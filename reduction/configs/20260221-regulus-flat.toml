@@ -1,0 +1,70 @@
+[inputs]
+root = "<local-spec-root>"
+target_name = "Regulus"
+science = ["26.2.21/Regulus-*.fit"]
+flat = ["26.2.21/LED-[4-6].fit"]
+bias = ["OFFSET/offset-[1-5].fit"]
+dark = []
+arc = []
+output_dir = "../output/Regulus/2026-02-21/runs/response"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+# February FITS arrays were verified from the Balmer sequence: blue is at low x.
+red_left_blue_right = false
+horizontal_flip = false
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 10.0
+sigma_clip = 5.0
+auto_detect_sdk_wrap = false
+use_bias = true
+use_dark = false
+use_flat = true
+cosmic_ray_clean = false
+maximum_dark_temperature_delta_c = 3.0
+allow_dark_exposure_scaling = false
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 50
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 18
+sky_separation = 10
+sky_width = 16
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+# The robust solution is established without the low-S/N blue flat, then the
+# identical axis is reused here while the flat is applied for response work.
+mode = "solution_file"
+solution_path = "../output/Regulus/2026-02-21/final/spectrum.fits"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3500.0
+maximum_angstrom = 7500.0
+minimum_matched_lines = 5
+maximum_rms_angstrom = 3.0
+minimum_pixel_span_fraction = 0.5
+minimum_template_correlation = 0.35
+stellar_feature_prominence = 0.02
+stellar_feature_tolerance_pixels = 45.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

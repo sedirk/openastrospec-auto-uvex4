@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AssemblyName>UvexAdv.Nina.Plugin</AssemblyName>
+    <RootNamespace>UvexAdv.Nina.Plugin</RootNamespace>
+    <NinaInstallDir Condition="'$(NinaInstallDir)' == ''">C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy</NinaInstallDir>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UvexAdv.Core\UvexAdv.Core.csproj" />
+    <ProjectReference Include="..\UvexAdv.Observatory\UvexAdv.Observatory.csproj" />
+    <ProjectReference Include="..\UvexAdv.Phd2\UvexAdv.Phd2.csproj" />
+    <ProjectReference Include="..\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
+    <ProjectReference Include="..\UvexAdv.Spectroscopy\UvexAdv.Spectroscopy.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
+    <Reference Include="NINA" HintPath="$(NinaInstallDir)\NINA.dll" Private="false" />
+    <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="false" />
+    <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="false" />
+    <Reference Include="NINA.Equipment" HintPath="$(NinaInstallDir)\NINA.Equipment.dll" Private="false" />
+    <Reference Include="NINA.Image" HintPath="$(NinaInstallDir)\NINA.Image.dll" Private="false" />
+    <Reference Include="NINA.Plugin" HintPath="$(NinaInstallDir)\NINA.Plugin.dll" Private="false" />
+    <Reference Include="NINA.PlateSolving" HintPath="$(NinaInstallDir)\NINA.PlateSolving.dll" Private="false" />
+    <Reference Include="NINA.Profile" HintPath="$(NinaInstallDir)\NINA.Profile.dll" Private="false" />
+    <Reference Include="NINA.Sequencer" HintPath="$(NinaInstallDir)\NINA.Sequencer.dll" Private="false" />
+    <Reference Include="NINA.WPF.Base" HintPath="$(NinaInstallDir)\NINA.WPF.Base.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(NinaInstallDir)\Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="System.ComponentModel.Composition" HintPath="$(NinaInstallDir)\System.ComponentModel.Composition.dll" Private="false" />
+    <Reference Include="CommunityToolkit.Mvvm" HintPath="$(NinaInstallDir)\CommunityToolkit.Mvvm.dll" Private="false" />
+  </ItemGroup>
+
+</Project>

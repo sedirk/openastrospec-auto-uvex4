@@ -1,0 +1,76 @@
+# Final May 4 Albireo-B reduction. Raw detector x runs red to blue, so every
+# frame is flipped before extraction. H-gamma and H-beta absorption plus the
+# persistent H-alpha emission core were identified jointly in all three B
+# frames and checked against the local ISIS B8V photospheric template.
+# This is a stellar-template-assisted solution, not an arc-lamp absolute scale.
+[inputs]
+root = "<local-data-root>"
+target_name = "Albireo-B"
+science = ["20260504/6CYGB-*.fit"]
+flat = []
+bias = []
+dark = []
+arc = []
+output_dir = "../output/Albireo/2026-05-04/runs/B-baseline"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 255.0
+
+[orientation]
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 12.0
+sigma_clip = 4.5
+use_bias = false
+use_dark = false
+use_flat = false
+cosmic_ray_clean = false
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.05
+alignment_probe_shift_pixels = 90.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 40
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 14
+sky_separation = 10
+sky_width = 18
+optimal = true
+aspired_faint_percent = 15.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "known_pairs"
+polynomial_degree = 1
+# Post-flip pixels: raw H-gamma x=3670.5 -> 168.5;
+# raw H-beta x=3126.8 -> 712.2; raw H-alpha x=1324.8 -> 2514.2.
+known_pixels = [168.5, 712.2, 2514.2]
+known_angstroms = [4340.47, 4861.35, 6562.79]
+medium = "air"
+minimum_angstrom = 4100.0
+maximum_angstrom = 8000.0
+minimum_matched_lines = 3
+maximum_rms_angstrom = 4.0
+minimum_pixel_span_fraction = 0.60

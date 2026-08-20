@@ -1,0 +1,23 @@
+{
+  "Uvex": {
+    "Simulator": false,
+    "PortName": "COM5",
+    "ExpectedUsbVid": "1A86",
+    "ExpectedUsbPid": "7523",
+    "ExpectedGratingLinesPerMm": 300,
+    "HardwareIdentityVerified": false,
+    "GratingMinimumSteps": -250000,
+    "GratingMaximumSteps": 250000,
+    "GratingMaximumSingleMoveSteps": 20000,
+    "FocusMinimumSteps": -20000,
+    "FocusMaximumSteps": 20000,
+    "FocusMaximumSingleMoveSteps": 2000,
+    "SlitPositions": 4,
+    "SlitNames": [ "300um", "15um", "25um", "35um" ],
+    "SlitOffsetMaximumAbsoluteSteps": 2000,
+    "UseSlitPhotodiode": true,
+    "SerialOpenDelay": "00:00:02",
+    "CommandTimeout": "00:00:03",
+    "MotionTimeout": "00:00:45"
+  }
+}

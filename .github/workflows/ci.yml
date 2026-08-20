@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  observatory-control-tests:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.419
+
+      - name: Verify frozen acquisition design
+        shell: powershell
+        run: .\scripts\verify-design-baseline.ps1 -Quiet
+
+      - name: Verify two-product repository layout and GPL metadata
+        shell: powershell
+        run: .\scripts\verify-product-layout.ps1 -Quiet
+
+      - name: Verify public branding and compatibility identities
+        shell: powershell
+        run: .\scripts\verify-public-branding.ps1
+
+      - name: Audit the public source snapshot
+        shell: powershell
+        run: .\scripts\audit-public-release.ps1 -Strict
+
+      - name: Test hardware-independent Observatory projects
+        shell: powershell
+        run: |
+          dotnet test .\tests\UvexAdv.Protocol.Tests\UvexAdv.Protocol.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Core.Tests\UvexAdv.Core.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Spectroscopy.Tests\UvexAdv.Spectroscopy.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Service.Tests\UvexAdv.Service.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Observatory.Tests\UvexAdv.Observatory.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Phd2.Tests\UvexAdv.Phd2.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Phd2.Watchdog.Tests\UvexAdv.Phd2.Watchdog.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Qhy.Tests\UvexAdv.Qhy.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Admin.Tests\UvexAdv.Admin.Tests.csproj -c Release
+          dotnet test .\tests\UvexAdv.Commissioning.Tool.Tests\UvexAdv.Commissioning.Tool.Tests.csproj -c Release
+
+      - name: Explain N.I.N.A. plugin build boundary
+        shell: powershell
+        run: |
+          Write-Host 'The N.I.N.A. plugin is release-tested on Windows with supported N.I.N.A. 3.2 assemblies; hosted CI does not fabricate external runtime files.'
+
+  spectral-studio-tests:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: reduction
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: reduction/requirements-lock.txt
+
+      - name: Install pinned reduction environment
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r .\requirements-lock.txt
+          python -m pip install pytest==8.3.5 ruff==0.9.10
+          python -m pip install --no-deps -e .
+
+      - name: Ruff
+        shell: powershell
+        run: ruff check src tests tools
+
+      - name: Pytest
+        shell: powershell
+        run: pytest -q

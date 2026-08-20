@@ -1,0 +1,122 @@
+<Window x:Class="UvexAdv.Admin.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OpenAstroSpec Auto — UVEX4 管理器" Height="800" Width="1100" MinHeight="680" MinWidth="960"
+        Background="#111827" Foreground="#E5E7EB">
+  <Window.Resources>
+    <Style TargetType="GroupBox">
+      <Setter Property="Margin" Value="8" />
+      <Setter Property="Padding" Value="12" />
+      <Setter Property="BorderBrush" Value="#374151" />
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Margin" Value="4" />
+      <Setter Property="Padding" Value="12,7" />
+      <Setter Property="Background" Value="#2563EB" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Margin" Value="4" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="MinWidth" Value="90" />
+    </Style>
+  </Window.Resources>
+
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+
+    <Border Grid.Row="0" Background="#1F2937" CornerRadius="8" Padding="16" Margin="8">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBlock FontSize="24" FontWeight="SemiBold" Text="OpenAstroSpec Auto — UVEX4" />
+          <TextBlock Margin="0,6,0,0" Text="{Binding StatusSummary}" />
+          <TextBlock Margin="0,3,0,0" Foreground="#9CA3AF" Text="{Binding DeviceDetails}" />
+          <TextBlock Margin="0,3,0,0" Foreground="#FCA5A5" Text="{Binding ErrorDetails}" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Content="获取控制权" Command="{Binding AcquireLeaseCommand}" />
+          <Button Content="释放控制权" Command="{Binding ReleaseLeaseCommand}" />
+          <Button Content="全部急停" Background="#B91C1C" Command="{Binding EmergencyStopCommand}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <UniformGrid Grid.Row="1" Columns="3">
+      <GroupBox Header="光栅">
+        <StackPanel>
+          <TextBlock Text="{Binding GratingStatus}" />
+          <StackPanel Orientation="Horizontal">
+            <TextBox Text="{Binding GratingDeltaSteps, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Content="相对移动" Command="{Binding MoveGratingCommand}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <TextBox Text="{Binding WavelengthNm, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Content="名义波长 nm" Command="{Binding GotoWavelengthCommand}" />
+          </StackPanel>
+          <Button Content="光栅回零" Command="{Binding HomeGratingCommand}" />
+        </StackPanel>
+      </GroupBox>
+
+      <GroupBox Header="M2 对焦">
+        <StackPanel>
+          <TextBlock Text="{Binding FocusStatus}" />
+          <StackPanel Orientation="Horizontal">
+            <TextBox Text="{Binding FocusDeltaSteps, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Content="相对移动" Command="{Binding MoveFocusCommand}" />
+          </StackPanel>
+          <Button Content="M2 回零" Command="{Binding HomeFocusCommand}" />
+        </StackPanel>
+      </GroupBox>
+
+      <GroupBox Header="狭缝、定位LED（非Calibrex）与维护">
+        <StackPanel>
+          <TextBlock Text="{Binding SlitStatus}" />
+          <TextBlock Margin="0,3,0,5" Foreground="#9CA3AF" Text="{Binding SlitCalibrationStatus}" TextWrapping="Wrap" />
+          <Border Margin="4,2,4,6" Padding="8" Background="#172033" BorderBrush="#4B5563" BorderThickness="1" CornerRadius="4">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="{Binding SlitIlluminationStatus}" TextWrapping="Wrap" />
+              <TextBlock Margin="0,3,0,0" Foreground="#CBD5E1" Text="{Binding SlitPhotodiodeStatus}" TextWrapping="Wrap" />
+              <TextBlock Margin="0,3,0,0" Foreground="#FBBF24" Text="{Binding SlitIlluminationWarning}" TextWrapping="Wrap" />
+              <TextBlock Margin="0,3,0,0" Foreground="#9CA3AF"
+                         Text="此处只控制 UVEX 狭缝定位LED（SLON/SLOF），不控制 Calibrex，也不判定 G3 图像中的光学狭缝。"
+                         TextWrapping="Wrap" />
+              <WrapPanel Margin="0,3,0,0">
+                <Button Content="开启定位LED" Command="{Binding TurnOnSlitIlluminationCommand}" />
+                <Button Content="关闭定位LED" Background="#475569" Command="{Binding TurnOffSlitIlluminationCommand}" />
+              </WrapPanel>
+            </StackPanel>
+          </Border>
+          <StackPanel Orientation="Horizontal">
+            <ComboBox Width="130" Margin="4" ItemsSource="{Binding SlitOptions}" DisplayMemberPath="DisplayName"
+                      SelectedValuePath="Position" SelectedValue="{Binding SlitPosition}" />
+            <Button Content="选择狭缝" Command="{Binding SelectSlitCommand}" />
+          </StackPanel>
+          <CheckBox Margin="6,5,4,2" Content="我确认正在执行狭缝校准" IsChecked="{Binding SlitCalibrationConfirmed}" />
+          <WrapPanel>
+            <Button Content="将当前位置标定为所选狭缝" Command="{Binding CalibrateSlitPositionCommand}" />
+            <Button Content="自动校准光电阈值" Command="{Binding CalibrateSlitPhotodiodeCommand}" />
+          </WrapPanel>
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Margin="6,0,2,0" VerticalAlignment="Center" Text="所选狭缝偏移" />
+            <TextBox Width="70" Text="{Binding SlitOffsetSteps, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Content="写入偏移 steps" Command="{Binding CalibrateSlitOffsetCommand}" />
+          </StackPanel>
+          <Button Content="释放 COM5 给旧 Manager" Command="{Binding EnterMaintenanceCommand}" />
+          <Button Content="退出维护并重连" Command="{Binding ExitMaintenanceCommand}" />
+        </StackPanel>
+      </GroupBox>
+    </UniformGrid>
+
+    <GroupBox Grid.Row="2" Header="操作与诊断">
+      <ListBox ItemsSource="{Binding Messages}" Background="#0F172A" Foreground="#D1D5DB" FontFamily="Consolas" />
+    </GroupBox>
+  </Grid>
+</Window>

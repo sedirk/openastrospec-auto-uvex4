@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "productId": "uvex-adv-spectral-studio",
+  "displayName": "OpenAstroSpec Spectral Studio — UVEX4",
+  "license": "GPL-3.0-only",
+  "kind": "offline-spectral-reduction",
+  "sourceRoots": [
+    "reduction/src/uvex_reduce",
+    "src/UvexAdv.Reduction.Launcher"
+  ],
+  "humanEntryPoints": [
+    "OpenAstroSpec 光谱处理 — UVEX4",
+    "uvex-reduce-gui",
+    "uvex-reduce"
+  ],
+  "generatedArtifactsRoot": "reduction/output",
+  "hardwareCapable": false
+}

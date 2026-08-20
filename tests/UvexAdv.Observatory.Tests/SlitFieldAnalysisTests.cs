@@ -1,0 +1,150 @@
+using UvexAdv.Observatory;
+using Xunit;
+
+namespace UvexAdv.Observatory.Tests;
+
+public sealed class SlitFieldAnalysisTests
+{
+    [Fact]
+    public void DetectorFindsBroadDefocusedStar()
+    {
+        const int width = 160, height = 120;
+        var pixels = Enumerable.Repeat((ushort)500, width * height).ToArray();
+        AddGaussian(pixels, width, height, 73.4, 52.7, 3.2, 18000);
+        var frame = new MonochromeFrame(width, height, pixels, 65520);
+
+        var stars = StarFieldDetector.Detect(frame, new StarDetectionOptions(4, 6));
+
+        var star = Assert.Single(stars);
+        Assert.InRange(star.Centroid.X, 72.8, 74.0);
+        Assert.InRange(star.Centroid.Y, 52.1, 53.3);
+        Assert.InRange(star.FwhmPixels, 5, 10);
+    }
+
+    [Fact]
+    public void TargetIdentityUsesWcsPredictionRatherThanBrightestStar()
+    {
+        var expected = new StarCandidate(new PixelPoint(100, 100), 5000, 20000, 30, 5, 0.1, 0, 100);
+        var brighterWrong = new StarCandidate(new PixelPoint(150, 150), 30000, 100000, 100, 5, 0.1, 0, 100);
+
+        var result = SlitTargetIdentifier.Identify([brighterWrong, expected], new PixelPoint(102, 99), 20);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Same(expected, result.Target);
+    }
+
+    [Fact]
+    public void GuideStarInsideSlitGuardIsRejected()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);
+        var onSlit = new StarCandidate(new PixelPoint(102, 130), 10000, 50000, 50, 4, 0.1, 0, 100);
+        var offSlit = new StarCandidate(new PixelPoint(140, 130), 8000, 40000, 40, 4, 0.1, 0, 100);
+
+        var result = GuideStarSelector.Select([onSlit, offSlit], slit, new PixelPoint(100, 100));
+
+        Assert.Equal(offSlit, result.Star);
+    }
+
+    [Fact]
+    public void DarkSlitLocusIsRefinedFromSeedWithoutOperatorConfirmation()
+    {
+        const int width = 240, height = 180;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        for (var y = 20; y < 160; y++)
+        for (var x = 126; x <= 128; x++)
+            pixels[y * width + x] = 850;
+        var frame = new MonochromeFrame(width, height, pixels, 65520);
+        var seed = new SlitGeometry("seed", new PixelPoint(120, 90), 90, 140, 3, 8, "g3", 1, 1);
+
+        var result = SlitLocusDetector.DetectDarkSlit(frame, seed, 15, 0, 2);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.InRange(result.Geometry.AcquisitionPoint.X, 125.5, 128.5);
+    }
+
+    [Fact]
+    public void CorrectionRefusesCumulativeLimit()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);
+        var transform = new PixelToMountTransform("xform", 2, 0, 0, 2, "East", 0.5, DateTimeOffset.UtcNow);
+        var limits = new MotionLimits(0.5, 0.1, 5);
+
+        var result = SlitCorrectionCalculator.Calculate(new PixelPoint(0, 100), slit, transform, limits, 0.08);
+
+        Assert.Equal(GateDisposition.Failed, result.Gate.Disposition);
+        Assert.Equal("MOTION_CUMULATIVE_LIMIT", result.Gate.Code);
+    }
+
+    [Fact]
+    public void CorrectionCapsLargeRequestToOneClosedLoopSegment()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(102, 0), 90, 150, 3, 1, "g3", 1, 1);
+        var transform = new PixelToMountTransform("xform", 1, 0, 0, 1, "East", 0.5, DateTimeOffset.UtcNow);
+        var limits = new MotionLimits(30d / 3600, 120d / 3600, 4);
+
+        var result = SlitCorrectionCalculator.Calculate(
+            new PixelPoint(0, 0),
+            slit,
+            transform,
+            limits,
+            cumulativeCorrectionDegrees: 0,
+            completedCorrectionAttempts: 0);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("MOTION_SEGMENT_BOUNDED", result.Gate.Code);
+        Assert.True(result.IsSegmented);
+        Assert.Equal(102d / 3600, result.RequestedMagnitudeDegrees, 10);
+        Assert.Equal(30d / 3600, result.MagnitudeDegrees, 10);
+        Assert.Equal(30, result.DeltaRaArcseconds, 10);
+        Assert.Equal(0, result.DeltaDecArcseconds, 10);
+        Assert.Equal(4, result.ReservedSegmentCount);
+    }
+
+    [Fact]
+    public void CorrectionReservesAllRequiredAttemptsBeforeFirstSegment()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(102, 0), 90, 150, 3, 1, "g3", 1, 1);
+        var transform = new PixelToMountTransform("xform", 1, 0, 0, 1, "East", 0.5, DateTimeOffset.UtcNow);
+        var limits = new MotionLimits(30d / 3600, 120d / 3600, 4);
+
+        var result = SlitCorrectionCalculator.Calculate(
+            new PixelPoint(0, 0),
+            slit,
+            transform,
+            limits,
+            cumulativeCorrectionDegrees: 0,
+            completedCorrectionAttempts: 1);
+
+        Assert.Equal(GateDisposition.Failed, result.Gate.Disposition);
+        Assert.Equal("CORRECTION_ATTEMPT_RESERVE", result.Gate.Code);
+    }
+
+    [Fact]
+    public void CorrectionReservesFullMeasuredCumulativeBudgetBeforeFirstSegment()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(102, 0), 90, 150, 3, 1, "g3", 1, 1);
+        var transform = new PixelToMountTransform("xform", 1, 0, 0, 1, "East", 0.5, DateTimeOffset.UtcNow);
+        var limits = new MotionLimits(30d / 3600, 120d / 3600, 5);
+
+        var result = SlitCorrectionCalculator.Calculate(
+            new PixelPoint(0, 0),
+            slit,
+            transform,
+            limits,
+            cumulativeCorrectionDegrees: 20d / 3600,
+            completedCorrectionAttempts: 0);
+
+        Assert.Equal(GateDisposition.Failed, result.Gate.Disposition);
+        Assert.Equal("MOTION_CUMULATIVE_LIMIT", result.Gate.Code);
+    }
+
+    private static void AddGaussian(ushort[] pixels, int width, int height, double cx, double cy, double sigma, double amplitude)
+    {
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var value = 500 + amplitude * Math.Exp(-((x - cx) * (x - cx) + (y - cy) * (y - cy)) / (2 * sigma * sigma));
+            pixels[y * width + x] = (ushort)Math.Min(65520, Math.Round(value));
+        }
+    }
+}

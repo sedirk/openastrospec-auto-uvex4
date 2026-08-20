@@ -1,0 +1,175 @@
+<UserControl x:Class="UvexAdv.Nina.Plugin.EmbeddedImageViewer"
+             x:Name="ViewerRoot"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:UvexAdv.Nina.Plugin"
+             Background="#070D16"
+             Foreground="#E5E7EB"
+             Focusable="True"
+             SnapsToDevicePixels="True">
+  <UserControl.Resources>
+    <Style x:Key="ViewerToolbarButton" TargetType="Button">
+      <Setter Property="Foreground" Value="#F1F5F9" />
+      <Setter Property="Background" Value="#172334" />
+      <Setter Property="BorderBrush" Value="#52647A" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="9,4" />
+      <Setter Property="Margin" Value="2,0" />
+      <Setter Property="MinHeight" Value="29" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="ButtonBorder"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="3"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                RecognizesAccessKey="True" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="#24364D" />
+                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#38BDF8" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="#0F766E" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.38" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </UserControl.Resources>
+
+  <Border Background="#070D16" BorderBrush="#334155" BorderThickness="1" CornerRadius="5">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="5">
+        <DockPanel LastChildFill="True">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <Button Style="{StaticResource ViewerToolbarButton}"
+                    Content="−"
+                    ToolTip="缩小"
+                    AutomationProperties.Name="缩小图像"
+                    IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                    Click="OnZoomOutClick" />
+            <TextBlock x:Name="ZoomTextBlock"
+                       Width="58"
+                       Text="100%"
+                       FontFamily="Consolas"
+                       FontWeight="SemiBold"
+                       Foreground="#BAE6FD"
+                       TextAlignment="Center"
+                       VerticalAlignment="Center"
+                       AutomationProperties.Name="当前缩放比例" />
+            <Button Style="{StaticResource ViewerToolbarButton}"
+                    Content="+"
+                    ToolTip="放大"
+                    AutomationProperties.Name="放大图像"
+                    IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                    Click="OnZoomInClick" />
+            <Button Style="{StaticResource ViewerToolbarButton}"
+                    Content="适配"
+                    ToolTip="完整图像适配当前视口；也可在图像上双击"
+                    AutomationProperties.Name="使完整图像适配窗口"
+                    IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                    Click="OnFitClick" />
+            <Button Style="{StaticResource ViewerToolbarButton}"
+                    Content="1:1"
+                    ToolTip="一个源图像像素对应一个视图单位"
+                    AutomationProperties.Name="按一比一显示图像"
+                    IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                    Click="OnActualSizeClick" />
+          </StackPanel>
+          <TextBlock Text="滚轮缩放 · 左键拖动 · 双击适配"
+                     Foreground="#CBD5E1"
+                     VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"
+                     Margin="5,0,8,0" />
+        </DockPanel>
+      </Border>
+
+      <Grid Grid.Row="1" Background="#02060C">
+        <ScrollViewer x:Name="ViewportScrollViewer"
+                      Background="#02060C"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalContentAlignment="Center"
+                      VerticalContentAlignment="Center"
+                      CanContentScroll="False"
+                      PanningMode="None"
+                      PreviewMouseWheel="OnPreviewMouseWheel"
+                      PreviewMouseLeftButtonDown="OnPreviewMouseLeftButtonDown"
+                      PreviewMouseLeftButtonUp="OnPreviewMouseLeftButtonUp"
+                      PreviewMouseMove="OnPreviewMouseMove"
+                      LostMouseCapture="OnLostMouseCapture"
+                      SizeChanged="OnViewportSizeChanged">
+          <Image x:Name="PreviewImageElement"
+                 Source="{Binding PreviewImage, ElementName=ViewerRoot}"
+                 Stretch="Fill"
+                 SnapsToDevicePixels="True"
+                 RenderOptions.BitmapScalingMode="HighQuality">
+            <Image.LayoutTransform>
+              <ScaleTransform x:Name="ImageScaleTransform" ScaleX="1" ScaleY="1" />
+            </Image.LayoutTransform>
+          </Image>
+        </ScrollViewer>
+
+        <Border x:Name="EmptyStatePanel"
+                Margin="18"
+                Padding="18"
+                MaxWidth="560"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="#0B1422"
+                BorderBrush="#475569"
+                BorderThickness="1"
+                CornerRadius="6"
+                IsHitTestVisible="False">
+          <StackPanel>
+            <TextBlock Text="○"
+                       FontSize="28"
+                       Foreground="#64748B"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="{Binding EmptyTitle, ElementName=ViewerRoot}"
+                       FontSize="15"
+                       FontWeight="SemiBold"
+                       Foreground="#E2E8F0"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,4,0,0" />
+            <TextBlock Text="{Binding EmptyDetails, ElementName=ViewerRoot}"
+                       Foreground="#94A3B8"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,6,0,0" />
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <Border x:Name="CaptionPanel"
+              Grid.Row="2"
+              Background="#0C1522"
+              BorderBrush="#334155"
+              BorderThickness="0,1,0,0"
+              Padding="8,5">
+        <TextBlock Text="{Binding Caption, ElementName=ViewerRoot}"
+                   Foreground="#CBD5E1"
+                   TextWrapping="Wrap" />
+      </Border>
+    </Grid>
+  </Border>
+</UserControl>

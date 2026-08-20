@@ -1,0 +1,84 @@
+[inputs]
+root = "<local-spec-root>"
+target_name = "Regulus"
+science = ["26.2.18/Regulus-[1-3].fit"]
+# These LED frames look like broad continuum illumination.  They are candidate
+# flats, not arc frames; inspect the flat-corrected result before science use.
+flat = ["26.2.18/LED-[4-6].fit"]
+bias = ["OFFSET/offset-[1-5].fit"]
+# Existing darks are 180 s near +0.1 C and do not match these cold science
+# frames.  Leave this empty until same-temperature, same-exposure darks exist.
+dark = []
+# No verified arc exists in the current SPEC directory.
+arc = []
+output_dir = "../output/Regulus/2026-02-18/runs/prototype"
+
+[detector]
+# Placeholder physical detector values.  Camera setting GAIN=100 in the FITS
+# header is not an electron/ADU calibration and must not be copied here.
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+# This preserves the user's original instrument assumption.  Stellar-template
+# calibration independently checks the direction and reverses the final products
+# when the Balmer sequence proves the detector orientation is opposite.
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 10.0
+sigma_clip = 5.0
+auto_detect_sdk_wrap = false
+use_bias = true
+use_dark = false
+# Conservative default: the LED frames are only candidate flats and have not
+# yet been validated against a calibrated continuum lamp.  Set true after
+# reviewing a dedicated flat validation run.
+use_flat = false
+cosmic_ray_clean = false
+maximum_dark_temperature_delta_c = 3.0
+allow_dark_exposure_scaling = false
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 40
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 16
+sky_separation = 8
+sky_width = 14
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+# The ISIS distribution contains a broad Pickles B8V template and a named
+# high-resolution UVEX Regulus template.  The broad template is used to select
+# and validate the Balmer-series solution.
+mode = "stellar_template"
+template_directory = "<local-isis-template-directory>"
+template_star = "Regulus"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3500.0
+maximum_angstrom = 7500.0
+minimum_matched_lines = 5
+maximum_rms_angstrom = 3.0
+minimum_pixel_span_fraction = 0.5
+minimum_template_correlation = 0.35
+stellar_feature_prominence = 0.02
+stellar_feature_tolerance_pixels = 40.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

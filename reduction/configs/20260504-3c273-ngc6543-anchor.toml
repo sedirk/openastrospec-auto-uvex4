@@ -1,0 +1,99 @@
+[inputs]
+root = "<local-data-root>"
+target_name = "3C273-NGC6543-anchor"
+science = ["20260504/3C273/*.fit"]
+flat = []
+bias = []
+dark = []
+arc = []
+output_dir = "../output/3C273/2026-05-04/runs/ngc6543-anchor"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+# The immediately following NGC 6543 sequence proves that these raw frames are
+# red-left/blue-right.  Flip before extraction so wavelength increases in x.
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+align_spatial = true
+# The quasar continuum has too little high-frequency structure for a safe
+# science-only x-correlation.  The NGC anchor supplies the dispersion mapping.
+align_dispersion = false
+maximum_shift_pixels = 220.0
+sigma_clip = 4.5
+combine_method = "median"
+use_bias = false
+use_dark = false
+use_flat = false
+cosmic_ray_clean = true
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.10
+alignment_probe_shift_pixels = 240.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+# Manual line-segment continuity establishes the first frame of each capture
+# segment (21:14 and 22:23) as intact.  Each continuation frame needs the
+# documented fix.py left roll; automatic single-frame inference is disabled.
+sdk_wrap_fix_files = [
+  "260504212430.fit",
+  "260504213430.fit",
+  "260504223330.fit",
+  "260504224331.fit",
+  "260504225331.fit",
+  "260504230331.fit",
+  "260504231331.fit",
+  "260504232331.fit",
+  "260504233331.fit",
+  "260504234332.fit",
+  "260504235332.fit",
+]
+sdk_wrap_fix_direction = "left"
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 55
+trace_degree = 2
+minimum_trace_snr = 2.5
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = true
+aperture_half_width = 22
+sky_separation = 12
+sky_width = 20
+optimal = true
+aspired_faint_percent = 10.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "solution_file"
+solution_path = "../output/NGC6543/2026-05-05/final/spectrum.fits"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3800.0
+maximum_angstrom = 7600.0
+minimum_matched_lines = 6
+maximum_rms_angstrom = 2.0
+minimum_pixel_span_fraction = 0.50
+minimum_template_correlation = 0.25
+stellar_feature_prominence = 0.010
+stellar_feature_tolerance_pixels = 55.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

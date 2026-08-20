@@ -1,0 +1,78 @@
+# Editors and operating-system metadata
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# .NET SDK, build and test output
+.dotnet/
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Python environments, caches and packaging output
+.venv/
+.venv*/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+**/.mypy_cache/
+.coverage
+htmlcov/
+**/*.egg-info/
+build/
+dist/
+
+# Local runtime state and generated products
+tmp/
+/output/
+/reduction/output/
+logs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.astroproj
+
+# Machine-local configuration and credentials
+src/UvexAdv.Service/appsettings.Local.json
+**/appsettings.Local.json
+config/*.local.json
+*.local.toml
+.env
+.env.*
+!.env.example
+*.pfx
+*.snk
+credentials*.json
+secrets*.json
+
+# Raw astronomy/camera data are observation assets, not source code. Small,
+# deliberately curated regression fixtures may be force-added under a fixture
+# directory when their provenance and license are documented.
+*.fit
+*.fits
+*.fts
+*.ser
+*.xisf
+*.raw
+!tests/fixtures/**/*.fit
+!tests/fixtures/**/*.fits
+!reduction/tests/fixtures/**/*.fit
+!reduction/tests/fixtures/**/*.fits

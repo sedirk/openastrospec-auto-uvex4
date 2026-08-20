@@ -1,0 +1,67 @@
+[inputs]
+root = "<local-data-root>"
+target_name = "NGC2392"
+science = ["20260221/NGC2392/*.fit"]
+flat = ["<local-flat-glob>"]
+bias = ["<local-bias-glob>"]
+dark = []
+arc = []
+output_dir = "../output/NGC2392/2026-02-21/runs/flat-trial"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+red_left_blue_right = false
+horizontal_flip = false
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 10.0
+sigma_clip = 5.0
+auto_detect_sdk_wrap = false
+use_bias = true
+use_dark = false
+use_flat = true
+cosmic_ray_clean = false
+maximum_dark_temperature_delta_c = 3.0
+allow_dark_exposure_scaling = false
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 80
+trace_degree = 2
+minimum_trace_snr = 2.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = true
+aperture_half_width = 24
+sky_separation = 12
+sky_width = 20
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.4
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "solution_file"
+solution_path = "../output/Regulus/2026-02-21/final/spectrum.fits"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3500.0
+maximum_angstrom = 7500.0
+minimum_matched_lines = 5
+maximum_rms_angstrom = 3.0
+minimum_pixel_span_fraction = 0.5
+minimum_template_correlation = 0.35
+stellar_feature_prominence = 0.02
+stellar_feature_tolerance_pixels = 45.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

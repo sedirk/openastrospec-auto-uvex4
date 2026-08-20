@@ -1,0 +1,89 @@
+[inputs]
+root = "<local-data-root>"
+target_name = "Vega"
+science = ["20260509/Vega/*.fit"]
+# These broad daytime/continuum frames are only candidates.  full-run always
+# reduces a no-flat control and accepts this trial only after objective gates.
+flat = ["20260507/*.fit"]
+bias = []
+dark = []
+arc = []
+output_dir = "../output/Vega/2026-05-09/runs/standard"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 20.0
+sigma_clip = 5.0
+use_bias = false
+use_dark = false
+use_flat = true
+cosmic_ray_clean = false
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.10
+alignment_probe_shift_pixels = 90.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+sdk_wrap_fix_files = [
+  "260509014600.fit",
+  "260509014714.fit",
+  "260509014737.fit",
+  "260509014749.fit",
+  "260509014751.fit",
+  "260509014754.fit",
+  "260509014757.fit",
+  "260509014759.fit",
+]
+sdk_wrap_fix_direction = "left"
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 40
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 16
+sky_separation = 8
+sky_width = 14
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "stellar_template"
+template_directory = "<local-isis-template-directory>"
+template_star = "Vega"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 4000.0
+maximum_angstrom = 8200.0
+minimum_matched_lines = 3
+maximum_rms_angstrom = 3.0
+minimum_pixel_span_fraction = 0.50
+minimum_template_correlation = 0.35
+stellar_feature_prominence = 0.015
+stellar_feature_tolerance_pixels = 45.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "productId": "uvex-adv-observatory",
+  "displayName": "OpenAstroSpec Auto — UVEX4",
+  "license": "GPL-3.0-only",
+  "kind": "acquisition-and-observatory-control",
+  "sourceRoots": [
+    "src/UvexAdv.Admin",
+    "src/UvexAdv.Commissioning.Tool",
+    "src/UvexAdv.Core",
+    "src/UvexAdv.Nina.Plugin",
+    "src/UvexAdv.Observatory",
+    "src/UvexAdv.Phd2",
+    "src/UvexAdv.Phd2.Watchdog",
+    "src/UvexAdv.Protocol",
+    "src/UvexAdv.Qhy.Core",
+    "src/UvexAdv.Qhy.Service",
+    "src/UvexAdv.Service",
+    "src/UvexAdv.Spectroscopy"
+  ],
+  "humanEntryPoints": [
+    "UvexAdv.Admin.exe",
+    "OpenAstroSpec 自动观测 (N.I.N.A. dock)"
+  ],
+  "generatedArtifactsRoot": "artifacts",
+  "hardwareCapable": true
+}

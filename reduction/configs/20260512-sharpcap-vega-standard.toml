@@ -1,0 +1,93 @@
+# SharpCap Vega sequence acquired immediately before the NGC 6543 sequence.
+# No compatible bias/dark/flat/arc exists, so this is a documented stellar-
+# template wavelength and relative-response calibration.
+[inputs]
+root = "<local-sharpcap-root>"
+target_name = "Vega"
+science = ["2026-05-12/Vega/*/*.fits"]
+flat = []
+bias = []
+dark = []
+arc = []
+output_dir = "../output/Vega/2026-05-12/runs/standard"
+
+[detector]
+# SharpCap saved the 12-bit ADC in a 16-bit FITS container.  EGAINSAV is the
+# electron scale of the stored pixels; EGAIN=1.0098 refers to pre-shift ADC ADU.
+gain_e_per_adu = 0.06311
+read_noise_e = 1.1
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+align_spatial = true
+align_dispersion = true
+maximum_shift_pixels = 12.0
+combine_method = "median"
+sigma_clip = 4.5
+use_bias = false
+use_dark = false
+use_flat = false
+# The six short frames already provide temporal rejection.  L.A.Cosmic sees
+# the shifted 12-bit quantisation and sharp stellar troughs as false positives,
+# so use the multi-frame sigma-clipped median for this standard.
+cosmic_ray_clean = false
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.10
+alignment_probe_shift_pixels = 90.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 40
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 14
+sky_separation = 9
+sky_width = 16
+optimal = true
+aspired_faint_percent = 15.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+# Centres were fitted on the pipeline's post-flip, six-frame median spectrum.
+# H-gamma/H-beta/H-alpha are independently obvious in the 2D frame and in the
+# A0V template.  Automatic Balmer matching previously found a false alias, so
+# preserve these reviewed anchors and still require a broad-template check.
+mode = "known_pairs"
+known_pixels = [197.4702, 741.8552, 2546.4873]
+known_angstroms = [4340.47, 4861.35, 6562.79]
+template_directory = "<local-isis-template-directory>"
+template_star = "Vega"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3600.0
+maximum_angstrom = 7600.0
+minimum_matched_lines = 4
+maximum_rms_angstrom = 3.0
+minimum_pixel_span_fraction = 0.50
+minimum_template_correlation = 0.50
+stellar_feature_prominence = 0.012
+stellar_feature_tolerance_pixels = 55.0
+minimum_wavelength_span_angstrom = 2800.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

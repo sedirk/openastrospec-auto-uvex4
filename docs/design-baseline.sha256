@@ -1,0 +1,6 @@
+# SHA-256 manifest for frozen acquisition-design records.
+# Update only through the explicit design-change process in CONTRIBUTING.md.
+88d36d36f93971468e442d1165a7d7aca305b35159cbd8c8f9aa28f4b30b0d24  AGENTS.md
+a80e8c766a0fbbad960b4a980339dcf2a75c42edd2f137d9eaf3ae4931acff58  docs/design/observatory-automation-baseline.md
+ac525474f7febdf068fed8cf957844e8950f9cd08da5f72afe9f41a8242f0e44  docs/adr/0001-single-owner-device-orchestration.md
+a4da1168d89a789e741350339332bf91a0b72dd5962a77afd28df9c105f8c6a8  docs/adr/0002-automatic-progression-with-operator-pause.md

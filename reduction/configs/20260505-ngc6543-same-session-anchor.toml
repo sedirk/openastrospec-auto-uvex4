@@ -1,0 +1,123 @@
+[inputs]
+root = "<local-data-root>"
+target_name = "NGC6543-same-session-anchor"
+science = ["20260505/NGC6543/*.fit"]
+flat = []
+bias = []
+dark = []
+arc = []
+output_dir = "../output/NGC6543/2026-05-05/runs/wavelength-anchor"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+# The NGC 6543 line order proves that the raw sequence is red-left/blue-right:
+# [O III] 5007, 4959 and H-beta occur at successively larger raw x.  Flip the
+# stack so every exported wavelength axis increases from left to right.
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+align_spatial = true
+align_dispersion = true
+maximum_shift_pixels = 100.0
+sigma_clip = 4.5
+combine_method = "median"
+use_bias = false
+use_dark = false
+use_flat = false
+cosmic_ray_clean = true
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.10
+alignment_probe_shift_pixels = 120.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+# Manual line-segment continuity establishes 260505013331.fit as the intact
+# readout.  Every other frame is one SDK cycle to the right and therefore uses
+# the documented fix.py left roll.  Do not infer correctness by majority vote.
+sdk_wrap_fix_files = [
+  "260505001743.fit",
+  "260505002751.fit",
+  "260505004637.fit",
+  "260505005637.fit",
+  "260505010637.fit",
+  "260505011637.fit",
+  "260505014331.fit",
+  "260505015331.fit",
+  "260505020331.fit",
+  "260505021331.fit",
+  "260505022332.fit",
+  "260505023332.fit",
+  "260505024332.fit",
+  "260505025332.fit",
+  "260505030332.fit",
+]
+sdk_wrap_fix_direction = "left"
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 70
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 28
+sky_separation = 14
+sky_width = 24
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "known_pairs"
+polynomial_degree = 2
+medium = "air"
+# Post-flip subpixel peaks from eight isolated, high-S/N nebular lines.  The
+# anchors span 83.7% of the detector and give a 0.19 Angstrom internal RMS.
+known_pixels = [
+  258.5661,
+  507.9090,
+  1053.0819,
+  1155.8820,
+  1206.1812,
+  2123.6427,
+  3395.0204,
+  3471.2807,
+]
+known_angstroms = [
+  4101.74,
+  4340.47,
+  4861.35,
+  4958.91,
+  5006.84,
+  5875.62,
+  7065.19,
+  7135.79,
+]
+minimum_angstrom = 3800.0
+maximum_angstrom = 7600.0
+minimum_matched_lines = 6
+maximum_rms_angstrom = 2.0
+minimum_pixel_span_fraction = 0.50
+minimum_template_correlation = 0.25
+stellar_feature_prominence = 0.010
+stellar_feature_tolerance_pixels = 55.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

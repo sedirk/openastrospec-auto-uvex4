@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "phd2Host": "127.0.0.1",
+  "phd2Port": 4400,
+  "pollIntervalMilliseconds": 500,
+  "stopFailureRetryMilliseconds": 5000,
+  "statusPublishIntervalMilliseconds": 30000,
+  "leaseFileName": "lease.json",
+  "statusFileName": "status.json"
+}

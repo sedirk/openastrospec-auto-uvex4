@@ -1,0 +1,12 @@
+{
+  "Uvex": {
+    "Simulator": true,
+    "PortName": "COM5",
+    "ExpectedUsbVid": "1A86",
+    "ExpectedUsbPid": "7523",
+    "ExpectedGratingLinesPerMm": 600,
+    "HardwareIdentityVerified": false,
+    "SlitNames": [ "300um", "15um", "25um", "35um" ],
+    "SerialOpenDelay": "00:00:00"
+  }
+}

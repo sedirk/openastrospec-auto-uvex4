@@ -1,0 +1,86 @@
+[inputs]
+root = "<local-data-root>"
+target_name = "NGC6543"
+science = ["20260506凌晨/NGC6543/*.fit"]
+flat = []
+bias = []
+dark = []
+arc = []
+output_dir = "../output/NGC6543/2026-05-06/runs/science"
+
+[detector]
+gain_e_per_adu = 1.0
+read_noise_e = 6.5
+saturation_adu = 65520.0
+
+[orientation]
+dispersion_axis = 1
+red_left_blue_right = true
+horizontal_flip = true
+
+[preprocess]
+align_frames = true
+maximum_shift_pixels = 15.0
+sigma_clip = 4.5
+use_bias = false
+use_dark = false
+use_flat = false
+cosmic_ray_clean = false
+normalize_science_exposure = true
+reject_mixed_camera_gain = true
+reject_unalignable_frames = true
+minimum_alignment_confidence = 0.10
+alignment_probe_shift_pixels = 90.0
+auto_detect_sdk_wrap = false
+sdk_wrap_shift_pixels = 64
+sdk_wrap_seam_sigma = 4.0
+sdk_wrap_fix_files = [
+  "260506010745.fit",
+  "260506011745.fit",
+  "260506012953.fit",
+  "260506013453.fit",
+  "260506013953.fit",
+  "260506014453.fit",
+  "260506014954.fit",
+  "260506015454.fit",
+]
+sdk_wrap_fix_direction = "left"
+minimum_flat_frames = 2
+maximum_flat_saturation_fraction = 0.006
+minimum_flat_valid_fraction = 0.50
+
+[extraction]
+backend = "aspired"
+allow_native_fallback = true
+trace_bins = 24
+trace_half_width = 55
+trace_degree = 2
+minimum_trace_snr = 3.0
+minimum_valid_trace_bins = 5
+allow_low_confidence_trace = false
+aperture_half_width = 20
+sky_separation = 10
+sky_width = 18
+optimal = true
+aspired_faint_percent = 20.0
+minimum_valid_fraction = 0.5
+maximum_optimal_to_boxcar_peak_ratio = 8.0
+maximum_optimal_to_boxcar_noise_ratio = 4.0
+
+[wavelength]
+mode = "solution_file"
+solution_path = "../output/Arcturus/2026-05-06/final/spectrum.fits"
+polynomial_degree = 2
+medium = "air"
+minimum_angstrom = 3800.0
+maximum_angstrom = 8500.0
+minimum_matched_lines = 3
+maximum_rms_angstrom = 4.0
+minimum_pixel_span_fraction = 0.45
+minimum_template_correlation = 0.30
+stellar_feature_prominence = 0.010
+stellar_feature_tolerance_pixels = 55.0
+minimum_wavelength_span_angstrom = 2500.0
+minimum_abs_dispersion_angstrom_per_pixel = 0.3
+maximum_abs_dispersion_angstrom_per_pixel = 2.0
+auto_reverse_output = true

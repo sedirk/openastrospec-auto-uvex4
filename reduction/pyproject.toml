@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uvex-reduction"
+version = "0.4.1"
+description = "Fault-tolerant UVEX 4i long-slit spectroscopy reduction pipeline"
+license = { text = "GPL-3.0-only" }
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # RASCAL 0.3.10 (required by ASPIRED 0.5.1) still requires NumPy < 1.24.
+    # Keep this environment on Python 3.11 and do not loosen these pins in-place.
+    "numpy==1.23.5",
+    "scipy==1.10.1",
+    "astropy==5.3.4",
+    "ccdproc==2.3.1",
+    "specutils==1.11.0",
+    "specreduce==1.5.0",
+    "aspired==0.5.1",
+    "rascal==0.3.10",
+    "matplotlib==3.7.5",
+]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.6,<1",
+]
+gui = [
+    "streamlit>=1.37,<2",
+]
+
+[project.scripts]
+uvex-reduce = "uvex_reduce.cli:main"
+uvex-reduce-gui = "uvex_reduce.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".."]
+filterwarnings = [
+    "ignore::pyparsing.PyparsingDeprecationWarning",
+    "ignore:.*parseString deprecated.*:DeprecationWarning",
+    "ignore:.*resetCache deprecated.*:DeprecationWarning",
+    "ignore:.*enablePackrat deprecated.*:DeprecationWarning",
+    "ignore:pkg_resources is deprecated as an API.*:DeprecationWarning",
+    "ignore:Deprecated call to `pkg_resources.declare_namespace.*:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

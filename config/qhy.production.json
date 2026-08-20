@@ -1,0 +1,29 @@
+{
+  "Qhy": {
+    "Simulator": false,
+    "SimulatorMode": "Synthetic",
+    "ExpectedStableId": "QHYminiCam8M-<commissioned-stable-id>",
+    "ExpectedModel": "QHYminiCam8M",
+    "DataRoot": "",
+    "Port": 47845,
+    "AutoConnect": false,
+    "ReplayDirectory": "",
+    "SyntheticWidth": 1024,
+    "SyntheticHeight": 576,
+    "SyntheticStars": 80,
+    "SimulationDelayMilliseconds": 80,
+    "NativeSdkPath": "C:\\Program Files\\UVEX-ADV\\QhyService\\native\\qhyccd.dll",
+    "NativeSdkSha256": "5F0957E29FF510F19FA5DE8688162FB4B9F4562B0B79B693DCBB9377BF281D14",
+    "NativeReadoutMode": 1,
+    "NativeFilterPositions": {
+      "S": 0,
+      "H": 1,
+      "O": 2,
+      "U": 3,
+      "G": 4,
+      "R": 5,
+      "I": 6,
+      "Z": 7
+    }
+  }
+}

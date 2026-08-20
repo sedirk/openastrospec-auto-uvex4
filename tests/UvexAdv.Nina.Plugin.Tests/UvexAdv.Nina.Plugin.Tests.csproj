@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <NinaInstallDir Condition="'$(NinaInstallDir)' == ''">C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy</NinaInstallDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2"><PrivateAssets>all</PrivateAssets></PackageReference>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
+    <Reference Include="NINA.Profile" HintPath="$(NinaInstallDir)\NINA.Profile.dll" Private="true" />
+    <Reference Include="NINA.Plugin" HintPath="$(NinaInstallDir)\NINA.Plugin.dll" Private="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UvexAdv.Nina.Plugin\UvexAdv.Nina.Plugin.csproj" />
+    <ProjectReference Include="..\..\src\UvexAdv.Commissioning.Tool\UvexAdv.Commissioning.Tool.csproj" />
+    <ProjectReference Include="..\..\src\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\Templates.xaml"
+          Link="Templates.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.cs"
+          Link="Sources\RealObservationStageRunner.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.Phd2SlitPlacement.cs"
+          Link="Sources\RealObservationStageRunner.Phd2SlitPlacement.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.GhostAssistance.cs"
+          Link="Sources\RealObservationStageRunner.GhostAssistance.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.QhyG3SolvePair.cs"
+          Link="Sources\RealObservationStageRunner.QhyG3SolvePair.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealCommissioningPreset.cs"
+          Link="Sources\RealCommissioningPreset.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\ObservationDockable.cs"
+          Link="Sources\ObservationDockable.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\update-touptek-sdk.ps1"
+          Link="Sources\update-touptek-sdk.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
