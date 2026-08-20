@@ -1,5 +1,7 @@
 # OpenAstroSpec Auto — UVEX4
 
+[简体中文](README.zh-CN.md) | **English**
+
 [![CI](https://github.com/sedirk/openastrospec-auto-uvex4/actions/workflows/ci.yml/badge.svg)](https://github.com/sedirk/openastrospec-auto-uvex4/actions/workflows/ci.yml)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4.svg)
@@ -19,11 +21,6 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 > unavailable until the site-specific evidence and safety gates described in the
 > commissioning documentation have passed.
 
-**中文概览：** 本项目为 UVEX4 地基光谱仪提供开源的 N.I.N.A. 自动观测、设备单一所有权编排、
-可审计的目标入缝/导星闭环，以及完全离线的光谱处理工作台。默认配置只运行模拟器；真实设备控制必须先完成
-本机 commissioning、设备身份锁定和逐级安全验收。本项目与 NASA UVEX 空间任务无关，也不是 UVEX4 或
-N.I.N.A. 官方发布。
-
 **Start here:** [Observatory product](products/observatory/README.md) ·
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
@@ -36,8 +33,14 @@ The repository contains two user-facing GPL-3.0-only software products:
 
 | Product | Purpose | Start here |
 |---|---|---|
-| **OpenAstroSpec Auto — UVEX4（前期观测控制）** | N.I.N.A. workflow, equipment ownership/orchestration, commissioning, live QHY/G3/ATR diagnostics, and immutable run evidence | [`products/observatory/README.md`](products/observatory/README.md) |
-| **OpenAstroSpec Spectral Studio — UVEX4（后期光谱处理）** | Offline FITS inspection, reduction, 2D/1D visualization, wavelength/response calibration, and delivery | [`products/spectral-studio/README.md`](products/spectral-studio/README.md) |
+| **OpenAstroSpec Auto — UVEX4 (observing control)** | N.I.N.A. workflow, equipment ownership/orchestration, commissioning, live QHY/G3/ATR diagnostics, and immutable run evidence | [`products/observatory/README.md`](products/observatory/README.md) |
+| **OpenAstroSpec Spectral Studio — UVEX4 (spectral processing)** | Offline FITS inspection, reduction, 2D/1D visualization, wavelength/response calibration, and delivery | [`products/spectral-studio/README.md`](products/spectral-studio/README.md) |
+
+![OpenAstroSpec Auto — UVEX4 observatory under the night sky](docs/assets/openastrospec-observatory-night.jpg)
+
+_The observatory environment used to develop and commission OpenAstroSpec Auto —
+UVEX4. This photograph documents the physical context; it is not evidence that the
+site has passed the unattended-operation safety gates._
 
 ![OpenAstroSpec Auto simulated N.I.N.A. observing dock](docs/assets/openastrospec-auto-running.png)
 
@@ -96,14 +99,15 @@ The current/projected component map is in
 The separately packaged Python post-processing product (FITS inspection, ASPIRED extraction,
 Spectrum1D/FITS/CSV/PNG products) is documented in
 [`reduction/README.md`](reduction/README.md). It does not access COM5 or camera drivers.
-Its Chinese desktop GUI is available through the `OpenAstroSpec 光谱处理 - UVEX4` shortcut or
+Its desktop GUI is available through the `OpenAstroSpec 光谱处理 - UVEX4`
+(`OpenAstroSpec Spectral Processing - UVEX4`) shortcut or
 the developer fallback `Launch-UVEX-Spectrum-GUI.cmd`; it now supports quality-gated
 wavelength calibration from the local ISIS stellar-template database. The installed
 shortcut targets a native `.NET 8` launcher, matching the manager shortcut instead of
 exposing a command file or Python executable.
 
 Reduced spectra are organized under `reduction/output/Target/YYYY-MM-DD/`. Double-click
-`reduction/output/00-打开结果索引.html` for the visual catalogue; historical runs and
+`reduction/output/00-打开结果索引.html` (the “open result index” page) for the visual catalogue; historical runs and
 quality studies are retained separately under `reduction/output/_internal/`.
 
 ## Safety status
@@ -186,9 +190,10 @@ acceptance record are in
 Its isolated WPF harness renders the real production data template with deterministic
 mock states; it never constructs the production dockable or contacts equipment.
 
-The `OpenAstroSpec 自动观测` dock begins with two explicit choices: **模拟演练（不连接任何真实
-设备）** and **真实设备控制（必须通过全部安全硬门）**. It then uses one mode-aware
-start button. Selecting real mode by itself never connects or moves equipment. The dock
+The `OpenAstroSpec 自动观测` (`OpenAstroSpec Automated Observation`) dock begins with
+two explicit choices: **Simulation rehearsal (connects no real equipment)** and
+**Real-equipment control (must pass every hard safety gate)**. It then uses one
+mode-aware start button. Selecting real mode by itself never connects or moves equipment. The dock
 shows QHY/GS350, PHD2/G3 slit-field, and ATR spectrum previews as narrow-layout tabs,
 alongside the current stage, next stage, quality gates, timeline, evidence files, and
 remaining progress. A persistent failure card links the latest failed gate and metrics
