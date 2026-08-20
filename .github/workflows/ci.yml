@@ -18,23 +18,23 @@ jobs:
           dotnet-version: 8.0.419
 
       - name: Verify frozen acquisition design
-        shell: powershell
+        shell: pwsh
         run: .\scripts\verify-design-baseline.ps1 -Quiet
 
       - name: Verify two-product repository layout and GPL metadata
-        shell: powershell
+        shell: pwsh
         run: .\scripts\verify-product-layout.ps1 -Quiet
 
       - name: Verify public branding and compatibility identities
-        shell: powershell
+        shell: pwsh
         run: .\scripts\verify-public-branding.ps1
 
       - name: Audit the public source snapshot
-        shell: powershell
+        shell: pwsh
         run: .\scripts\audit-public-release.ps1 -Strict
 
       - name: Test hardware-independent Observatory projects
-        shell: powershell
+        shell: pwsh
         run: |
           dotnet test .\tests\UvexAdv.Protocol.Tests\UvexAdv.Protocol.Tests.csproj -c Release
           dotnet test .\tests\UvexAdv.Core.Tests\UvexAdv.Core.Tests.csproj -c Release
@@ -48,7 +48,7 @@ jobs:
           dotnet test .\tests\UvexAdv.Commissioning.Tool.Tests\UvexAdv.Commissioning.Tool.Tests.csproj -c Release
 
       - name: Explain N.I.N.A. plugin build boundary
-        shell: powershell
+        shell: pwsh
         run: |
           Write-Host 'The N.I.N.A. plugin is release-tested on Windows with supported N.I.N.A. 3.2 assemblies; hosted CI does not fabricate external runtime files.'
 
@@ -67,7 +67,7 @@ jobs:
           cache-dependency-path: reduction/requirements-lock.txt
 
       - name: Install pinned reduction environment
-        shell: powershell
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r .\requirements-lock.txt
@@ -75,9 +75,9 @@ jobs:
           python -m pip install --no-deps -e .
 
       - name: Ruff
-        shell: powershell
+        shell: pwsh
         run: ruff check src tests tools
 
       - name: Pytest
-        shell: powershell
+        shell: pwsh
         run: pytest -q
