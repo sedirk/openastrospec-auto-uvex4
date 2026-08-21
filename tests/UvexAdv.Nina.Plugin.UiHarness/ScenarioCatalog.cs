@@ -59,9 +59,13 @@ public sealed class ObservationDockMockViewModel
     public string Phd2CalibrationPermissionText { get; init; } = "验证导星：等待 · exact-lock：等待 · 无人值守科学：否";
     public string Phd2CalibrationScaleText { get; init; } = "步长/残差缩放：等待 PostSettle 证据";
     public string Phd2CalibrationReasonText { get; init; } = "当前生产路径只评估 PHD2 当前 active calibration（单候选，并非历史择优）；真实 settle 和 fresh residual 到齐后再复评。";
+    public string Phd2CalibrationOverviewGradeText { get; init; } = "尚未评估";
+    public string Phd2CalibrationOverviewText { get; init; } = "启动导星后自动评估；评估前不执行精调或科学曝光。";
     public string GhostCalibrationSummaryText { get; init; } = "模式：Skip · 标定：commissioning preset 未包含 GhostAssistance。";
     public string GhostApplicabilityText { get; init; } = "适用性：尚未运行。";
     public string GhostDecisionText { get; init; } = "决定：尚未运行；Skip/Auto 继续原 WCS/居中/搜索。";
+    public string GhostAssistanceModeText { get; init; } = "关闭";
+    public string GhostOverviewText { get; init; } = "已关闭；目标定位使用常规 WCS、居中与有界搜索。";
 
     public bool IsSimulationMode { get; init; } = true;
     public bool IsRealMode => !IsSimulationMode;
@@ -217,6 +221,7 @@ public sealed class ObservationDockMockViewModel
     public ICommand TakeoverCommand => IsRunActive || IsPausedNeedsAttention ? EnabledCommand : DisabledCommand;
     public ICommand CancelCommand => IsRunActive || IsPausedNeedsAttention ? EnabledCommand : DisabledCommand;
     public ICommand ImportCommissioningBindingsCommand => EnabledCommand;
+    public ICommand ShowObservationPlanCommand => EnabledCommand;
     public ICommand ShowStartupRequirementsCommand => EnabledCommand;
     public ICommand RefreshProfileOwnershipCommand => EnabledCommand;
     public ICommand ImportFromFramingAssistantCommand =>
@@ -264,6 +269,7 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制",
         ModeDescription = "全部启动硬门已经通过；流程正在自动推进，人工可随时暂停。",
         RealModeStatus = "✓ 真实模式启动条件已通过",
+        RealModeStatusSummary = "真实模式：启动条件已通过。",
         StartButtonText = "真实设备自动观测正在运行",
         StateText = "运行中",
         StatusMessage = "G3 精解析通过，正在执行目标质心到狭缝的有界闭环。",
@@ -296,6 +302,7 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制",
         ModeDescription = "自动流程已停止发起新动作；人工检查后可恢复并重新验证全部失效门。",
         RealModeStatus = "✓ 已锁定本次运行的 Night Setup 与设备身份",
+        RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
         StartButtonText = "当前运行已暂停",
         StateText = "已暂停，需要处理",
         StatusMessage = "G3 主焦点质量门未通过，没有开始导星或 ATR 科学曝光。",
@@ -332,22 +339,25 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制 · 有人监督",
         ModeDescription = "离线界面验收：显示降级校准的权限边界；没有连接或移动设备。",
         RealModeStatus = "PHD2 降级模式只能由本轮显式选择，不能成为无人值守科学权威。",
+        RealModeStatusSummary = "真实模式：启动条件已通过；等待本轮监督选择。",
         StartButtonText = "启动真实设备自动观测",
         StateText = "已暂停，需要处理",
-        StatusMessage = "PHD2 当前 active calibration 已完成 settle 与 fresh residual 复评。",
-        PauseReason = "等待操作员决定是否接受 DegradedSupervised 短块。",
+        StatusMessage = "PHD2 当前校准已完成导星稳定和新鲜入缝残差复评。",
+        PauseReason = "等待操作员决定是否接受降级校准的有人监督短时观测。",
         CurrentStageText = "选择导星星并等待稳定",
-        NextStageText = "有人监督 exact-lock 入缝",
+        NextStageText = "有人监督精确入缝",
         ProgressPercent = 58,
         IsSimulationMode = false,
         HasFailure = true,
         SelectedWorkspaceTabIndex = 0,
         Phd2CalibrationGradeText = "DegradedSupervised",
+        Phd2CalibrationOverviewGradeText = "降级（需人工监督）",
         Phd2CalibrationPolicyText = "phd2-calibration-quality-v1",
         Phd2CommissioningRouteText = "路线：Phd2CalibrationLockShift · guide OffSlitGuideStar · 普通星 2000 ms · 亮目标降级 10 ms",
         Phd2CalibrationPermissionText = "验证导星：是 · exact-lock：是（仅有人监督） · 无人值守科学：否",
         Phd2CalibrationScaleText = "步长缩放：0.5 · 残差门缩放：0.75",
         Phd2CalibrationReasonText = "正交误差 11.7° 高于 Qualified 10.0°，但低于 Degraded 30.0°；同 epoch settle 与 fresh residual 已通过。",
+        Phd2CalibrationOverviewText = "精确入缝：是（仅有人监督） · 无人值守拍摄：否",
         GateRows =
         [
             new("PHD2 校准复评", "降级可用", "PHD2_CALIBRATION_DEGRADED_SUPERVISED", "11.7° 候选只允许有人监督", "stage 0.5 · residual 0.75", "Indeterminate", true, false),
@@ -359,10 +369,11 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制 · 有人监督",
         ModeDescription = "离线界面验收：普通导星星不可用时，显示短曝光直接导目标星的退化路线；没有连接或移动设备。",
         RealModeStatus = "直接导目标星始终需要本轮显式监督许可，校准本身合格也不能获得无人值守权限。",
+        RealModeStatusSummary = "真实模式：启动条件已通过；等待本轮监督选择。",
         StartButtonText = "启动真实设备自动观测",
         StateText = "已暂停，需要处理",
         StatusMessage = "普通星 2000 ms 同帧选择失败；10 ms 目标专用帧已唯一识别目标，等待显式监督许可。",
-        PauseReason = "等待操作员接受 DegradedDirectTargetGuiding 短块；未接受前不启动 guide 或 exact-lock。",
+        PauseReason = "等待操作员接受短曝光直接导目标星；未接受前不启动导星或精确入缝。",
         CurrentStageText = "选择导星星并等待稳定",
         NextStageText = "短曝光直接导目标星并分段入缝",
         ProgressPercent = 56,
@@ -370,11 +381,13 @@ public sealed class ObservationDockMockViewModel
         HasFailure = true,
         SelectedWorkspaceTabIndex = 0,
         Phd2CalibrationGradeText = "Qualified",
+        Phd2CalibrationOverviewGradeText = "合格",
         Phd2CalibrationPolicyText = "phd2-calibration-quality-v1",
         Phd2CommissioningRouteText = "路线：Phd2CalibrationLockShift · guide DegradedDirectTargetGuiding · 普通星 2000 ms 未找到 · 目标短曝 10 ms · 有人监督",
         Phd2CalibrationPermissionText = "验证导星：是 · exact-lock：等待本轮监督许可 · 无人值守科学：否",
         Phd2CalibrationScaleText = "校准步长缩放：1.0 · direct-target 残差门使用更严格专用上限",
         Phd2CalibrationReasonText = "活动校准为 Qualified；但直接导目标星路线本身始终 RequiresOperatorSupervision，不能因校准合格而升级为无人值守。",
+        Phd2CalibrationOverviewText = "精确入缝：等待监督许可 · 无人值守拍摄：否",
         GateRows =
         [
             new("PHD2 导星星选择", "等待监督许可", "PHD2_DIRECT_TARGET_SUPERVISION_REQUIRED", "普通星不可用；目标短曝已通过唯一性与边缘门", "ordinary 2000 ms · direct 10 ms", "Indeterminate", true, false),
@@ -386,6 +399,7 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制",
         ModeDescription = "离线界面验收：已显示确定性鬼影辅助的完整权限边界；没有连接或移动设备。",
         RealModeStatus = "✓ schema 4 commissioning preset、四槽位光学身份与 action configuration 已锁定",
+        RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
         StartButtonText = "真实设备自动观测正在运行",
         StateText = "运行中",
         StatusMessage = "普通/翼部身份定位失败后，2 张新鲜同曝光 OFF 帧通过了鬼影模板适用性与一致性门。",
@@ -396,13 +410,17 @@ public sealed class ObservationDockMockViewModel
         IsRunActive = true,
         SelectedWorkspaceTabIndex = 0,
         GhostAssistanceMode = "AutoIfValidElseSkip",
+        GhostAssistanceModeText = "自动（无效时跳过）",
         GhostCalibrationSummaryText = "模式：AutoIfValidElseSkip · 标定：g3-ghost-install-20260818 / A47D9C0F11B2 · 策略：ghost-match-v1 / 16BDA0397F22 · preset 8C64B121A05E。",
         GhostApplicabilityText = "适用性：GHOST_TEMPLATE_APPLICABLE · 外部身份：CatalogBoundG3Wcs · 新鲜同曝光 OFF 帧：2。",
         GhostDecisionText = "决定：UseCalibratedAuxiliaryEstimate · 门：GHOST_AUXILIARY_TARGET_ESTIMATE_VALID · 权限：CalibratedAuxiliaryOnly（不能建立身份或授权运动）。",
+        GhostOverviewText = "本轮使用已标定的辅助质心；目标身份和设备移动仍由常规证据授权。",
         Phd2CalibrationGradeText = "Qualified",
+        Phd2CalibrationOverviewGradeText = "合格",
         Phd2CommissioningRouteText = "路线：Phd2CalibrationLockShift · guide AutoPreferOffSlitThenDirectTarget · 普通星 2000 ms · 亮目标降级 10 ms",
         Phd2CalibrationPermissionText = "验证导星：是 · exact-lock：是 · 无人值守科学：等待新鲜残差",
         Phd2CalibrationScaleText = "步长缩放：1.0 · 残差门缩放：1.0",
+        Phd2CalibrationOverviewText = "精确入缝：是 · 无人值守拍摄：等待新的入缝残差",
         GateRows = DefaultGates("等待"),
         TimelineRows =
         [
@@ -421,6 +439,7 @@ public sealed class ObservationDockMockViewModel
         ModeText = "真实设备控制 · 候选学习",
         ModeDescription = "离线界面验收：G3 解算后立即配对 QHY WCS；没有连接、曝光或移动设备。",
         RealModeStatus = "✓ 快速双解算 policy 已进入不可变 action configuration",
+        RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
         StartButtonText = "启动真实设备自动观测",
         StateText = "运行中",
         StatusMessage = "G3 WCS 成功；复用同一指向下 8.4 秒前完成的 QHY WCS，未增加曝光。",

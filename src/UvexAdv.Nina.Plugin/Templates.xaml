@@ -337,11 +337,7 @@
       <!-- The main area uses tabs instead of one very long, nested-scroll page. -->
       <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedWorkspaceTabIndex, Mode=TwoWay}">
         <TabItem Header="运行概览">
-          <Grid Margin="9">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
+          <StackPanel Margin="9">
             <Border x:Name="RealModeStartupSummary" Background="#172033" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="8" Margin="0,0,0,8">
               <Grid>
                 <Grid.ColumnDefinitions>
@@ -350,47 +346,42 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
                   <TextBlock Text="{Binding RealModeStatusSummary}" Foreground="#FBBF24" FontWeight="SemiBold" TextWrapping="Wrap" />
-                  <TextBlock Text="模式切换不会连接或移动设备；启动时仍会逐项复核。完整条件与 bindings 位于“高级设置”。"
+                  <TextBlock Text="启动前先完善观测计划和启动条件；模式切换本身不会连接或移动设备。"
                              Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
                 </StackPanel>
                 <WrapPanel Grid.Column="1" VerticalAlignment="Center">
-                  <Button Content="查看启动条件" Command="{Binding ShowStartupRequirementsCommand}" />
-                  <Button Content="导入 bindings" Command="{Binding ImportCommissioningBindingsCommand}" />
+                  <Button Content="编辑观测计划" Command="{Binding ShowObservationPlanCommand}" />
+                  <Button Content="处理启动条件" Command="{Binding ShowStartupRequirementsCommand}" />
                 </WrapPanel>
               </Grid>
             </Border>
-            <Grid Grid.Row="1">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="8" />
-                <ColumnDefinition Width="*" />
-              </Grid.ColumnDefinitions>
-              <Border Grid.Column="0" Background="#211A12" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="5" Padding="10">
-                <StackPanel>
-                  <WrapPanel>
-                    <TextBlock Text="PHD2 校准质量" FontSize="15" FontWeight="Bold" Foreground="#FDE68A" Margin="0,0,10,0" />
-                    <TextBlock Text="{Binding Phd2CalibrationGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
-                  </WrapPanel>
-                  <TextBlock Text="{Binding Phd2CalibrationPolicyText, StringFormat=策略：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding Phd2CalibrationPermissionText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <TextBlock Text="{Binding Phd2CommissioningRouteText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding Phd2CalibrationScaleText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding Phd2CalibrationReasonText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,5,0,0" />
+            <Border x:Name="OperationalReadinessSummary" Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="9">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="PHD2 导星" FontWeight="Bold" Foreground="#FDE68A" VerticalAlignment="Center" Margin="0,0,14,0" />
+                <StackPanel Grid.Row="0" Grid.Column="1">
+                  <TextBlock Text="{Binding Phd2CalibrationOverviewGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
+                  <TextBlock Text="{Binding Phd2CalibrationOverviewText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,1,0,0" />
                 </StackPanel>
-              </Border>
-              <Border Grid.Column="2" Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10">
-                <StackPanel>
-                  <TextBlock Text="鬼影辅助定位" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="仅提供辅助质心与协方差，不授予目标身份或运动权限。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
-                  <TextBlock Text="{Binding GhostCalibrationSummaryText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <TextBlock Text="{Binding GhostApplicabilityText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="Skip 完全跳过；Auto 无效时继续 WCS/居中/搜索；Require 无效时暂停。"
-                             Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,5,0,0" />
+                <Button Grid.Row="0" Grid.RowSpan="3" Grid.Column="2" Content="详细策略" Command="{Binding ShowStartupRequirementsCommand}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                <Separator Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,7" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="目标定位辅助" FontWeight="Bold" Foreground="#7DD3FC" VerticalAlignment="Center" Margin="0,0,14,0" />
+                <StackPanel Grid.Row="2" Grid.Column="1">
+                  <TextBlock Text="{Binding GhostAssistanceModeText}" FontWeight="Bold" Foreground="#7DD3FC" />
+                  <TextBlock Text="{Binding GhostOverviewText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,1,0,0" />
                 </StackPanel>
-              </Border>
-            </Grid>
-          </Grid>
+              </Grid>
+            </Border>
+          </StackPanel>
         </TabItem>
 
         <TabItem Header="观测计划">
@@ -598,6 +589,27 @@
                   <Button Content="导入 commissioning bindings" Command="{Binding ImportCommissioningBindingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
                 </StackPanel>
               </Border>
+              <Expander Header="PHD2 与目标定位策略详情" Margin="0,0,0,8">
+                <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
+                  <StackPanel>
+                    <WrapPanel>
+                      <TextBlock Text="PHD2 校准质量" FontWeight="Bold" Foreground="#FDE68A" Margin="0,0,10,0" />
+                      <TextBlock Text="{Binding Phd2CalibrationGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding Phd2CalibrationPolicyText, StringFormat=策略：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding Phd2CalibrationPermissionText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding Phd2CommissioningRouteText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    <TextBlock Text="{Binding Phd2CalibrationScaleText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    <TextBlock Text="{Binding Phd2CalibrationReasonText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <Separator Margin="0,8,0,7" />
+                    <TextBlock Text="确定性鬼影辅助" FontWeight="Bold" Foreground="#7DD3FC" />
+                    <TextBlock Text="仅提供辅助质心与协方差，不授予目标身份或运动权限。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
+                    <TextBlock Text="{Binding GhostCalibrationSummaryText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding GhostApplicabilityText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  </StackPanel>
+                </Border>
+              </Expander>
               <Expander Header="站点、40° 围墙与模拟速度" Margin="0,0,0,8">
                 <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
                   <Grid>

@@ -51,6 +51,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand openFailureEvidenceDirectoryCommand;
     private readonly SimpleCommand openLatestEvidenceDirectoryCommand;
     private readonly SimpleCommand openRunDirectoryCommand;
+    private readonly SimpleCommand showObservationPlanCommand;
     private readonly SimpleCommand showStartupRequirementsCommand;
     private readonly SimpleCommand importCommissioningBindingsCommand;
     private readonly SimpleCommand refreshProfileOwnershipCommand;
@@ -86,10 +87,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string phd2CalibrationPermissionText = "验证导星：等待 · exact-lock：等待 · 无人值守科学：否";
     private string phd2CalibrationScaleText = "步长/残差缩放：等待 PostSettle 证据";
     private string phd2CalibrationReasonText = "当前生产路径只评估 PHD2 当前 active calibration（单候选）；本轮真实 settle 和 fresh residual 到齐后才授予 exact-lock 或科学权限。";
+    private string phd2CalibrationOverviewGradeText = "尚未评估";
+    private string phd2CalibrationOverviewText = "启动导星后自动评估；评估前不执行精调或科学曝光。";
     private string ghostCalibrationSummaryText = "标定：尚未读取经过 SHA-256 验证的 commissioning preset。";
     private string slitIdentityStatusText = "狭缝光学身份：尚未读取经过 SHA-256 验证的四槽位 LED 宽度指纹。";
     private string ghostApplicabilityText = "适用性：尚未运行；需同时核对新鲜 OFF 帧、相机/Profile、ROI/binning、方向、pier side、外部目录身份和独立 C11 焦点。";
     private string ghostDecisionText = "决定：尚未运行。Skip/Auto 继续既有 WCS/居中/搜索；只有 Require 无效时暂停。";
+    private string ghostAssistanceModeText = "关闭";
+    private string ghostOverviewText = "已关闭；目标定位使用常规 WCS、居中与有界搜索。";
     private ObservationPreviewChannel? lastFailurePreviewChannel;
     private bool hasFailure;
     private bool hasTargetImport;
@@ -155,6 +160,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         openRunDirectoryCommand = new SimpleCommand(
             () => OpenContainingDirectory(RunManifestPath, "运行清单"),
             () => PathExists(RunManifestPath));
+        showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
         showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 5);
         importCommissioningBindingsCommand = new SimpleCommand(ImportCommissioningBindings);
         refreshProfileOwnershipCommand = new SimpleCommand(RefreshProfileOwnership);
@@ -189,6 +195,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand OpenFailureEvidenceDirectoryCommand => openFailureEvidenceDirectoryCommand;
     public ICommand OpenLatestEvidenceDirectoryCommand => openLatestEvidenceDirectoryCommand;
     public ICommand OpenRunDirectoryCommand => openRunDirectoryCommand;
+    public ICommand ShowObservationPlanCommand => showObservationPlanCommand;
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
     public ICommand ImportCommissioningBindingsCommand => importCommissioningBindingsCommand;
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
@@ -787,6 +794,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string Phd2CalibrationPermissionText { get => phd2CalibrationPermissionText; private set { phd2CalibrationPermissionText = value; RaisePropertyChanged(); } }
     public string Phd2CalibrationScaleText { get => phd2CalibrationScaleText; private set { phd2CalibrationScaleText = value; RaisePropertyChanged(); } }
     public string Phd2CalibrationReasonText { get => phd2CalibrationReasonText; private set { phd2CalibrationReasonText = value; RaisePropertyChanged(); } }
+    public string Phd2CalibrationOverviewGradeText { get => phd2CalibrationOverviewGradeText; private set { phd2CalibrationOverviewGradeText = value; RaisePropertyChanged(); } }
+    public string Phd2CalibrationOverviewText { get => phd2CalibrationOverviewText; private set { phd2CalibrationOverviewText = value; RaisePropertyChanged(); } }
     public string PauseReason { get => pauseReason; private set { pauseReason = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasPauseReason)); } }
     public string RunManifestPath { get => runManifestPath; private set { runManifestPath = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasRunManifest)); } }
     public string OperatorNotice { get => operatorNotice; private set { operatorNotice = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasOperatorNotice)); } }
@@ -811,6 +820,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string SlitIdentityStatusText { get => slitIdentityStatusText; private set { slitIdentityStatusText = value; RaisePropertyChanged(); } }
     public string GhostApplicabilityText { get => ghostApplicabilityText; private set { ghostApplicabilityText = value; RaisePropertyChanged(); } }
     public string GhostDecisionText { get => ghostDecisionText; private set { ghostDecisionText = value; RaisePropertyChanged(); } }
+    public string GhostAssistanceModeText { get => ghostAssistanceModeText; private set { ghostAssistanceModeText = value; RaisePropertyChanged(); } }
+    public string GhostOverviewText { get => ghostOverviewText; private set { ghostOverviewText = value; RaisePropertyChanged(); } }
     public bool HasFailure
     {
         get => hasFailure;
@@ -1539,16 +1550,29 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             !double.IsFinite(numericGrade))
         {
             Phd2CalibrationGradeText = gate is null ? "尚未评估" : "尚未获得 PostSettle 权限";
+            Phd2CalibrationOverviewGradeText = Phd2CalibrationGradeText;
             Phd2CalibrationPermissionText = "验证导星：等待 · exact-lock：等待 · 无人值守科学：否";
             Phd2CalibrationScaleText = "步长/残差缩放：等待 PostSettle 证据";
             Phd2CalibrationReasonText = gate?.Message ?? "当前生产路径只评估 PHD2 当前 active calibration（单候选，并非历史择优）；本轮真实 settle 和 fresh residual 到齐后才授予 exact-lock 或科学权限。";
+            Phd2CalibrationOverviewText = gate is null
+                ? "启动导星后自动评估；评估前不执行精调或科学曝光。"
+                : "等待本轮导星稳定和新的入缝残差；暂不继续精调或科学曝光。";
             return;
         }
 
         var gradeValue = (int)Math.Round(numericGrade);
-        Phd2CalibrationGradeText = Enum.IsDefined(typeof(Phd2CalibrationQualityGrade), gradeValue)
-            ? ((Phd2CalibrationQualityGrade)gradeValue).ToString()
-            : $"未知等级 {numericGrade:G4}";
+        var grade = Enum.IsDefined(typeof(Phd2CalibrationQualityGrade), gradeValue)
+            ? (Phd2CalibrationQualityGrade?)gradeValue
+            : null;
+        Phd2CalibrationGradeText = grade?.ToString() ?? $"未知等级 {numericGrade:G4}";
+        Phd2CalibrationOverviewGradeText = grade switch
+        {
+            Phd2CalibrationQualityGrade.Excellent => "优秀",
+            Phd2CalibrationQualityGrade.Qualified => "合格",
+            Phd2CalibrationQualityGrade.DegradedSupervised => "降级（需人工监督）",
+            Phd2CalibrationQualityGrade.Rejected => "不可用",
+            _ => "未知等级",
+        };
         Phd2CalibrationPermissionText =
             $"验证导星：{Permission(gate.Metrics, "phd2CanAttemptValidationGuide")} · " +
             $"exact-lock：{Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
@@ -1557,6 +1581,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             $"步长缩放：{Metric(gate.Metrics, "phd2MaximumLockShiftScale")} · " +
             $"残差门缩放：{Metric(gate.Metrics, "phd2RequiredResidualToleranceScale")}";
         Phd2CalibrationReasonText = gate.Message;
+        Phd2CalibrationOverviewText =
+            $"精确入缝：{Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
+            $"无人值守拍摄：{Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}";
     }
 
     private IReadOnlyList<string> ValidateCommissioningPresetUiRequirements()
@@ -1655,11 +1682,26 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             $"决定：{MetadataValue(metadata, "decision", "未知")} · " +
             $"门：{MetadataValue(metadata, "decisionGate", "未知")} · " +
             $"权限：{MetadataValue(metadata, "ghostAuthority", "None")}（不能建立身份或授权运动）。";
+        GhostOverviewText = GhostDecisionOverview(MetadataValue(metadata, "decision", "未知"));
     }
 
     private void RefreshGhostCommissioningSummary()
     {
         var mode = settings.GhostAssistanceMode;
+        GhostAssistanceModeText = mode switch
+        {
+            GhostAssistanceMode.Skip => "关闭",
+            GhostAssistanceMode.AutoIfValidElseSkip => "自动（无效时跳过）",
+            GhostAssistanceMode.RequireValid => "必须有效",
+            _ => "未知模式",
+        };
+        GhostOverviewText = mode switch
+        {
+            GhostAssistanceMode.Skip => "已关闭；目标定位使用常规 WCS、居中与有界搜索。",
+            GhostAssistanceMode.AutoIfValidElseSkip => "自动辅助；无效时继续常规 WCS、居中与有界搜索。",
+            GhostAssistanceMode.RequireValid => "强制辅助；证据无效时暂停并等待处理。",
+            _ => $"模式 {mode}；启动前需要复核。",
+        };
         if (string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) ||
             !File.Exists(settings.CommissioningPresetPath))
         {
@@ -1770,6 +1812,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string fallback) => metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
         ? value
         : fallback;
+
+    private static string GhostDecisionOverview(string decision) => decision switch
+    {
+        nameof(GhostAssistanceDecision.UseCalibratedAuxiliaryEstimate) =>
+            "本轮使用已标定的辅助质心；目标身份和设备移动仍由常规证据授权。",
+        nameof(GhostAssistanceDecision.ContinueLongExposureWcsFallback) =>
+            "本轮辅助定位无效；已继续使用常规 WCS、居中与有界搜索。",
+        nameof(GhostAssistanceDecision.PauseNeedsAttention) =>
+            "辅助定位证据无效；已暂停并等待处理。",
+        _ => "本轮辅助定位结果未知；请打开详细策略核对证据。",
+    };
 
     private static string JsonText(JsonElement node, string name, string fallback) =>
         TryGetProperty(node, name, out var value) && value.ValueKind == JsonValueKind.String

@@ -8,6 +8,10 @@ DLL 能被插件加载器读取不等于界面模板能安全实例化；发布�
    或 `Mode=OneTime`，不得依赖 `TextBox.Text` 默认的 TwoWay 模式。自动观测
    主界面的“运行概览”和“观测计划”不得包含整页 `ScrollViewer`；新增常用状态或
    目标字段时应新增/重组页签或使用紧凑分栏，不得把常用页面重新堆成长滚动表单。
+   “运行概览”不得以 `Height="*"` 把 PHD2、鬼影或其他说明卡拉满剩余高度；首页只显示
+   等级/模式、是否可用和下一操作，policy SHA、commissioning route、缩放、完整适用性
+   与权限契约必须放在“高级设置”的折叠详情中。首页状态必须使用操作员可读的中文，
+   不得直接显示 `DegradedSupervised`、`AutoIfValidElseSkip`、decision gate code 等内部枚举或证据代码。
 2. 渲染 UI harness 的全部场景并人工检查截图，不得只检查编译结果。
 3. 安装将要交付的精确 artifact 后启动 N.I.N.A.，至少依次打开一次 UVEX
    主观测控制台、OpenAstroSpec 光谱面板和 OpenAstroSpec 校准库面板。

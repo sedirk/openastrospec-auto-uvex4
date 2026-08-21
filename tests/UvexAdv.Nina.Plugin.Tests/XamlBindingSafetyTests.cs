@@ -105,6 +105,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("Header=\"失败诊断\"", dock, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"RealModeStartupSummary\"", dock, StringComparison.Ordinal);
         Assert.Contains("Text=\"{Binding RealModeStatusSummary}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ShowObservationPlanCommand}\"", dock, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding ShowStartupRequirementsCommand}\"", dock, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"RealModeStartupDetails\"", dock, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(dock, "Text=\\\"\\{Binding RealModeStatus\\}\\\"", RegexOptions.CultureInvariant).Cast<Match>());
@@ -120,8 +121,26 @@ public sealed class XamlBindingSafetyTests
             failureTabStart > realtimeTabStart &&
             advancedTabStart > failureTabStart);
         Assert.DoesNotContain("<ScrollViewer", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("<RowDefinition Height=\"*\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"OperationalReadinessSummary\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewGradeText}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewText}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.Contains("Text=\"{Binding GhostAssistanceModeText}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.Contains("Text=\"{Binding GhostOverviewText}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Text=\"{Binding Phd2CalibrationGradeText}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Text=\"{Binding GhostAssistanceMode}\"", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2CalibrationPolicyText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2CommissioningRouteText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2CalibrationScaleText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2CalibrationReasonText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("GhostCalibrationSummaryText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("GhostApplicabilityText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("GhostDecisionText", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
         Assert.DoesNotContain("<ScrollViewer", dock[planTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("<ScrollViewer", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("Header=\"PHD2 与目标定位策略详情\"", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("Phd2CalibrationPolicyText", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("GhostCalibrationSummaryText", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.DoesNotContain("Header=\"操作与计划\"", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("{Binding RealModeStatus}", dock[overviewTabStart..planTabStart], StringComparison.Ordinal);
         Assert.Contains("Text=\"{Binding TargetName", dock[planTabStart..realtimeTabStart], StringComparison.Ordinal);

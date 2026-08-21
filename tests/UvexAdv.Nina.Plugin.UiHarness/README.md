@@ -11,9 +11,10 @@ Rendering is refused unless the caller supplies the explicit `--render` switch:
 .\.dotnet\dotnet.exe run --project .\tests\UvexAdv.Nina.Plugin.UiHarness\UvexAdv.Nina.Plugin.UiHarness.csproj --configuration Release -- --render
 ```
 
-The default output is the ignored `tmp/ui-screenshots/` directory. Eight PNG files
-cover idle, running, failed/paused, PHD2 degraded, direct-target supervised guiding,
-calibrated ghost-assistance, narrow-dock, and advanced bright-target settings states. The wide idle and narrow
+The default output is the ignored `tmp/ui-screenshots/` directory. Ten PNG files
+cover idle, startup requirements, running, failed/paused, PHD2 degraded,
+direct-target supervised guiding, calibrated ghost-assistance, QHY/G3 fast pairing,
+narrow-dock, and advanced bright-target settings states. The wide idle and narrow
 scenarios also exercise target-import status, full button labels, responsive wrapping,
 and run-time command disabling. To render one scenario:
 
@@ -24,9 +25,10 @@ and run-time command disabling. To render one scenario:
 The `advanced` scenario selects the production Advanced Settings tab, expands the
 bright-target wing-centroid section, and scrolls it into view for label/layout QA.
 
-The `ghost-assistance` scenario shows Auto mode with explicit calibration/policy
-hash summaries, applicability and decision, plus the centroid/covariance-only
-authority boundary. It is synthetic and does not read FITS or contact hardware.
+The `ghost-assistance` scenario shows the compact operator summary for Auto mode;
+the full calibration/policy hashes, applicability and centroid/covariance-only
+authority boundary live in the collapsed Advanced Settings detail. It is synthetic
+and does not read FITS or contact hardware.
 
 The `phd2-direct-target` scenario proves that a Qualified calibration does not turn
 the ultra-bright-target fallback into unattended authority: ordinary and direct
