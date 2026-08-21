@@ -163,7 +163,7 @@ public static class ScreenshotRenderer
             element.UpdateLayout();
         }
 
-        if (scenario.ViewModel.SelectedWorkspaceTabIndex != 1)
+        if (scenario.ViewModel.SelectedWorkspaceTabIndex != 2)
         {
             return;
         }

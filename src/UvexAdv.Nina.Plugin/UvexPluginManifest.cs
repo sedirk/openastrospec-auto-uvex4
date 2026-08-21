@@ -150,7 +150,7 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
 
             if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
             {
-                return "配置不完整：必须先在“OpenAstroSpec 光谱”面板绑定 ATR585M DeviceId。";
+                return "配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。";
             }
 
             int focusLineCount;
@@ -184,7 +184,7 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
 
             if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
             {
-                return "配置不完整：必须先在“OpenAstroSpec 光谱”面板绑定 ATR585M DeviceId。";
+                return "配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。";
             }
 
             if (!double.IsFinite(settings.WavelengthReferencePixel) ||

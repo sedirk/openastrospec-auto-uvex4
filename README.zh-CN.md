@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\install-nina-plugin.ps1
 ```
 
-为兼容旧配置，插件仍安装到 `%LOCALAPPDATA%\NINA\Plugins\3.0.0\UVEX-ADV Spectroscopy`，但在界面中显示为 `OpenAstroSpec Auto — UVEX4`，包含 `OpenAstroSpec 光谱`、`OpenAstroSpec 校准库` 和 `OpenAstroSpec 自动观测` 面板，以及 `OpenAstroSpec Auto` 高级序列分类。文件夹名与插件 GUID 保持不变，因此已有 N.I.N.A. profile 会继续加载同一个插件。
+为兼容旧配置，插件仍安装到 `%LOCALAPPDATA%\NINA\Plugins\3.0.0\UVEX-ADV Spectroscopy`，但在界面中显示为 `OpenAstroSpec Auto — UVEX4`，包含 `OpenAstroSpec 自动观测` 和 `OpenAstroSpec 校准库` 两个面板，以及 `OpenAstroSpec Auto` 高级序列分类。ATR585M 身份绑定和单帧提取检查已并入 `OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱`，不再保留独立的占位“光谱”页。文件夹名与插件 GUID 保持不变，因此已有 N.I.N.A. profile 会继续加载同一个插件。
 
 QHY 服务单独安装，默认使用合成模拟器：
 

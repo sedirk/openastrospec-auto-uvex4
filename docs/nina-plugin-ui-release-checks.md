@@ -13,8 +13,12 @@ DLL 能被插件加载器读取不等于界面模板能安全实例化；发布�
    与权限契约必须放在“高级设置”的折叠详情中。首页状态必须使用操作员可读的中文，
    不得直接显示 `DegradedSupervised`、`AutoIfValidElseSkip`、decision gate code 等内部枚举或证据代码。
 2. 渲染 UI harness 的全部场景并人工检查截图，不得只检查编译结果。
-3. 安装将要交付的精确 artifact 后启动 N.I.N.A.，至少依次打开一次 UVEX
-   主观测控制台、OpenAstroSpec 光谱面板和 OpenAstroSpec 校准库面板。
+   会共同重建 `UvexAdv.Nina.Plugin` 的插件测试与 UI harness 测试必须串行运行；
+   不得让两个 `dotnet build/test` 进程同时写同一个 WPF `obj/*_wpftmp` 目录，避免
+   生成的 `InitializeComponent`/命名控件文件发生竞态。
+3. 安装将要交付的精确 artifact 后启动 N.I.N.A.，至少依次打开一次
+   OpenAstroSpec 自动观测和 OpenAstroSpec 校准库两个面板，并在自动观测中切换到
+   `实时图像 → ATR 二维/一维光谱`，确认内嵌的 ATR 单帧检查区能实例化。
 4. 检查本次新建的 N.I.N.A. 日志。出现 `XamlParseException`、dispatcher
    未处理异常、Binding 异常或非预期进程退出时，本次发布失败；即使日志已经写出
    `Successfully loaded plugin` 也不得判为通过。
@@ -31,11 +35,16 @@ DLL 能被插件加载器读取不等于界面模板能安全实例化；发布�
 commissioning 原始字段属于高级设置，不得重新占据计划页。
 
 N.I.N.A. 的“插件 → OpenAstroSpec Auto — UVEX4 → 选项”页采用四个互不混淆的标签：
-`范围与连接 / ATR 提取 / M2 对焦 / 光栅锁定`。该页只配置 OpenAstroSpec 光谱工具和对应的
+`范围与连接 / ATR 提取 / M2 对焦 / 光栅锁定`。该页只配置 ATR/UVEX4 光谱工具和对应的
 两个 Advanced Sequencer 闭环项，不得暗示它控制自动观测、C11/G3 对焦或科学曝光。
 ATR 提取矩形必须明确标作完整图像上的软件提取而非相机硬件 ROI；M2 与光栅使用
 独立 commissioning 授权；绑定后的 ATR DeviceId 只读并优先于名称回退；未配置的
 浮点字段显示为空白/“未配置”，不得向用户显示内部 `NaN` 哨兵值。
+
+ATR 相机身份绑定和单帧提取检查并入自动观测的
+`实时图像 → ATR 二维/一维光谱`。插件不得再导出只有状态、绑定和一条临时曲线的
+`OpenAstroSpec 光谱`占位 Dockable；如果未来增加独立手动观测页，必须能完成明确的
+手动观测任务，并复用同一设备所有权、保存和证据链，不能形成第二套隐式采集流程。
 
 该检查不能由“我没有改 XAML”口头豁免：ViewModel 属性可写性、DataTemplate、资源字典
 和打包内容的变化同样可能只在真实 Dockable 首次实例化时失败。每次插件交付都必须执行。

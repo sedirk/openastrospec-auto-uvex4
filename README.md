@@ -147,10 +147,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-nina-plugin.ps1
 
 For compatibility it is still installed under
 `%LOCALAPPDATA%\NINA\Plugins\3.0.0\UVEX-ADV Spectroscopy`, but it appears as
-`OpenAstroSpec Auto — UVEX4`, the `OpenAstroSpec 光谱`,
-`OpenAstroSpec 校准库`, and `OpenAstroSpec 自动观测` dock panels, and the
+`OpenAstroSpec Auto — UVEX4`, the `OpenAstroSpec 自动观测` and
+`OpenAstroSpec 校准库` dock panels, and the
 `OpenAstroSpec Auto` advanced-sequencer category. The folder name and plugin GUID
 remain unchanged so existing N.I.N.A. profiles continue to load the same plugin.
+ATR585M identity binding and one-frame extraction checks are integrated under
+`OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱`; there is no separate
+placeholder spectrum dock.
 
 The QHY service is installed separately and defaults to the synthetic simulator:
 

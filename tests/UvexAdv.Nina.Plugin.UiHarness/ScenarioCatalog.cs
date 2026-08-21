@@ -17,6 +17,7 @@ public static class ScenarioCatalog
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
         new("startup-requirements", 1180, 900, ObservationDockMockViewModel.StartupRequirements()),
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
+        new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
         new("phd2-degraded", 1180, 850, ObservationDockMockViewModel.Phd2Degraded()),
         new("phd2-direct-target", 1180, 880, ObservationDockMockViewModel.Phd2DirectTarget()),
@@ -141,6 +142,14 @@ public sealed class ObservationDockMockViewModel
     public string QhyPreviewMetadata { get; init; } = "最后一帧：无";
     public string G3PreviewMetadata { get; init; } = "最后一帧：无";
     public string AtrPreviewMetadata { get; init; } = "最后一帧：无";
+    public string AtrManualCameraStatus { get; init; } = "N.I.N.A. 当前没有连接相机。";
+    public string BoundAtrCameraId { get; init; } = "未绑定";
+    public string AtrManualCapturePresetText { get; init; } = "2 s · Gain 100 · Offset 256 · 1×1";
+    public string AtrManualCaptureStatus { get; init; } = "尚未采集单帧检查光谱。";
+    public string AtrManualCaptureError { get; init; } = string.Empty;
+    public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
+    public string ManualSpectrumSummary { get; init; } = "尚未采集光谱";
+    public PointCollection ManualSpectrumPoints { get; init; } = CreateEmptyManualSpectrumPoints();
 
     public IReadOnlyList<MockGateRow> GateRows { get; init; } = [];
     public IReadOnlyList<MockTimelineRow> TimelineRows { get; init; } = [];
@@ -235,6 +244,9 @@ public sealed class ObservationDockMockViewModel
     public ICommand OpenQhyPreviewCommand => HasQhyPreview ? EnabledCommand : DisabledCommand;
     public ICommand OpenG3PreviewCommand => HasG3Preview ? EnabledCommand : DisabledCommand;
     public ICommand OpenAtrPreviewCommand => HasAtrPreview ? EnabledCommand : DisabledCommand;
+    public ICommand BindCurrentAtrCameraCommand => IsRunActive ? DisabledCommand : EnabledCommand;
+    public ICommand RefreshAtrManualStatusCommand => EnabledCommand;
+    public ICommand CaptureManualAtrSpectrumCommand => IsRunActive ? DisabledCommand : EnabledCommand;
 
     public static ObservationDockMockViewModel Idle() => new()
     {
@@ -332,6 +344,27 @@ public sealed class ObservationDockMockViewModel
         GateRows = FailureGates(),
         TimelineRows = FailureTimeline(),
         EvidenceRows = FailureEvidence()
+    };
+
+    public static ObservationDockMockViewModel AtrManual() => new()
+    {
+        ModeText = "真实设备控制",
+        ModeDescription = "离线界面验收：单帧检查区已并入自动观测；本截图没有连接相机或触发曝光。",
+        RealModeStatus = "离线示例；单帧检查不会启动入缝、导星或 UVEX 运动。",
+        RealModeStatusSummary = "真实模式：离线界面验收。",
+        StartButtonText = "启动真实设备自动观测",
+        IsSimulationMode = false,
+        SelectedWorkspaceTabIndex = 2,
+        SelectedPreviewTabIndex = 2,
+        AtrPreviewImage = PreviewImageFactory.CreateAtrSpectrum(),
+        AtrPreviewCaption = "最近自动探测帧：即时一维提取 SNR 31.7；该帧属于自动观测证据链。",
+        AtrManualCameraStatus = "已连接并匹配：ATR585M。",
+        BoundAtrCameraId = "ATR585M-SIMULATED-STABLE-ID",
+        AtrManualCapturePresetText = "2 s · Gain 100 · Offset 256 · 1×1",
+        AtrManualCaptureStatus = "单帧检查完成：1920 个色散采样点。",
+        ManualSpectrumSummary = "饱和 0.00% · 提取 1920 px · SDK 行回绕未触发",
+        ManualSpectrumPoints = CreateManualSpectrumPoints(),
+        OperatorNotice = "离线 ATR 页面截图；按钮只用于排版验收。",
     };
 
     public static ObservationDockMockViewModel Phd2Degraded() => new()
@@ -518,6 +551,30 @@ public sealed class ObservationDockMockViewModel
         new("G3 精解析与入缝", state, string.Empty, "尚未执行", string.Empty, "Pending", false, false),
         new("ATR 科学曝光", state, string.Empty, "尚未执行", string.Empty, "Pending", false, false)
     ];
+
+    private static PointCollection CreateManualSpectrumPoints()
+    {
+        var points = new PointCollection(160);
+        for (var index = 0; index < 160; index++)
+        {
+            var x = index / 159d;
+            var continuum = 0.18 + 0.10 * Math.Sin(index * 0.11);
+            var line1 = 0.58 * Math.Exp(-Math.Pow((index - 42) / 5d, 2));
+            var line2 = 0.82 * Math.Exp(-Math.Pow((index - 93) / 3.5d, 2));
+            var line3 = 0.48 * Math.Exp(-Math.Pow((index - 128) / 7d, 2));
+            var y = 1 - Math.Clamp(continuum + line1 + line2 + line3, 0, 0.96);
+            points.Add(new Point(x, y));
+        }
+        points.Freeze();
+        return points;
+    }
+
+    private static PointCollection CreateEmptyManualSpectrumPoints()
+    {
+        var points = new PointCollection();
+        points.Freeze();
+        return points;
+    }
 
     private static IReadOnlyList<MockGateRow> RunningGates() =>
     [

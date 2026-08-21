@@ -46,9 +46,10 @@ This repository currently ships two user-facing products:
 | Acquisition and control | **OpenAstroSpec Auto — UVEX4** | N.I.N.A. orchestration, equipment services, commissioning, slit acquisition, guiding, spectral acquisition, recovery, and immutable evidence |
 | Offline reduction | **OpenAstroSpec Spectral Studio — UVEX4** | Offline FITS inspection, reduction, calibration, visualization, and delivery |
 
-Short UI surfaces may use `OpenAstroSpec Auto`, `OpenAstroSpec 自动观测`,
-`OpenAstroSpec 光谱`, and `OpenAstroSpec 校准库` when the full name would crowd a
-tab. Hardware-action labels continue to say `UVEX4` or `UVEX` where they identify
+Short UI surfaces may use `OpenAstroSpec Auto`, `OpenAstroSpec 自动观测`, and
+`OpenAstroSpec 校准库` when the full name would crowd a tab. ATR spectral previews
+and one-frame checks live inside the automatic-observation surface rather than in a
+separate product-named dock. Hardware-action labels continue to say `UVEX4` or `UVEX` where they identify
 the physical spectrograph rather than the software brand.
 
 Future instrument implementations should keep the family and product-line names

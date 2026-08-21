@@ -11,8 +11,9 @@ Rendering is refused unless the caller supplies the explicit `--render` switch:
 .\.dotnet\dotnet.exe run --project .\tests\UvexAdv.Nina.Plugin.UiHarness\UvexAdv.Nina.Plugin.UiHarness.csproj --configuration Release -- --render
 ```
 
-The default output is the ignored `tmp/ui-screenshots/` directory. Ten PNG files
-cover idle, startup requirements, running, failed/paused, PHD2 degraded,
+The default output is the ignored `tmp/ui-screenshots/` directory. Eleven PNG files
+cover idle, startup requirements, running, the integrated ATR single-frame check,
+failed/paused, PHD2 degraded,
 direct-target supervised guiding, calibrated ghost-assistance, QHY/G3 fast pairing,
 narrow-dock, and advanced bright-target settings states. The wide idle and narrow
 scenarios also exercise target-import status, full button labels, responsive wrapping,
@@ -24,6 +25,11 @@ and run-time command disabling. To render one scenario:
 
 The `advanced` scenario selects the production Advanced Settings tab, expands the
 bright-target wing-centroid section, and scrolls it into view for label/layout QA.
+
+The `atr-manual` scenario selects `Live Images > ATR 2D / 1D Spectrum` and verifies
+that camera identity binding and one-frame extraction diagnostics are integrated
+beside the automatic-observation preview instead of being exported as a separate
+placeholder dock. Its curve and camera identity are deterministic mock data.
 
 The `ghost-assistance` scenario shows the compact operator summary for Auto mode;
 the full calibration/policy hashes, applicability and centroid/covariance-only

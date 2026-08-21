@@ -55,16 +55,17 @@ extraction policy、三者哈希、runtime installation/optical/orientation fing
 
 任何插件 XAML、Dockable ViewModel 或打包产物改变后，先执行
 [N.I.N.A. 插件 UI 发布检查](nina-plugin-ui-release-checks.md)：完整构建、全部 UI
-harness 场景、安装精确 artifact、真实启动 N.I.N.A. 并依次打开三个 UVEX 面板，
+harness 场景、安装精确 artifact、真实启动 N.I.N.A. 并依次打开自动观测与校准库两个面板，
+同时打开自动观测中的 ATR 单帧检查区，
 最后确认新日志没有 XAML/Binding/dispatcher 未处理异常。只看到插件加载成功不算验收。
 
 真实服务只公开明确标记为 `Hardware`、绑定本机 COM5/VID/PID 且与配置光栅线数一致的波长标定。历史模拟器条目（例如旧数据库中的 `sim-default` 600 lines/mm）会保留在数据库中用于追溯，但在真实模式 API 中不可见，也不能覆盖写入为实机标定。本机实机配置为 300 lines/mm；新建标定时必须重新测量步数/像素，不能把模拟器的 `10 steps/pixel` 当作初值。
 
 1. 在 N.I.N.A. 中连接 ATR585M；PHD2 保持独占 G3M2210M。
-2. 打开“OpenAstroSpec 光谱”面板，点击“绑定当前相机”，保存稳定 DeviceId。
+2. 打开“OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱”，点击“绑定当前 ATR585M”，保存稳定 DeviceId。
 3. 设置曝光、ROI、色散方向、提取孔径；保持“允许闭环电机运动”未选中。
 4. 使用外部校准光源采集多组焦内/焦外图像，选择至少三条未饱和且 SNR>10 的谱线。
-5. 用影子采集核对一维光谱、谱线像素位置和饱和比例。
+5. 用“采集一帧检查光谱”核对一维光谱、谱线像素位置和饱和比例；它只做单帧诊断，不启动自动观测流程。
 
 ## 5. 开放闭环
 

@@ -14,8 +14,8 @@
 
       <Border BorderBrush="#0EA5E9" BorderThickness="1" CornerRadius="3" Padding="9" Margin="0,0,0,8">
         <StackPanel>
-          <TextBlock Text="OpenAstroSpec 光谱工具设置 · UVEX4" FontWeight="Bold" FontSize="15" />
-          <TextBlock Text="这里只配置“OpenAstroSpec 光谱”面板以及 Advanced Sequencer 中的 UVEX4 M2 谱线对焦和光栅波长锁定。它不配置自动观测、C11 主镜对焦、G3 导星镜对焦、目标入缝或科学曝光计划。"
+          <TextBlock Text="OpenAstroSpec Auto · ATR/UVEX4 光谱工具设置" FontWeight="Bold" FontSize="15" />
+          <TextBlock Text="这里只配置自动观测界面中的 ATR 单帧检查，以及 Advanced Sequencer 中的 UVEX4 M2 谱线对焦和光栅波长锁定。它不配置 C11 主镜对焦、G3 导星镜对焦、目标入缝或自动科学曝光计划。"
                      TextWrapping="Wrap" Margin="0,4,0,0" />
         </StackPanel>
       </Border>
@@ -38,7 +38,7 @@
             <TextBlock Grid.Row="3" Grid.Column="0" Text="已绑定 ATR DeviceId" VerticalAlignment="Center" />
             <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding BoundCameraId, Mode=OneWay}" IsReadOnly="True" Margin="5,2" />
             <TextBlock Grid.Row="4" Grid.ColumnSpan="2"
-                       Text="DeviceId 只能从“OpenAstroSpec 光谱”面板的“绑定当前相机”按钮写入。绑定后闭环必须精确匹配 DeviceId；型号名称不能绕过绑定。"
+                       Text="DeviceId 由“OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱”或校准库中的显式“绑定当前 ATR585M”按钮写入。绑定后闭环必须精确匹配 DeviceId；型号名称不能绕过绑定。"
                        TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,9,0,0" />
           </Grid>
         </TabItem>
@@ -161,22 +161,6 @@
           </Grid>
         </TabItem>
       </TabControl>
-    </Grid>
-  </DataTemplate>
-
-  <DataTemplate x:Key="UvexAdv.Nina.Plugin.UvexDockable_Dockable">
-    <Grid Margin="6">
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="160"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <TextBlock Text="{Binding ServiceStatus}" FontWeight="SemiBold" />
-      <StackPanel Grid.Row="1" Orientation="Horizontal">
-        <TextBlock Text="{Binding CameraStatus}" VerticalAlignment="Center" />
-        <Button Content="绑定当前相机" Command="{Binding BindCurrentCameraCommand}" Margin="8,2" />
-        <Button Content="影子采集" Command="{Binding CaptureShadowCommand}" Margin="2" />
-      </StackPanel>
-      <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" Margin="0,5">
-        <Viewbox Stretch="Fill"><Canvas Width="1" Height="1"><Polyline Points="{Binding SpectrumPoints}" Stroke="#38BDF8" StrokeThickness="0.005" /></Canvas></Viewbox>
-      </Border>
-      <StackPanel Grid.Row="3"><TextBlock Text="{Binding MetricSummary}" /><TextBlock Text="{Binding Error}" Foreground="OrangeRed" TextWrapping="Wrap" /></StackPanel>
     </Grid>
   </DataTemplate>
 
@@ -488,14 +472,60 @@
               </Grid>
             </TabItem>
             <TabItem Header="ATR 二维 / 一维光谱">
-              <Grid Margin="7"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <local:EmbeddedImageViewer PreviewImage="{Binding AtrPreviewImage}"
-                                           Caption="{Binding AtrPreviewCaption}"
-                                           EmptyTitle="尚无 ATR 光谱图像"
-                                           EmptyDetails="尚未收到 N.I.N.A./ATR585M 探测或科学帧。请检查当前阶段、相机状态和最近质量门。"
-                                           MinHeight="220" />
-                <Button Grid.Row="1" Content="弹出 ATR 大图" Command="{Binding OpenAtrPreviewCommand}" HorizontalAlignment="Right"
-                        Visibility="{Binding HasAtrPreview, Converter={StaticResource ObservationBoolToVisibility}}" />
+              <Grid Margin="7">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="3*" />
+                  <ColumnDefinition Width="8" />
+                  <ColumnDefinition Width="2*" />
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0">
+                  <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                  <local:EmbeddedImageViewer PreviewImage="{Binding AtrPreviewImage}"
+                                             Caption="{Binding AtrPreviewCaption}"
+                                             EmptyTitle="尚无自动观测 ATR 图像"
+                                             EmptyDetails="自动流程尚未收到 N.I.N.A./ATR585M 探测或科学帧。右侧单帧检查不会启动整套自动观测。"
+                                             MinHeight="220" />
+                  <Button Grid.Row="1" Content="弹出自动观测 ATR 大图" Command="{Binding OpenAtrPreviewCommand}" HorizontalAlignment="Right"
+                          Visibility="{Binding HasAtrPreview, Converter={StaticResource ObservationBoolToVisibility}}" />
+                </Grid>
+                <Border Grid.Column="2" Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="9">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="*" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0">
+                      <TextBlock Text="ATR 单帧检查" FontWeight="Bold" FontSize="14" />
+                      <TextBlock Text="用于绑定相机和检查提取结果；不会启动入缝、导星、UVEX 运动或自动科学序列。"
+                                 TextWrapping="Wrap" Opacity="0.78" Margin="0,2,0,6" />
+                      <TextBlock Text="{Binding AtrManualCameraStatus}" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding BoundAtrCameraId, StringFormat=绑定 DeviceId：{0}}" TextWrapping="Wrap" Opacity="0.72" />
+                      <TextBlock Text="{Binding AtrManualCapturePresetText, StringFormat=单帧设置：{0}}" TextWrapping="Wrap" Opacity="0.72" />
+                    </StackPanel>
+                    <WrapPanel Grid.Row="1" Margin="0,6,0,4">
+                      <Button Content="绑定当前 ATR585M" Command="{Binding BindCurrentAtrCameraCommand}" />
+                      <Button Content="刷新相机状态" Command="{Binding RefreshAtrManualStatusCommand}" />
+                      <Button Content="采集一帧检查光谱" Command="{Binding CaptureManualAtrSpectrumCommand}" Background="#166534" BorderBrush="#22C55E" />
+                    </WrapPanel>
+                    <TextBlock Grid.Row="2" Text="{Binding AtrManualCaptureStatus}" TextWrapping="Wrap" Margin="0,2,0,5" />
+                    <Border Grid.Row="3" BorderBrush="#475569" BorderThickness="1" MinHeight="150" Background="#08111F">
+                      <Viewbox Stretch="Fill">
+                        <Canvas Width="1" Height="1">
+                          <Polyline Points="{Binding ManualSpectrumPoints}" Stroke="#38BDF8" StrokeThickness="0.005" />
+                        </Canvas>
+                      </Viewbox>
+                    </Border>
+                    <TextBlock Grid.Row="4" Text="{Binding ManualSpectrumSummary}" TextWrapping="Wrap" Margin="0,5,0,0" />
+                    <Border Grid.Row="5" Background="#3F1515" BorderBrush="#EF4444" BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,5,0,0"
+                            Visibility="{Binding HasAtrManualCaptureError, Converter={StaticResource ObservationBoolToVisibility}}">
+                      <TextBlock Text="{Binding AtrManualCaptureError}" Foreground="#FCA5A5" TextWrapping="Wrap" />
+                    </Border>
+                  </Grid>
+                </Border>
               </Grid>
             </TabItem>
           </TabControl>

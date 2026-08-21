@@ -96,7 +96,7 @@ internal sealed class NinaSpectrumCapture(
                 ? $"the fallback model name '{settings.ExpectedCameraName}'"
                 : $"the bound DeviceId '{settings.BoundCameraId}'";
             throw new InvalidOperationException(
-                $"The active N.I.N.A. camera '{info.DisplayName ?? info.Name}' does not match {requirement}. Bind the ATR585M stable DeviceId from the OpenAstroSpec Spectrum panel before closed-loop operation.");
+                $"The active N.I.N.A. camera '{info.DisplayName ?? info.Name}' does not match {requirement}. Bind the ATR585M stable DeviceId from OpenAstroSpec Auto > Live Images > ATR Spectrum or the calibration-library panel before closed-loop operation.");
         }
     }
 }

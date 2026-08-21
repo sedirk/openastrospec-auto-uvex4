@@ -51,18 +51,19 @@ public sealed class XamlBindingSafetyTests
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
         var start = xaml.IndexOf("x:Key=\"OpenAstroSpec Auto — UVEX4_Options\"", StringComparison.Ordinal);
         var end = xaml.IndexOf(
-            "x:Key=\"UvexAdv.Nina.Plugin.UvexDockable_Dockable\"",
+            "x:Key=\"UvexAdv.Nina.Plugin.ObservationDockable_Dockable\"",
             start,
             StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start);
         var options = xaml[start..end];
 
-        Assert.Contains("OpenAstroSpec 光谱工具设置 · UVEX4", options, StringComparison.Ordinal);
+        Assert.Contains("OpenAstroSpec Auto · ATR/UVEX4 光谱工具设置", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"范围与连接\"", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"ATR 提取\"", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"M2 对焦\"", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"光栅锁定\"", options, StringComparison.Ordinal);
-        Assert.Contains("不配置自动观测、C11 主镜对焦、G3 导星镜对焦", options, StringComparison.Ordinal);
+        Assert.Contains("配置自动观测界面中的 ATR 单帧检查", options, StringComparison.Ordinal);
+        Assert.Contains("不配置 C11 主镜对焦、G3 导星镜对焦", options, StringComparison.Ordinal);
         Assert.Contains("软件提取矩形（原始全帧像素）", options, StringComparison.Ordinal);
         Assert.Contains("它与 C11 主镜、G3M2210M 导星模组小镜头", options, StringComparison.Ordinal);
         Assert.Contains("IsChecked=\"{Binding SpectralAutofocusCommissioned}\"", options, StringComparison.Ordinal);
@@ -154,6 +155,13 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("G3 对焦 / 狭缝 / 导星", dock, StringComparison.Ordinal);
         Assert.Contains("ATR 二维 / 一维光谱", dock, StringComparison.Ordinal);
         Assert.Equal(3, Regex.Matches(dock, "<local:EmbeddedImageViewer\\b", RegexOptions.CultureInvariant).Count);
+        Assert.Contains("Text=\"ATR 单帧检查\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"绑定当前 ATR585M\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"采集一帧检查光谱\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding CaptureManualAtrSpectrumCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Points=\"{Binding ManualSpectrumPoints}\"", dock, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content=\"影子采集\"", dock, StringComparison.Ordinal);
+        Assert.DoesNotContain("UvexAdv.Nina.Plugin.UvexDockable_Dockable", xaml, StringComparison.Ordinal);
         Assert.Contains("当前没有失败或待处理质量门", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("没有需要检查的失败图像", dock, StringComparison.Ordinal);
 

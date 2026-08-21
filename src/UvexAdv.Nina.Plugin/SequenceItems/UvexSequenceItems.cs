@@ -37,7 +37,7 @@ public abstract class UvexSequenceItemBase : SequenceItem
         if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
         {
             throw new InvalidOperationException(
-                "A stable ATR585M DeviceId is required for a spectral closed loop. Bind the current camera from the OpenAstroSpec Spectrum panel first.");
+                "A stable ATR585M DeviceId is required for a spectral closed loop. Bind the current camera from OpenAstroSpec Auto > Live Images > ATR Spectrum or the calibration-library panel first.");
         }
     }
 

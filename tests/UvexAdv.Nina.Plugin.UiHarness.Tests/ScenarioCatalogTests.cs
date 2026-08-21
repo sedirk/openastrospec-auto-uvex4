@@ -9,10 +9,15 @@ public sealed class ScenarioCatalogTests
     {
         var scenarios = ScenarioCatalog.Select(null);
 
-        Assert.Equal(["idle", "startup-requirements", "running", "failure", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
+        Assert.Equal(["idle", "startup-requirements", "running", "atr-manual", "failure", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);
         Assert.False(scenarios.Single(item => item.Name == "idle").ViewModel.HasFailure);
         Assert.True(scenarios.Single(item => item.Name == "running").ViewModel.IsRunActive);
+        var atrManual = scenarios.Single(item => item.Name == "atr-manual").ViewModel;
+        Assert.Equal(2, atrManual.SelectedWorkspaceTabIndex);
+        Assert.Equal(2, atrManual.SelectedPreviewTabIndex);
+        Assert.NotEmpty(atrManual.ManualSpectrumPoints);
+        Assert.True(atrManual.CaptureManualAtrSpectrumCommand.CanExecute(null));
         Assert.True(scenarios.Single(item => item.Name == "failure").ViewModel.HasFailure);
         Assert.Equal(0, scenarios.Single(item => item.Name == "idle").ViewModel.SelectedWorkspaceTabIndex);
         var startup = scenarios.Single(item => item.Name == "startup-requirements").ViewModel;

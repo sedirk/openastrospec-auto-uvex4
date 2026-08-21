@@ -11,6 +11,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using NINA.Core.Model;
 using NINA.Equipment.Interfaces;
+using NINA.Equipment.Interfaces.Mediator;
 using NINA.Equipment.Interfaces.ViewModel;
 using NINA.Profile.Interfaces;
 using NINA.WPF.Base.Interfaces.ViewModel;
@@ -35,6 +36,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly ObservationCoordinatorHost host;
     private readonly RealObservationStageRunnerFactory realRunnerFactory;
     private readonly ObservationTargetImportService targetImportService;
+    private readonly ICameraMediator cameraMediator;
+    private readonly IImagingMediator imagingMediator;
+    private readonly CancellationTokenSource lifetime = new();
     private readonly SimpleAsyncCommand startSelectedModeCommand;
     private readonly SimpleAsyncCommand startSimulationCommand;
     private readonly SimpleAsyncCommand startRealCommand;
@@ -57,6 +61,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand refreshProfileOwnershipCommand;
     private readonly SimpleAsyncCommand importFromFramingAssistantCommand;
     private readonly SimpleAsyncCommand importFromPlanetariumCommand;
+    private readonly SimpleCommand bindCurrentAtrCameraCommand;
+    private readonly SimpleCommand refreshAtrManualStatusCommand;
+    private readonly SimpleAsyncCommand captureManualAtrSpectrumCommand;
     private string stateText = "空闲";
     private string currentStageText = "—";
     private string nextStageText = "—";
@@ -103,6 +110,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private int targetEditGeneration;
     private string targetImportSummary = "目标由手工输入。";
     private string targetImportDetails = "尚未从构图助手或第三方星图导入。";
+    private string atrManualCameraStatus = "尚未检查 N.I.N.A. 当前相机。";
+    private string atrManualCaptureStatus = "尚未采集单帧检查光谱。";
+    private string atrManualCaptureError = string.Empty;
     private int selectedWorkspaceTabIndex;
 
     [ImportingConstructor]
@@ -111,13 +121,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ObservationCoordinatorHost host,
         RealObservationStageRunnerFactory realRunnerFactory,
         IFramingAssistantVM framingAssistant,
-        IPlanetariumFactory planetariumFactory)
+        IPlanetariumFactory planetariumFactory,
+        ICameraMediator cameraMediator,
+        IImagingMediator imagingMediator)
         : base(profileService)
     {
         activeProfileService = profileService;
         settings = new UvexPluginSettings(profileService);
         this.host = host;
         this.realRunnerFactory = realRunnerFactory;
+        this.cameraMediator = cameraMediator;
+        this.imagingMediator = imagingMediator;
         targetImportService = ObservationTargetImportNinaSources.CreateService(
             framingAssistant,
             planetariumFactory);
@@ -170,12 +184,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         importFromPlanetariumCommand = new SimpleAsyncCommand(
             ImportFromPlanetariumAsync,
             CanImportTarget);
+        bindCurrentAtrCameraCommand = new SimpleCommand(BindCurrentAtrCamera, CanUseManualAtrTools);
+        refreshAtrManualStatusCommand = new SimpleCommand(RefreshAtrManualStatus);
+        captureManualAtrSpectrumCommand = new SimpleAsyncCommand(
+            CaptureManualAtrSpectrumAsync,
+            CanUseManualAtrTools);
 
         LoadTargetImportDisplay();
         RefreshGhostCommissioningSummary();
         RefreshSlitIdentitySummary();
+        RefreshAtrManualStatus();
 
         host.DashboardChanged += OnDashboardChanged;
+        UvexRuntimeState.Changed += OnManualSpectrumChanged;
         ApplyDashboard(host.Dashboard);
     }
 
@@ -201,6 +222,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
     public ICommand ImportFromFramingAssistantCommand => importFromFramingAssistantCommand;
     public ICommand ImportFromPlanetariumCommand => importFromPlanetariumCommand;
+    public ICommand BindCurrentAtrCameraCommand => bindCurrentAtrCameraCommand;
+    public ICommand RefreshAtrManualStatusCommand => refreshAtrManualStatusCommand;
+    public ICommand CaptureManualAtrSpectrumCommand => captureManualAtrSpectrumCommand;
 
     public ObservableCollection<ObservationGateRow> GateRows { get; } = new();
     public ObservableCollection<ObservationTimelineRow> TimelineRows { get; } = new();
@@ -912,6 +936,47 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     }
     public bool IsSimulationOnly => false;
 
+    public string AtrManualCameraStatus
+    {
+        get => atrManualCameraStatus;
+        private set
+        {
+            if (string.Equals(atrManualCameraStatus, value, StringComparison.Ordinal)) return;
+            atrManualCameraStatus = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    public string AtrManualCaptureStatus
+    {
+        get => atrManualCaptureStatus;
+        private set
+        {
+            if (string.Equals(atrManualCaptureStatus, value, StringComparison.Ordinal)) return;
+            atrManualCaptureStatus = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    public string AtrManualCaptureError
+    {
+        get => atrManualCaptureError;
+        private set
+        {
+            if (string.Equals(atrManualCaptureError, value, StringComparison.Ordinal)) return;
+            atrManualCaptureError = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HasAtrManualCaptureError));
+        }
+    }
+
+    public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
+    public string BoundAtrCameraId => string.IsNullOrWhiteSpace(settings.BoundCameraId) ? "未绑定" : settings.BoundCameraId;
+    public string AtrManualCapturePresetText =>
+        $"{settings.ExposureSeconds:G6} s · Gain {settings.Gain} · Offset {settings.Offset} · {settings.Binning}×{settings.Binning}";
+    public string ManualSpectrumSummary => UvexRuntimeState.MetricSummary;
+    public PointCollection ManualSpectrumPoints => UvexRuntimeState.SpectrumPoints;
+
     private ObservationRunState RunState => host.Dashboard.Run.State;
 
     private bool IsControllable => RunState is
@@ -922,7 +987,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ObservationRunState.PausedNeedsAttention or
         ObservationRunState.ManualTakeover;
 
-    public void Dispose() => host.DashboardChanged -= OnDashboardChanged;
+    public void Dispose()
+    {
+        host.DashboardChanged -= OnDashboardChanged;
+        UvexRuntimeState.Changed -= OnManualSpectrumChanged;
+        lifetime.Cancel();
+        lifetime.Dispose();
+    }
 
     private Task StartSelectedModeAsync() => UseRealMode
         ? StartRealAsync()
@@ -1166,6 +1237,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private bool CanImportTarget() => !IsTargetImportBusy && CanEditTargetPlan();
 
+    private bool CanUseManualAtrTools() => !IsTargetImportBusy && CanEditTargetPlan();
+
     private bool CanEditTargetPlan() => RunState is
         ObservationRunState.Idle or
         ObservationRunState.Completed or
@@ -1173,6 +1246,105 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ObservationRunState.Faulted;
 
     private bool CanStartReal() => CanStart() && RealModeEligibilityIssues().Count == 0;
+
+    private void BindCurrentAtrCamera()
+    {
+        try
+        {
+            var info = cameraMediator.GetInfo();
+            if (!info.Connected || string.IsNullOrWhiteSpace(info.DeviceId))
+            {
+                throw new InvalidOperationException("请先在 N.I.N.A. 的相机页连接 ATR585M。");
+            }
+
+            var identity = string.Join('|', info.Name, info.DisplayName, info.Description, info.DeviceId);
+            if (!identity.Contains(settings.ExpectedCameraName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"当前设备“{info.DisplayName ?? info.Name}”不是配置的 {settings.ExpectedCameraName}；不会按相机列表顺序猜测。");
+            }
+
+            settings.BoundCameraId = info.DeviceId;
+            AtrManualCaptureError = string.Empty;
+            RaisePropertyChanged(nameof(BoundAtrCameraId));
+            RefreshAtrManualStatus();
+        }
+        catch (Exception ex)
+        {
+            AtrManualCaptureError = ex.Message;
+            RefreshAtrManualStatus();
+        }
+    }
+
+    private void RefreshAtrManualStatus()
+    {
+        var info = cameraMediator.GetInfo();
+        if (!info.Connected)
+        {
+            AtrManualCameraStatus = "N.I.N.A. 当前没有连接相机。";
+        }
+        else if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
+        {
+            AtrManualCameraStatus = $"已连接 {info.DisplayName ?? info.Name}；尚未绑定稳定 DeviceId。";
+        }
+        else if (string.Equals(info.DeviceId, settings.BoundCameraId, StringComparison.Ordinal))
+        {
+            AtrManualCameraStatus = $"已连接并匹配：{info.DisplayName ?? info.Name}。";
+        }
+        else
+        {
+            AtrManualCameraStatus = $"当前相机 {info.DisplayName ?? info.Name} 与已绑定 ATR585M 不匹配。";
+        }
+
+        RaisePropertyChanged(nameof(BoundAtrCameraId));
+        RaisePropertyChanged(nameof(AtrManualCapturePresetText));
+        captureManualAtrSpectrumCommand.RaiseCanExecuteChanged();
+    }
+
+    private async Task CaptureManualAtrSpectrumAsync()
+    {
+        try
+        {
+            AtrManualCaptureError = string.Empty;
+            AtrManualCaptureStatus = "正在通过 N.I.N.A. 采集一帧检查光谱…";
+            RefreshAtrManualStatus();
+            var progress = new Progress<ApplicationStatus>();
+            var capture = new NinaSpectrumCapture(cameraMediator, imagingMediator, settings, progress);
+            var spectrum = await capture.CaptureAsync(lifetime.Token).ConfigureAwait(true);
+            AtrManualCaptureStatus = $"单帧检查完成：{spectrum.Flux.Length} 个色散采样点。";
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            AtrManualCaptureStatus = "单帧检查已取消。";
+        }
+        catch (Exception ex)
+        {
+            AtrManualCaptureStatus = "单帧检查失败。";
+            AtrManualCaptureError = ex.Message;
+        }
+        finally
+        {
+            if (!lifetime.IsCancellationRequested) RefreshAtrManualStatus();
+        }
+    }
+
+    private void OnManualSpectrumChanged(object? sender, EventArgs e)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            RaisePropertyChanged(nameof(ManualSpectrumSummary));
+            RaisePropertyChanged(nameof(ManualSpectrumPoints));
+        }
+        else
+        {
+            _ = dispatcher.BeginInvoke(() =>
+            {
+                RaisePropertyChanged(nameof(ManualSpectrumSummary));
+                RaisePropertyChanged(nameof(ManualSpectrumPoints));
+            });
+        }
+    }
 
     private IReadOnlyList<string> RealModeEligibilityIssues()
     {
@@ -1525,6 +1697,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         openRunDirectoryCommand.RaiseCanExecuteChanged();
         importFromFramingAssistantCommand.RaiseCanExecuteChanged();
         importFromPlanetariumCommand.RaiseCanExecuteChanged();
+        bindCurrentAtrCameraCommand.RaiseCanExecuteChanged();
+        captureManualAtrSpectrumCommand.RaiseCanExecuteChanged();
     }
 
     private void RefreshProfileOwnership()
