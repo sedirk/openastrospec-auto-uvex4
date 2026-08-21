@@ -200,6 +200,12 @@ public sealed class ObservationRunCoordinator : IDisposable
 
     private async Task RunAsync(ObservationPlan plan, IObservationStageRunner runner, CancellationToken cancellationToken)
     {
+        // StartAsync installs the active-run task while holding sync.  Always
+        // cross an asynchronous boundary before publishing the first snapshot,
+        // otherwise a synchronously entered SnapshotChanged handler can invert
+        // the coordinator/host lock order and deadlock the N.I.N.A. UI thread.
+        await Task.Yield();
+
         var context = new ObservationContext(plan);
         var stageIndex = 0;
         try

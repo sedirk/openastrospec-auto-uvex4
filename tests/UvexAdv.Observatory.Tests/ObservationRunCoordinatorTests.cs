@@ -19,6 +19,28 @@ public sealed class ObservationRunCoordinatorTests
     }
 
     [Fact]
+    public async Task FirstSnapshotIsNotPublishedWhileStartLockIsHeld()
+    {
+        using var coordinator = new ObservationRunCoordinator();
+        var runner = new FakeRunner();
+        var firstSnapshotObserved = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        coordinator.SnapshotChanged += (_, _) =>
+        {
+            var independentReader = Task.Run(() => coordinator.Snapshot);
+            firstSnapshotObserved.TrySetResult(
+                independentReader.Wait(TimeSpan.FromSeconds(1)));
+        };
+
+        await coordinator.StartAsync(CreatePlan(), runner);
+
+        Assert.True(
+            await firstSnapshotObserved.Task.WaitAsync(TimeSpan.FromSeconds(2)),
+            "SnapshotChanged was published while StartAsync still held the coordinator lock.");
+    }
+
+    [Fact]
     public async Task RunnerWithoutDurableCompletionAcknowledgerIsRejectedBeforeRunStarts()
     {
         using var coordinator = new ObservationRunCoordinator();
