@@ -142,6 +142,10 @@ internal sealed partial class RealObservationStageRunner
                 throw new InvalidOperationException($"{preSelectBinding.Code}: {preSelectBinding.Message}");
             }
             var selected = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+            var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+                selected,
+                preset.SensorWidthPixels,
+                preset.SensorHeightPixels);
             await PublishPhd2GuideSelectionEvidenceAsync(
                 context,
                 choice.Field,
@@ -152,6 +156,7 @@ internal sealed partial class RealObservationStageRunner
                 choice.Mode,
                 choice.Capture,
                 loop,
+                guideSelectionRoi,
                 cancellationToken).ConfigureAwait(false);
 
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -168,6 +173,7 @@ internal sealed partial class RealObservationStageRunner
             var settle = await phd2.GuideAndSettleAsync(
                 Phd2SettleCriteriaFromConfiguration(),
                 forceRecalibration,
+                guideSelectionRoi,
                 cancellationToken).ConfigureAwait(false);
             if (!settle.Succeeded || !phd2.Snapshot.HasCurrentSuccessfulSettle)
                 throw new InvalidOperationException(settle.Error ?? "The local PHD2 guide operation did not leave a current settle attestation.");
@@ -471,6 +477,10 @@ internal sealed partial class RealObservationStageRunner
             return new StageResult(preSelectBinding, lastG3Field.FramePath);
         }
         var selectedGuide = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+        var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+            selectedGuide,
+            preset.SensorWidthPixels,
+            preset.SensorHeightPixels);
         await PublishPhd2GuideSelectionEvidenceAsync(
             context,
             lastG3Field,
@@ -481,6 +491,7 @@ internal sealed partial class RealObservationStageRunner
             guideChoice.Mode,
             guideChoice.Capture,
             loop,
+            guideSelectionRoi,
             cancellationToken).ConfigureAwait(false);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         var preGuideBinding = await ValidateG3FieldMountBindingForMotionAsync(
@@ -493,7 +504,11 @@ internal sealed partial class RealObservationStageRunner
             return new StageResult(preGuideBinding, lastG3Field.FramePath);
         }
         Volatile.Write(ref phd2GuidingEverStarted, 1);
-        var settle = await phd2.GuideAndSettleAsync(Phd2SettleCriteriaFromConfiguration(), false, cancellationToken).ConfigureAwait(false);
+        var settle = await phd2.GuideAndSettleAsync(
+            Phd2SettleCriteriaFromConfiguration(),
+            false,
+            guideSelectionRoi,
+            cancellationToken).ConfigureAwait(false);
         var snapshot = phd2.Snapshot;
         if (!settle.Succeeded || !snapshot.HasCurrentSuccessfulSettle)
             return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RECOVERY_SETTLE_FAILED", settle.Error ?? "A fresh locally issued guide/settle epoch was not attested.");
@@ -903,6 +918,10 @@ internal sealed partial class RealObservationStageRunner
                 throw new InvalidOperationException($"{preSelectBinding.Code}: {preSelectBinding.Message}");
             }
             var selectedGuide = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+            var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+                selectedGuide,
+                preset.SensorWidthPixels,
+                preset.SensorHeightPixels);
             await PublishPhd2GuideSelectionEvidenceAsync(
                 context,
                 lastG3Field,
@@ -913,6 +932,7 @@ internal sealed partial class RealObservationStageRunner
                 guideChoice.Mode,
                 guideChoice.Capture,
                 loop,
+                guideSelectionRoi,
                 cancellationToken).ConfigureAwait(false);
 
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -929,6 +949,7 @@ internal sealed partial class RealObservationStageRunner
             var settle = await phd2.GuideAndSettleAsync(
                 Phd2SettleCriteriaFromConfiguration(),
                 forceRecalibration,
+                guideSelectionRoi,
                 cancellationToken).ConfigureAwait(false);
             if (!settle.Succeeded)
                 throw new InvalidOperationException(settle.Error ?? "PHD2 guide/settle failed.");
@@ -2039,7 +2060,7 @@ internal sealed partial class RealObservationStageRunner
         var target = identification.Target!;
         if (resolvedMode == Phd2SlitGuideMode.OffSlitGuideStar)
         {
-            var selection = GuideStarSelector.Select(candidates, field.SlitDetection.Geometry, target.Centroid);
+            var selection = GuideStarSelector.Select(candidates, field.SlitDetection.Geometry, target);
             return new Phd2PlacementGuideChoice(
                 field,
                 selection,
@@ -2249,6 +2270,7 @@ internal sealed partial class RealObservationStageRunner
         Phd2SlitGuideMode resolvedGuideMode,
         Phd2SingleFrameResult selectionFrame,
         Phd2LoopingStartResult loop,
+        Phd2Rectangle guideSelectionRoi,
         CancellationToken cancellationToken)
     {
         var target = field.TargetIdentification.Target!;
@@ -2268,6 +2290,8 @@ internal sealed partial class RealObservationStageRunner
                 runtimeSlitAcquisitionPoint = field.SlitDetection.Geometry.AcquisitionPoint,
                 requestedGuidePosition = requested,
                 selectedGuidePosition = selected,
+                guideSelectionRoi,
+                guideSelectionAuthority = "same-frame morphology-qualified candidate; PHD2 fallback confined to ROI",
                 selectedCandidate = selection.Star,
                 loop.InitialState,
                 loop.Frame,
@@ -2282,6 +2306,30 @@ internal sealed partial class RealObservationStageRunner
             },
             field.FramePath,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static Phd2Rectangle BuildPhd2GuideSelectionRoi(
+        Phd2Point selected,
+        int sensorWidthPixels,
+        int sensorHeightPixels)
+    {
+        const int commissionedSizePixels = 80;
+        if (!double.IsFinite(selected.X) || !double.IsFinite(selected.Y))
+            throw new ArgumentOutOfRangeException(nameof(selected), "Selected PHD2 guide position must be finite.");
+        if (sensorWidthPixels <= 0 || sensorHeightPixels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sensorWidthPixels), "PHD2 sensor dimensions must be positive.");
+
+        var width = Math.Min(commissionedSizePixels, sensorWidthPixels);
+        var height = Math.Min(commissionedSizePixels, sensorHeightPixels);
+        var x = Math.Clamp(
+            (int)Math.Floor(selected.X - width / 2d),
+            0,
+            sensorWidthPixels - width);
+        var y = Math.Clamp(
+            (int)Math.Floor(selected.Y - height / 2d),
+            0,
+            sensorHeightPixels - height);
+        return new Phd2Rectangle(x, y, width, height);
     }
 
     private Phd2SettleCriteria Phd2SettleCriteriaFromConfiguration() => new(

@@ -8246,7 +8246,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var selection = GuideStarSelector.Select(
             lastG3Field.Candidates,
             lastG3Field.SlitDetection.Geometry,
-            lastG3Field.TargetIdentification.Target.Centroid);
+            lastG3Field.TargetIdentification.Target);
         if (selection.Gate.Disposition != GateDisposition.Passed || selection.Star is null) return new StageResult(selection.Gate);
 
         await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
@@ -8264,6 +8264,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var selected = await phd2.SelectGuideStarAsync(
             new Phd2Point(selection.Star.Centroid.X, selection.Star.Centroid.Y),
             cancellationToken).ConfigureAwait(false);
+        var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+            selected,
+            lastG3Field.Frame!.Width,
+            lastG3Field.Frame.Height);
         if (lastG3Field.Image is not null)
         {
             PublishG3Preview(
@@ -8278,6 +8282,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             lastG3Field,
             selection,
             selected,
+            guideSelectionRoi,
             "initial-guide-selection",
             cancellationToken).ConfigureAwait(false);
         var calibrationBefore = await phd2.ValidateCalibrationAsync(
@@ -8296,6 +8301,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 configuration.Phd2.SettleStableSeconds,
                 configuration.Phd2.SettleTimeoutSeconds),
             forceRecalibration,
+            guideSelectionRoi,
             cancellationToken).ConfigureAwait(false);
         if (!settle.Succeeded)
         {
@@ -8360,7 +8366,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var refreshedSelection = GuideStarSelector.Select(
                 postCalibrationField.Candidates,
                 postCalibrationField.SlitDetection.Geometry,
-                postCalibrationTarget.Centroid);
+                postCalibrationTarget);
             if (refreshedSelection.Gate.Disposition != GateDisposition.Passed || refreshedSelection.Star is null)
             {
                 return new StageResult(refreshedSelection.Gate, postCalibrationField.FramePath);
@@ -8369,6 +8375,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             selected = await phd2.SelectGuideStarAsync(
                 new Phd2Point(refreshedSelection.Star.Centroid.X, refreshedSelection.Star.Centroid.Y),
                 cancellationToken).ConfigureAwait(false);
+            guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+                selected,
+                postCalibrationField.Frame!.Width,
+                postCalibrationField.Frame.Height);
             if (postCalibrationField.Image is not null)
             {
                 PublishG3Preview(
@@ -8383,6 +8393,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 postCalibrationField,
                 refreshedSelection,
                 selected,
+                guideSelectionRoi,
                 "post-calibration-guide-selection",
                 cancellationToken).ConfigureAwait(false);
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -8393,6 +8404,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     configuration.Phd2.SettleStableSeconds,
                     configuration.Phd2.SettleTimeoutSeconds),
                 forceRecalibration: false,
+                guideSelectionRoi,
                 cancellationToken).ConfigureAwait(false);
             if (!settle.Succeeded)
             {
@@ -9413,6 +9425,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         G3FieldState field,
         GuideStarSelection selection,
         Phd2Point selected,
+        Phd2Rectangle guideSelectionRoi,
         string phase,
         CancellationToken cancellationToken)
     {
@@ -9452,7 +9465,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     selection.Score,
                 },
                 phd2AcceptedPosition = new { selected.X, selected.Y },
-                exclusionPolicy = "off-slit, off-target, non-edge, non-saturated, shape/SNR quality gated",
+                guideSelectionRoi,
+                guideSelectionAuthority = "same-frame compact-source morphology; PHD2 fallback confined to ROI",
+                exclusionPolicy = "off-slit, bright-target/halo guard, compact FWHM, ellipticity, edge, saturation and SNR quality gated",
                 phase,
             },
             field.FramePath,

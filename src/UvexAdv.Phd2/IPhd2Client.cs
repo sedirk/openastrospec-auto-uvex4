@@ -105,6 +105,18 @@ public interface IPhd2Client : IAsyncDisposable
         bool forceRecalibration,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Starts or re-settles guiding while restricting PHD2's fallback star
+    /// search to an already morphology-qualified detector region. Callers
+    /// starting a new guide epoch in a bright-target field must provide the
+    /// same-frame candidate ROI instead of allowing full-frame auto-selection.
+    /// </summary>
+    Task<Phd2SettleResult> GuideAndSettleAsync(
+        Phd2SettleCriteria criteria,
+        bool forceRecalibration,
+        Phd2Rectangle? selectionRoi,
+        CancellationToken cancellationToken);
+
     Task<Phd2StopCaptureResult> StopCaptureAndConfirmAsync(CancellationToken cancellationToken);
 
     Task<Phd2StopCaptureResult> PauseAutomationAndStopCaptureAsync(CancellationToken cancellationToken);

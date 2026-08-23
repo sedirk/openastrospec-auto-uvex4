@@ -10,6 +10,10 @@ public sealed class Phd2SlitPlacementCommissioningTests
         AppContext.BaseDirectory,
         "Sources",
         "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+    private static readonly string LegacyRunnerSource = File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "Sources",
+        "RealObservationStageRunner.cs"));
 
     [Fact]
     public void CompletePolicyAndTopologyPresetPassesButNumericPolicyDriftBreaksHash()
@@ -98,6 +102,21 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("capture.VerifiedExposureMilliseconds != exposureMilliseconds", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("selectionMustUseThisFrame", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("AutoPreferOffSlitThenDirectTarget", RunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryNewGuideEpochConfinesPhd2FallbackToSameFrameCandidateRoi()
+    {
+        Assert.Equal(3, Count("BuildPhd2GuideSelectionRoi(") - 1); // Three commissioned new-guide paths plus the helper declaration.
+        Assert.Equal(4, Count("PublishPhd2GuideSelectionEvidenceAsync(")); // Three call sites plus the evidence helper declaration.
+        Assert.Equal(1, Count("guideSelectionAuthority = \"same-frame morphology-qualified candidate; PHD2 fallback confined to ROI\""));
+        Assert.Contains("const int commissionedSizePixels = 80", RunnerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("AutoSelectGuideStarAsync", RunnerSource, StringComparison.Ordinal);
+
+        Assert.Equal(2, CountIn(LegacyRunnerSource, "BuildPhd2GuideSelectionRoi("));
+        Assert.Equal(3, CountIn(LegacyRunnerSource, "PublishGuideSelectionEvidenceAsync(")); // Two call sites plus the evidence helper declaration.
+        Assert.Equal(1, CountIn(LegacyRunnerSource, "guideSelectionAuthority = \"same-frame compact-source morphology; PHD2 fallback confined to ROI\""));
+        Assert.Contains("bright-target/halo guard, compact FWHM", LegacyRunnerSource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -314,10 +333,13 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     private static int Count(string value)
+        => CountIn(RunnerSource, value);
+
+    private static int CountIn(string source, string value)
     {
         var count = 0;
         var index = 0;
-        while ((index = RunnerSource.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        while ((index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
         {
             count++;
             index += value.Length;

@@ -46,6 +46,35 @@ public sealed class SlitFieldAnalysisTests
     }
 
     [Fact]
+    public void BroadBrightHaloPeakIsRejectedInFavorOfCompactGuideStar()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);
+        var target = new StarCandidate(new PixelPoint(100, 100), 65535, 500000, 300, 0, 0, 1, 100);
+        var haloPeak = new StarCandidate(new PixelPoint(260, 100), 40000, 200000, 200, 9, 0.1, 0, 100);
+        var compactGuide = new StarCandidate(new PixelPoint(300, 140), 9000, 45000, 30, 4.1, 0.17, 0, 100);
+
+        var result = GuideStarSelector.Select([haloPeak, compactGuide], slit, target);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(compactGuide, result.Star);
+    }
+
+    [Fact]
+    public void UltraBrightTargetUsesWideHaloGuardBeforeGuideSelection()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);
+        var target = new StarCandidate(new PixelPoint(100, 100), 65535, 500000, 300, 0, 0, 1, 100);
+        var compactHaloIsland = new StarCandidate(new PixelPoint(180, 100), 12000, 50000, 40, 3.5, 0.1, 0, 100);
+        var isolatedGuide = new StarCandidate(new PixelPoint(260, 130), 9000, 40000, 25, 4, 0.1, 0, 100);
+
+        var result = GuideStarSelector.Select([compactHaloIsland, isolatedGuide], slit, target);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(isolatedGuide, result.Star);
+        Assert.Contains("120px", result.Gate.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DarkSlitLocusIsRefinedFromSeedWithoutOperatorConfirmation()
     {
         const int width = 240, height = 180;

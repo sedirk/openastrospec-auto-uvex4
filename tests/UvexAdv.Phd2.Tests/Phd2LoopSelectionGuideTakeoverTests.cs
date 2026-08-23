@@ -5,13 +5,17 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2LoopSelectionGuideTakeoverTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public async Task IdleLoopFreshFrameSelectionThenGuideTakeoverProducesCurrentSettle(
-        bool loopStoppedBeforeStartGuiding)
+        bool loopStoppedBeforeStartGuiding,
+        bool settleBeginBeforeStartGuiding)
     {
         var requestedGuide = new Phd2Point(321.25, 654.5);
         var selectedGuide = new Phd2Point(322.0, 655.0);
+        var selectionRoi = new Phd2Rectangle(282, 615, 80, 80);
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
         {
             await ReplyValidCalibrationAsync(session, cancellationToken);
@@ -55,7 +59,16 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
             var guide = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("guide", guide.GetProperty("method").GetString());
             Assert.False(guide.GetProperty("params").GetProperty("recalibrate").GetBoolean());
+            Assert.Equal(
+                new[] { selectionRoi.X, selectionRoi.Y, selectionRoi.Width, selectionRoi.Height },
+                guide.GetProperty("params").GetProperty("roi").EnumerateArray().Select(value => value.GetInt32()).ToArray());
             await session.ReplyResultAsync(guide, 0, cancellationToken);
+            // Real PHD2 repeats the already selected lock position while the
+            // local guide RPC is starting.  This is a confirmation, not an
+            // external lock mutation that may erase this operation's settle.
+            await session.SendEventAsync(
+                new { Event = "LockPositionSet", X = selectedGuide.X, Y = selectedGuide.Y },
+                cancellationToken);
             // This is the normal interactive takeover: guide consumes the
             // existing loop. The stop event must not erase this RPC's pending
             // settle epoch in either ordering relative to StartGuiding.
@@ -63,12 +76,19 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
             {
                 await session.SendEventAsync(new { Event = "LoopingExposuresStopped" }, cancellationToken);
             }
+            if (settleBeginBeforeStartGuiding)
+            {
+                await session.SendEventAsync(new { Event = "SettleBegin" }, cancellationToken);
+            }
             await session.SendEventAsync(new { Event = "StartGuiding" }, cancellationToken);
             if (!loopStoppedBeforeStartGuiding)
             {
                 await session.SendEventAsync(new { Event = "LoopingExposuresStopped" }, cancellationToken);
             }
-            await session.SendEventAsync(new { Event = "SettleBegin" }, cancellationToken);
+            if (!settleBeginBeforeStartGuiding)
+            {
+                await session.SendEventAsync(new { Event = "SettleBegin" }, cancellationToken);
+            }
             await session.SendEventAsync(
                 new
                 {
@@ -101,6 +121,7 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
         var settled = await client.GuideAndSettleAsync(
             new Phd2SettleCriteria(1.5, 1, 10),
             forceRecalibration: false,
+            selectionRoi,
             CancellationToken.None);
 
         Assert.Equal(Phd2AppState.Stopped, looping.InitialState);

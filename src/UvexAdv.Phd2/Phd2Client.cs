@@ -991,13 +991,34 @@ public sealed class Phd2Client : IPhd2Client
         }
     }
 
+    public Task<Phd2SettleResult> GuideAndSettleAsync(
+        Phd2SettleCriteria criteria,
+        bool forceRecalibration,
+        CancellationToken cancellationToken) =>
+        GuideAndSettleAsync(criteria, forceRecalibration, selectionRoi: null, cancellationToken);
+
+    /// <summary>
+    /// Starts or re-settles guiding while constraining PHD2's documented
+    /// fallback auto-selection to an already morphology-qualified region.
+    /// The ROI is relevant only when PHD2 decides no star is selected; when it
+    /// is already guiding, PHD2 simply begins another settle period.
+    /// </summary>
     public async Task<Phd2SettleResult> GuideAndSettleAsync(
         Phd2SettleCriteria criteria,
         bool forceRecalibration,
+        Phd2Rectangle? selectionRoi,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(criteria);
         ValidateSettleCriteria(criteria);
+        if (selectionRoi is not null &&
+            (selectionRoi.X < 0 || selectionRoi.Y < 0 ||
+             selectionRoi.Width <= 0 || selectionRoi.Height <= 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(selectionRoi),
+                "Guide-star selection ROI must have a non-negative origin and positive dimensions.");
+        }
 
         await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         long? operationId = null;
@@ -1052,18 +1073,30 @@ public sealed class Phd2Client : IPhd2Client
                 throw new Phd2Exception(
                     "PHD2 guide/settle operation lost its local epoch before the guide command was sent.");
             }
+            var guideParameters = new Dictionary<string, object?>
+            {
+                ["settle"] = new
+                {
+                    pixels = criteria.Pixels,
+                    time = criteria.StableTimeSeconds,
+                    timeout = criteria.TimeoutSeconds,
+                },
+                ["recalibrate"] = forceRecalibration,
+            };
+            if (selectionRoi is not null)
+            {
+                guideParameters["roi"] = new[]
+                {
+                    selectionRoi.X,
+                    selectionRoi.Y,
+                    selectionRoi.Width,
+                    selectionRoi.Height,
+                };
+            }
+
             await InvokeAsync(
                     "guide",
-                    new
-                    {
-                        settle = new
-                        {
-                            pixels = criteria.Pixels,
-                            time = criteria.StableTimeSeconds,
-                            timeout = criteria.TimeoutSeconds,
-                        },
-                        recalibrate = forceRecalibration,
-                    },
+                    guideParameters,
                     cancellationToken)
                 .ConfigureAwait(false);
             MarkGuideCommandAccepted(localOperationId);
@@ -1624,7 +1657,7 @@ public sealed class Phd2Client : IPhd2Client
         InvokeEventHandlersSafely(EventReceived, message);
     }
 
-    private static Phd2StateSnapshot ApplyEvent(Phd2StateSnapshot current, Phd2EventMessage message)
+    private Phd2StateSnapshot ApplyEvent(Phd2StateSnapshot current, Phd2EventMessage message)
     {
         var next = current with
         {
@@ -1641,6 +1674,10 @@ public sealed class Phd2Client : IPhd2Client
             "AppState" => ApplyObservedAppState(
                 next,
                 ParseAppState(GetOptionalString(message.Payload, "State"))),
+            "LockPositionSet" when IsPendingGuideStartLockConfirmation(next, message.Payload) => next with
+            {
+                LockPosition = ParsePointObject(message.Payload),
+            },
             "LockPositionSet" => InvalidateSettle(next with
             {
                 LockPosition = ParsePointObject(message.Payload),
@@ -1659,6 +1696,14 @@ public sealed class Phd2Client : IPhd2Client
             {
                 CalibrationValidation = null,
             }),
+            // PHD2 can repeat StarSelected after accepting the local guide
+            // RPC but before StartGuiding/SettleBegin.  If it still names the
+            // already accepted, morphology-qualified lock neighbourhood, it
+            // is guide-takeover confirmation rather than an external reselect.
+            "StarSelected" when IsPendingGuideStartLockConfirmation(next, message.Payload) => next with
+            {
+                SelectedStar = ParsePointObject(message.Payload),
+            },
             "StarSelected" => InvalidateSettle(next with
             {
                 SelectedStar = ParsePointObject(message.Payload),
@@ -1703,8 +1748,7 @@ public sealed class Phd2Client : IPhd2Client
             // StartGuiding. It is progress inside the already-pending guide RPC,
             // not an external stop that may erase the matching settle epoch.
             "LoopingExposuresStopped" when IsPendingSettleOperationCurrent(next) &&
-                next.PendingTakeoverLoopStopAllowed &&
-                !next.PendingSettleBeginSequence.HasValue => next with
+                next.PendingTakeoverLoopStopAllowed => next with
                 {
                     PendingTakeoverLoopStopAllowed = false,
                 },
@@ -1716,6 +1760,15 @@ public sealed class Phd2Client : IPhd2Client
             "Settling" => ApplySettling(next, message.Payload),
             "SettleDone" => ApplySettleDone(next, message),
             "GuideStep" => ApplyGuideStep(next, message.Payload),
+            // Thin cloud or momentary seeing can drop one centroid while the
+            // same locally issued PHD2 settle operation remains active.  PHD2
+            // is authoritative for whether that operation ultimately settles
+            // or fails, so retain the pending epoch until its SettleDone.
+            "StarLost" when IsPendingSettleOperationCurrent(next) => next with
+            {
+                AppState = Phd2AppState.LostLock,
+                LastGuideStep = ParseGuideStep(message.Payload),
+            },
             "StarLost" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.LostLock,
@@ -1747,14 +1800,39 @@ public sealed class Phd2Client : IPhd2Client
 
     private static Phd2StateSnapshot BeginGuideEpoch(Phd2StateSnapshot current)
     {
-        var preservePending = IsPendingSettleOperationCurrent(current) &&
-            !current.PendingSettleBeginSequence.HasValue;
+        // PHD2 does not guarantee whether StartGuiding or SettleBegin is
+        // delivered first for the same locally issued guide RPC.  A validated
+        // SettleBegin already belongs to the current pending operation, so a
+        // later StartGuiding is progress within that operation rather than a
+        // competing guide lifecycle transition.  With no current pending
+        // operation, StartGuiding still invalidates all prior settle evidence.
+        var preservePending = IsPendingSettleOperationCurrent(current);
         var next = InvalidateSettle(current with
         {
             AppState = Phd2AppState.Guiding,
             Phd2Paused = false,
         });
         return preservePending ? RestorePendingSettle(current, next) : next;
+    }
+
+    private bool IsPendingGuideStartLockConfirmation(
+        Phd2StateSnapshot current,
+        JsonElement payload)
+    {
+        if (!IsPendingSettleOperationCurrent(current) ||
+            current.PendingSettleBeginSequence.HasValue ||
+            current.LockPosition is null)
+        {
+            return false;
+        }
+
+        // Non-exact selection is intentionally allowed to snap from the
+        // requested search coordinate to a nearby stellar centroid.  PHD2
+        // announces that accepted centroid once more as guide takes over the
+        // selection loop, so use the same bounded tolerance as selection.
+        var announced = ParsePointObject(payload);
+        return announced is not null &&
+               Distance(current.LockPosition, announced) <= options.GuideStarSelectionTolerancePixels;
     }
 
     private static Phd2StateSnapshot ApplySettleBegin(
@@ -1773,7 +1851,6 @@ public sealed class Phd2Client : IPhd2Client
         {
             SettleProgress = null,
             PendingSettleBeginSequence = message.Sequence,
-            PendingTakeoverLoopStopAllowed = false,
         };
     }
 
@@ -1806,10 +1883,11 @@ public sealed class Phd2Client : IPhd2Client
                 Phd2AppState.Guiding);
         }
 
-        if (current.AppState == Phd2AppState.Guiding)
+        if (current.AppState is Phd2AppState.Guiding or Phd2AppState.LostLock)
         {
             return current with
             {
+                AppState = Phd2AppState.Guiding,
                 LastGuideStep = step,
                 PendingTakeoverLoopStopAllowed = false,
                 PendingLateLoopFrameAllowed = false,

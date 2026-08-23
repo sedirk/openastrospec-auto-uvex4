@@ -306,6 +306,18 @@ public static class SlitTargetIdentifier
 
 public sealed record GuideStarSelection(GateResult Gate, StarCandidate? Star, double Score);
 
+public sealed record GuideStarSelectionPolicy(
+    double SlitGuardPixels = 12,
+    double TargetGuardPixels = 20,
+    double BrightTargetHaloGuardPixels = 120,
+    double BrightTargetSignalToNoiseThreshold = 100,
+    double BrightTargetSaturatedFractionThreshold = 0.005,
+    double MinimumSignalToNoise = 10,
+    double MinimumEdgeDistancePixels = 20,
+    double MaximumFwhmPixels = 7,
+    double MaximumEllipticity = 0.45,
+    double MaximumSaturatedFraction = 0.005);
+
 public static class GuideStarSelector
 {
     public static GuideStarSelection Select(
@@ -316,17 +328,68 @@ public static class GuideStarSelector
         double targetGuardPixels = 20,
         double minimumSnr = 10)
     {
+        return SelectCore(
+            candidates,
+            slit,
+            targetPoint,
+            target: null,
+            new GuideStarSelectionPolicy(
+                SlitGuardPixels: slitGuardPixels,
+                TargetGuardPixels: targetGuardPixels,
+                MinimumSignalToNoise: minimumSnr));
+    }
+
+    public static GuideStarSelection Select(
+        IReadOnlyList<StarCandidate> candidates,
+        SlitGeometry slit,
+        StarCandidate target,
+        GuideStarSelectionPolicy? policy = null)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return SelectCore(candidates, slit, target.Centroid, target, policy ?? new GuideStarSelectionPolicy());
+    }
+
+    private static GuideStarSelection SelectCore(
+        IReadOnlyList<StarCandidate> candidates,
+        SlitGeometry slit,
+        PixelPoint targetPoint,
+        StarCandidate? target,
+        GuideStarSelectionPolicy policy)
+    {
+        var targetIsUltraBright = target is not null &&
+            (target.FwhmPixels <= 0 ||
+             target.SignalToNoise >= policy.BrightTargetSignalToNoiseThreshold ||
+             target.SaturatedFraction >= policy.BrightTargetSaturatedFractionThreshold);
+        var effectiveTargetGuardPixels = targetIsUltraBright
+            ? Math.Max(policy.TargetGuardPixels, policy.BrightTargetHaloGuardPixels)
+            : policy.TargetGuardPixels;
         var eligible = candidates
-            .Where(candidate => candidate.SignalToNoise >= minimumSnr)
-            .Where(candidate => candidate.EdgeDistancePixels >= 20)
-            .Where(candidate => Distance(candidate.Centroid, targetPoint) >= targetGuardPixels)
-            .Where(candidate => DistanceToSlit(candidate.Centroid, slit) >= slit.WidthPixels / 2 + slitGuardPixels)
-            .Select(candidate => (Candidate: candidate, Score: candidate.SignalToNoise / (1 + candidate.Ellipticity * 5 + candidate.SaturatedFraction * 100)))
+            .Where(candidate => double.IsFinite(candidate.SignalToNoise) && candidate.SignalToNoise >= policy.MinimumSignalToNoise)
+            .Where(candidate => double.IsFinite(candidate.FwhmPixels) && candidate.FwhmPixels > 0 && candidate.FwhmPixels <= policy.MaximumFwhmPixels)
+            .Where(candidate => double.IsFinite(candidate.Ellipticity) && candidate.Ellipticity <= policy.MaximumEllipticity)
+            .Where(candidate => double.IsFinite(candidate.SaturatedFraction) && candidate.SaturatedFraction <= policy.MaximumSaturatedFraction)
+            .Where(candidate => candidate.EdgeDistancePixels >= policy.MinimumEdgeDistancePixels)
+            .Where(candidate => Distance(candidate.Centroid, targetPoint) >= effectiveTargetGuardPixels)
+            .Where(candidate => DistanceToSlit(candidate.Centroid, slit) >= slit.WidthPixels / 2 + policy.SlitGuardPixels)
+            .Select(candidate => (
+                Candidate: candidate,
+                Score: candidate.SignalToNoise /
+                    (1 + candidate.Ellipticity * 5 + candidate.SaturatedFraction * 100 + Math.Max(0, candidate.FwhmPixels - 2) * 0.5)))
             .OrderByDescending(item => item.Score)
             .ToArray();
         return eligible.Length == 0
-            ? new GuideStarSelection(GateResult.Fail("GUIDE_STAR_NOT_FOUND", "No off-slit guide star passed the SNR, shape, edge and guard-region gates."), null, 0)
-            : new GuideStarSelection(GateResult.Pass("GUIDE_STAR_SELECTED", $"Selected guide star at ({eligible[0].Candidate.Centroid.X:F1}, {eligible[0].Candidate.Centroid.Y:F1})."), eligible[0].Candidate, eligible[0].Score);
+            ? new GuideStarSelection(
+                GateResult.Fail(
+                    "GUIDE_STAR_NOT_FOUND",
+                    $"No off-slit guide star passed the SNR, compact-FWHM, ellipticity, saturation, edge and {effectiveTargetGuardPixels:F0}px target/halo guard gates."),
+                null,
+                0)
+            : new GuideStarSelection(
+                GateResult.Pass(
+                    "GUIDE_STAR_SELECTED",
+                    $"Selected compact guide star at ({eligible[0].Candidate.Centroid.X:F1}, {eligible[0].Candidate.Centroid.Y:F1}); target/halo guard {effectiveTargetGuardPixels:F0}px."),
+                eligible[0].Candidate,
+                eligible[0].Score);
     }
 
     public static double DistanceToSlit(PixelPoint point, SlitGeometry slit)
