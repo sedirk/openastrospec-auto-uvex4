@@ -86,6 +86,29 @@ public interface IPhd2Client : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Delegates full-frame guide-star selection to PHD2's native
+    /// <c>find_star</c> implementation. The caller may apply acceptance gates
+    /// to the returned selection, but does not rank or substitute candidates.
+    /// </summary>
+    Task<Phd2Point> FindGuideStarAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads PHD2's exact configured image scale in arcseconds per pixel.
+    /// This is the unrounded JSON-RPC value, not the one-decimal UI label.
+    /// </summary>
+    Task<double> GetPixelScaleAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks PHD2 to find and select a star only inside the supplied detector
+    /// rectangle. This is the bounded recovery path when mount drift has moved
+    /// a morphology-qualified candidate beyond PHD2's point-selection search
+    /// radius before the first fresh looping frame arrives.
+    /// </summary>
+    Task<Phd2Point> FindGuideStarInRoiAsync(
+        Phd2Rectangle searchRoi,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Reads PHD2's current runtime lock position. This is a read-only JSON-RPC
     /// operation and does not select a star or mutate the PHD2 profile.
     /// </summary>

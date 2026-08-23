@@ -105,11 +105,15 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
-    public void EveryNewGuideEpochConfinesPhd2FallbackToSameFrameCandidateRoi()
+    public void EveryNewGuideEpochDelegatesOrdinarySelectionToPhd2AndRetainsBoundedRecoveryFence()
     {
         Assert.Equal(3, Count("BuildPhd2GuideSelectionRoi(") - 1); // Three commissioned new-guide paths plus the helper declaration.
         Assert.Equal(4, Count("PublishPhd2GuideSelectionEvidenceAsync(")); // Three call sites plus the evidence helper declaration.
-        Assert.Equal(1, Count("guideSelectionAuthority = \"same-frame morphology-qualified candidate; PHD2 fallback confined to ROI\""));
+        Assert.Contains("phd2.FindGuideStarAsync", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("GuideStarSelector.ValidateNativeSelection", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("PHD2 native full-frame find_star; coordinator validates the exact returned point and never ranks a substitute", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("candidateRankingByCoordinator = false", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("phd2.GetPixelScaleAsync", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("const int commissionedSizePixels = 80", RunnerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("AutoSelectGuideStarAsync", RunnerSource, StringComparison.Ordinal);
 
@@ -117,6 +121,35 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Equal(3, CountIn(LegacyRunnerSource, "PublishGuideSelectionEvidenceAsync(")); // Two call sites plus the evidence helper declaration.
         Assert.Equal(1, CountIn(LegacyRunnerSource, "guideSelectionAuthority = \"same-frame compact-source morphology; PHD2 fallback confined to ROI\""));
         Assert.Contains("bright-target/halo guard, compact FWHM", LegacyRunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DirectTargetFirstAutoModeRequiresBothCommissionedExposures()
+    {
+        var preset = CreatePreset() with
+        {
+            GuideMode = Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit,
+            DirectTargetGuidingExposureMilliseconds = 10,
+            OffSlitGuidingExposureMilliseconds = 2000,
+        };
+
+        Assert.Empty(preset.Validate());
+        Assert.Equal(10, preset.ExposureFor(Phd2SlitGuideMode.DegradedDirectTargetGuiding));
+        Assert.Equal(2000, preset.ExposureFor(Phd2SlitGuideMode.OffSlitGuideStar));
+        Assert.Contains("if (preset.GuideMode == Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit)", RunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DurableOriginSlitUsesFiniteNearestPointRatherThanHistoricalMidpoint()
+    {
+        var pendingState = Section(
+            "private Phd2LockShiftPendingState CreatePhd2PendingState(",
+            "private async Task PublishPhd2GuideSelectionEvidenceAsync(");
+
+        Assert.Contains("GuideStarSelector.ClosestPointOnSlit", pendingState, StringComparison.Ordinal);
+        Assert.Contains("originSlit.X", pendingState, StringComparison.Ordinal);
+        Assert.Contains("originSlit.Y", pendingState, StringComparison.Ordinal);
+        Assert.DoesNotContain("InitialRuntimeSlitLocal.AcquisitionPoint, preset).X", pendingState, StringComparison.Ordinal);
     }
 
     [Fact]

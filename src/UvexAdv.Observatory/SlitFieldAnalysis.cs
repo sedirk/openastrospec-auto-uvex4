@@ -349,6 +349,89 @@ public static class GuideStarSelector
         return SelectCore(candidates, slit, target.Centroid, target, policy ?? new GuideStarSelectionPolicy());
     }
 
+    /// <summary>
+    /// Validates the star selected by PHD2's native full-frame auto-selection.
+    /// This method never ranks a replacement: a rejected native selection is
+    /// returned as a rejection so the caller can stop or use an explicit
+    /// degraded route.
+    /// </summary>
+    public static GuideStarSelection ValidateNativeSelection(
+        IReadOnlyList<StarCandidate> candidates,
+        SlitGeometry slit,
+        StarCandidate target,
+        PixelPoint nativeSelection,
+        double matchRadiusPixels,
+        GuideStarSelectionPolicy? policy = null)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(slit);
+        ArgumentNullException.ThrowIfNull(target);
+        if (!double.IsFinite(nativeSelection.X) || !double.IsFinite(nativeSelection.Y) ||
+            !double.IsFinite(matchRadiusPixels) || matchRadiusPixels <= 0)
+        {
+            return new GuideStarSelection(
+                GateResult.Fail("PHD2_NATIVE_GUIDE_INVALID", "PHD2 native guide coordinates or the match radius are invalid."),
+                null,
+                0);
+        }
+
+        var effectivePolicy = policy ?? new GuideStarSelectionPolicy();
+        var matches = candidates
+            .Select(candidate => (Candidate: candidate, Distance: Distance(candidate.Centroid, nativeSelection)))
+            .Where(item => item.Distance <= matchRadiusPixels)
+            .OrderBy(item => item.Distance)
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            return new GuideStarSelection(
+                GateResult.Fail(
+                    "PHD2_NATIVE_GUIDE_NOT_STELLAR",
+                    $"PHD2 selected ({nativeSelection.X:F1}, {nativeSelection.Y:F1}), but no stellar morphology matched it within {matchRadiusPixels:F1}px."),
+                null,
+                0);
+        }
+
+        var candidate = matches[0].Candidate;
+        var targetIsUltraBright = target.FwhmPixels <= 0 ||
+            target.SignalToNoise >= effectivePolicy.BrightTargetSignalToNoiseThreshold ||
+            target.SaturatedFraction >= effectivePolicy.BrightTargetSaturatedFractionThreshold;
+        var targetGuard = targetIsUltraBright
+            ? Math.Max(effectivePolicy.TargetGuardPixels, effectivePolicy.BrightTargetHaloGuardPixels)
+            : effectivePolicy.TargetGuardPixels;
+        var failures = new List<string>();
+        if (!double.IsFinite(candidate.SignalToNoise) || candidate.SignalToNoise < effectivePolicy.MinimumSignalToNoise)
+            failures.Add($"SNR {candidate.SignalToNoise:F1} is below {effectivePolicy.MinimumSignalToNoise:F1}");
+        if (!double.IsFinite(candidate.FwhmPixels) || candidate.FwhmPixels <= 0 || candidate.FwhmPixels > effectivePolicy.MaximumFwhmPixels)
+            failures.Add($"FWHM {candidate.FwhmPixels:F1}px is outside the compact-star envelope");
+        if (!double.IsFinite(candidate.Ellipticity) || candidate.Ellipticity > effectivePolicy.MaximumEllipticity)
+            failures.Add($"ellipticity {candidate.Ellipticity:F2} is too high");
+        if (!double.IsFinite(candidate.SaturatedFraction) || candidate.SaturatedFraction > effectivePolicy.MaximumSaturatedFraction)
+            failures.Add($"saturated fraction {candidate.SaturatedFraction:F4} is too high");
+        if (candidate.EdgeDistancePixels < effectivePolicy.MinimumEdgeDistancePixels)
+            failures.Add("selection is too close to a detector edge");
+        if (Distance(candidate.Centroid, target.Centroid) < targetGuard)
+            failures.Add($"selection is inside the {targetGuard:F0}px target/halo guard");
+        if (DistanceToSlit(candidate.Centroid, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
+            failures.Add("selection is inside the physical-slit guard");
+
+        if (failures.Count > 0)
+        {
+            return new GuideStarSelection(
+                GateResult.Fail(
+                    "PHD2_NATIVE_GUIDE_REJECTED",
+                    $"PHD2's native selection was rejected without substitution: {string.Join("; ", failures)}."),
+                candidate,
+                candidate.SignalToNoise);
+        }
+
+        return new GuideStarSelection(
+            GateResult.Pass(
+                "PHD2_NATIVE_GUIDE_ACCEPTED",
+                $"Accepted PHD2 native guide star at ({candidate.Centroid.X:F1}, {candidate.Centroid.Y:F1}); the coordinator did not rank or substitute candidates."),
+            candidate,
+            candidate.SignalToNoise);
+    }
+
     private static GuideStarSelection SelectCore(
         IReadOnlyList<StarCandidate> candidates,
         SlitGeometry slit,
@@ -394,14 +477,26 @@ public static class GuideStarSelector
 
     public static double DistanceToSlit(PixelPoint point, SlitGeometry slit)
     {
+        var closest = ClosestPointOnSlit(point, slit);
+        return Distance(point, closest);
+    }
+
+    /// <summary>
+    /// Returns the nearest usable point on the finite physical slit centreline.
+    /// Moving a target to this point removes only the cross-slit error and
+    /// deliberately preserves its along-slit position whenever that position
+    /// already lies inside the illuminated slit length.
+    /// </summary>
+    public static PixelPoint ClosestPointOnSlit(PixelPoint point, SlitGeometry slit)
+    {
         var angle = slit.AngleDegrees * Math.PI / 180;
         var dx = point.X - slit.AcquisitionPoint.X;
         var dy = point.Y - slit.AcquisitionPoint.Y;
-        var perpendicular = -Math.Sin(angle) * dx + Math.Cos(angle) * dy;
         var along = Math.Cos(angle) * dx + Math.Sin(angle) * dy;
-        if (Math.Abs(along) <= slit.LengthPixels / 2) return Math.Abs(perpendicular);
-        var endpointAlong = Math.CopySign(slit.LengthPixels / 2, along);
-        return Math.Sqrt(perpendicular * perpendicular + (along - endpointAlong) * (along - endpointAlong));
+        var closestAlong = Math.Clamp(along, -slit.LengthPixels / 2, slit.LengthPixels / 2);
+        return new PixelPoint(
+            slit.AcquisitionPoint.X + Math.Cos(angle) * closestAlong,
+            slit.AcquisitionPoint.Y + Math.Sin(angle) * closestAlong);
     }
 
     private static double Distance(PixelPoint a, PixelPoint b)
@@ -445,8 +540,13 @@ public static class SlitCorrectionCalculator
         double cumulativeCorrectionDegrees,
         int completedCorrectionAttempts = 0)
     {
-        var dx = slit.AcquisitionPoint.X - target.X;
-        var dy = slit.AcquisitionPoint.Y - target.Y;
+        // A long slit is a finite line segment, not a single acquisition
+        // pixel. Correct only to the nearest point on that segment so a target
+        // that is already inside the slit is never dragged lengthwise toward
+        // the historical calibration midpoint.
+        var closestSlitPoint = GuideStarSelector.ClosestPointOnSlit(target, slit);
+        var dx = closestSlitPoint.X - target.X;
+        var dy = closestSlitPoint.Y - target.Y;
         var ra = transform.RaArcsecondsPerPixelX * dx + transform.RaArcsecondsPerPixelY * dy;
         var dec = transform.DecArcsecondsPerPixelX * dx + transform.DecArcsecondsPerPixelY * dy;
         var requestedMagnitude = Math.Sqrt(ra * ra + dec * dec) / 3600;

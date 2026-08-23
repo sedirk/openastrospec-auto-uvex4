@@ -115,10 +115,24 @@ No registry/profile lock overlay is rewritten with the current slit point. The
 slit acquisition point remains a versioned detector-geometry record; the PHD2
 lock position remains per-run runtime state.
 
-### Ordinary and direct-target guiding modes
+### Mature owner functions, ordinary and direct-target guiding modes
 
-The preferred mode selects an independent, unsaturated off-slit guide star. Its
-identity, guard distance, morphology and fresh lock residual must pass.
+The coordinator reuses the mature function of the component that already owns
+each device. N.I.N.A. performs catalog slew, plate solving and centering. PHD2
+performs full-frame guide-star auto-selection, calibration, guiding and runtime
+lock-position shifts. UVEX-ADV may validate the exact star returned by PHD2
+against the same fresh frame (stellar morphology, SNR range, bright-target halo,
+detector edge and physical-slit guards), but it does not rank a different star
+and substitute its own choice. A rejected PHD2 selection stops that route or
+enters an explicitly commissioned fallback.
+
+For a bright science target that is still visible, the preferred automatic
+mode first uses the shortest separately commissioned exposure and guides
+directly on that target. This mirrors manual slit acquisition and avoids an
+unnecessary guide-star transfer before the target reaches the slit. If direct
+target selection is not usable, the route falls back to PHD2's native
+independent, unsaturated off-slit guide-star selection. The exact native result,
+its guard distance, morphology and fresh lock residual must pass.
 
 If no independent star is usable and the science target itself is uniquely
 identified, the run may use `DegradedDirectTargetGuiding`. This mode uses the
@@ -127,6 +141,17 @@ binds `guide == target`, applies the same staged-lock and fresh-residual rules,
 and records that atmospheric image motion and slit-crossing flux modulation may
 be worse. A short direct-target guide frame is not focus evidence and does not
 replace a long-exposure WCS frame.
+
+The slit is a finite dark aperture, not one historical acquisition pixel and
+not either bright reflective edge. Placement therefore projects the target to
+the nearest point on the measured finite slit centreline. This removes only the
+cross-slit error when the target is already within the usable slit length; it
+must never drag an already admitted target lengthwise toward the calibration
+midpoint. A direct target that disappears after reaching the slit is an
+expected optical condition, not evidence that focus failed. Handoff to an
+off-slit guide must preserve the current mount position and obtain a new WCS or
+equivalent catalog-position residual before claiming placement; loss of the
+target alone never authorizes an unverified lock shift or a blind retry.
 
 ### Deterministic ghost assistance and non-visual fallback
 
@@ -179,4 +204,3 @@ ADR-0003 remains authoritative for measured slit geometry. ADR-0004 remains
 authoritative for the optional, separately versioned QHY-to-G3 pre-positioning
 model; this ADR supersedes only its assumption that the independent
 `G3PixelToMount` model is always the final-placement authority.
-

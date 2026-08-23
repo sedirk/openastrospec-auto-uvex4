@@ -89,7 +89,8 @@ public sealed record Phd2SlitPlacementContract(
         if (string.IsNullOrWhiteSpace(PierSide) || PierSide.Contains("unknown", StringComparison.OrdinalIgnoreCase))
             issues.Add("PHD2 lock-shift commissioning requires an exact known pier side.");
         if (!Enum.IsDefined(typeof(Phd2SlitGuideMode), GuideMode)) issues.Add("PHD2 slit guide mode is invalid.");
-        if (GuideMode == (int)Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget)
+        if (GuideMode is (int)Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget or
+            (int)Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit)
         {
             if (OffSlitGuidingExposureMilliseconds is not > 0) issues.Add("Auto guide selection requires a commissioned ordinary off-slit guiding exposure.");
             if (DirectTargetGuidingExposureMilliseconds is not > 0) issues.Add("Auto guide selection requires a separately commissioned shortest direct-target exposure.");

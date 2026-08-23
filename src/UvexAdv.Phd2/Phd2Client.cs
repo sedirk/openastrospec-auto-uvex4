@@ -646,6 +646,110 @@ public sealed class Phd2Client : IPhd2Client
         }
     }
 
+    public async Task<Phd2Point> FindGuideStarInRoiAsync(
+        Phd2Rectangle searchRoi,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(searchRoi);
+        if (searchRoi.X < 0 || searchRoi.Y < 0 ||
+            searchRoi.Width <= 0 || searchRoi.Height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(searchRoi),
+                "Guide-star search ROI must have a non-negative origin and positive dimensions.");
+        }
+
+        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfAutomationPaused();
+            var result = await InvokeAsync(
+                    "find_star",
+                    new
+                    {
+                        roi = new[]
+                        {
+                            searchRoi.X,
+                            searchRoi.Y,
+                            searchRoi.Width,
+                            searchRoi.Height,
+                        },
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var selected = ParsePointArray(result)
+                ?? throw new Phd2Exception("PHD2 found no guide star in the bounded search ROI.");
+            var maximumX = searchRoi.X + searchRoi.Width;
+            var maximumY = searchRoi.Y + searchRoi.Height;
+            if (selected.X < searchRoi.X || selected.X > maximumX ||
+                selected.Y < searchRoi.Y || selected.Y > maximumY)
+            {
+                throw new Phd2Exception(
+                    $"PHD2 returned guide star ({selected.X:F2}, {selected.Y:F2}) outside " +
+                    $"the requested ROI [{searchRoi.X}, {searchRoi.Y}, {searchRoi.Width}, {searchRoi.Height}].");
+            }
+
+            UpdateSnapshot(current => current with
+            {
+                LockPosition = selected,
+                SelectedStar = selected,
+            });
+            return selected;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    public async Task<Phd2Point> FindGuideStarAsync(CancellationToken cancellationToken)
+    {
+        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfAutomationPaused();
+            var result = await InvokeAsync(
+                    "find_star",
+                    parameters: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var selected = ParsePointArray(result)
+                ?? throw new Phd2Exception("PHD2 native automatic selection found no guide star.");
+            UpdateSnapshot(current => current with
+            {
+                LockPosition = selected,
+                SelectedStar = selected,
+            });
+            return selected;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    public async Task<double> GetPixelScaleAsync(CancellationToken cancellationToken)
+    {
+        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var result = await InvokeAsync("get_pixel_scale", parameters: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.ValueKind != JsonValueKind.Number ||
+                !result.TryGetDouble(out var pixelScale) ||
+                !double.IsFinite(pixelScale) || pixelScale <= 0)
+            {
+                throw new Phd2Exception("PHD2 returned an invalid image scale.");
+            }
+
+            return pixelScale;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     public async Task<Phd2LoopingStartResult> StartLoopingAndWaitForFreshFrameAsync(
         Phd2LoopingStartRequest request,
         CancellationToken cancellationToken)
@@ -1311,6 +1415,19 @@ public sealed class Phd2Client : IPhd2Client
                 "The existing capture, calibration, or guiding session was left untouched.");
         }
 
+        var priorExposureResult = await InvokeAsync(
+                "get_exposure",
+                parameters: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (priorExposureResult.ValueKind != JsonValueKind.Number ||
+            !priorExposureResult.TryGetInt32(out var priorExposureMilliseconds) ||
+            priorExposureMilliseconds <= 0)
+        {
+            throw new Phd2CaptureException(
+                "PHD2 did not return a valid pre-mutation exposure. No exposure or loop command was sent.");
+        }
+
         // One exposure mutation only.  Its response and a fresh readback must
         // both be unambiguous before a selection frame is allowed to start.
         // The caller must never retry this method after an ambiguous outcome.
@@ -1338,7 +1455,18 @@ public sealed class Phd2Client : IPhd2Client
                 $"PHD2 exposure readback did not exactly match the commissioned {request.ExposureMs}ms selection exposure. No loop was started.");
         }
 
-        using var frameWaiter = RegisterEventWaiter(message => message.Name == "LoopingExposures");
+        // PHD2/camera pipelines can publish one already-buffered image after a
+        // set_exposure transition.  When the value changed, deliberately
+        // discard the first post-loop event and save only the following frame.
+        // This is especially important for the 10 ms bright-target route,
+        // where a stale 50 ms frame can saturate a completely different halo.
+        var requiredLoopFrames = priorExposureMilliseconds == request.ExposureMs ? 1 : 2;
+        var observedLoopFrames = 0;
+        var frameBaselineSequence = Snapshot.EventSequence;
+        using var frameWaiter = RegisterEventWaiter(message =>
+            message.Name == "LoopingExposures" &&
+            message.Sequence > frameBaselineSequence &&
+            Interlocked.Increment(ref observedLoopFrames) >= requiredLoopFrames);
         var loopingStarted = false;
         string sourcePath;
         try
@@ -1346,7 +1474,14 @@ public sealed class Phd2Client : IPhd2Client
             await InvokeAsync("loop", parameters: null, cancellationToken).ConfigureAwait(false);
             loopingStarted = true;
             var frameTimeout = TimeSpan.FromMilliseconds(request.ExposureMs) + options.EventTimeoutMargin;
-            await WaitForEventAsync(frameWaiter, "looping-frame capture", frameTimeout, cancellationToken)
+            var pipelineFlushAllowance = priorExposureMilliseconds == request.ExposureMs
+                ? TimeSpan.Zero
+                : TimeSpan.FromMilliseconds(request.ExposureMs) + options.EventTimeoutMargin;
+            await WaitForEventAsync(
+                    frameWaiter,
+                    "exposure-bound looping-frame capture",
+                    frameTimeout + pipelineFlushAllowance,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             using var stoppedWaiter = RegisterEventWaiter(message => message.Name == "LoopingExposuresStopped");

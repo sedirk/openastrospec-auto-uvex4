@@ -117,6 +117,10 @@ public sealed class Phd2ClientTests
             Assert.False(state.TryGetProperty("params", out _));
             await session.ReplyResultAsync(state, "Stopped", cancellationToken);
 
+            var priorExposure = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_exposure", priorExposure.GetProperty("method").GetString());
+            await session.ReplyResultAsync(priorExposure, 1500, cancellationToken);
+
             var exposure = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("set_exposure", exposure.GetProperty("method").GetString());
             var exposureParameters = exposure.GetProperty("params");
@@ -169,9 +173,59 @@ public sealed class Phd2ClientTests
         Assert.False(File.Exists(source));
         Assert.Equal(result, client.Snapshot.LastSingleFrame);
         Assert.Equal(
-            ["get_app_state", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image"],
+            ["get_app_state", "get_exposure", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image"],
             server.ReceivedMethods.ToArray());
         Assert.DoesNotContain("capture_single_frame", server.ReceivedMethods);
+    }
+
+    [Fact]
+    public async Task CaptureFullFrameDiscardsFirstPipelineFrameAfterExposureChange()
+    {
+        using var directory = new TemporaryDirectory();
+        var source = Path.Combine(directory.Path, "phd-short-exposure.fit");
+        var destination = Path.Combine(directory.Path, "short-exposure-evidence.fit");
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var state = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(state, "Stopped", cancellationToken);
+
+            var priorExposure = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_exposure", priorExposure.GetProperty("method").GetString());
+            await session.ReplyResultAsync(priorExposure, 50, cancellationToken);
+
+            var setExposure = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("set_exposure", setExposure.GetProperty("method").GetString());
+            await session.ReplyResultAsync(setExposure, 0, cancellationToken);
+
+            var readback = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(readback, 10, cancellationToken);
+
+            var loop = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(loop, 0, cancellationToken);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 1 }, cancellationToken);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 2 }, cancellationToken);
+
+            var stop = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("stop_capture", stop.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stop, 0, cancellationToken);
+            await session.SendEventAsync(new { Event = "LoopingExposuresStopped" }, cancellationToken);
+
+            var save = await session.ReadRequestAsync(cancellationToken);
+            await File.WriteAllBytesAsync(source, [0x31, 0x30], cancellationToken);
+            await session.ReplyResultAsync(save, new { filename = source }, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var result = await client.CaptureFullFrameAsync(
+            new Phd2SingleFrameRequest(10, 1, 100, destination),
+            CancellationToken.None);
+
+        Assert.Equal(10, result.VerifiedExposureMilliseconds);
+        Assert.Equal(new byte[] { 0x31, 0x30 }, await File.ReadAllBytesAsync(destination));
+        Assert.Equal(
+            ["get_app_state", "get_exposure", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image"],
+            server.ReceivedMethods.ToArray());
     }
 
     [Fact]
@@ -816,6 +870,76 @@ public sealed class Phd2ClientTests
         Assert.Equal(42, snapshot.LastGuideStep?.Frame);
         Assert.Equal(12.5, snapshot.LastGuideStep?.Snr);
         Assert.Equal("test alert", snapshot.LastAlert);
+    }
+
+    [Fact]
+    public async Task FindGuideStarInRoiConfinesPHD2SelectionAndUpdatesSnapshot()
+    {
+        var roi = new Phd2Rectangle(560, 770, 80, 80);
+        var found = new Phd2Point(603.25, 816.5);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            Assert.Equal(
+                new[] { roi.X, roi.Y, roi.Width, roi.Height },
+                request.GetProperty("params").GetProperty("roi")
+                    .EnumerateArray().Select(value => value.GetInt32()).ToArray());
+            await session.ReplyResultAsync(request, new[] { found.X, found.Y }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var selected = await client.FindGuideStarInRoiAsync(roi, CancellationToken.None);
+
+        Assert.Equal(found, selected);
+        Assert.Equal(found, client.Snapshot.LockPosition);
+        Assert.Equal(found, client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task FindGuideStarDelegatesFullFrameSelectionToPHD2AndUpdatesSnapshot()
+    {
+        var found = new Phd2Point(1134.79, 711.6);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            Assert.False(request.TryGetProperty("params", out _));
+            await session.ReplyResultAsync(request, new[] { found.X, found.Y }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var selected = await client.FindGuideStarAsync(CancellationToken.None);
+
+        Assert.Equal(found, selected);
+        Assert.Equal(found, client.Snapshot.LockPosition);
+        Assert.Equal(found, client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task PixelScaleUsesExactUnroundedPHD2Value()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_pixel_scale", request.GetProperty("method").GetString());
+            Assert.False(request.TryGetProperty("params", out _));
+            await session.ReplyResultAsync(request, 0.383749, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var result = await client.GetPixelScaleAsync(CancellationToken.None);
+
+        Assert.Equal(0.383749, result, 9);
+        Assert.Equal(new[] { "get_pixel_scale" }, server.ReceivedMethods.ToArray());
     }
 
     private static Phd2Client CreateClient(

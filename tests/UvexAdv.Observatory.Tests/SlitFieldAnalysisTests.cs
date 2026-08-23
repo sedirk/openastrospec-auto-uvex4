@@ -46,6 +46,32 @@ public sealed class SlitFieldAnalysisTests
     }
 
     [Fact]
+    public void ClosestSlitPointPreservesPositionAlongTheUsableAperture()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
+        var target = new PixelPoint(45, 106);
+
+        var closest = GuideStarSelector.ClosestPointOnSlit(target, slit);
+
+        Assert.Equal(45, closest.X, 9);
+        Assert.Equal(100, closest.Y, 9);
+        Assert.Equal(6, GuideStarSelector.DistanceToSlit(target, slit), 9);
+    }
+
+    [Fact]
+    public void ClosestSlitPointClampsToFiniteEndpointOutsideTheAperture()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
+        var target = new PixelPoint(200, 110);
+
+        var closest = GuideStarSelector.ClosestPointOnSlit(target, slit);
+
+        Assert.Equal(175, closest.X, 9);
+        Assert.Equal(100, closest.Y, 9);
+        Assert.Equal(Math.Sqrt(725), GuideStarSelector.DistanceToSlit(target, slit), 9);
+    }
+
+    [Fact]
     public void BroadBrightHaloPeakIsRejectedInFavorOfCompactGuideStar()
     {
         var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);
@@ -72,6 +98,46 @@ public sealed class SlitFieldAnalysisTests
         Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
         Assert.Equal(isolatedGuide, result.Star);
         Assert.Contains("120px", result.Gate.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativePhd2SelectionIsValidatedWithoutSubstitutingAnotherCandidate()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
+        var target = new StarCandidate(new PixelPoint(100, 100), 65535, 500000, 300, 0, 0, 1, 100);
+        var native = new StarCandidate(new PixelPoint(300, 140), 9000, 45000, 30, 4.1, 0.17, 0, 100);
+        var higherScore = new StarCandidate(new PixelPoint(360, 150), 12000, 80000, 60, 3.5, 0.08, 0, 100);
+
+        var result = GuideStarSelector.ValidateNativeSelection(
+            [higherScore, native],
+            slit,
+            target,
+            new PixelPoint(300.5, 139.5),
+            5);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(native, result.Star);
+        Assert.Contains("did not rank or substitute", result.Gate.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectedNativePhd2HaloIsNotReplacedByACompactCandidate()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
+        var target = new StarCandidate(new PixelPoint(100, 100), 65535, 500000, 300, 0, 0, 1, 100);
+        var halo = new StarCandidate(new PixelPoint(180, 100), 12000, 50000, 40, 3.5, 0.1, 0, 100);
+        var compact = new StarCandidate(new PixelPoint(300, 140), 9000, 45000, 30, 4.1, 0.17, 0, 100);
+
+        var result = GuideStarSelector.ValidateNativeSelection(
+            [halo, compact],
+            slit,
+            target,
+            new PixelPoint(180, 100),
+            5);
+
+        Assert.Equal(GateDisposition.Failed, result.Gate.Disposition);
+        Assert.Equal(halo, result.Star);
+        Assert.Contains("without substitution", result.Gate.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,6 +168,26 @@ public sealed class SlitFieldAnalysisTests
 
         Assert.Equal(GateDisposition.Failed, result.Gate.Disposition);
         Assert.Equal("MOTION_CUMULATIVE_LIMIT", result.Gate.Code);
+    }
+
+    [Fact]
+    public void CorrectionRemovesOnlyCrossSlitErrorForTargetInsideSlitLength()
+    {
+        var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
+        var transform = new PixelToMountTransform("xform", 1, 0, 0, 1, "West", 0.5, DateTimeOffset.UtcNow);
+        var limits = new MotionLimits(30d / 3600, 120d / 3600, 4);
+
+        var result = SlitCorrectionCalculator.Calculate(
+            new PixelPoint(45, 106),
+            slit,
+            transform,
+            limits,
+            cumulativeCorrectionDegrees: 0);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(0, result.DeltaRaArcseconds, 9);
+        Assert.Equal(-6, result.DeltaDecArcseconds, 9);
+        Assert.Equal(6d / 3600, result.RequestedMagnitudeDegrees, 9);
     }
 
     [Fact]

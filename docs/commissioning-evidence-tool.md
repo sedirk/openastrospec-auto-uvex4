@@ -213,7 +213,7 @@ names in these fields are rejected before a preset is written:
 | `FineMotionAuthority` | `0` independent transform, `1` PHD2 lock shift, `2` prefer PHD2 then independent |
 | `Phd2SlitPlacement.CoordinateDomain` | `0` full sensor, `1` ROI-local |
 | `Phd2SlitPlacement.RotationAuthority` | only `1`, qualified PHD2 calibration; plate-solve angle remains seed-only |
-| `Phd2SlitPlacement.GuideMode` | `0` off-slit, `1` degraded direct target, `2` prefer off-slit then direct target |
+| `Phd2SlitPlacement.GuideMode` | `0` off-slit, `1` degraded direct target, `2` prefer off-slit then direct target, `3` prefer direct target then fall back to an off-slit star |
 | `GhostAssistanceMode` | `0` Skip, `1` AutoIfValidElseSkip, `2` RequireValid |
 
 The four slit entries are not accepted merely because their labels reproduce

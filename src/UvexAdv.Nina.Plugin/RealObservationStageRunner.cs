@@ -7835,7 +7835,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var current = lastG3Field;
             var target = current.TargetIdentification.Target!;
             var slit = current.SlitDetection.Geometry;
-            var residualPixels = Distance(target.Centroid, slit.AcquisitionPoint);
+            var residualPixels = GuideStarSelector.DistanceToSlit(target.Centroid, slit);
             if (residualPixels <= configuration.Slit.PlacementTolerancePixels)
             {
                 return Passed(

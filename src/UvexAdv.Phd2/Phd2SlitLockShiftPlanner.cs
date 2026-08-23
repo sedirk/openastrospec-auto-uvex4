@@ -23,6 +23,7 @@ public enum Phd2SlitGuideMode
     OffSlitGuideStar = 0,
     DegradedDirectTargetGuiding = 1,
     AutoPreferOffSlitThenDirectTarget = 2,
+    AutoPreferDirectTargetThenOffSlit = 3,
 }
 
 public enum Phd2SensorRotationAuthority

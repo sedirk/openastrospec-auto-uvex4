@@ -89,7 +89,8 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         if (string.IsNullOrWhiteSpace(PierSide) || PierSide.Contains("unknown", StringComparison.OrdinalIgnoreCase))
             issues.Add("PHD2 lock-shift commissioning requires an exact known pier side.");
         if (!Enum.IsDefined(GuideMode)) issues.Add("PHD2 slit guide mode is invalid.");
-        if (GuideMode == Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget)
+        if (GuideMode is Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget or
+            Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit)
         {
             if (OffSlitGuidingExposureMilliseconds is not > 0) issues.Add("Auto guide selection requires a commissioned ordinary off-slit guiding exposure.");
             if (DirectTargetGuidingExposureMilliseconds is not > 0) issues.Add("Auto guide selection requires a separately commissioned shortest direct-target exposure.");
@@ -165,9 +166,13 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
 
     public int ExposureFor(Phd2SlitGuideMode resolvedMode) => resolvedMode switch
     {
-        Phd2SlitGuideMode.OffSlitGuideStar when GuideMode == Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget =>
+        Phd2SlitGuideMode.OffSlitGuideStar when GuideMode is
+            Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget or
+            Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit =>
             OffSlitGuidingExposureMilliseconds ?? 0,
-        Phd2SlitGuideMode.DegradedDirectTargetGuiding when GuideMode == Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget =>
+        Phd2SlitGuideMode.DegradedDirectTargetGuiding when GuideMode is
+            Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget or
+            Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit =>
             DirectTargetGuidingExposureMilliseconds ?? 0,
         Phd2SlitGuideMode.OffSlitGuideStar or Phd2SlitGuideMode.DegradedDirectTargetGuiding =>
             ExpectedGuidingExposureMilliseconds,

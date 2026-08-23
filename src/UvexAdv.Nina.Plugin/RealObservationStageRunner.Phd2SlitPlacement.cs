@@ -113,7 +113,8 @@ internal sealed partial class RealObservationStageRunner
                 lastG3Field,
                 preset,
                 cancellationToken).ConfigureAwait(false);
-            if (choice.Selection.Gate.Disposition != GateDisposition.Passed || choice.Selection.Star is null)
+            if (choice.Selection.Gate.Disposition != GateDisposition.Passed ||
+                (choice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding && choice.Selection.Star is null))
                 return new StageResult(choice.Selection.Gate, choice.Field.FramePath);
             lastG3Field = choice.Field;
             if (choice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
@@ -125,7 +126,6 @@ internal sealed partial class RealObservationStageRunner
                     "Fresh selection resolved to degraded direct-target guiding. This run has no explicit supervised-science opt-in, so no guide or lock command was sent.");
             }
             var target = choice.Field.TargetIdentification.Target!;
-            var requestedGuide = ToPhd2Domain(choice.Selection.Star.Centroid, preset);
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
             var loop = await phd2.StartLoopingAndWaitForFreshFrameAsync(
                 new Phd2LoopingStartRequest(TimeSpan.FromSeconds(preset.FreshLoopFrameTimeoutSeconds)),
@@ -141,7 +141,11 @@ internal sealed partial class RealObservationStageRunner
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
                 throw new InvalidOperationException($"{preSelectBinding.Code}: {preSelectBinding.Message}");
             }
-            var selected = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+            var guideSelectionResult = await SelectFreshPhd2GuideAsync(
+                choice,
+                preset,
+                cancellationToken).ConfigureAwait(false);
+            var selected = guideSelectionResult.Selected;
             var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
                 selected,
                 preset.SensorWidthPixels,
@@ -149,8 +153,8 @@ internal sealed partial class RealObservationStageRunner
             await PublishPhd2GuideSelectionEvidenceAsync(
                 context,
                 choice.Field,
-                choice.Selection,
-                requestedGuide,
+                guideSelectionResult.Selection,
+                guideSelectionResult.Requested,
                 selected,
                 preset,
                 choice.Mode,
@@ -423,10 +427,10 @@ internal sealed partial class RealObservationStageRunner
         if (fieldBinding.Disposition != GateDisposition.Passed) return new StageResult(fieldBinding, lastG3Field.FramePath);
 
         var guideChoice = await AcquireFreshPhd2PlacementGuideAsync(context, lastG3Field, preset, cancellationToken).ConfigureAwait(false);
-        if (guideChoice.Selection.Gate.Disposition != GateDisposition.Passed || guideChoice.Selection.Star is null)
+        if (guideChoice.Selection.Gate.Disposition != GateDisposition.Passed ||
+            (guideChoice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding && guideChoice.Selection.Star is null))
             return new StageResult(guideChoice.Selection.Gate, guideChoice.Field.FramePath);
         lastG3Field = guideChoice.Field;
-        var requestedGuide = ToPhd2Domain(guideChoice.Selection.Star.Centroid, preset);
 
         var activeCalibrationBeforeGuide = await phd2.ValidateCalibrationAsync(
             preset.CalibrationQualityPolicy.ApplyHardRejectionCeilings(PhdCalibrationRequirement()),
@@ -476,7 +480,11 @@ internal sealed partial class RealObservationStageRunner
             await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
             return new StageResult(preSelectBinding, lastG3Field.FramePath);
         }
-        var selectedGuide = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+        var guideSelectionResult = await SelectFreshPhd2GuideAsync(
+            guideChoice,
+            preset,
+            cancellationToken).ConfigureAwait(false);
+        var selectedGuide = guideSelectionResult.Selected;
         var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
             selectedGuide,
             preset.SensorWidthPixels,
@@ -484,8 +492,8 @@ internal sealed partial class RealObservationStageRunner
         await PublishPhd2GuideSelectionEvidenceAsync(
             context,
             lastG3Field,
-            guideChoice.Selection,
-            requestedGuide,
+            guideSelectionResult.Selection,
+            guideSelectionResult.Requested,
             selectedGuide,
             preset,
             guideChoice.Mode,
@@ -883,7 +891,8 @@ internal sealed partial class RealObservationStageRunner
             preset,
             cancellationToken).ConfigureAwait(false);
         var guideSelection = guideChoice.Selection;
-        if (guideSelection.Gate.Disposition != GateDisposition.Passed || guideSelection.Star is null)
+        if (guideSelection.Gate.Disposition != GateDisposition.Passed ||
+            (guideChoice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding && guideSelection.Star is null))
             return new StageResult(guideSelection.Gate, guideChoice.Field.FramePath);
         if (guideChoice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
             !configuration.AllowDegradedSupervisedScience)
@@ -896,9 +905,6 @@ internal sealed partial class RealObservationStageRunner
         lastG3Field = guideChoice.Field;
         initialTarget = guideChoice.Field.TargetIdentification.Target
             ?? throw new InvalidOperationException("Fresh guide-selection frame passed without a target identity.");
-        var requestedGuideLocal = guideSelection.Star.Centroid;
-        var requestedGuide = ToPhd2Domain(requestedGuideLocal, preset);
-
         try
         {
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -917,7 +923,12 @@ internal sealed partial class RealObservationStageRunner
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
                 throw new InvalidOperationException($"{preSelectBinding.Code}: {preSelectBinding.Message}");
             }
-            var selectedGuide = await phd2.SelectGuideStarAsync(requestedGuide, cancellationToken).ConfigureAwait(false);
+            var guideSelectionResult = await SelectFreshPhd2GuideAsync(
+                guideChoice,
+                preset,
+                cancellationToken).ConfigureAwait(false);
+            guideSelection = guideSelectionResult.Selection;
+            var selectedGuide = guideSelectionResult.Selected;
             var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
                 selectedGuide,
                 preset.SensorWidthPixels,
@@ -926,7 +937,7 @@ internal sealed partial class RealObservationStageRunner
                 context,
                 lastG3Field,
                 guideSelection,
-                requestedGuide,
+                guideSelectionResult.Requested,
                 selectedGuide,
                 preset,
                 guideChoice.Mode,
@@ -1784,9 +1795,15 @@ internal sealed partial class RealObservationStageRunner
                 preset.SlitMinimumContrastSigma);
             if (slitDetection.Gate.Disposition != GateDisposition.Passed)
                 throw new InvalidOperationException($"Fresh runtime slit recognition failed: {slitDetection.Gate.Code}: {slitDetection.Gate.Message}");
+            var nearestSlitLocal = GuideStarSelector.ClosestPointOnSlit(
+                targetLocal,
+                slitDetection.Geometry);
             var target = ToPhd2Domain(targetLocal, preset);
             var guide = ToPhd2Domain(guideLocal, preset);
-            var slit = ToPhd2Domain(slitDetection.Geometry.AcquisitionPoint, preset);
+            // Preserve the target's along-slit coordinate.  The lock-shift
+            // formula receives the nearest point on the finite black aperture,
+            // not the historical calibration midpoint.
+            var slit = ToPhd2Domain(nearestSlitLocal, preset);
             var targetResidual = PointDistance(target, slit);
             var guideResidual = PointDistance(guide, currentLock);
             var measurement = new Phd2SlitFieldMeasurement(
@@ -1864,7 +1881,48 @@ internal sealed partial class RealObservationStageRunner
         Phd2SlitPlacementCommissioningPreset preset,
         CancellationToken cancellationToken)
     {
-        if (preset.GuideMode is Phd2SlitGuideMode.OffSlitGuideStar or Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget)
+        if (preset.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar)
+        {
+            return await CaptureAndSelectPhd2GuideAtExposureAsync(
+                context,
+                seedField,
+                preset,
+                Phd2SlitGuideMode.OffSlitGuideStar,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (preset.GuideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)
+        {
+            return await CaptureAndSelectPhd2GuideAtExposureAsync(
+                context,
+                seedField,
+                preset,
+                Phd2SlitGuideMode.DegradedDirectTargetGuiding,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (preset.GuideMode == Phd2SlitGuideMode.AutoPreferDirectTargetThenOffSlit)
+        {
+            var direct = await CaptureAndSelectPhd2GuideAtExposureAsync(
+                context,
+                seedField,
+                preset,
+                Phd2SlitGuideMode.DegradedDirectTargetGuiding,
+                cancellationToken).ConfigureAwait(false);
+            if (direct.Selection.Gate.Disposition == GateDisposition.Passed)
+            {
+                return direct;
+            }
+
+            return await CaptureAndSelectPhd2GuideAtExposureAsync(
+                context,
+                direct.Field,
+                preset,
+                Phd2SlitGuideMode.OffSlitGuideStar,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (preset.GuideMode == Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget)
         {
             var ordinary = await CaptureAndSelectPhd2GuideAtExposureAsync(
                 context,
@@ -1872,30 +1930,64 @@ internal sealed partial class RealObservationStageRunner
                 preset,
                 Phd2SlitGuideMode.OffSlitGuideStar,
                 cancellationToken).ConfigureAwait(false);
-            if (ordinary.Selection.Gate.Disposition == GateDisposition.Passed ||
-                preset.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar)
+            if (ordinary.Selection.Gate.Disposition == GateDisposition.Passed)
             {
                 return ordinary;
             }
-            seedField = ordinary.Field;
+
+            return await CaptureAndSelectPhd2GuideAtExposureAsync(
+                context,
+                ordinary.Field,
+                preset,
+                Phd2SlitGuideMode.DegradedDirectTargetGuiding,
+                cancellationToken).ConfigureAwait(false);
         }
 
-        if (preset.GuideMode is not Phd2SlitGuideMode.DegradedDirectTargetGuiding and
-            not Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget)
-        {
-            return Phd2PlacementGuideChoice.Failed(
-                seedField,
-                GateResult.Fail("PHD2_GUIDE_MODE_INVALID", "Unknown commissioned PHD2 guide mode."),
-                preset.GuideMode,
-                "invalid guide mode");
-        }
-
-        return await CaptureAndSelectPhd2GuideAtExposureAsync(
-            context,
+        return Phd2PlacementGuideChoice.Failed(
             seedField,
-            preset,
-            Phd2SlitGuideMode.DegradedDirectTargetGuiding,
-            cancellationToken).ConfigureAwait(false);
+            GateResult.Fail("PHD2_GUIDE_MODE_INVALID", "Unknown commissioned PHD2 guide mode."),
+            preset.GuideMode,
+            "invalid guide mode");
+    }
+
+    private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected)> SelectFreshPhd2GuideAsync(
+        Phd2PlacementGuideChoice choice,
+        Phd2SlitPlacementCommissioningPreset preset,
+        CancellationToken cancellationToken)
+    {
+        if (choice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)
+        {
+            var star = choice.Selection.Star
+                ?? throw new InvalidOperationException("Direct-target guiding has no fresh target centroid.");
+            var requested = ToPhd2Domain(star.Centroid, preset);
+            var selected = await phd2.SelectGuideStarAsync(requested, cancellationToken).ConfigureAwait(false);
+            return (choice.Selection, requested, selected);
+        }
+
+        if (choice.Mode != Phd2SlitGuideMode.OffSlitGuideStar)
+            throw new InvalidOperationException($"Resolved guide mode {choice.Mode} is not selectable.");
+
+        // PHD2 owns full-frame guide-star choice.  Local morphology is only an
+        // acceptance gate for the exact point returned by native find_star;
+        // a rejected point is never replaced with a coordinator-ranked star.
+        var selectedNative = await phd2.FindGuideStarAsync(cancellationToken).ConfigureAwait(false);
+        var selectedLocal = ToFrameLocal(selectedNative, preset);
+        var target = choice.Field.TargetIdentification.Target
+            ?? throw new InvalidOperationException("PHD2 native guide validation has no fresh target identity.");
+        var validation = GuideStarSelector.ValidateNativeSelection(
+            choice.Field.Candidates,
+            choice.Field.SlitDetection.Geometry,
+            target,
+            selectedLocal,
+            preset.GuideSearchRadiusPixels,
+            new GuideStarSelectionPolicy(MinimumSignalToNoise: preset.MinimumGuideSignalToNoise));
+        if (validation.Gate.Disposition != GateDisposition.Passed)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            throw new InvalidOperationException($"{validation.Gate.Code}: {validation.Gate.Message}");
+        }
+
+        return (validation, selectedNative, selectedNative);
     }
 
     private async Task<Phd2PlacementGuideChoice> CaptureAndSelectPhd2GuideAtExposureAsync(
@@ -2060,15 +2152,18 @@ internal sealed partial class RealObservationStageRunner
         var target = identification.Target!;
         if (resolvedMode == Phd2SlitGuideMode.OffSlitGuideStar)
         {
-            var selection = GuideStarSelector.Select(candidates, field.SlitDetection.Geometry, target);
+            var diagnostic = GuideStarSelector.Select(candidates, field.SlitDetection.Geometry, target);
             return new Phd2PlacementGuideChoice(
                 field,
-                selection,
+                new GuideStarSelection(
+                    GateResult.Pass(
+                        "PHD2_NATIVE_GUIDE_SELECTION_DEFERRED",
+                        $"Fresh exposure-bound target/slit evidence is valid. PHD2 native full-frame find_star will choose the off-slit guide after the fresh loop; local ranking is diagnostic only ({diagnostic.Gate.Code})."),
+                    diagnostic.Star,
+                    diagnostic.Score),
                 resolvedMode,
                 exposureMilliseconds,
-                selection.Gate.Disposition == GateDisposition.Passed
-                    ? "ordinary off-slit guide selected from the same fresh commissioned-exposure frame"
-                    : selection.Gate.Message,
+                "PHD2 native full-frame selection is authoritative; coordinator candidate ranking is not used",
                 capture);
         }
         return new Phd2PlacementGuideChoice(
@@ -2221,6 +2316,11 @@ internal sealed partial class RealObservationStageRunner
         string reason)
     {
         var now = DateTimeOffset.UtcNow;
+        var originTargetLocal = ToFrameLocal(session.InitialTarget, preset);
+        var originSlitLocal = GuideStarSelector.ClosestPointOnSlit(
+            originTargetLocal,
+            session.InitialRuntimeSlitLocal);
+        var originSlit = ToPhd2Domain(originSlitLocal, preset);
         return new Phd2LockShiftPendingState(
             Phd2LockShiftPendingState.CurrentSchemaVersion,
             context.Plan.ObservationRunId,
@@ -2256,8 +2356,8 @@ internal sealed partial class RealObservationStageRunner
             reason,
             session.InitialTarget.X,
             session.InitialTarget.Y,
-            ToPhd2Domain(session.InitialRuntimeSlitLocal.AcquisitionPoint, preset).X,
-            ToPhd2Domain(session.InitialRuntimeSlitLocal.AcquisitionPoint, preset).Y);
+            originSlit.X,
+            originSlit.Y);
     }
 
     private async Task PublishPhd2GuideSelectionEvidenceAsync(
@@ -2274,6 +2374,8 @@ internal sealed partial class RealObservationStageRunner
         CancellationToken cancellationToken)
     {
         var target = field.TargetIdentification.Target!;
+        var exactPixelScaleArcsecondsPerPixel = await phd2.GetPixelScaleAsync(cancellationToken).ConfigureAwait(false);
+        var nativeSelection = resolvedGuideMode == Phd2SlitGuideMode.OffSlitGuideStar;
         await PublishRunJsonEvidenceAsync(
             "phd2-full-frame-guide-takeover",
             "PHD2 full-frame loop selection followed by guide takeover",
@@ -2291,7 +2393,13 @@ internal sealed partial class RealObservationStageRunner
                 requestedGuidePosition = requested,
                 selectedGuidePosition = selected,
                 guideSelectionRoi,
-                guideSelectionAuthority = "same-frame morphology-qualified candidate; PHD2 fallback confined to ROI",
+                exactPixelScaleArcsecondsPerPixel,
+                guideSelectionAuthority = nativeSelection
+                    ? "PHD2 native full-frame find_star; coordinator validates the exact returned point and never ranks a substitute"
+                    : "commissioned direct target centroid selected through PHD2 point selection",
+                candidateRankingByCoordinator = false,
+                nativeFullFrameSelection = nativeSelection,
+                selectionGate = selection.Gate,
                 selectedCandidate = selection.Star,
                 loop.InitialState,
                 loop.Frame,
