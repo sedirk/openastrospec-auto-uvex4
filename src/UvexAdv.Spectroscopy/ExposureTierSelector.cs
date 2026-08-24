@@ -10,13 +10,21 @@ public sealed record SpectralProbeMetrics(
     double LineSnrPerResolutionElement,
     double TargetToSkyContrast,
     bool GuidingStable,
-    string SourceFrameId);
+    string SourceFrameId,
+    double TraceSaturatedFraction = 0,
+    double ClippedDispersionColumnFraction = 0,
+    int LongestClippedDispersionColumnRun = 0,
+    int TraceSpatialCenterPixel = -1,
+    int TraceSpatialHalfWidthPixels = 0);
 
 public sealed record ExposureTierOptions(
     IReadOnlyList<double> ExposureLadderSeconds,
     double TargetFullScaleFraction = 0.65,
     double MaximumFullScaleFraction = 0.82,
     double MaximumSaturatedFraction = 0.001,
+    double MaximumTraceSaturatedFraction = 0.001,
+    double MaximumClippedDispersionColumnFraction = 0.002,
+    int MaximumConsecutiveClippedDispersionColumns = 3,
     double MinimumTargetToSkyContrast = 1.15,
     double MinimumContinuumSnr = 5,
     double MinimumLineSnr = 8)
@@ -54,6 +62,12 @@ public static class ExposureTierSelector
         {
             return Reject("PROBE_SATURATION_INVALID", "Probe saturated fraction must be finite and within [0, 1].", ladder[0], double.NaN, probe);
         }
+        if (!double.IsFinite(probe.TraceSaturatedFraction) || probe.TraceSaturatedFraction is < 0 or > 1 ||
+            !double.IsFinite(probe.ClippedDispersionColumnFraction) || probe.ClippedDispersionColumnFraction is < 0 or > 1 ||
+            probe.LongestClippedDispersionColumnRun < 0)
+        {
+            return Reject("PROBE_TRACE_SATURATION_INVALID", "Trace saturation metrics must be finite and within their valid ranges.", ladder[0], double.NaN, probe);
+        }
         if (!double.IsFinite(probe.ContinuumSnrPerResolutionElement) || probe.ContinuumSnrPerResolutionElement < 0 ||
             !double.IsFinite(probe.LineSnrPerResolutionElement) || probe.LineSnrPerResolutionElement < 0)
         {
@@ -69,7 +83,10 @@ public static class ExposureTierSelector
         var usableRange = probe.FullScaleAdu - probe.BiasLevelAdu;
         var signal = Math.Max(0, probe.HighPercentileAdu - probe.BiasLevelAdu);
         var observedFraction = signal / usableRange;
-        if (probe.SaturatedFraction > options.MaximumSaturatedFraction || observedFraction >= options.MaximumFullScaleFraction)
+        var traceClipped = probe.TraceSaturatedFraction > options.MaximumTraceSaturatedFraction ||
+            probe.ClippedDispersionColumnFraction > options.MaximumClippedDispersionColumnFraction ||
+            probe.LongestClippedDispersionColumnRun > options.MaximumConsecutiveClippedDispersionColumns;
+        if (probe.SaturatedFraction > options.MaximumSaturatedFraction || traceClipped || observedFraction >= options.MaximumFullScaleFraction)
         {
             var ratio = observedFraction > 0 ? options.TargetFullScaleFraction / observedFraction : 0.25;
             var desired = probe.ExposureSeconds * Math.Clamp(ratio, 0.02, 0.95);
@@ -95,7 +112,9 @@ public static class ExposureTierSelector
                 : safeBackoffTiers.MinBy(static item => item.Exposure);
             return Accept(
                 "SATURATION_BACKOFF",
-                $"Probe was near clipping; selected bounded lower tier {selectedBackoff.Exposure:G4} s.",
+                traceClipped
+                    ? $"Spectral trace clipped {probe.ClippedDispersionColumnFraction:P2} of wavelength columns (longest run {probe.LongestClippedDispersionColumnRun}); selected lower tier {selectedBackoff.Exposure:G4} s for a fresh probe."
+                    : $"Probe was near clipping; selected bounded lower tier {selectedBackoff.Exposure:G4} s for a fresh probe.",
                 selectedBackoff.Exposure,
                 selectedBackoff.Predicted,
                 probe);
@@ -142,6 +161,11 @@ public static class ExposureTierSelector
             ["highPercentileAdu"] = probe.HighPercentileAdu,
             ["fullScaleAdu"] = probe.FullScaleAdu,
             ["saturatedFraction"] = probe.SaturatedFraction,
+            ["traceSaturatedFraction"] = probe.TraceSaturatedFraction,
+            ["clippedDispersionColumnFraction"] = probe.ClippedDispersionColumnFraction,
+            ["longestClippedDispersionColumnRun"] = probe.LongestClippedDispersionColumnRun,
+            ["traceSpatialCenterPixel"] = probe.TraceSpatialCenterPixel,
+            ["traceSpatialHalfWidthPixels"] = probe.TraceSpatialHalfWidthPixels,
             ["continuumSnrPerResolutionElement"] = probe.ContinuumSnrPerResolutionElement,
             ["lineSnrPerResolutionElement"] = probe.LineSnrPerResolutionElement,
             ["targetToSkyContrast"] = probe.TargetToSkyContrast,

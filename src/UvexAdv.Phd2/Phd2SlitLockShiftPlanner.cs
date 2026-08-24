@@ -385,8 +385,8 @@ public static class Phd2SlitLockShiftPlanner
             return new Phd2LockShiftPlanResult(
                 true,
                 true,
-                "TARGET_ON_SLIT",
-                $"Fresh G3 target/slit residual {residual:F3} pixels is within graded tolerance {effectiveTargetTolerance:F3}.",
+                "TARGET_AT_SLIT_MIDPOINT",
+                $"Fresh G3 target/slit-midpoint residual {residual:F3} pixels is within graded tolerance {effectiveTargetTolerance:F3}.",
                 null);
         }
         if (residual > limits.MaximumAcquisitionResidualPixels)

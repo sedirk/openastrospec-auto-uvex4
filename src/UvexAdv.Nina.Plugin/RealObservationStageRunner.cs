@@ -35,6 +35,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     // Command-acceptance tolerance, not an optical-centering tolerance. A
     // stopped slew farther away cannot be treated as an attained waypoint.
     private const double MountCommandArrivalToleranceArcseconds = 2d;
+    // The mature N.I.N.A. 3.2 CenteringSolver owns the solve/correct/repeat
+    // algorithm. QHY capture and every physical slew remain behind this
+    // project's ownership and commissioning guards.
+    private static readonly bool UseNinaNativeQhyCentering = true;
 
     private static readonly JsonSerializerOptions EvidenceJsonOptions = new()
     {
@@ -59,6 +63,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private readonly IDomeMediator domeMediator;
     private readonly IWeatherDataMediator weatherDataMediator;
     private readonly IFlatDeviceMediator flatDeviceMediator;
+    private readonly IFilterWheelMediator filterWheelMediator;
+    private readonly IDomeFollower domeFollower;
+    private readonly IPlateSolverFactory plateSolverFactory;
     private readonly IProgress<ApplicationStatus> progress;
     private readonly WindowsFocusDomainEvidence focusDomainEvidence = new();
     private readonly QhyServiceClient qhy;
@@ -115,6 +122,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private int executingStage = -1;
     private int resumeRecoveryRequired;
     private int phd2GuidingEverStarted;
+    private int mountClockRecoveryAttempted;
     private UvexServiceClient? activeSlitIlluminationClient;
     private UvexServiceClient.UvexLeaseSession? activeSlitIlluminationLease;
     private string? activeSlitIlluminationSequenceId;
@@ -155,6 +163,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         IDomeMediator domeMediator,
         IWeatherDataMediator weatherDataMediator,
         IFlatDeviceMediator flatDeviceMediator,
+        IFilterWheelMediator filterWheelMediator,
+        IDomeFollower domeFollower,
         IProgress<ApplicationStatus> progress)
     {
         this.host = host;
@@ -171,6 +181,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         this.domeMediator = domeMediator;
         this.weatherDataMediator = weatherDataMediator;
         this.flatDeviceMediator = flatDeviceMediator;
+        this.filterWheelMediator = filterWheelMediator;
+        this.domeFollower = domeFollower;
+        this.plateSolverFactory = plateSolverFactory;
         this.progress = progress;
         var plateSettings = profileService.ActiveProfile.PlateSolveSettings;
         var primarySolver = plateSolverFactory.GetPlateSolver(plateSettings);
@@ -807,7 +820,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return GateResult.Fail("TELESCOPE_IDENTITY_MISMATCH", $"Connected telescope DeviceId '{telescope.DeviceId}' does not match '{configuration.ExpectedTelescopeId}'.");
         }
         if (!telescope.CanSlew) return GateResult.Fail("TELESCOPE_CANNOT_SLEW", "The connected mount does not report slew capability.");
-        var mountClockGate = ValidateMountClock();
+        var mountClockGate = await EnsureMountClockSynchronizedAsync(context, cancellationToken).ConfigureAwait(false);
         if (mountClockGate.Disposition != GateDisposition.Passed) return mountClockGate;
 
         var c11FocusOwner = ReadC11MainFocusOwner();
@@ -1215,6 +1228,192 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
     }
 
+    private async Task<GateResult> EnsureMountClockSynchronizedAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        var initial = ValidateMountClock();
+        if (initial.Disposition == GateDisposition.Passed ||
+            !string.Equals(initial.Code, "MOUNT_CLOCK_OFFSET_EXCEEDED", StringComparison.Ordinal))
+        {
+            return initial;
+        }
+
+        // OnStep receives workstation UTC from N.I.N.A. when its ASCOM
+        // connection is established. A long-lived N.I.N.A. session can
+        // therefore retain a mount UTCDate that is days old even though the
+        // Profile TimeSync option remains enabled. Recover once per run by
+        // reconnecting only the N.I.N.A.-owned telescope; never scan devices,
+        // touch another owner, or continue guiding through the reconnect.
+        if (Interlocked.CompareExchange(ref mountClockRecoveryAttempted, 1, 0) != 0)
+        {
+            return GateResult.Fail(
+                "MOUNT_CLOCK_RECOVERY_ALREADY_ATTEMPTED",
+                "The sole automatic N.I.N.A. telescope reconnect was already attempted in this run and mount UTC is still stale; no mount motion is permitted.",
+                initial.Metrics);
+        }
+
+        try
+        {
+            await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            var environment = ValidateEnvironment(context.Plan with
+            {
+                PlannedStartUtc = DateTimeOffset.UtcNow,
+                PlannedDuration = context.RemainingWorstCaseDuration ?? context.Plan.PlannedDuration,
+            });
+            if (environment.Disposition != GateDisposition.Passed) return environment;
+            var cover = ValidateOpticalCoverOpen();
+            if (cover.Disposition != GateDisposition.Passed) return cover;
+
+            var profileGate = ValidateNinaProfileOwnerSelections(context.Plan);
+            if (profileGate.Disposition != GateDisposition.Passed) return profileGate;
+            if (!profileService.ActiveProfile.TelescopeSettings.TimeSync)
+            {
+                return GateResult.Fail(
+                    "MOUNT_CLOCK_NINA_TIME_SYNC_DISABLED",
+                    "The active N.I.N.A. Profile has telescope TimeSync disabled; an automatic reconnect cannot attest that OnStep UTC will be corrected.",
+                    initial.Metrics);
+            }
+
+            var before = telescopeMediator.GetInfo();
+            if (!before.Connected ||
+                !string.Equals(before.DeviceId, configuration.ExpectedTelescopeId, StringComparison.Ordinal) ||
+                before.Slewing ||
+                before.IsPulseGuiding)
+            {
+                return GateResult.Unknown(
+                    "MOUNT_CLOCK_RECOVERY_MOUNT_NOT_STATIONARY",
+                    "Automatic UTC recovery requires the exact N.I.N.A.-owned telescope to be connected, stationary, and not pulse-guiding.",
+                    initial.Metrics);
+            }
+
+            await EnsurePhdConnectedAsync(cancellationToken).ConfigureAwait(false);
+            var phdIdentity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
+            if (!phdIdentity.IsValid)
+            {
+                return GateResult.Fail(
+                    "MOUNT_CLOCK_RECOVERY_PHD2_IDENTITY_INVALID",
+                    string.Join(" ", phdIdentity.Failures.Concat(phdIdentity.IndeterminateReasons)),
+                    initial.Metrics);
+            }
+            object? phdStop = null;
+            if (phd2.Snapshot.AppState != Phd2AppState.Stopped)
+            {
+                Report("赤道仪 UTC 已陈旧；先停止 PHD2，再由 N.I.N.A. 独占重连 OnStep 同步时钟");
+                phdStop = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
+            }
+            if (phd2.Snapshot.AppState != Phd2AppState.Stopped)
+            {
+                return GateResult.Unknown(
+                    "MOUNT_CLOCK_RECOVERY_PHD2_NOT_STOPPED",
+                    "PHD2 did not attest Stopped state; the N.I.N.A. telescope reconnect was not attempted.",
+                    initial.Metrics);
+            }
+
+            var beforeCoordinates = telescopeMediator.GetCurrentPosition();
+            var beforePier = before.SideOfPier;
+            var beforeTracking = before.TrackingEnabled;
+            await WriteAuditBestEffortAsync("mount-clock-recovery-intent", new
+            {
+                cause = initial,
+                owner = "N.I.N.A. telescope mediator",
+                exactDeviceId = before.DeviceId,
+                profileTimeSync = true,
+                beforePier,
+                beforeTracking,
+                beforeRaDegrees = beforeCoordinates.RADegrees,
+                beforeDecDegrees = beforeCoordinates.Dec,
+                phdStop,
+                automaticRetryAllowed = false,
+                slewIssued = false,
+            }).ConfigureAwait(false);
+
+            await telescopeMediator.Disconnect().ConfigureAwait(false);
+            var disconnectDeadline = DateTimeOffset.UtcNow.AddSeconds(20);
+            while (telescopeMediator.GetInfo().Connected && DateTimeOffset.UtcNow < disconnectDeadline)
+            {
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+            }
+            if (telescopeMediator.GetInfo().Connected)
+            {
+                return GateResult.Unknown(
+                    "MOUNT_CLOCK_RECOVERY_DISCONNECT_TIMEOUT",
+                    "N.I.N.A. did not attest telescope disconnection within 20 seconds; no mount motion is permitted.",
+                    initial.Metrics);
+            }
+
+            profileGate = ValidateNinaProfileOwnerSelections(context.Plan);
+            if (profileGate.Disposition != GateDisposition.Passed) return profileGate;
+            if (!profileService.ActiveProfile.TelescopeSettings.TimeSync)
+            {
+                return GateResult.Fail(
+                    "MOUNT_CLOCK_NINA_TIME_SYNC_CHANGED",
+                    "N.I.N.A. telescope TimeSync changed while the telescope was disconnected; reconnect was not attempted.",
+                    initial.Metrics);
+            }
+            if (!await telescopeMediator.Connect().ConfigureAwait(false))
+            {
+                return GateResult.Unknown(
+                    "MOUNT_CLOCK_RECOVERY_RECONNECT_REJECTED",
+                    "N.I.N.A. rejected the sole telescope reconnect used to refresh OnStep UTC.",
+                    initial.Metrics);
+            }
+            var connectDeadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while (!telescopeMediator.GetInfo().Connected && DateTimeOffset.UtcNow < connectDeadline)
+            {
+                await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+            }
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+
+            var after = telescopeMediator.GetInfo();
+            var afterClock = ValidateMountClock();
+            if (afterClock.Disposition != GateDisposition.Passed ||
+                !after.Connected ||
+                !string.Equals(after.DeviceId, configuration.ExpectedTelescopeId, StringComparison.Ordinal) ||
+                after.Slewing ||
+                after.IsPulseGuiding ||
+                after.SideOfPier != beforePier ||
+                after.TrackingEnabled != beforeTracking)
+            {
+                return GateResult.Fail(
+                    "MOUNT_CLOCK_RECOVERY_POSTCHECK_FAILED",
+                    $"N.I.N.A. telescope reconnect did not preserve identity/stationary state/pier/tracking or did not refresh UTC: {afterClock.Message}",
+                    afterClock.Metrics);
+            }
+
+            var afterCoordinates = telescopeMediator.GetCurrentPosition();
+            var reportedPositionShiftArcseconds = AngularSeparationArcseconds(beforeCoordinates, afterCoordinates);
+            await WriteAuditBestEffortAsync("mount-clock-recovery-completed", new
+            {
+                beforeClock = initial,
+                afterClock,
+                beforePier,
+                afterPier = after.SideOfPier,
+                beforeTracking,
+                afterTracking = after.TrackingEnabled,
+                reportedPositionShiftArcseconds,
+                requiresFreshWcs = reportedPositionShiftArcseconds > 30,
+                automaticRetryAllowed = false,
+                slewIssued = false,
+            }).ConfigureAwait(false);
+            return GateResult.Pass(
+                "MOUNT_CLOCK_RECOVERED_BY_NINA_RECONNECT",
+                $"N.I.N.A. refreshed stale OnStep UTC with one telescope-only reconnect; reported position shift {reportedPositionShiftArcseconds:F1} arcsec. Fresh QHY WCS remains mandatory before coarse centering.",
+                (afterClock.Metrics ?? new Dictionary<string, double>()).Concat(new Dictionary<string, double>
+                {
+                    ["mountClockRecoveryReportedPositionShiftArcseconds"] = reportedPositionShiftArcseconds,
+                }).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return GateResult.Unknown(
+                "MOUNT_CLOCK_RECOVERY_EXCEPTION",
+                $"The sole automatic N.I.N.A. telescope reconnect failed: {ex.Message}. No automatic retry or mount motion is permitted.",
+                initial.Metrics);
+        }
+    }
+
     private C11MainFocusOwnerSnapshot ReadC11MainFocusOwner()
     {
         var focuser = focuserMediator.GetInfo();
@@ -1234,6 +1433,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         CancellationToken cancellationToken)
     {
         await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+        var clock = await EnsureMountClockSynchronizedAsync(context, cancellationToken).ConfigureAwait(false);
+        if (clock.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(clock);
         var gate = ValidateImmediatePhysicalActionGates(context);
         if (gate.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(gate);
     }
@@ -1639,6 +1840,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 finalizationWillNotAutoPark = true,
             }).ConfigureAwait(false);
         }
+        var trackingGate = await EnsureMountTrackingEnabledAsync(context, cancellationToken).ConfigureAwait(false);
+        if (trackingGate.Disposition != GateDisposition.Passed)
+        {
+            return new StageResult(trackingGate);
+        }
         var target = TargetCoordinates(context.Plan);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         Report("按目录坐标进行计划内初始转向");
@@ -1661,6 +1867,37 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             "CATALOG_SLEW_COMPLETED",
             $"Initial catalog slew completed; mount-reported residual is {residual:F1} arcsec. QHY WCS must independently verify it.",
             new Dictionary<string, double> { ["mountReportedResidualArcseconds"] = residual });
+    }
+
+    private async Task<GateResult> EnsureMountTrackingEnabledAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        var info = telescopeMediator.GetInfo();
+        if (info.TrackingEnabled)
+        {
+            return GateResult.Pass("TELESCOPE_TRACKING_ENABLED", "N.I.N.A. reports mount tracking is enabled.");
+        }
+
+        await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+        await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+        Report("赤道仪未跟踪；通过 N.I.N.A. 启用恒星时跟踪并回读核验");
+        var accepted = telescopeMediator.SetTrackingEnabled(true);
+        var verified = telescopeMediator.GetInfo();
+        await WriteAuditBestEffortAsync("telescope-tracking-enable", new
+        {
+            accepted,
+            verified = verified.TrackingEnabled,
+        }).ConfigureAwait(false);
+
+        if (!accepted || !verified.TrackingEnabled)
+        {
+            return GateResult.Unknown(
+                "TELESCOPE_TRACKING_ENABLE_FAILED",
+                $"N.I.N.A. did not verify tracking after the enable request (accepted={accepted}, enabled={verified.TrackingEnabled}); no slew was started.");
+        }
+
+        return GateResult.Pass("TELESCOPE_TRACKING_ENABLED", "N.I.N.A. enabled and verified mount tracking.");
     }
 
     private async Task<StageResult> AcquireQhyWideFieldAsync(ObservationContext context, CancellationToken cancellationToken)
@@ -1865,6 +2102,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ObservationStage.CoarseCenter,
                 "QHY_COARSE_LIMITS_INVALID",
                 string.Join(" ", limitIssues));
+        }
+        if (UseNinaNativeQhyCentering)
+        {
+            return await CoarseCenterWithNinaNativeAsync(context, limits, cancellationToken).ConfigureAwait(false);
         }
         var previousWorstCaseDuration = context.RemainingWorstCaseDuration;
         context.RemainingWorstCaseDuration =
@@ -2802,7 +3043,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     probe.MountBinding);
             }
         }
-        if (probe.Solve?.Result.Success == true && probe.Solve.Result.Coordinates is not null)
+        if (probe.Solve?.Result.Success == true &&
+            probe.Solve.Result.Coordinates is not null &&
+            probe.Gate.Code is not "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED")
         {
             await TryCollectQhyG3FastSolvePairAsync(context, probe, cancellationToken).ConfigureAwait(false);
         }
@@ -3053,6 +3296,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "G3_PLATE_SOLVE_TIER_FAILED",
                     $"G3 plate-solve exposure tier {index + 1}/{preset.ExposureMilliseconds.Count} ({exposureMilliseconds} ms) did not solve.");
             }
+            else if (ValidateG3PlateSolvePlausibility(
+                solve,
+                properties.Width,
+                properties.Height) is { Disposition: not GateDisposition.Passed } plausibility)
+            {
+                resultGate = plausibility;
+            }
             else if (solve.Result.Flipped != configuration.G3.ExpectedWcsFlipped)
             {
                 resultGate = await InvalidateCommissioningAsync(
@@ -3061,13 +3311,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             else
             {
-                var projected = targetCoordinates.XYProjection(
-                    solve.Result.Coordinates,
-                    new Point(properties.Width / 2d, properties.Height / 2d),
-                    solve.Result.Pixscale,
-                    solve.Result.Pixscale,
-                    solve.Result.PositionAngle);
-                projectedTarget = new PixelPoint(projected.X, projected.Y);
+                var projected = G3WcsTargetProjector.Project(
+                    targetCoordinates,
+                    solve.Result,
+                    properties.Width,
+                    properties.Height,
+                    solve.SolverIdentity);
+                projectedTarget = projected;
                 resultGate = G3SolvedFieldPolicy.TargetInsideField(
                     projected.X,
                     projected.Y,
@@ -3123,7 +3373,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 attempts.AsReadOnly(),
                 MountBinding: probeMountBinding,
                 BeforeExposureMountReadback: beforeProbeMountReadback);
-            if (solve.Result.Success) return latest;
+            // A solver process can return Success for a geometrically
+            // impossible alias in a sparse/oversized-star field. Do not let
+            // that formal success terminate the ladder or authorize a slew.
+            if (solve.Result.Success && resultGate.Code != "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED") return latest;
         }
 
         var hasStructuredContent = attempts.Any(attempt => attempt.CoherentSourceCount > 0);
@@ -3177,6 +3430,56 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.G3.Binning,
             configuration.G3.GainPercent,
             phdProfileEvidence);
+    }
+
+    private GateResult ValidateG3PlateSolvePlausibility(
+        PlateSolveEvidence solve,
+        int imageWidth,
+        int imageHeight)
+    {
+        if (!solve.Result.Success || solve.Result.Coordinates is null)
+        {
+            return GateResult.Unknown(
+                "G3_PLATE_SOLVE_PLAUSIBILITY_UNAVAILABLE",
+                "A successful G3 solve with coordinates is required for WCS plausibility validation.");
+        }
+
+        var expectedPixelScale = 206.26480624709636d *
+            configuration.G3.PixelSizeMicrometers /
+            configuration.G3.FocalLengthMillimeters /
+            configuration.G3.Binning;
+        var measuredPixelScale = solve.Result.Pixscale;
+        var scaleRatio = measuredPixelScale / expectedPixelScale;
+        var halfDiagonalArcseconds = 0.5d * Math.Sqrt(
+            imageWidth * (double)imageWidth + imageHeight * (double)imageHeight) * measuredPixelScale;
+        var maximumHintResidualArcseconds = halfDiagonalArcseconds +
+            configuration.G3.WcsCentering.MaximumRadiusArcseconds;
+        var metrics = new Dictionary<string, double>
+        {
+            ["g3SolveHintResidualArcseconds"] = solve.ResidualArcseconds,
+            ["g3SolveMaximumHintResidualArcseconds"] = maximumHintResidualArcseconds,
+            ["g3SolveExpectedPixelScaleArcseconds"] = expectedPixelScale,
+            ["g3SolveMeasuredPixelScaleArcseconds"] = measuredPixelScale,
+            ["g3SolvePixelScaleRatio"] = scaleRatio,
+        };
+        if (!double.IsFinite(measuredPixelScale) ||
+            measuredPixelScale <= 0 ||
+            !double.IsFinite(solve.Result.PositionAngle) ||
+            !double.IsFinite(solve.ResidualArcseconds) ||
+            !double.IsFinite(scaleRatio) ||
+            scaleRatio is < 0.70d or > 1.30d ||
+            solve.ResidualArcseconds > maximumHintResidualArcseconds)
+        {
+            return GateResult.Fail(
+                "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED",
+                $"Plate solver reported Success, but the G3 solution is inconsistent with the commissioned scale/search envelope: hint residual {solve.ResidualArcseconds:F1} arcsec (maximum {maximumHintResidualArcseconds:F1}), scale ratio {scaleRatio:F3}. It is retained as a false-solution diagnostic and cannot authorize target projection, QHY pairing, or mount motion.",
+                metrics);
+        }
+
+        return GateResult.Pass(
+            "G3_PLATE_SOLVE_PLAUSIBILITY_VALID",
+            $"G3 solution is consistent with the commissioned scale/search envelope (hint residual {solve.ResidualArcseconds:F1} arcsec, scale ratio {scaleRatio:F3}).",
+            metrics);
     }
 
     private static bool IsRecoverableG3SearchGate(GateResult gate) => gate.Code is
@@ -5950,13 +6253,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var targetCoordinates = TargetCoordinates(context.Plan);
-        var predicted = targetCoordinates.XYProjection(
-            solve.Result.Coordinates,
-            new Point(properties.Width / 2d, properties.Height / 2d),
-            solve.Result.Pixscale,
-            solve.Result.Pixscale,
-            solve.Result.PositionAngle);
-        var predictedPoint = new PixelPoint(predicted.X, predicted.Y);
+        var predictedPoint = G3WcsTargetProjector.Project(
+            targetCoordinates,
+            solve.Result,
+            properties.Width,
+            properties.Height,
+            solve.SolverIdentity);
         var rawIdentification = SlitTargetIdentifier.Identify(
             candidates,
             predictedPoint,
@@ -7326,11 +7628,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 return GateResult.Fail("SLIT_PENDING_COMMISSIONING_MISMATCH", "Commissioning evidence changed after the pending slit move was persisted.");
             }
-            if (!string.Equals(state.TransformCalibrationId, commissioning.MountTransform.CalibrationId, StringComparison.Ordinal))
+            if (commissioning.MountTransform is not { } recoveryTransform)
+            {
+                return GateResult.Unknown("INDEPENDENT_TRANSFORM_REQUIRED", "An outstanding independent-transform recovery record exists, but this commissioning preset is PHD2-only.");
+            }
+            if (!string.Equals(state.TransformCalibrationId, recoveryTransform.CalibrationId, StringComparison.Ordinal))
             {
                 return GateResult.Fail("SLIT_PENDING_TRANSFORM_MISMATCH", "Pixel-to-mount transform identity changed after the pending slit move was persisted.");
             }
-            if (!string.Equals(state.PierSide, commissioning.MountTransform.PierSide, StringComparison.Ordinal) ||
+            if (!string.Equals(state.PierSide, recoveryTransform.PierSide, StringComparison.Ordinal) ||
                 Math.Abs(state.MaximumSingleCorrectionDegrees - commissioning.MotionLimits.MaximumSingleCorrectionDegrees) > 1e-12 ||
                 Math.Abs(state.MaximumCumulativeCorrectionDegrees - commissioning.MotionLimits.MaximumCumulativeCorrectionDegrees) > 1e-12 ||
                 state.MaximumCorrectionAttempts != commissioning.MotionLimits.MaximumCorrectionAttempts ||
@@ -7822,7 +8128,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     rejectedAuthority = RealSlitPlacementAuthority.Phd2CalibrationLockShift.ToString(),
                     rejectedCode = phd2Result.Gate.Code,
                     rejectedReason = phd2Result.Gate.Message,
-                    independentTransformCalibrationId = commissioning.MountTransform.CalibrationId,
+                    independentTransformCalibrationId = commissioning.MountTransform!.CalibrationId,
                     independentTransformPierSide = commissioning.MountTransform.PierSide,
                     qhyToG3OpticalOffsetUsed = false,
                     hardCodedBoresightOffsetUsed = false,
@@ -7830,20 +8136,23 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 lastG3Field.FramePath,
                 cancellationToken).ConfigureAwait(false);
         }
+        var independentTransform = commissioning.MountTransform;
+        if (independentTransform is null)
+            return Attention(ObservationStage.PlaceTargetOnSlit, "INDEPENDENT_TRANSFORM_REQUIRED", "The selected fine-motion route requires an independently commissioned pixel-to-mount transform.");
         while (true)
         {
             var current = lastG3Field;
             var target = current.TargetIdentification.Target!;
             var slit = current.SlitDetection.Geometry;
-            var residualPixels = GuideStarSelector.DistanceToSlit(target.Centroid, slit);
+            var residualPixels = Distance(target.Centroid, slit.AcquisitionPoint);
             if (residualPixels <= configuration.Slit.PlacementTolerancePixels)
             {
                 return Passed(
-                    "TARGET_ON_SLIT",
-                    $"Target/slit residual {residualPixels:F2}px is within {configuration.Slit.PlacementTolerancePixels:F2}px.",
+                    "TARGET_AT_SLIT_MIDPOINT",
+                    $"Target/slit-midpoint residual {residualPixels:F2}px is within {configuration.Slit.PlacementTolerancePixels:F2}px.",
                     new Dictionary<string, double>
                     {
-                        ["slitResidualPixels"] = residualPixels,
+                        ["slitMidpointResidualPixels"] = residualPixels,
                         ["cumulativeCorrectionArcseconds"] = cumulativeCorrectionDegrees * 3600,
                         ["correctionAttempts"] = correctionAttempts,
                     },
@@ -7851,18 +8160,18 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
 
             var pierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
-            if (!IsKnownPierSide(pierSide) || !IsKnownPierSide(commissioning.MountTransform.PierSide))
+            if (!IsKnownPierSide(pierSide) || !IsKnownPierSide(independentTransform.PierSide))
             {
-                return Attention(ObservationStage.PlaceTargetOnSlit, "TRANSFORM_PIER_SIDE_UNKNOWN", $"A known exact pier side is required for slit placement (current '{pierSide}', transform '{commissioning.MountTransform.PierSide}').");
+                return Attention(ObservationStage.PlaceTargetOnSlit, "TRANSFORM_PIER_SIDE_UNKNOWN", $"A known exact pier side is required for slit placement (current '{pierSide}', transform '{independentTransform.PierSide}').");
             }
-            if (!string.Equals(pierSide, commissioning.MountTransform.PierSide, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(pierSide, independentTransform.PierSide, StringComparison.OrdinalIgnoreCase))
             {
-                return Attention(ObservationStage.PlaceTargetOnSlit, "TRANSFORM_PIER_SIDE_MISMATCH", $"Current pier side '{pierSide}' does not match transform '{commissioning.MountTransform.PierSide}'.");
+                return Attention(ObservationStage.PlaceTargetOnSlit, "TRANSFORM_PIER_SIDE_MISMATCH", $"Current pier side '{pierSide}' does not match transform '{independentTransform.PierSide}'.");
             }
             var correction = SlitCorrectionCalculator.Calculate(
                 target.Centroid,
                 slit,
-                commissioning.MountTransform,
+                independentTransform,
                 commissioning.MotionLimits,
                 cumulativeCorrectionDegrees,
                 correctionAttempts);
@@ -7902,7 +8211,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 $"Closed-loop slit-placement segment {correctionAttempts + 1}",
                 new
                 {
-                    transformCalibrationId = commissioning.MountTransform.CalibrationId,
+                    transformCalibrationId = independentTransform.CalibrationId,
                     commissioningPresetSha256 = commissioning.Sha256,
                     configuration.ActionConfigurationSha256,
                     budgetLineageId = slitPlacementBudgetLineageId,
@@ -7929,8 +8238,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 configuration.ActionConfigurationSha256,
                 ComputeSlitRecoveryContextSha256(context),
                 commissioning.Sha256,
-                commissioning.MountTransform.CalibrationId,
-                commissioning.MountTransform.PierSide,
+                independentTransform.CalibrationId,
+                independentTransform.PierSide,
                 currentCoordinates.Epoch.ToString(),
                 currentCoordinates.RADegrees,
                 currentCoordinates.Dec,
@@ -7965,7 +8274,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     return returned.CanAdvance ? new StageResult(commandHorizon, current.FramePath) : returned;
                 }
                 await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
-                var mountGate = ValidateG3SearchMountState(commissioning.MountTransform.PierSide);
+                var mountGate = ValidateG3SearchMountState(independentTransform.PierSide);
                 if (mountGate.Disposition != GateDisposition.Passed)
                 {
                     var returned = await ReturnPendingSlitPlacementLockedAsync(context, segmentPending, mountGate.Message, cancellationToken).ConfigureAwait(false);
@@ -8026,7 +8335,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                             $"The mount changed {outboundPrecommandDriftArcseconds:F2} arcsec after the durable outbound intent and was returned to the saved segment origin; a fresh G3 field is required.")
                         : returned;
                 }
-                mountGate = ValidateG3SearchMountState(commissioning.MountTransform.PierSide);
+                mountGate = ValidateG3SearchMountState(independentTransform.PierSide);
                 if (mountGate.Disposition != GateDisposition.Passed)
                 {
                     var returned = await ReturnPendingSlitPlacementLockedAsync(context, segmentPending, mountGate.Message, cancellationToken).ConfigureAwait(false);
@@ -8550,39 +8859,88 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
         var coverGate = await EnsureOpticalCoverOpenAsync(context, cancellationToken).ConfigureAwait(false);
         if (coverGate.Disposition != GateDisposition.Passed) return new StageResult(coverGate);
-        await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
-        attemptedAtrProbeFrames++;
-        PublishFrameCounters();
-        var probe = await CaptureAtrImageAsync(
-            context,
-            configuration.Atr.ProbeExposureSeconds,
-            CaptureSequence.ImageTypes.SNAPSHOT,
-            "UVEX-ADV spectral exposure probe",
-            cancellationToken).ConfigureAwait(false);
-        PublishAtrPreview(probe.Image, $"ATR probe {configuration.Atr.ProbeExposureSeconds:G4}s · p99.9 {probe.Metrics.HighPercentileAdu:F0} ADU · saturation {probe.Metrics.SaturatedFraction:P3} · SNR {probe.Metrics.LineSnrPerResolutionElement:F1}");
-        var decision = ExposureTierSelector.Select(
-            probe.Metrics,
-            new ExposureTierOptions(ladder));
-        await SaveAtrImageAsync(
-            probe,
-            attemptedAtrProbeFrames,
-            decision.Accepted,
-            decision.Accepted ? GateDisposition.Passed : GateDisposition.Indeterminate,
-            decision.Code,
-            decision.Reason,
-            cancellationToken).ConfigureAwait(false);
-        retainedAtrProbeFrames++;
-        if (decision.Accepted) acceptedAtrProbeFrames++;
-        PublishFrameCounters();
-        if (!decision.Accepted)
+
+        // A clipped probe supplies only a lower bound on the true peak. Never
+        // infer that a lower tier is safe and immediately open a science frame:
+        // capture that tier and run the same trace-local gate again. Rejected
+        // higher tiers remain excluded to prevent a 1s -> 3s -> 1s cycle.
+        var availableTiers = ladder
+            .Where(static value => double.IsFinite(value) && value > 0)
+            .Distinct()
+            .OrderBy(static value => value)
+            .ToList();
+        var probeExposure = configuration.Atr.ProbeExposureSeconds;
+        var visited = new HashSet<double>();
+        while (visited.Count < ladder.Count)
         {
-            return Attention(ObservationStage.SelectAtrExposure, decision.Code, decision.Reason, decision.Metrics);
+            if (!visited.Add(probeExposure))
+            {
+                return Attention(ObservationStage.SelectAtrExposure, "ATR_PROBE_TIER_CYCLE", "ATR exposure selection revisited a probe tier without obtaining a validated non-clipped trace.");
+            }
+
+            await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+            attemptedAtrProbeFrames++;
+            PublishFrameCounters();
+            var probe = await CaptureAtrImageAsync(
+                context,
+                probeExposure,
+                CaptureSequence.ImageTypes.SNAPSHOT,
+                $"UVEX-ADV spectral exposure probe {attemptedAtrProbeFrames}",
+                cancellationToken).ConfigureAwait(false);
+            PublishAtrPreview(probe.Image, $"ATR probe {probeExposure:G4}s · trace p99.9 {probe.Metrics.HighPercentileAdu:F0} ADU · clipped columns {probe.Metrics.ClippedDispersionColumnFraction:P2} · longest clip {probe.Metrics.LongestClippedDispersionColumnRun} · SNR {probe.Metrics.LineSnrPerResolutionElement:F1}");
+            var decision = ExposureTierSelector.Select(
+                probe.Metrics,
+                new ExposureTierOptions(
+                    availableTiers,
+                    MaximumSaturatedFraction: configuration.Atr.MaximumSaturatedFraction,
+                    MaximumTraceSaturatedFraction: configuration.Atr.MaximumTraceSaturatedFraction,
+                    MaximumClippedDispersionColumnFraction: configuration.Atr.MaximumClippedDispersionColumnFraction,
+                    MaximumConsecutiveClippedDispersionColumns: configuration.Atr.MaximumConsecutiveClippedDispersionColumns,
+                    MinimumTargetToSkyContrast: configuration.Atr.MinimumTargetToSkyContrast,
+                    MinimumContinuumSnr: configuration.Atr.MinimumContinuumSnr,
+                    MinimumLineSnr: configuration.Atr.MinimumLineSnr));
+            var selectedTierValidatedByThisFrame = decision.Accepted &&
+                Math.Abs(decision.SelectedExposureSeconds - probeExposure) < 1e-9;
+            var evidenceCode = selectedTierValidatedByThisFrame ? "ATR_PROBE_TIER_VALIDATED" : decision.Code;
+            var evidenceReason = selectedTierValidatedByThisFrame
+                ? $"Fresh {probeExposure:G4}s probe passed the spectral-trace clipping, contrast and SNR gates."
+                : decision.Reason;
+            await SaveAtrImageAsync(
+                probe,
+                attemptedAtrProbeFrames,
+                selectedTierValidatedByThisFrame,
+                selectedTierValidatedByThisFrame ? GateDisposition.Passed : GateDisposition.Indeterminate,
+                evidenceCode,
+                evidenceReason,
+                cancellationToken).ConfigureAwait(false);
+            retainedAtrProbeFrames++;
+            if (selectedTierValidatedByThisFrame) acceptedAtrProbeFrames++;
+            PublishFrameCounters();
+            if (!decision.Accepted)
+            {
+                return Attention(ObservationStage.SelectAtrExposure, decision.Code, decision.Reason, decision.Metrics);
+            }
+            if (selectedTierValidatedByThisFrame)
+            {
+                selectedAtrExposureSeconds = probeExposure;
+                atrReprobeRequired = false;
+                context.Set("atrSelectedExposureSeconds", probeExposure);
+                UpdateRemainingScienceDuration(context, probeExposure);
+                return Passed("ATR_PROBE_TIER_VALIDATED", evidenceReason, decision.Metrics);
+            }
+
+            if (decision.Code == "SATURATION_BACKOFF")
+            {
+                availableTiers.RemoveAll(value => value >= probeExposure);
+            }
+            if (!availableTiers.Any(value => Math.Abs(value - decision.SelectedExposureSeconds) < 1e-9))
+            {
+                return Attention(ObservationStage.SelectAtrExposure, "ATR_REPROBE_TIER_UNAVAILABLE", $"Selected reprobe tier {decision.SelectedExposureSeconds:G4}s is no longer available after clipping backoff.", decision.Metrics);
+            }
+            probeExposure = decision.SelectedExposureSeconds;
         }
-        selectedAtrExposureSeconds = decision.SelectedExposureSeconds;
-        atrReprobeRequired = false;
-        context.Set("atrSelectedExposureSeconds", decision.SelectedExposureSeconds);
-        UpdateRemainingScienceDuration(context, decision.SelectedExposureSeconds);
-        return Passed(decision.Code, decision.Reason, decision.Metrics);
+
+        return Attention(ObservationStage.SelectAtrExposure, "ATR_PROBE_ATTEMPT_LIMIT", "ATR exposure ladder was exhausted without a freshly validated spectral-trace probe.");
     }
 
     private async Task<StageResult> RunScienceBlockAsync(ObservationContext context, CancellationToken cancellationToken)
@@ -8634,7 +8992,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 CaptureSequence.ImageTypes.LIGHT,
                 $"UVEX-ADV science accepted-candidate {acceptedIndex}/{configuration.Atr.ScienceFrameCount} attempt {attemptedAtrFrames}",
                 cancellationToken).ConfigureAwait(false);
-            PublishAtrPreview(captured.Image, $"ATR science candidate {acceptedIndex}/{configuration.Atr.ScienceFrameCount} · attempt {attemptedAtrFrames} · {exposure:G4}s · p99.9 {captured.Metrics.HighPercentileAdu:F0} · saturation {captured.Metrics.SaturatedFraction:P3} · line SNR {captured.Metrics.LineSnrPerResolutionElement:F1}");
+            PublishAtrPreview(captured.Image, $"ATR science candidate {acceptedIndex}/{configuration.Atr.ScienceFrameCount} · attempt {attemptedAtrFrames} · {exposure:G4}s · trace p99.9 {captured.Metrics.HighPercentileAdu:F0} · clipped columns {captured.Metrics.ClippedDispersionColumnFraction:P2} · longest clip {captured.Metrics.LongestClippedDispersionColumnRun} · line SNR {captured.Metrics.LineSnrPerResolutionElement:F1}");
             var quality = ValidateAtrScienceMetrics(captured.Metrics);
             await SaveAtrImageAsync(
                 captured,
@@ -9668,6 +10026,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     ["highPercentileAdu"] = metrics.HighPercentileAdu.ToString("R", CultureInfo.InvariantCulture),
                     ["fullScaleAdu"] = metrics.FullScaleAdu.ToString("R", CultureInfo.InvariantCulture),
                     ["saturatedFraction"] = metrics.SaturatedFraction.ToString("R", CultureInfo.InvariantCulture),
+                    ["traceSaturatedFraction"] = metrics.TraceSaturatedFraction.ToString("R", CultureInfo.InvariantCulture),
+                    ["clippedDispersionColumnFraction"] = metrics.ClippedDispersionColumnFraction.ToString("R", CultureInfo.InvariantCulture),
+                    ["longestClippedDispersionColumnRun"] = metrics.LongestClippedDispersionColumnRun.ToString(CultureInfo.InvariantCulture),
+                    ["traceSpatialCenterPixel"] = metrics.TraceSpatialCenterPixel.ToString(CultureInfo.InvariantCulture),
+                    ["traceSpatialHalfWidthPixels"] = metrics.TraceSpatialHalfWidthPixels.ToString(CultureInfo.InvariantCulture),
                     ["continuumSnrPerResolutionElement"] = metrics.ContinuumSnrPerResolutionElement.ToString("R", CultureInfo.InvariantCulture),
                     ["lineSnrPerResolutionElement"] = metrics.LineSnrPerResolutionElement.ToString("R", CultureInfo.InvariantCulture),
                     ["targetToSkyContrast"] = metrics.TargetToSkyContrast.ToString("R", CultureInfo.InvariantCulture),
@@ -9692,48 +10055,41 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (values.Length != properties.Width * properties.Height) throw new InvalidOperationException("ATR image buffer dimensions do not match.");
         var roi = configuration.Atr.Roi;
         roi.Validate(properties.Width, properties.Height);
-        var sample = new List<double>(Math.Min(250_000, roi.Width * roi.Height));
-        var stride = Math.Max(1, (roi.Width * roi.Height) / 250_000);
-        var counter = 0;
-        var saturated = 0L;
-        var total = 0L;
         var fullScale = Math.Pow(2, Math.Clamp(properties.BitDepth, 1, 16)) - 1;
-        for (var y = roi.Y; y < roi.Y + roi.Height; y++)
-            for (var x = roi.X; x < roi.X + roi.Width; x++)
-            {
-                var value = values[y * properties.Width + x];
-                if (value >= fullScale * 0.999) saturated++;
-                if (counter++ % stride == 0) sample.Add(value);
-                total++;
-            }
-        sample.Sort();
-        var median = Percentile(sample, 0.5);
-        var p90 = Percentile(sample, 0.9);
-        var p999 = Percentile(sample, 0.999);
-        var deviations = sample.Select(value => Math.Abs(value - median)).OrderBy(value => value).ToArray();
-        var sigma = Math.Max(1, Percentile(deviations, 0.5) * 1.4826);
-        var continuumSnr = Math.Max(0, (p90 - median) / sigma);
-        var lineSnr = Math.Max(0, (p999 - median) / sigma);
-        var contrast = median > 0 ? p90 / median : 0;
+        var pixels = Array.ConvertAll(values, static value => (double)value);
+        var trace = SpectralTraceQualityAnalyzer.Analyze(
+            new SpectralImage(properties.Width, properties.Height, pixels, fullScale),
+            roi,
+            configuration.Atr.DispersionAxis,
+            configuration.Atr.ApertureStart,
+            configuration.Atr.ApertureLength);
         return new SpectralProbeMetrics(
             exposureSeconds,
-            median,
-            p999,
+            trace.BiasLevelAdu,
+            trace.HighPercentileAdu,
             fullScale,
-            saturated / (double)Math.Max(1, total),
-            continuumSnr,
-            lineSnr,
-            contrast,
+            trace.FullFrameSaturatedFraction,
+            trace.ContinuumSnrPerResolutionElement,
+            trace.LineSnrPerResolutionElement,
+            trace.TargetToSkyContrast,
             IsGuidingStable(),
-            Guid.NewGuid().ToString("N"));
+            Guid.NewGuid().ToString("N"),
+            trace.TraceSaturatedFraction,
+            trace.ClippedDispersionColumnFraction,
+            trace.LongestClippedDispersionColumnRun,
+            trace.TraceSpatialCenterPixel,
+            trace.TraceSpatialHalfWidthPixels);
     }
 
     private GateResult ValidateAtrScienceMetrics(SpectralProbeMetrics metrics)
     {
-        if (metrics.SaturatedFraction > configuration.Atr.MaximumSaturatedFraction) return GateResult.Fail("ATR_SATURATION_LIMIT", $"ATR science frame saturated fraction {metrics.SaturatedFraction:P3} exceeds {configuration.Atr.MaximumSaturatedFraction:P3}.");
+        if (metrics.SaturatedFraction > configuration.Atr.MaximumSaturatedFraction) return GateResult.Fail("ATR_SATURATION_LIMIT", $"ATR science frame full-ROI saturated fraction {metrics.SaturatedFraction:P3} exceeds {configuration.Atr.MaximumSaturatedFraction:P3}.");
+        if (metrics.TraceSaturatedFraction > configuration.Atr.MaximumTraceSaturatedFraction) return GateResult.Fail("ATR_TRACE_SATURATION_LIMIT", $"ATR spectral-trace saturated fraction {metrics.TraceSaturatedFraction:P3} exceeds {configuration.Atr.MaximumTraceSaturatedFraction:P3}.");
+        if (metrics.ClippedDispersionColumnFraction > configuration.Atr.MaximumClippedDispersionColumnFraction) return GateResult.Fail("ATR_CLIPPED_COLUMNS_LIMIT", $"ATR spectrum clips {metrics.ClippedDispersionColumnFraction:P2} of wavelength columns, above {configuration.Atr.MaximumClippedDispersionColumnFraction:P2}.");
+        if (metrics.LongestClippedDispersionColumnRun > configuration.Atr.MaximumConsecutiveClippedDispersionColumns) return GateResult.Fail("ATR_CONSECUTIVE_CLIP_LIMIT", $"ATR spectrum has {metrics.LongestClippedDispersionColumnRun} consecutive clipped wavelength columns; limit is {configuration.Atr.MaximumConsecutiveClippedDispersionColumns}.");
         if (metrics.TargetToSkyContrast < configuration.Atr.MinimumTargetToSkyContrast) return GateResult.Unknown("ATR_TARGET_CONTRAST_LOW", $"ATR target/sky proxy {metrics.TargetToSkyContrast:F2} is below {configuration.Atr.MinimumTargetToSkyContrast:F2}.");
         if (metrics.LineSnrPerResolutionElement < configuration.Atr.MinimumLineSnr && metrics.ContinuumSnrPerResolutionElement < configuration.Atr.MinimumContinuumSnr) return GateResult.Unknown("ATR_SNR_LOW", "ATR science frame has insufficient continuum and line SNR proxies.");
-        return GateResult.Pass("ATR_FRAME_QUALITY_VALID", "ATR science frame passed saturation, contrast and SNR gates.");
+        return GateResult.Pass("ATR_FRAME_QUALITY_VALID", "ATR science frame passed trace-local clipping, contrast and SNR gates.");
     }
 
     private GateResult ValidateAtrCameraIdentity(string expectedDeviceId)

@@ -18,7 +18,7 @@ public sealed record CommissioningPresetContract(
     int G3GainPercent,
     bool G3ExpectedWcsFlipped,
     SlitGeometryContract Slit,
-    MountTransformContract MountTransform,
+    MountTransformContract? MountTransform,
     MotionLimitContract Motion,
     EnvironmentContract Environment,
     DateTimeOffset? ValidUntilUtc,
@@ -29,7 +29,7 @@ public sealed record CommissioningPresetContract(
     GhostAssistanceContract? GhostAssistance = null,
     SlitWheelIdentityCalibration? SlitWheelIdentity = null)
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 }
 
 public sealed record HardwareFingerprintContract(
@@ -77,9 +77,11 @@ public sealed record EnvironmentContract(
 /// <summary>
 /// Human-prepared measurement input. It is deliberately not a commissioned
 /// preset: the builder must validate referenced slit evidence and fit a
-/// non-singular pixel-to-mount transform and the complete PHD2 fine-motion
-/// evidence and four independent slit-width fingerprints before schema 4 can
-/// be emitted.
+/// non-singular pixel-to-mount transform whenever an independent-motion route
+/// is selected, plus complete PHD2 fine-motion evidence and four independent
+/// slit-width fingerprints before schema 5 can be emitted.  PHD2-only
+/// commissioning deliberately omits the unused independent transform rather
+/// than accepting invented calibration samples.
 /// </summary>
 public sealed record CommissioningMeasurementDefinition(
     int SchemaVersion,
@@ -95,7 +97,7 @@ public sealed record CommissioningMeasurementDefinition(
     int G3GainPercent,
     bool G3ExpectedWcsFlipped,
     SlitMeasurementDefinition Slit,
-    MountMeasurementDefinition MountTransform,
+    MountMeasurementDefinition? MountTransform,
     MotionLimitContract Motion,
     EnvironmentContract Environment,
     int G3SaturationAdu,
@@ -105,7 +107,7 @@ public sealed record CommissioningMeasurementDefinition(
     GhostAssistanceContract? GhostAssistance,
     SlitWheelIdentityMeasurementDefinition? SlitWheelIdentity = null)
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 }
 
 public sealed record SlitMeasurementDefinition(

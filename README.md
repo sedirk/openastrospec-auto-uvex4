@@ -25,6 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
+[latest real-sky closeout](docs/commissioning-night-2026-08-24.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [contributing](CONTRIBUTING.md)
@@ -90,6 +91,15 @@ environment applicability, expiry, uncertainty, and motion limits. Its default
 policy is `AutoIfValidElseSkip`, and the operator can visibly select `Skip`. Missing
 or stale evidence falls back to QHY coarse centering followed by a direct G3 solve
 and bounded local G3 search; it does not silently reuse a remembered offset.
+
+The ordinary stellar core loop has completed two real-sky, single-start runs
+without manual or model correction after launch. This is evidence for target
+placement, guiding and paired ATR/QHY acquisition—not a claim that the roof and
+weather system are unattended. The evidence boundary and remaining sparse-field
+work are documented in the
+[`2026-08-24/25 commissioning closeout`](docs/commissioning-night-2026-08-24.md)
+and the
+[`faint-target and sparse-field design`](docs/design/faint-target-and-sparse-field-acquisition.md).
 
 Repository contribution, data-separation and frozen-design rules are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md).

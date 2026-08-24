@@ -393,6 +393,21 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
+    public void CatalogSlewEnablesAndVerifiesTrackingThroughNinaMediator()
+    {
+        var source = MethodBody(
+            "private async Task<StageResult> SlewToCatalogTargetAsync(",
+            "private async Task<StageResult> AcquireQhyWideFieldAsync(");
+        var tracking = source.IndexOf("EnsureMountTrackingEnabledAsync", StringComparison.Ordinal);
+        var slew = source.IndexOf("telescopeMediator.SlewToCoordinatesAsync", StringComparison.Ordinal);
+
+        Assert.True(tracking >= 0 && tracking < slew);
+        Assert.Contains("telescopeMediator.SetTrackingEnabled(true)", source, StringComparison.Ordinal);
+        Assert.Contains("verified.TrackingEnabled", source, StringComparison.Ordinal);
+        Assert.Contains("TELESCOPE_TRACKING_ENABLE_FAILED", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PauseStartsNoReturnMotionAndResumeReconcilesPendingBeforeDevicesResume()
     {
         var pause = MethodBody(

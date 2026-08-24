@@ -1,6 +1,7 @@
 using System.ComponentModel.Composition;
 using System.Runtime.Versioning;
 using NINA.Core.Model;
+using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Image.Interfaces;
 using NINA.PlateSolving.Interfaces;
@@ -32,6 +33,8 @@ public sealed class RealObservationStageRunnerFactory
     private readonly IDomeMediator domeMediator;
     private readonly IWeatherDataMediator weatherDataMediator;
     private readonly IFlatDeviceMediator flatDeviceMediator;
+    private readonly IFilterWheelMediator filterWheelMediator;
+    private readonly IDomeFollower domeFollower;
 
     [ImportingConstructor]
     public RealObservationStageRunnerFactory(
@@ -47,7 +50,9 @@ public sealed class RealObservationStageRunnerFactory
         ISafetyMonitorMediator safetyMonitorMediator,
         IDomeMediator domeMediator,
         IWeatherDataMediator weatherDataMediator,
-        IFlatDeviceMediator flatDeviceMediator)
+        IFlatDeviceMediator flatDeviceMediator,
+        IFilterWheelMediator filterWheelMediator,
+        IDomeFollower domeFollower)
     {
         this.telescopeMediator = telescopeMediator;
         this.guiderMediator = guiderMediator;
@@ -62,6 +67,8 @@ public sealed class RealObservationStageRunnerFactory
         this.domeMediator = domeMediator;
         this.weatherDataMediator = weatherDataMediator;
         this.flatDeviceMediator = flatDeviceMediator;
+        this.filterWheelMediator = filterWheelMediator;
+        this.domeFollower = domeFollower;
     }
 
     internal RealObservationStageRunner Create(
@@ -85,6 +92,8 @@ public sealed class RealObservationStageRunnerFactory
             domeMediator,
             weatherDataMediator,
             flatDeviceMediator,
+            filterWheelMediator,
+            domeFollower,
             progress);
 
     internal RealRunConfiguration CaptureConfiguration(UvexPluginSettings settings)

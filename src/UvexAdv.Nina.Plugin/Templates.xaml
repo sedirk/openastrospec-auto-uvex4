@@ -616,7 +616,11 @@
                   <TextBlock Text="真实模式启动条件" FontSize="15" FontWeight="Bold" Foreground="#FDE68A" />
                   <TextBlock Text="{Binding ModeDescription}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
                   <TextBlock Text="{Binding RealModeStatus}" Foreground="#FBBF24" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <Button Content="导入 commissioning bindings" Command="{Binding ImportCommissioningBindingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                  <WrapPanel Margin="0,7,0,0">
+                    <Button Content="导入 commissioning bindings" Command="{Binding ImportCommissioningBindingsCommand}" Margin="0,0,8,0" />
+                    <Button Content="启用并核验恒星时跟踪" Command="{Binding EnableMountTrackingCommand}" AutomationProperties.AutomationId="OpenAstroSpec.EnableMountTracking" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding MountTrackingManualStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,5,0,0" />
                 </StackPanel>
               </Border>
               <Expander Header="PHD2 与目标定位策略详情" Margin="0,0,0,8">

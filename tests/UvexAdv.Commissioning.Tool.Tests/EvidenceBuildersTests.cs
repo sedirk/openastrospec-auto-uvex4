@@ -89,7 +89,7 @@ public sealed class EvidenceBuildersTests : IDisposable
         Assert.Equal(2_000, created.Preset.Phd2SlitPlacement.OffSlitGuidingExposureMilliseconds);
         Assert.Equal(250, created.Preset.Phd2SlitPlacement.DirectTargetGuidingExposureMilliseconds);
         Assert.Null(created.Preset.GhostAssistance);
-        Assert.Equal(-2, created.Preset.MountTransform.DecArcsecondsPerPixelX, 8);
+        Assert.Equal(-2, created.Preset.MountTransform!.DecArcsecondsPerPixelX, 8);
         Assert.Equal(2, created.Preset.MountTransform.RaArcsecondsPerPixelY, 8);
         Assert.Equal(created.Preset.HardwareFingerprint!.Sha256, created.Bindings.HardwareFingerprintSha256);
         Assert.Equal(created.Artifact.Sha256, created.Bindings.PresetSha256);
@@ -221,7 +221,7 @@ public sealed class EvidenceBuildersTests : IDisposable
         var baseDefinition = CreateDefinition(slitEvidence, phd);
         var definition = baseDefinition with
         {
-            MountTransform = baseDefinition.MountTransform with
+            MountTransform = baseDefinition.MountTransform! with
             {
                 Samples =
                 [

@@ -540,13 +540,12 @@ public static class SlitCorrectionCalculator
         double cumulativeCorrectionDegrees,
         int completedCorrectionAttempts = 0)
     {
-        // A long slit is a finite line segment, not a single acquisition
-        // pixel. Correct only to the nearest point on that segment so a target
-        // that is already inside the slit is never dragged lengthwise toward
-        // the historical calibration midpoint.
-        var closestSlitPoint = GuideStarSelector.ClosestPointOnSlit(target, slit);
-        var dx = closestSlitPoint.X - target.X;
-        var dy = closestSlitPoint.Y - target.Y;
+        // Science acquisition uses the measured physical slit midpoint, not
+        // merely the nearest point on the finite segment. This minimizes the
+        // along-slit optical asymmetry seen by the spectrograph and keeps the
+        // PHD2 and independent-transform authorities on the same destination.
+        var dx = slit.AcquisitionPoint.X - target.X;
+        var dy = slit.AcquisitionPoint.Y - target.Y;
         var ra = transform.RaArcsecondsPerPixelX * dx + transform.RaArcsecondsPerPixelY * dy;
         var dec = transform.DecArcsecondsPerPixelX * dx + transform.DecArcsecondsPerPixelY * dy;
         var requestedMagnitude = Math.Sqrt(ra * ra + dec * dec) / 3600;

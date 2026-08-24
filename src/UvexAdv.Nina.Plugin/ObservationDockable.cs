@@ -38,6 +38,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly ObservationTargetImportService targetImportService;
     private readonly ICameraMediator cameraMediator;
     private readonly IImagingMediator imagingMediator;
+    private readonly ITelescopeMediator telescopeMediator;
     private readonly CancellationTokenSource lifetime = new();
     private readonly SimpleAsyncCommand startSelectedModeCommand;
     private readonly SimpleAsyncCommand startSimulationCommand;
@@ -59,6 +60,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand showStartupRequirementsCommand;
     private readonly SimpleCommand importCommissioningBindingsCommand;
     private readonly SimpleCommand refreshProfileOwnershipCommand;
+    private readonly SimpleCommand enableMountTrackingCommand;
     private readonly SimpleAsyncCommand importFromFramingAssistantCommand;
     private readonly SimpleAsyncCommand importFromPlanetariumCommand;
     private readonly SimpleCommand bindCurrentAtrCameraCommand;
@@ -113,6 +115,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string atrManualCameraStatus = "尚未检查 N.I.N.A. 当前相机。";
     private string atrManualCaptureStatus = "尚未采集单帧检查光谱。";
     private string atrManualCaptureError = string.Empty;
+    private string mountTrackingManualStatus = "尚未请求；正式自动流程会在目录转向前自行启用并核验。";
     private int selectedWorkspaceTabIndex;
 
     [ImportingConstructor]
@@ -123,7 +126,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         IFramingAssistantVM framingAssistant,
         IPlanetariumFactory planetariumFactory,
         ICameraMediator cameraMediator,
-        IImagingMediator imagingMediator)
+        IImagingMediator imagingMediator,
+        ITelescopeMediator telescopeMediator)
         : base(profileService)
     {
         activeProfileService = profileService;
@@ -132,6 +136,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         this.realRunnerFactory = realRunnerFactory;
         this.cameraMediator = cameraMediator;
         this.imagingMediator = imagingMediator;
+        this.telescopeMediator = telescopeMediator;
         targetImportService = ObservationTargetImportNinaSources.CreateService(
             framingAssistant,
             planetariumFactory);
@@ -178,6 +183,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 5);
         importCommissioningBindingsCommand = new SimpleCommand(ImportCommissioningBindings);
         refreshProfileOwnershipCommand = new SimpleCommand(RefreshProfileOwnership);
+        enableMountTrackingCommand = new SimpleCommand(EnableMountTrackingForCommissioning);
         importFromFramingAssistantCommand = new SimpleAsyncCommand(
             ImportFromFramingAssistantAsync,
             CanImportTarget);
@@ -220,6 +226,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
     public ICommand ImportCommissioningBindingsCommand => importCommissioningBindingsCommand;
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
+    public ICommand EnableMountTrackingCommand => enableMountTrackingCommand;
     public ICommand ImportFromFramingAssistantCommand => importFromFramingAssistantCommand;
     public ICommand ImportFromPlanetariumCommand => importFromPlanetariumCommand;
     public ICommand BindCurrentAtrCameraCommand => bindCurrentAtrCameraCommand;
@@ -971,6 +978,16 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     }
 
     public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
+    public string MountTrackingManualStatus
+    {
+        get => mountTrackingManualStatus;
+        private set
+        {
+            if (string.Equals(mountTrackingManualStatus, value, StringComparison.Ordinal)) return;
+            mountTrackingManualStatus = value;
+            RaisePropertyChanged();
+        }
+    }
     public string BoundAtrCameraId => string.IsNullOrWhiteSpace(settings.BoundCameraId) ? "未绑定" : settings.BoundCameraId;
     public string AtrManualCapturePresetText =>
         $"{settings.ExposureSeconds:G6} s · Gain {settings.Gain} · Offset {settings.Offset} · {settings.Binning}×{settings.Binning}";
@@ -1006,6 +1023,27 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             ? "已选择真实设备控制。此选择本身不会连接或移动设备；请在“高级设置”查看并处理完整启动阻断项。"
             : "已选择模拟演练。模拟运行不会连接或移动任何真实设备。";
         Error = string.Empty;
+    }
+
+    private void EnableMountTrackingForCommissioning()
+    {
+        var before = telescopeMediator.GetInfo();
+        if (!before.Connected)
+        {
+            MountTrackingManualStatus = "未执行：请先由 N.I.N.A. 连接赤道仪。";
+            return;
+        }
+        if (before.AtPark)
+        {
+            MountTrackingManualStatus = "未执行：赤道仪仍处于停驻状态。";
+            return;
+        }
+
+        var accepted = telescopeMediator.SetTrackingEnabled(true);
+        var after = telescopeMediator.GetInfo();
+        MountTrackingManualStatus = accepted && after.TrackingEnabled
+            ? "已由 N.I.N.A. 启用并回读确认恒星时跟踪。"
+            : $"启用失败：N.I.N.A. accepted={accepted}，回读 tracking={after.TrackingEnabled}。";
     }
 
     private Task ImportFromFramingAssistantAsync() => RunTargetImportAsync(
@@ -1776,8 +1814,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             }
             using var document = JsonDocument.Parse(bytes);
             var root = document.RootElement;
-            if (!TryGetProperty(root, "schemaVersion", out var schema) || !schema.TryGetInt32(out var schemaVersion) || schemaVersion != 4)
-                issues.Add("自动真实观测要求 schema 4 commissioning preset。");
+            if (!TryGetProperty(root, "schemaVersion", out var schema) || !schema.TryGetInt32(out var schemaVersion) || schemaVersion != 5)
+                issues.Add("自动真实观测要求 schema 5 commissioning preset。");
             if (!TryGetProperty(root, "slitWheelIdentity", out var identity) || identity.ValueKind != JsonValueKind.Object ||
                 !TryGetProperty(identity, "fingerprints", out var fingerprints) || fingerprints.ValueKind != JsonValueKind.Array ||
                 fingerprints.GetArrayLength() != SlitWheelIdentityCalibration.RequiredWheelPositionCount)

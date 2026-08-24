@@ -239,8 +239,8 @@ internal sealed class UvexPluginSettings
     public int ExpectedUvexM2PositionSteps { get => values.GetValueInt32(nameof(ExpectedUvexM2PositionSteps), int.MinValue); set => values.SetValueInt32(nameof(ExpectedUvexM2PositionSteps), value); }
     public int UvexPositionToleranceSteps { get => values.GetValueInt32(nameof(UvexPositionToleranceSteps), 2); set => values.SetValueInt32(nameof(UvexPositionToleranceSteps), value); }
 
-    public string AtrExposureLadderSecondsCsv { get => GetString(nameof(AtrExposureLadderSecondsCsv), "1,3,10,30,60,120,300,600"); set => values.SetValueString(nameof(AtrExposureLadderSecondsCsv), value); }
-    public double AtrProbeExposureSeconds { get => values.GetValueDouble(nameof(AtrProbeExposureSeconds), 10); set => values.SetValueDouble(nameof(AtrProbeExposureSeconds), value); }
+    public string AtrExposureLadderSecondsCsv { get => GetString(nameof(AtrExposureLadderSecondsCsv), "0.01,0.03,0.1,0.3,1,3,10,15,30,60,120,300,600"); set => values.SetValueString(nameof(AtrExposureLadderSecondsCsv), value); }
+    public double AtrProbeExposureSeconds { get => values.GetValueDouble(nameof(AtrProbeExposureSeconds), 0.1); set => values.SetValueDouble(nameof(AtrProbeExposureSeconds), value); }
     public int AtrScienceFrameCount { get => values.GetValueInt32(nameof(AtrScienceFrameCount), 3); set => values.SetValueInt32(nameof(AtrScienceFrameCount), value); }
     public int AtrScienceMaximumAttempts { get => values.GetValueInt32(nameof(AtrScienceMaximumAttempts), 6); set => values.SetValueInt32(nameof(AtrScienceMaximumAttempts), value); }
 

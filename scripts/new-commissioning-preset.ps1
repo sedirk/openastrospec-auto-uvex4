@@ -16,8 +16,8 @@ $definition = Get-Content -LiteralPath $DefinitionPath -Raw | ConvertFrom-Json
 $requiredSchema4Inputs = @('FineMotionAuthority', 'Phd2SlitPlacement', 'GhostAssistanceMode', 'GhostAssistance', 'SlitWheelIdentity')
 $definitionProperties = @($definition.PSObject.Properties.Name)
 $missingSchema4Inputs = @($requiredSchema4Inputs | Where-Object { $_ -notin $definitionProperties })
-if ($definition.SchemaVersion -ne 3) {
-    throw 'Commissioning measurement definition schema 3 is required to generate a production schema 4 preset.'
+if ($definition.SchemaVersion -ne 4) {
+    throw 'Commissioning measurement definition schema 4 is required to generate a production schema 5 preset.'
 }
 if ($missingSchema4Inputs.Count -gt 0) {
     throw "Commissioning definition is missing explicit schema 4 input field(s): $($missingSchema4Inputs -join ', ')."

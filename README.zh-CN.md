@@ -20,6 +20,7 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
+[最新实机收口](docs/commissioning-night-2026-08-24.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
 [参与贡献](CONTRIBUTING.md)
@@ -57,6 +58,8 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 仓库已包含 QHY 服务、PHD2 事件服务器客户端、目标采集状态机以及 N.I.N.A. 真实/模拟运行器。健康阶段无需确认对话框即可自动推进；失败或不确定的安全门进入 `PausedNeedsAttention`。操作员始终可以暂停、恢复、取消或人工接管。必须先完成模拟 commissioning。构建和版本化 Git hook 会校验权威设计哈希，使意外架构修改明确失败。
 
 当前 GS350/QHY 到 C11/G3 的光轴差绝不会作为编译期常量写入程序。未来可选预定位阶段只消费由操作员明确选择、带版本和来源的记录；记录必须绑定硬件/安装指纹、赤道仪侧、环境适用性、有效期、不确定度与运动限制。默认策略为 `AutoIfValidElseSkip`，界面也必须能明确选择 `Skip`。证据缺失或过期时，系统退化为 QHY 粗居中、G3 直接解析以及有界 G3 局部搜索，不会静默复用记忆中的偏移。
+
+普通恒星的核心闭环已经在真实天空中两次从单次启动运行到完成，启动后没有人工或大模型纠偏。该结论只覆盖目标入缝、导星和 ATR/QHY 配对采集，不声称屋顶与天气系统已经无人值守。证据边界和稀疏场剩余工作见[2026-08-24/25 实机收口](docs/commissioning-night-2026-08-24.md)与[暗目标/稀疏场设计](docs/design/faint-target-and-sparse-field-acquisition.md)。
 
 仓库贡献、数据隔离和冻结设计规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`AGENTS.md`](AGENTS.md)。当前及规划中的组件地图见 [`docs/repository-layout.md`](docs/repository-layout.md)。
 

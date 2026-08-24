@@ -16,6 +16,31 @@ public sealed class Phd2SlitPlacementCommissioningTests
         "RealObservationStageRunner.cs"));
 
     [Fact]
+    public void EveryFineMotionAuthorityTargetsFreshMeasuredSlitMidpoint()
+    {
+        Assert.Contains(
+            "ToPhd2Domain(slitDetection.Geometry.AcquisitionPoint, preset)",
+            RunnerSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ClosestPointOnSlit(\r\n                targetLocal",
+            RunnerSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ClosestPointOnSlit(\n                targetLocal",
+            RunnerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Distance(target.Centroid, slit.AcquisitionPoint)",
+            LegacyRunnerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SlitCorrectionCalculator.Calculate(",
+            LegacyRunnerSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompletePolicyAndTopologyPresetPassesButNumericPolicyDriftBreaksHash()
     {
         var valid = CreatePreset();

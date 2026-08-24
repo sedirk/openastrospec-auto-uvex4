@@ -1,12 +1,33 @@
 # G3 WCS acquisition and deterministic recovery
 
-Status: source-complete for simulator/build validation; real-hardware commissioning is still required.
+Status: PlateSolve3 and bounded real-hardware recovery exercised on 2026-08-24;
+the corrected projection still requires one installed-runner replay before
+unattended qualification.
 
 ## Purpose and authority boundary
 
 This path recovers the G3M2210M slit field without compiling a QHY-to-G3 optical-axis offset into the plugin. PHD2 remains the sole owner of G3M2210M; N.I.N.A. remains the sole mount-command owner. The plugin requests a PHD2 full-frame FITS, asks the configured N.I.N.A. plate solver for WCS, and sends only bounded absolute coordinates through the N.I.N.A. telescope mediator.
 
 The WCS and catalog target are the only identity authority in this path. A solve-only image is never promoted to slit or target-placement evidence. Slit geometry and target morphology always come from a fresh detector-fixed OFF/ON/OFF sequence. No image-language model, learned interpretation, fixed two-telescope offset, or ghost position may establish target identity or authorize mount motion.
+
+### N.I.N.A. 3.2 PlateSolve3 orientation convention
+
+N.I.N.A. 3.2's `Platesolve3Solver.ReadResult` copies the second PlateSolve3
+result value directly into `PlateSolveResult.PositionAngle` and does not
+populate `PlateSolveResult.Flipped`. By contrast, its other solver adapters
+normalize their orientation before `Coordinates.XYProjection` consumes it.
+Passing the raw PlateSolve3 angle to that projection mirrored the catalog target
+to the wrong side of the G3 detector during the 2026-08-24 Deneb run.
+
+For an exact PlateSolve3 solver identity, the runner therefore applies
+`projectionRotation = normalize(360° - PositionAngle)` before projecting the
+catalog target. The current commissioning preset remains the parity authority;
+PlateSolve3's default `Flipped=false` is not represented as a measured parity.
+The immutable Deneb sidecar regression maps the old `(1738.9, 600.0)` result to
+the corrected `(293.4, 947.3)` detector location. Other N.I.N.A. solvers retain
+their already-normalized position angle. A solver change, detector flip, ROI,
+binning or camera rotation still invalidates the relevant commissioning
+fingerprint and requires fresh evidence.
 
 ## Locked configuration
 

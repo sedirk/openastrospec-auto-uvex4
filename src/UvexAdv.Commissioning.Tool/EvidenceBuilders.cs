@@ -307,15 +307,31 @@ public static class EvidenceBuilders
         var issues = ValidateCommissioningDefinition(definition, nightSetup, phdEvidence, definitionDirectory);
         RequireNoIssues(issues, "Commissioning measurement definition");
 
-        var transformResult = MountTransformCalibrator.Fit(
-            definition.MountTransform.CalibrationId,
-            definition.MountTransform.PierSide,
-            definition.MountTransform.Samples,
-            definition.MountTransform.MaximumResidualArcseconds,
-            definition.MountTransform.MaximumConditionEstimate);
-        if (transformResult.Gate.Disposition != GateDisposition.Passed || transformResult.Transform is null)
+        MountTransformContract? mountTransform = null;
+        if (RequiresIndependentMountTransform(definition.FineMotionAuthority))
         {
-            throw new InvalidDataException($"Measured mount samples did not pass commissioning: {transformResult.Gate.Message}");
+            var measuredTransform = definition.MountTransform
+                ?? throw new InvalidDataException("The selected fine-motion authority requires independent mount-transform measurements.");
+            var transformResult = MountTransformCalibrator.Fit(
+                measuredTransform.CalibrationId,
+                measuredTransform.PierSide,
+                measuredTransform.Samples,
+                measuredTransform.MaximumResidualArcseconds,
+                measuredTransform.MaximumConditionEstimate);
+            if (transformResult.Gate.Disposition != GateDisposition.Passed || transformResult.Transform is null)
+            {
+                throw new InvalidDataException($"Measured mount samples did not pass commissioning: {transformResult.Gate.Message}");
+            }
+
+            var transform = transformResult.Transform;
+            mountTransform = new MountTransformContract(
+                measuredTransform.CalibrationId,
+                measuredTransform.PierSide,
+                transform.RaArcsecondsPerPixelX,
+                transform.RaArcsecondsPerPixelY,
+                transform.DecArcsecondsPerPixelX,
+                transform.DecArcsecondsPerPixelY,
+                transform.RmsArcseconds);
         }
 
         var fingerprintWithoutHash = new HardwareFingerprintContract(
@@ -331,7 +347,6 @@ public static class EvidenceBuilders
         {
             Sha256 = ComputeHardwareFingerprintSha256(fingerprintWithoutHash),
         };
-        var transform = transformResult.Transform;
         return new CommissioningPresetContract(
             CommissioningPresetContract.CurrentSchemaVersion,
             definition.PresetId,
@@ -355,14 +370,7 @@ public static class EvidenceBuilders
                 definition.Slit.LengthPixels,
                 definition.Slit.WidthPixels,
                 definition.Slit.UncertaintyPixels),
-            new MountTransformContract(
-                definition.MountTransform.CalibrationId,
-                definition.MountTransform.PierSide,
-                transform.RaArcsecondsPerPixelX,
-                transform.RaArcsecondsPerPixelY,
-                transform.DecArcsecondsPerPixelX,
-                transform.DecArcsecondsPerPixelY,
-                transform.RmsArcseconds),
+            mountTransform,
             definition.Motion,
             definition.Environment,
             definition.ValidUntilUtc,
@@ -560,8 +568,15 @@ public static class EvidenceBuilders
         ValidateSlitWheelIdentityDefinition(definition, nightSetup, definitionDirectory, issues);
 
         var mount = definition.MountTransform;
-        if (mount is null) issues.Add("Measured mount transform samples are required.");
-        else
+        if (RequiresIndependentMountTransform(definition.FineMotionAuthority) && mount is null)
+        {
+            issues.Add("The selected fine-motion authority requires measured mount-transform samples.");
+        }
+        else if (!RequiresIndependentMountTransform(definition.FineMotionAuthority) && mount is not null)
+        {
+            issues.Add("PHD2-only commissioning must omit MountTransform; unused or invented independent samples are not accepted.");
+        }
+        else if (mount is not null)
         {
             if (string.IsNullOrWhiteSpace(mount.CalibrationId) || string.IsNullOrWhiteSpace(mount.PierSide)) issues.Add("Mount calibration ID and pier side are required.");
             if (mount.MeasuredUtc == default || mount.MeasuredUtc > definition.CreatedUtc.AddMinutes(5)) issues.Add("Mount measurement timestamp is missing or after preset creation.");
@@ -783,13 +798,13 @@ public static class EvidenceBuilders
         if (!Enum.IsDefined(typeof(CommissioningFineMotionAuthority), preset.FineMotionAuthority))
             issues.Add("Commissioning fine-motion authority is invalid.");
         if (preset.Phd2SlitPlacement is null)
-            issues.Add("Schema-4 commissioning requires a complete PHD2 slit-placement record.");
+            issues.Add("Schema-5 commissioning requires a complete PHD2 slit-placement record.");
         else
             issues.AddRange(preset.Phd2SlitPlacement.Validate());
         if (preset.GhostAssistance is not null)
             issues.AddRange(preset.GhostAssistance.Validate());
         if (preset.SlitWheelIdentity is null)
-            issues.Add("Schema-4 commissioning requires a complete four-slot LED slit-width identity calibration.");
+            issues.Add("Schema-5 commissioning requires a complete four-slot LED slit-width identity calibration.");
         else
             issues.AddRange(preset.SlitWheelIdentity.Validate());
         if (preset.CreatedUtc == default || preset.CreatedUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("Preset creation timestamp is invalid.");
@@ -806,11 +821,15 @@ public static class EvidenceBuilders
         if (preset.G3SaturationAdu is <= 0 or > ushort.MaxValue) issues.Add("Commissioned G3 saturation ADU is invalid.");
         if (preset.Motion is null) issues.Add("Commissioned motion limits are missing.");
         if (preset.Environment is null) issues.Add("Commissioned environment limits are missing.");
-        if (preset.MountTransform is null)
+        if (RequiresIndependentMountTransform(preset.FineMotionAuthority) && preset.MountTransform is null)
         {
-            issues.Add("Commissioned pixel-to-mount transform is missing.");
+            issues.Add("The selected fine-motion authority requires a commissioned pixel-to-mount transform.");
         }
-        else
+        else if (!RequiresIndependentMountTransform(preset.FineMotionAuthority) && preset.MountTransform is not null)
+        {
+            issues.Add("PHD2-only commissioning must not carry an unused independent mount transform.");
+        }
+        else if (preset.MountTransform is not null)
         {
             var determinant = preset.MountTransform.RaArcsecondsPerPixelX * preset.MountTransform.DecArcsecondsPerPixelY -
                 preset.MountTransform.RaArcsecondsPerPixelY * preset.MountTransform.DecArcsecondsPerPixelX;
@@ -909,14 +928,6 @@ public static class EvidenceBuilders
             ["SlitLengthPixels"] = preset.Slit.LengthPixels,
             ["SlitWidthPixels"] = preset.Slit.WidthPixels,
             ["SlitUncertaintyPixels"] = preset.Slit.UncertaintyPixels,
-            ["MountTransformCommissioned"] = true,
-            ["MountTransformCalibrationId"] = preset.MountTransform.CalibrationId,
-            ["MountTransformPierSide"] = preset.MountTransform.PierSide,
-            ["MountRaArcsecondsPerPixelX"] = preset.MountTransform.RaArcsecondsPerPixelX,
-            ["MountRaArcsecondsPerPixelY"] = preset.MountTransform.RaArcsecondsPerPixelY,
-            ["MountDecArcsecondsPerPixelX"] = preset.MountTransform.DecArcsecondsPerPixelX,
-            ["MountDecArcsecondsPerPixelY"] = preset.MountTransform.DecArcsecondsPerPixelY,
-            ["MountTransformRmsArcseconds"] = preset.MountTransform.RmsArcseconds,
             ["MaximumSingleCorrectionArcseconds"] = preset.Motion.MaximumSingleCorrectionArcseconds,
             ["MaximumCumulativeCorrectionArcseconds"] = preset.Motion.MaximumCumulativeCorrectionArcseconds,
             ["MaximumCorrectionAttempts"] = preset.Motion.MaximumCorrectionAttempts,
@@ -934,6 +945,21 @@ public static class EvidenceBuilders
             ["MaximumHumidityPercent"] = preset.Environment.MaximumHumidityPercent,
             ["MaximumWindSpeedMetersPerSecond"] = preset.Environment.MaximumWindSpeedMetersPerSecond,
         };
+        if (preset.MountTransform is { } transform)
+        {
+            values["MountTransformCommissioned"] = true;
+            values["MountTransformCalibrationId"] = transform.CalibrationId;
+            values["MountTransformPierSide"] = transform.PierSide;
+            values["MountRaArcsecondsPerPixelX"] = transform.RaArcsecondsPerPixelX;
+            values["MountRaArcsecondsPerPixelY"] = transform.RaArcsecondsPerPixelY;
+            values["MountDecArcsecondsPerPixelX"] = transform.DecArcsecondsPerPixelX;
+            values["MountDecArcsecondsPerPixelY"] = transform.DecArcsecondsPerPixelY;
+            values["MountTransformRmsArcseconds"] = transform.RmsArcseconds;
+        }
+        else
+        {
+            values["MountTransformCommissioned"] = false;
+        }
         return values;
     }
 
@@ -1236,6 +1262,10 @@ public static class EvidenceBuilders
         Phd2CalibrationLockShift = 1,
         AutoPreferPhd2ThenIndependent = 2,
     }
+
+    private static bool RequiresIndependentMountTransform(int authority) =>
+        authority is (int)CommissioningFineMotionAuthority.IndependentMountTransform or
+            (int)CommissioningFineMotionAuthority.AutoPreferPhd2ThenIndependent;
 
     // Keep declaration order and property casing identical to the anonymous
     // object serialized by RealCommissioningPresetLoader.ValidateHardwareFingerprint.

@@ -171,11 +171,11 @@ public sealed class SlitFieldAnalysisTests
     }
 
     [Fact]
-    public void CorrectionRemovesOnlyCrossSlitErrorForTargetInsideSlitLength()
+    public void CorrectionMovesTargetInsideSlitLengthToMeasuredMidpoint()
     {
         var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 0, 150, 3.5, 1, "g3", 1, 1);
         var transform = new PixelToMountTransform("xform", 1, 0, 0, 1, "West", 0.5, DateTimeOffset.UtcNow);
-        var limits = new MotionLimits(30d / 3600, 120d / 3600, 4);
+        var limits = new MotionLimits(60d / 3600, 120d / 3600, 4);
 
         var result = SlitCorrectionCalculator.Calculate(
             new PixelPoint(45, 106),
@@ -185,9 +185,9 @@ public sealed class SlitFieldAnalysisTests
             cumulativeCorrectionDegrees: 0);
 
         Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
-        Assert.Equal(0, result.DeltaRaArcseconds, 9);
+        Assert.Equal(55, result.DeltaRaArcseconds, 9);
         Assert.Equal(-6, result.DeltaDecArcseconds, 9);
-        Assert.Equal(6d / 3600, result.RequestedMagnitudeDegrees, 9);
+        Assert.Equal(Math.Sqrt(3061) / 3600, result.RequestedMagnitudeDegrees, 9);
     }
 
     [Fact]

@@ -22,7 +22,7 @@ internal sealed record RealCommissioningPreset(
     int G3GainPercent,
     bool G3ExpectedWcsFlipped,
     SlitGeometryPreset Slit,
-    MountTransformPreset MountTransform,
+    MountTransformPreset? MountTransform,
     MotionLimitPreset Motion,
     EnvironmentPreset Environment,
     DateTimeOffset? ValidUntilUtc = null,
@@ -80,7 +80,7 @@ internal sealed record LoadedCommissioningPreset(
     string AbsolutePath,
     string Sha256,
     SlitGeometry SlitGeometry,
-    PixelToMountTransform MountTransform,
+    PixelToMountTransform? MountTransform,
     MotionLimits MotionLimits);
 
 internal static class RealCommissioningPresetLoader
@@ -136,15 +136,17 @@ internal static class RealCommissioningPresetLoader
             preset.G3CameraStableId,
             preset.G3Binning,
             preset.G3Binning);
-        var transform = new PixelToMountTransform(
-            preset.MountTransform.CalibrationId,
-            preset.MountTransform.RaArcsecondsPerPixelX,
-            preset.MountTransform.RaArcsecondsPerPixelY,
-            preset.MountTransform.DecArcsecondsPerPixelX,
-            preset.MountTransform.DecArcsecondsPerPixelY,
-            preset.MountTransform.PierSide,
-            preset.MountTransform.RmsArcseconds,
-            preset.CreatedUtc);
+        var transform = preset.MountTransform is { } measuredTransform
+            ? new PixelToMountTransform(
+                measuredTransform.CalibrationId,
+                measuredTransform.RaArcsecondsPerPixelX,
+                measuredTransform.RaArcsecondsPerPixelY,
+                measuredTransform.DecArcsecondsPerPixelX,
+                measuredTransform.DecArcsecondsPerPixelY,
+                measuredTransform.PierSide,
+                measuredTransform.RmsArcseconds,
+                preset.CreatedUtc)
+            : null;
         var motion = new MotionLimits(
             preset.Motion.MaximumSingleCorrectionArcseconds / 3600d,
             preset.Motion.MaximumCumulativeCorrectionArcseconds / 3600d,
@@ -156,11 +158,11 @@ internal static class RealCommissioningPresetLoader
     private static void ValidatePreset(RealRunConfiguration configuration, RealCommissioningPreset preset, List<string> issues)
     {
         var binding = configuration.Commissioning;
-        if (preset.SchemaVersion != 4)
-            issues.Add($"Commissioning preset schema {preset.SchemaVersion} is not authorized for automatic real science; schema 4 with complete PHD2 slit-placement and four-slot optical slit-identity bindings is required.");
+        if (preset.SchemaVersion != 5)
+            issues.Add($"Commissioning preset schema {preset.SchemaVersion} is not authorized for automatic real science; schema 5 with complete PHD2 slit-placement and four-slot optical slit-identity bindings is required.");
         if (!Enum.IsDefined(preset.FineMotionAuthority)) issues.Add("Commissioning fine-motion authority is invalid.");
         if (preset.Phd2SlitPlacement is null)
-            issues.Add("Schema 4 requires hash-bound PHD2 guide exposure, topology, calibration-quality and bounded-return commissioning for every automatic real-science route.");
+            issues.Add("Schema 5 requires hash-bound PHD2 guide exposure, topology, calibration-quality and bounded-return commissioning for every automatic real-science route.");
         else
             issues.AddRange(preset.Phd2SlitPlacement.Validate());
         if (preset.FineMotionAuthority is RealSlitPlacementAuthority.Phd2CalibrationLockShift or RealSlitPlacementAuthority.AutoPreferPhd2ThenIndependent)
@@ -172,6 +174,11 @@ internal static class RealCommissioningPresetLoader
         {
             issues.Add("Pixel-to-mount transform is not marked commissioned for the selected fine-motion authority.");
         }
+        if (preset.FineMotionAuthority == RealSlitPlacementAuthority.Phd2CalibrationLockShift && preset.MountTransform is not null)
+            issues.Add("PHD2-only commissioning must omit the unused independent mount transform.");
+        if (preset.FineMotionAuthority is RealSlitPlacementAuthority.IndependentMountTransform or RealSlitPlacementAuthority.AutoPreferPhd2ThenIndependent &&
+            preset.MountTransform is null)
+            issues.Add("The selected fine-motion authority requires a separately commissioned independent mount transform.");
         if (!string.Equals(preset.PresetId, binding.PresetId, StringComparison.Ordinal)) issues.Add("Commissioning preset ID does not match the locked run binding.");
         if (preset.CreatedUtc == default) issues.Add("Commissioning preset creation timestamp is missing.");
         if (preset.CreatedUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("Commissioning preset creation timestamp is in the future.");
@@ -197,8 +204,8 @@ internal static class RealCommissioningPresetLoader
 
         if (configuration.G3.GhostAssistanceMode != GhostAssistanceMode.Skip)
         {
-            if (preset.SchemaVersion != 4)
-                issues.Add("Ghost assistance requires commissioning preset schema 4.");
+            if (preset.SchemaVersion != 5)
+                issues.Add("Ghost assistance requires commissioning preset schema 5.");
             if (preset.GhostAssistance is null)
                 issues.Add("The selected ghost-assistance mode requires a complete versioned calibration, match policy, extraction policy and runtime fingerprint in the commissioning preset.");
             else
@@ -218,7 +225,7 @@ internal static class RealCommissioningPresetLoader
 
         if (preset.SlitWheelIdentity is null)
         {
-            issues.Add("Schema 4 requires four independently measured LED slit-width fingerprints; the mechanical wheel ordinal cannot establish physical slit identity by itself.");
+            issues.Add("Schema 5 requires four independently measured LED slit-width fingerprints; the mechanical wheel ordinal cannot establish physical slit identity by itself.");
         }
         else
         {
@@ -241,17 +248,18 @@ internal static class RealCommissioningPresetLoader
 
         if (preset.FineMotionAuthority is RealSlitPlacementAuthority.IndependentMountTransform or RealSlitPlacementAuthority.AutoPreferPhd2ThenIndependent)
         {
-            RequireSame(issues, "mount RA/X", preset.MountTransform.RaArcsecondsPerPixelX, binding.MountRaArcsecondsPerPixelX);
-            RequireSame(issues, "mount RA/Y", preset.MountTransform.RaArcsecondsPerPixelY, binding.MountRaArcsecondsPerPixelY);
-            RequireSame(issues, "mount Dec/X", preset.MountTransform.DecArcsecondsPerPixelX, binding.MountDecArcsecondsPerPixelX);
-            RequireSame(issues, "mount Dec/Y", preset.MountTransform.DecArcsecondsPerPixelY, binding.MountDecArcsecondsPerPixelY);
-            RequireSame(issues, "mount transform RMS", preset.MountTransform.RmsArcseconds, binding.MountTransformRmsArcseconds);
-            if (!string.Equals(preset.MountTransform.CalibrationId, binding.MountTransformCalibrationId, StringComparison.Ordinal)) issues.Add("Mount transform calibration ID mismatch.");
-            if (!string.Equals(preset.MountTransform.PierSide, binding.MountTransformPierSide, StringComparison.OrdinalIgnoreCase)) issues.Add("Mount transform pier-side binding mismatch.");
-            var determinant = preset.MountTransform.RaArcsecondsPerPixelX * preset.MountTransform.DecArcsecondsPerPixelY
-                - preset.MountTransform.RaArcsecondsPerPixelY * preset.MountTransform.DecArcsecondsPerPixelX;
+            if (preset.MountTransform is not { } transform) return;
+            RequireSame(issues, "mount RA/X", transform.RaArcsecondsPerPixelX, binding.MountRaArcsecondsPerPixelX);
+            RequireSame(issues, "mount RA/Y", transform.RaArcsecondsPerPixelY, binding.MountRaArcsecondsPerPixelY);
+            RequireSame(issues, "mount Dec/X", transform.DecArcsecondsPerPixelX, binding.MountDecArcsecondsPerPixelX);
+            RequireSame(issues, "mount Dec/Y", transform.DecArcsecondsPerPixelY, binding.MountDecArcsecondsPerPixelY);
+            RequireSame(issues, "mount transform RMS", transform.RmsArcseconds, binding.MountTransformRmsArcseconds);
+            if (!string.Equals(transform.CalibrationId, binding.MountTransformCalibrationId, StringComparison.Ordinal)) issues.Add("Mount transform calibration ID mismatch.");
+            if (!string.Equals(transform.PierSide, binding.MountTransformPierSide, StringComparison.OrdinalIgnoreCase)) issues.Add("Mount transform pier-side binding mismatch.");
+            var determinant = transform.RaArcsecondsPerPixelX * transform.DecArcsecondsPerPixelY
+                - transform.RaArcsecondsPerPixelY * transform.DecArcsecondsPerPixelX;
             if (!double.IsFinite(determinant) || Math.Abs(determinant) < 1e-9) issues.Add("Commissioned pixel-to-mount transform is singular.");
-            if (!double.IsFinite(preset.MountTransform.RmsArcseconds) || preset.MountTransform.RmsArcseconds < 0) issues.Add("Mount transform RMS is invalid.");
+            if (!double.IsFinite(transform.RmsArcseconds) || transform.RmsArcseconds < 0) issues.Add("Mount transform RMS is invalid.");
         }
 
         RequireSame(issues, "single correction limit", preset.Motion.MaximumSingleCorrectionArcseconds, binding.MaximumSingleCorrectionArcseconds);

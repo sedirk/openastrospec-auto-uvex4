@@ -14,14 +14,14 @@ public sealed class CommissioningSchemaSourceSafetyTests
         "ObservationDockable.cs"));
 
     [Fact]
-    public void AutomaticRealScienceRequiresSchemaFourPhd2AndOpticalSlitIdentityForEveryAuthority()
+    public void AutomaticRealScienceRequiresSchemaFivePhd2AndOpticalSlitIdentityForEveryAuthority()
     {
-        Assert.Contains("if (preset.SchemaVersion != 4)", PresetSource, StringComparison.Ordinal);
+        Assert.Contains("if (preset.SchemaVersion != 5)", PresetSource, StringComparison.Ordinal);
         Assert.Contains("if (preset.Phd2SlitPlacement is null)", PresetSource, StringComparison.Ordinal);
         Assert.Contains("issues.AddRange(preset.Phd2SlitPlacement.Validate())", PresetSource, StringComparison.Ordinal);
         Assert.Contains("if (preset.SlitWheelIdentity is null)", PresetSource, StringComparison.Ordinal);
         Assert.Contains("issues.AddRange(preset.SlitWheelIdentity.Validate())", PresetSource, StringComparison.Ordinal);
-        var schemaGate = PresetSource.IndexOf("if (preset.SchemaVersion != 4)", StringComparison.Ordinal);
+        var schemaGate = PresetSource.IndexOf("if (preset.SchemaVersion != 5)", StringComparison.Ordinal);
         var authorityBranch = PresetSource.IndexOf("if (preset.FineMotionAuthority is", schemaGate, StringComparison.Ordinal);
         var phdValidation = PresetSource.IndexOf("issues.AddRange(preset.Phd2SlitPlacement.Validate())", schemaGate, StringComparison.Ordinal);
         Assert.True(schemaGate >= 0 && phdValidation > schemaGate && authorityBranch > phdValidation);

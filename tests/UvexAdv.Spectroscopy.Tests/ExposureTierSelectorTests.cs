@@ -30,6 +30,34 @@ public sealed class ExposureTierSelectorTests
     }
 
     [Fact]
+    public void NarrowClippedTraceCannotHideBehindLowWholeFrameFraction()
+    {
+        var probe = new SpectralProbeMetrics(
+            10,
+            256,
+            65520,
+            65535,
+            0.0004,
+            20,
+            30,
+            3,
+            true,
+            "probe",
+            TraceSaturatedFraction: 0.04,
+            ClippedDispersionColumnFraction: 0.42,
+            LongestClippedDispersionColumnRun: 900,
+            TraceSpatialCenterPixel: 760,
+            TraceSpatialHalfWidthPixels: 4);
+
+        var decision = ExposureTierSelector.Select(probe);
+
+        Assert.True(decision.Accepted);
+        Assert.Equal("SATURATION_BACKOFF", decision.Code);
+        Assert.True(decision.SelectedExposureSeconds < probe.ExposureSeconds);
+        Assert.Equal(0.42, decision.Metrics["clippedDispersionColumnFraction"]);
+    }
+
+    [Fact]
     public void LowContrastDoesNotInventAUsableExposure()
     {
         var probe = new SpectralProbeMetrics(30, 256, 2000, 65535, 0, 2, 3, 1.02, true, "probe");

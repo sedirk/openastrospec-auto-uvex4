@@ -1087,8 +1087,8 @@ internal sealed partial class RealObservationStageRunner
                     phd2SlitPlacementSession = session;
                     lastG3Field = UpdateG3FieldFromGuidingResidual(lastG3Field, session.LastMeasurement, preset);
                     return Passed(
-                        "PHD2_TARGET_ON_SLIT",
-                        $"PHD2 graded calibration placed the target on the runtime-recognized slit with residual {priorResidual:F2}px; guiding remains settled for StartGuiding.",
+                        "PHD2_TARGET_AT_SLIT_MIDPOINT",
+                        $"PHD2 graded calibration placed the target at the runtime-recognized slit midpoint with residual {priorResidual:F2}px; guiding remains settled for StartGuiding.",
                         Phd2EffectiveQualityMetrics(session.Quality, session.GuideMode, session.SelectedGuide, session.Settle, priorResidual),
                         Metadata(loaded));
                 }
@@ -1795,15 +1795,12 @@ internal sealed partial class RealObservationStageRunner
                 preset.SlitMinimumContrastSigma);
             if (slitDetection.Gate.Disposition != GateDisposition.Passed)
                 throw new InvalidOperationException($"Fresh runtime slit recognition failed: {slitDetection.Gate.Code}: {slitDetection.Gate.Message}");
-            var nearestSlitLocal = GuideStarSelector.ClosestPointOnSlit(
-                targetLocal,
-                slitDetection.Geometry);
             var target = ToPhd2Domain(targetLocal, preset);
             var guide = ToPhd2Domain(guideLocal, preset);
-            // Preserve the target's along-slit coordinate.  The lock-shift
-            // formula receives the nearest point on the finite black aperture,
-            // not the historical calibration midpoint.
-            var slit = ToPhd2Domain(nearestSlitLocal, preset);
+            // The science destination is the midpoint measured from this fresh
+            // physical dark-aperture detection. It is not a historical fixed
+            // pixel and it is not the nearest point on the finite segment.
+            var slit = ToPhd2Domain(slitDetection.Geometry.AcquisitionPoint, preset);
             var targetResidual = PointDistance(target, slit);
             var guideResidual = PointDistance(guide, currentLock);
             var measurement = new Phd2SlitFieldMeasurement(
@@ -1823,10 +1820,11 @@ internal sealed partial class RealObservationStageRunner
                 $"fresh-target-slit={targetResidual:F4}px;fresh-guide-lock={guideResidual:F4}px");
             var gate = GateResult.Pass(
                 "PHD2_FRESH_GUIDING_RESIDUAL",
-                $"Fresh guiding FITS proved target/slit {targetResidual:F3}px and guide/lock {guideResidual:F3}px residuals.",
+                $"Fresh guiding FITS proved target/slit-midpoint {targetResidual:F3}px and guide/lock {guideResidual:F3}px residuals.",
                 new Dictionary<string, double>
                 {
                     ["targetSlitResidualPixels"] = targetResidual,
+                    ["targetSlitMidpointResidualPixels"] = targetResidual,
                     ["guideLockResidualPixels"] = guideResidual,
                     ["targetFluxMetric"] = targetFlux,
                     ["guideFrame"] = result.TriggerGuideFrame,
@@ -1857,6 +1855,7 @@ internal sealed partial class RealObservationStageRunner
                     expectedCurrentLock = currentLock,
                     expectedTarget,
                     targetSlitResidualPixels = targetResidual,
+                    targetSlitMidpointResidualPixels = targetResidual,
                     guideLockResidualPixels = guideResidual,
                     result.TriggerGuideFrame,
                     result.EventSequence,

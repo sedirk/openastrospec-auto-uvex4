@@ -99,7 +99,7 @@ QHY 接受帧 + WCS + 目录目标
                                 有界闭环入缝
 ```
 
-短帧解析成功时仍检查 WCS parity。解析失败时，仅当其余证据链与翼部门全部通过才允许给出目标质心。若使用 PHD2 authority，则先建立与本地 operation 绑定的 settle epoch，再令 `desiredGuideLock = guide + (slit - target)`；每次 exact-lock 读回后必须再次 settle 并保存 fresh G3 帧，不能把 lock readback 当成目标已到缝。若使用独立 `G3PixelToMount` 后备，则每个赤道仪分段仍沿用已有的 durable intent、单步/累计量、回程预留、地平线、pier side 和新鲜 G3 重拍门。
+短帧解析成功时仍检查 WCS parity。解析失败时，仅当其余证据链与翼部门全部通过才允许给出目标质心。若使用 PHD2 authority，则先建立与本地 operation 绑定的 settle epoch，再令 `desiredGuideLock = guide + (runtimeSlitMidpoint - target)`；这里的 `runtimeSlitMidpoint` 是本轮 fresh 黑色物理孔径检测出的几何中点，不是反光边、固定历史坐标或有限缝段最近端点。每次 exact-lock 读回后必须再次 settle 并保存 fresh G3 帧，不能把 lock readback 当成目标已到缝。若使用独立 `G3PixelToMount` 后备，则使用同一个 fresh 中点，每个赤道仪分段仍沿用已有的 durable intent、单步/累计量、回程预留、地平线、pier side 和新鲜 G3 重拍门。详见 [ADR-0006](adr/0006-runtime-slit-midpoint-as-science-destination.md)。
 
 重新计算 QHY 哈希发生在任何额外 G3 曝光之前。接受帧或 WCS JSON 缺失、不可读，或者当前 SHA-256 与接受/生成时记录不一致时，目标 authority 立即撤销；系统不会以只有格式正确的哈希字符串替代文件完整性验证。
 
