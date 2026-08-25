@@ -6,9 +6,11 @@ using System.Reflection;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using NINA.Astrometry;
 using NINA.Core.Model;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
@@ -17,6 +19,7 @@ using NINA.Profile.Interfaces;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using NINA.WPF.Base.ViewModel;
 using Microsoft.Win32;
+using UvexAdv.Core;
 using UvexAdv.Observatory;
 using UvexAdv.Phd2;
 
@@ -26,13 +29,34 @@ namespace UvexAdv.Nina.Plugin;
 [SupportedOSPlatform("windows")]
 public sealed class ObservationDockable : DockableVM, IDisposable
 {
+    private static readonly IReadOnlyList<UvexSlitChoice> SlitChoices =
+    [
+        new(1, "槽位 1 · 标称 300 µm"),
+        new(2, "槽位 2 · 标称 15 µm"),
+        new(3, "槽位 3 · 标称 25 µm"),
+        new(4, "槽位 4 · 标称 35 µm"),
+    ];
+
+    private static readonly IReadOnlyList<TargetObservabilityChoice> TargetObservabilityChoices =
+    [
+        new(TargetObservabilityClass.DirectStellar, "可直接识别的恒星", "用目标星质心复核 WCS 预测。"),
+        new(TargetObservabilityClass.FaintPointSource, "暗点源 / 类星体", "以目录 WCS 几何为准，不要求 G3 中看见目标核。"),
+        new(TargetObservabilityClass.CompactExtended, "紧致星云 / 行星状星云", "以目录中心入缝；发射线 SNR 优先于连续谱。"),
+        new(TargetObservabilityClass.ExtendedNebula, "扩展星云", "以计划坐标作为取样位置，不把星云误当恒星。"),
+        new(TargetObservabilityClass.InvisibleInG3, "G3 中不可见", "允许目标峰完全不可见；依赖目录 WCS、旁星与光谱信号。"),
+    ];
+
+    private static readonly IReadOnlyList<string> ManualUvexDevices = ["UVEX4 / COM5"];
+
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new()
     {
         PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly IProfileService activeProfileService;
     private readonly UvexPluginSettings settings;
+    private readonly InputTarget targetDraft;
     private readonly ObservationCoordinatorHost host;
     private readonly RealObservationStageRunnerFactory realRunnerFactory;
     private readonly ObservationTargetImportService targetImportService;
@@ -58,14 +82,32 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand openRunDirectoryCommand;
     private readonly SimpleCommand showObservationPlanCommand;
     private readonly SimpleCommand showStartupRequirementsCommand;
+    private readonly SimpleCommand showManualUvexControlCommand;
+    private readonly SimpleCommand showAdvancedSettingsCommand;
+    private readonly SimpleCommand autoFillConnectedNinaDevicesCommand;
+    private readonly SimpleCommand selectNightSetupSnapshotCommand;
     private readonly SimpleCommand importCommissioningBindingsCommand;
     private readonly SimpleCommand refreshProfileOwnershipCommand;
     private readonly SimpleCommand enableMountTrackingCommand;
+    private readonly SimpleCommand applyRecommendedImageFilePatternCommand;
+    private readonly SimpleCommand restorePreviousImageFilePatternCommand;
     private readonly SimpleAsyncCommand importFromFramingAssistantCommand;
     private readonly SimpleAsyncCommand importFromPlanetariumCommand;
     private readonly SimpleCommand bindCurrentAtrCameraCommand;
     private readonly SimpleCommand refreshAtrManualStatusCommand;
     private readonly SimpleAsyncCommand captureManualAtrSpectrumCommand;
+    private readonly SimpleAsyncCommand refreshManualUvexStatusCommand;
+    private readonly SimpleAsyncCommand connectManualUvexCommand;
+    private readonly SimpleAsyncCommand disconnectManualUvexCommand;
+    private readonly SimpleAsyncCommand releaseManualUvexComPortCommand;
+    private readonly SimpleAsyncCommand selectManualSlit1Command;
+    private readonly SimpleAsyncCommand selectManualSlit2Command;
+    private readonly SimpleAsyncCommand selectManualSlit3Command;
+    private readonly SimpleAsyncCommand selectManualSlit4Command;
+    private readonly SimpleAsyncCommand moveManualM2NegativeCommand;
+    private readonly SimpleAsyncCommand moveManualM2PositiveCommand;
+    private readonly SimpleAsyncCommand manualSlitLightOnCommand;
+    private readonly SimpleAsyncCommand manualSlitLightOffCommand;
     private string stateText = "空闲";
     private string currentStageText = "—";
     private string nextStageText = "—";
@@ -116,7 +158,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string atrManualCaptureStatus = "尚未采集单帧检查光谱。";
     private string atrManualCaptureError = string.Empty;
     private string mountTrackingManualStatus = "尚未请求；正式自动流程会在目录转向前自行启用并核验。";
+    private string manualUvexConnectionStatus = "尚未读取 UVEX 服务状态。";
+    private string manualUvexPositionStatus = "狭缝、M2 与光栅位置尚未读取。";
+    private string manualUvexLastAction = "设备选择已保存；打开本页不会连接 COM5。请先点击“连接”。";
+    private string manualUvexError = string.Empty;
+    private bool isManualUvexBusy;
+    private bool hasManualUvexStatus;
+    private bool manualUvexPositionKnown;
+    private DeviceConnectionState manualUvexConnectionState = DeviceConnectionState.Disconnected;
     private int selectedWorkspaceTabIndex;
+    private string? previousNinaImageFilePattern;
+    private Guid? previousNinaImageFilePatternProfileId;
 
     [ImportingConstructor]
     public ObservationDockable(
@@ -132,6 +184,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         activeProfileService = profileService;
         settings = new UvexPluginSettings(profileService);
+        targetDraft = CreateNativeTargetDraft(profileService, settings);
         this.host = host;
         this.realRunnerFactory = realRunnerFactory;
         this.cameraMediator = cameraMediator;
@@ -179,11 +232,25 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         openRunDirectoryCommand = new SimpleCommand(
             () => OpenContainingDirectory(RunManifestPath, "运行清单"),
             () => PathExists(RunManifestPath));
-        showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
-        showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 5);
+        showManualUvexControlCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
+        showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 2);
+        showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 3);
+        showAdvancedSettingsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 7);
+        autoFillConnectedNinaDevicesCommand = new SimpleCommand(
+            AutoFillConnectedNinaDevices,
+            CanEditTargetPlan);
+        selectNightSetupSnapshotCommand = new SimpleCommand(
+            SelectNightSetupSnapshot,
+            CanEditTargetPlan);
         importCommissioningBindingsCommand = new SimpleCommand(ImportCommissioningBindings);
         refreshProfileOwnershipCommand = new SimpleCommand(RefreshProfileOwnership);
         enableMountTrackingCommand = new SimpleCommand(EnableMountTrackingForCommissioning);
+        applyRecommendedImageFilePatternCommand = new SimpleCommand(
+            ApplyRecommendedImageFilePattern,
+            CanApplyRecommendedImageFilePattern);
+        restorePreviousImageFilePatternCommand = new SimpleCommand(
+            RestorePreviousImageFilePattern,
+            CanRestorePreviousImageFilePattern);
         importFromFramingAssistantCommand = new SimpleAsyncCommand(
             ImportFromFramingAssistantAsync,
             CanImportTarget);
@@ -195,6 +262,34 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         captureManualAtrSpectrumCommand = new SimpleAsyncCommand(
             CaptureManualAtrSpectrumAsync,
             CanUseManualAtrTools);
+        refreshManualUvexStatusCommand = new SimpleAsyncCommand(
+            RefreshManualUvexStatusAsync,
+            CanManageManualUvexConnection);
+        connectManualUvexCommand = new SimpleAsyncCommand(
+            ConnectManualUvexAsync,
+            CanConnectManualUvex);
+        disconnectManualUvexCommand = new SimpleAsyncCommand(
+            DisconnectManualUvexAsync,
+            CanDisconnectManualUvex);
+        releaseManualUvexComPortCommand = new SimpleAsyncCommand(
+            ReleaseManualUvexComPortAsync,
+            CanManageManualUvexConnection);
+        selectManualSlit1Command = CreateManualSlitCommand(1);
+        selectManualSlit2Command = CreateManualSlitCommand(2);
+        selectManualSlit3Command = CreateManualSlitCommand(3);
+        selectManualSlit4Command = CreateManualSlitCommand(4);
+        moveManualM2NegativeCommand = new SimpleAsyncCommand(
+            () => MoveManualM2Async(-ManualM2StepSize),
+            CanOperateManualUvex);
+        moveManualM2PositiveCommand = new SimpleAsyncCommand(
+            () => MoveManualM2Async(ManualM2StepSize),
+            CanOperateManualUvex);
+        manualSlitLightOnCommand = new SimpleAsyncCommand(
+            () => SetManualSlitLightAsync(enabled: true),
+            CanOperateManualUvex);
+        manualSlitLightOffCommand = new SimpleAsyncCommand(
+            () => SetManualSlitLightAsync(enabled: false),
+            CanOperateManualUvex);
 
         LoadTargetImportDisplay();
         RefreshGhostCommissioningSummary();
@@ -203,6 +298,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
         host.DashboardChanged += OnDashboardChanged;
         UvexRuntimeState.Changed += OnManualSpectrumChanged;
+        activeProfileService.ProfileChanged += OnProfileChanged;
         ApplyDashboard(host.Dashboard);
     }
 
@@ -224,14 +320,32 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand OpenRunDirectoryCommand => openRunDirectoryCommand;
     public ICommand ShowObservationPlanCommand => showObservationPlanCommand;
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
+    public ICommand ShowManualUvexControlCommand => showManualUvexControlCommand;
+    public ICommand ShowAdvancedSettingsCommand => showAdvancedSettingsCommand;
+    public ICommand AutoFillConnectedNinaDevicesCommand => autoFillConnectedNinaDevicesCommand;
+    public ICommand SelectNightSetupSnapshotCommand => selectNightSetupSnapshotCommand;
     public ICommand ImportCommissioningBindingsCommand => importCommissioningBindingsCommand;
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
     public ICommand EnableMountTrackingCommand => enableMountTrackingCommand;
+    public ICommand ApplyRecommendedImageFilePatternCommand => applyRecommendedImageFilePatternCommand;
+    public ICommand RestorePreviousImageFilePatternCommand => restorePreviousImageFilePatternCommand;
     public ICommand ImportFromFramingAssistantCommand => importFromFramingAssistantCommand;
     public ICommand ImportFromPlanetariumCommand => importFromPlanetariumCommand;
     public ICommand BindCurrentAtrCameraCommand => bindCurrentAtrCameraCommand;
     public ICommand RefreshAtrManualStatusCommand => refreshAtrManualStatusCommand;
     public ICommand CaptureManualAtrSpectrumCommand => captureManualAtrSpectrumCommand;
+    public ICommand RefreshManualUvexStatusCommand => refreshManualUvexStatusCommand;
+    public ICommand ConnectManualUvexCommand => connectManualUvexCommand;
+    public ICommand DisconnectManualUvexCommand => disconnectManualUvexCommand;
+    public ICommand ReleaseManualUvexComPortCommand => releaseManualUvexComPortCommand;
+    public ICommand SelectManualSlit1Command => selectManualSlit1Command;
+    public ICommand SelectManualSlit2Command => selectManualSlit2Command;
+    public ICommand SelectManualSlit3Command => selectManualSlit3Command;
+    public ICommand SelectManualSlit4Command => selectManualSlit4Command;
+    public ICommand MoveManualM2NegativeCommand => moveManualM2NegativeCommand;
+    public ICommand MoveManualM2PositiveCommand => moveManualM2PositiveCommand;
+    public ICommand ManualSlitLightOnCommand => manualSlitLightOnCommand;
+    public ICommand ManualSlitLightOffCommand => manualSlitLightOffCommand;
 
     public ObservableCollection<ObservationGateRow> GateRows { get; } = new();
     public ObservableCollection<ObservationTimelineRow> TimelineRows { get; } = new();
@@ -239,9 +353,18 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public string TargetName
     {
-        get => settings.ObservationTargetName;
-        set { settings.ObservationTargetName = value; MarkTargetAsManuallyEdited(); RaisePropertyChanged(); }
+        get => targetDraft.TargetName ?? string.Empty;
+        set
+        {
+            targetDraft.TargetName = value ?? string.Empty;
+            settings.ObservationTargetName = targetDraft.TargetName;
+            MarkTargetAsManuallyEdited();
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(Target));
+        }
     }
+
+    public InputTarget Target => targetDraft;
 
     public string CatalogId
     {
@@ -251,14 +374,44 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public double RightAscensionDegrees
     {
-        get => settings.ObservationRightAscensionDegrees;
-        set { settings.ObservationRightAscensionDegrees = value; MarkTargetAsManuallyEdited(); RaisePropertyChanged(); }
+        get => NativeTargetJ2000().RADegrees;
+        set
+        {
+            SetNativeTargetCoordinates(value, DeclinationDegrees);
+            settings.ObservationRightAscensionDegrees = value;
+            MarkTargetAsManuallyEdited();
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(Target));
+        }
     }
+
+    public IReadOnlyList<TargetObservabilityChoice> AvailableTargetObservabilityClasses => TargetObservabilityChoices;
+
+    public TargetObservabilityClass TargetObservability
+    {
+        get => settings.ObservationTargetObservability;
+        set
+        {
+            settings.ObservationTargetObservability = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(TargetObservabilitySummary));
+        }
+    }
+
+    public string TargetObservabilitySummary =>
+        TargetObservabilityChoices.First(choice => choice.Value == TargetObservability).Description;
 
     public double DeclinationDegrees
     {
-        get => settings.ObservationDeclinationDegrees;
-        set { settings.ObservationDeclinationDegrees = value; MarkTargetAsManuallyEdited(); RaisePropertyChanged(); }
+        get => NativeTargetJ2000().Dec;
+        set
+        {
+            SetNativeTargetCoordinates(RightAscensionDegrees, value);
+            settings.ObservationDeclinationDegrees = value;
+            MarkTargetAsManuallyEdited();
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(Target));
+        }
     }
 
     public double DurationMinutes
@@ -270,7 +423,21 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string NightSetupId
     {
         get => settings.ObservationNightSetupId;
-        set { settings.ObservationNightSetupId = value; RaisePropertyChanged(); }
+        set { settings.ObservationNightSetupId = value; RaisePropertyChanged(); RaisePreparationProperties(); }
+    }
+
+    public IReadOnlyList<UvexSlitChoice> UvexSlitChoices => SlitChoices;
+
+    public int ExpectedUvexSlitPosition
+    {
+        get => settings.ExpectedUvexSlitPosition;
+        set
+        {
+            settings.ExpectedUvexSlitPosition = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(RealModeStatus));
+            RaiseCommandStates();
+        }
     }
 
     public double SiteLatitudeDegrees
@@ -474,6 +641,47 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         get => settings.G3PlateSolveExposureMillisecondsCsv;
         set { settings.G3PlateSolveExposureMillisecondsCsv = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
+    }
+
+    public double G3MaximumPlateSolveHintOffsetDegrees
+    {
+        get => settings.G3MaximumPlateSolveHintOffsetDegrees;
+        set { settings.G3MaximumPlateSolveHintOffsetDegrees = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
+    }
+
+    public string QhyParallelFilterSequenceCsv
+    {
+        get => settings.QhyParallelFilterSequenceCsv;
+        set
+        {
+            settings.QhyParallelFilterSequenceCsv = value ?? string.Empty;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(QhyParallelFilterSequenceStatus));
+            RaisePropertyChanged(nameof(RealModeStatus));
+            RaiseCommandStates();
+        }
+    }
+
+    public string QhyParallelFilterSequenceStatus => string.IsNullOrWhiteSpace(settings.QhyParallelFilterSequenceCsv)
+        ? $"单滤镜同步测光：{settings.QhyFilterName}，{settings.QhyPhotometryExposureSeconds:G4}s。"
+        : $"并行循环：{settings.QhyParallelFilterSequenceCsv}。滤镜轮与 QHYminiCam8M 始终由 QHY 服务单一持有；每个滤镜分别建立质量基线。";
+
+    public int QhyMinimumDetectedStars
+    {
+        get => settings.QhyMinimumDetectedStars;
+        set { settings.QhyMinimumDetectedStars = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
+    }
+
+    public double QhyMinimumTransparency
+    {
+        get => settings.QhyMinimumTransparency;
+        set { settings.QhyMinimumTransparency = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
+    }
+
+    public double QhyMaximumSaturatedFraction
+    {
+        get => settings.QhyMaximumSaturatedFraction;
+        set { settings.QhyMaximumSaturatedFraction = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
     }
 
     public int G3WcsCenteringSchemaVersion => settings.G3WcsCenteringSchemaVersion;
@@ -785,11 +993,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    public string ModeText => UseRealMode ? "已选择：真实设备控制" : "已选择：模拟演练";
+    public string ModeText => UseRealMode ? "自动观测：真实设备" : "自动观测：模拟演练";
     public bool IsSimulationMode => !UseRealMode;
     public bool IsRealMode => UseRealMode;
     public string ModeDescription => UseRealMode
-        ? "只有点击下方启动按钮后才会进入真实流程；启动前仍会逐项检查不可变证据、设备身份、安全门和运动限额。仅切换到此模式不会连接或移动设备。"
+        ? "这里只选择自动观测的执行方式。UVEX 切缝、狭缝灯和 M2 小步进请使用“设备手控”，不要求整套自动观测准入。"
         : "模拟演练不会连接相机、赤道仪、PHD2 或 UVEX，可用于熟悉自动推进、暂停、恢复、取消、诊断和证据界面。";
     public string StartButtonText => UseRealMode
         ? "启动真实设备自动观测"
@@ -811,9 +1019,56 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             var issueCount = RealModeEligibilityIssues().Count;
             return issueCount == 0
                 ? "✓ 真实模式启动资料已填写；启动时仍会重新核验实时状态。"
-                : $"真实模式：{issueCount} 个启动阻断项。完整清单已移到“高级设置”。";
+                : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
         }
     }
+
+    public int AutomaticPreparationIssueCount => RealModeEligibilityIssues().Count;
+    public bool IsTargetPreparationMissing =>
+        string.IsNullOrWhiteSpace(TargetName) ||
+        !double.IsFinite(RightAscensionDegrees) ||
+        !double.IsFinite(DeclinationDegrees) ||
+        RightAscensionDegrees is < 0 or >= 360 ||
+        DeclinationDegrees is < -90 or > 90;
+    public string TargetPreparationStatus => IsTargetPreparationMissing
+        ? "未完成：请选择或导入目标，并确认 J2000 坐标。"
+        : $"已选择：{TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°";
+    public bool IsDevicePreparationMissing =>
+        string.IsNullOrWhiteSpace(settings.ExpectedTelescopeId) ||
+        string.IsNullOrWhiteSpace(settings.ObservationExpectedAtrCameraId) ||
+        settings.ObservationExpectedAtrCameraId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase) ||
+        string.IsNullOrWhiteSpace(settings.ObservationExpectedQhyCameraId) ||
+        settings.ObservationExpectedQhyCameraId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase) ||
+        settings.Phd2ProfileId < 0 ||
+        string.IsNullOrWhiteSpace(settings.Phd2CameraStableId);
+    public string DevicePreparationStatus => IsDevicePreparationMissing
+        ? "未完成：点击自动读取 N.I.N.A. 已连接设备；PHD2/G3 与 QHY 身份由 commissioning 文件一次导入。"
+        : $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}";
+    public bool IsCommissioningPreparationMissing =>
+        !settings.RealModeCommissioned ||
+        string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) ||
+        !File.Exists(settings.CommissioningPresetPath) ||
+        string.IsNullOrWhiteSpace(settings.CommissioningPresetId) ||
+        string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256) ||
+        string.IsNullOrWhiteSpace(settings.CommissioningHardwareFingerprintSha256);
+    public string CommissioningPreparationStatus => IsCommissioningPreparationMissing
+        ? "未完成：请选择 commissioning bindings；ID、哈希、设备身份和运动限额会自动填写，不需要逐项抄写。"
+        : $"已导入：{settings.CommissioningPresetId}";
+    public bool IsNightSetupPreparationMissing =>
+        string.IsNullOrWhiteSpace(settings.NightSetupSnapshotPath) ||
+        !File.Exists(settings.NightSetupSnapshotPath) ||
+        string.IsNullOrWhiteSpace(settings.NightSetupSnapshotSha256);
+    public string NightSetupPreparationStatus => IsNightSetupPreparationMissing
+        ? "未完成：本夜设备快照尚未选择。优先由 commissioning bindings 或本夜准备流程生成/导入。"
+        : $"已选择：{settings.ObservationNightSetupId} · {Path.GetFileName(settings.NightSetupSnapshotPath)}";
+    public bool IsSlitChoiceMissing => ExpectedUvexSlitPosition is < 1 or > 4;
+    public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
+    public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
+        ? "已通过：后台配置结构、设备所有权和运动限额完整。"
+        : "后台一致性尚未通过；多数项目会在导入 bindings 与 Night Setup 后自动完成，不需要逐项填写。";
+    public string AutomaticPreparationSummary => AutomaticPreparationIssueCount == 0
+        ? "✓ 表单已完成；启动时会自动读取实时状态并做最后复核。"
+        : "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
 
     public string StateText { get => stateText; private set { stateText = value; RaisePropertyChanged(); } }
     public string CurrentStageText { get => currentStageText; private set { currentStageText = value; RaisePropertyChanged(); } }
@@ -993,6 +1248,82 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         $"{settings.ExposureSeconds:G6} s · Gain {settings.Gain} · Offset {settings.Offset} · {settings.Binning}×{settings.Binning}";
     public string ManualSpectrumSummary => UvexRuntimeState.MetricSummary;
     public PointCollection ManualSpectrumPoints => UvexRuntimeState.SpectrumPoints;
+    public string ManualUvexServiceUrl => settings.ServiceUrl;
+    public IReadOnlyList<string> ManualUvexDeviceChoices => ManualUvexDevices;
+    public string SelectedManualUvexDevice
+    {
+        get
+        {
+            var selected = settings.ManualUvexSelectedDevice;
+            return ManualUvexDevices.Contains(selected, StringComparer.Ordinal)
+                ? selected
+                : ManualUvexDevices[0];
+        }
+        set
+        {
+            var selected = ManualUvexDevices.Contains(value, StringComparer.Ordinal)
+                ? value
+                : ManualUvexDevices[0];
+            if (string.Equals(settings.ManualUvexSelectedDevice, selected, StringComparison.Ordinal)) return;
+            settings.ManualUvexSelectedDevice = selected;
+            RaisePropertyChanged();
+        }
+    }
+    public string ManualUvexConnectionStatus
+    {
+        get => manualUvexConnectionStatus;
+        private set { manualUvexConnectionStatus = value; RaisePropertyChanged(); }
+    }
+    public string ManualUvexPositionStatus
+    {
+        get => manualUvexPositionStatus;
+        private set { manualUvexPositionStatus = value; RaisePropertyChanged(); }
+    }
+    public string ManualUvexLastAction
+    {
+        get => manualUvexLastAction;
+        private set { manualUvexLastAction = value; RaisePropertyChanged(); }
+    }
+    public string ManualUvexError
+    {
+        get => manualUvexError;
+        private set
+        {
+            manualUvexError = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HasManualUvexError));
+        }
+    }
+    public bool HasManualUvexError => !string.IsNullOrWhiteSpace(ManualUvexError);
+    public bool IsManualUvexBusy
+    {
+        get => isManualUvexBusy;
+        private set
+        {
+            if (isManualUvexBusy == value) return;
+            isManualUvexBusy = value;
+            RaisePropertyChanged();
+            RaiseCommandStates();
+        }
+    }
+    public int ManualM2StepSize
+    {
+        get => settings.ManualM2StepSize;
+        set
+        {
+            settings.ManualM2StepSize = Math.Clamp(value, 1, 2_000);
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ManualM2NegativeButtonText));
+            RaisePropertyChanged(nameof(ManualM2PositiveButtonText));
+        }
+    }
+    public string ManualM2NegativeButtonText => $"M2 −{ManualM2StepSize} 步";
+    public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
+    public string NinaImageFilePatternCurrent =>
+        activeProfileService.ActiveProfile.ImageFileSettings.FilePattern ?? string.Empty;
+    public string NinaImageFilePatternRecommended => NinaImageFilePatternPolicy.RecommendedPattern;
+    public string NinaImageFilePatternStatus =>
+        NinaImageFilePatternPolicy.Assess(NinaImageFilePatternCurrent).Status;
 
     private ObservationRunState RunState => host.Dashboard.Run.State;
 
@@ -1008,6 +1339,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         host.DashboardChanged -= OnDashboardChanged;
         UvexRuntimeState.Changed -= OnManualSpectrumChanged;
+        activeProfileService.ProfileChanged -= OnProfileChanged;
         lifetime.Cancel();
         lifetime.Dispose();
     }
@@ -1020,9 +1352,243 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         UseRealMode = useRealMode;
         OperatorNotice = useRealMode
-            ? "已选择真实设备控制。此选择本身不会连接或移动设备；请在“高级设置”查看并处理完整启动阻断项。"
+            ? "已选择真实设备自动观测。此按钮不是设备连接入口；观测前切缝和 M2 对焦请直接进入“设备手控”。"
             : "已选择模拟演练。模拟运行不会连接或移动任何真实设备。";
         Error = string.Empty;
+    }
+
+    private SimpleAsyncCommand CreateManualSlitCommand(int position) => new(
+        () => SelectManualSlitAsync(position),
+        CanOperateManualUvex);
+
+    private async Task RefreshManualUvexStatusAsync()
+    {
+        if (!CanManageManualUvexConnection()) return;
+        IsManualUvexBusy = true;
+        ManualUvexError = string.Empty;
+        ManualUvexLastAction = "正在读取 UVEX 服务与 COM5 状态…";
+        try
+        {
+            using var client = new UvexServiceClient(settings.ServiceUrl);
+            var status = await client.GetStatusAsync(lifetime.Token).ConfigureAwait(true)
+                ?? throw new InvalidOperationException("UVEX 服务没有返回设备状态。");
+            ApplyManualUvexStatus(status);
+            ManualUvexLastAction = "状态已刷新；没有执行任何机械运动。";
+        }
+        catch (Exception ex)
+        {
+            InvalidateManualUvexStatus();
+            ManualUvexError = $"无法读取 UVEX 服务：{ex.Message}";
+            ManualUvexLastAction = "状态刷新失败；没有执行机械运动。";
+        }
+        finally
+        {
+            IsManualUvexBusy = false;
+        }
+    }
+
+    private Task ConnectManualUvexAsync() => RunManualUvexActionAsync(
+        "连接 UVEX4 / COM5",
+        (lease, token) => lease.ConnectAndVerifyAsync(token));
+
+    private Task DisconnectManualUvexAsync() => RunManualUvexActionAsync(
+        "断开 UVEX4 / COM5",
+        (lease, token) => lease.DisconnectAndVerifyAsync(token));
+
+    private Task ReleaseManualUvexComPortAsync() => RunManualUvexActionAsync(
+        "释放 COM5 给原厂软件",
+        (lease, token) => lease.ReleaseComPortAndVerifyAsync(token));
+
+    private Task SelectManualSlitAsync(int position) => RunManualUvexActionAsync(
+        $"切换到狭缝槽位 {position}",
+        (lease, token) => lease.SelectSlitAndVerifyAsync(position, token));
+
+    private Task MoveManualM2Async(int deltaSteps) => RunManualUvexActionAsync(
+        $"M2 {deltaSteps:+#;-#;0} 步",
+        (lease, token) => lease.MoveFocusAndVerifyAsync(deltaSteps, token));
+
+    private Task SetManualSlitLightAsync(bool enabled) => RunManualUvexActionAsync(
+        enabled ? "打开狭缝照明灯" : "关闭狭缝照明灯",
+        (lease, token) => lease.SetSlitIlluminationAsync(enabled, token));
+
+    private async Task RunManualUvexActionAsync(
+        string actionName,
+        Func<UvexServiceClient.UvexLeaseSession, CancellationToken, Task<UvexDeviceStatus>> action)
+    {
+        if (!CanManageManualUvexConnection()) return;
+        IsManualUvexBusy = true;
+        ManualUvexError = string.Empty;
+        ManualUvexLastAction = $"正在{actionName}…";
+        try
+        {
+            using var client = new UvexServiceClient(settings.ServiceUrl);
+            await using var lease = await client
+                .AcquireLeaseAsync("N.I.N.A. OpenAstroSpec manual UVEX control", lifetime.Token)
+                .ConfigureAwait(true);
+            var status = await action(lease, lifetime.Token).ConfigureAwait(true);
+            ApplyManualUvexStatus(status);
+            ManualUvexLastAction = $"{actionName}完成，服务回读已核验。";
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            ManualUvexLastAction = $"{actionName}已取消。";
+        }
+        catch (Exception ex)
+        {
+            InvalidateManualUvexStatus();
+            ManualUvexError = $"{actionName}失败：{ex.Message}";
+            ManualUvexLastAction = $"{actionName}未完成；请查看本页红色提示。";
+        }
+        finally
+        {
+            IsManualUvexBusy = false;
+        }
+    }
+
+    private void ApplyManualUvexStatus(UvexDeviceStatus status)
+    {
+        hasManualUvexStatus = true;
+        manualUvexConnectionState = status.ConnectionState;
+        manualUvexPositionKnown = status.PositionKnown;
+        var firmware = string.IsNullOrWhiteSpace(status.FirmwareVersion) ? "固件未知" : $"固件 {status.FirmwareVersion}";
+        var trust = status.PositionKnown ? $"位置可信（{FormatManualUvexPositionTrust(status.PositionTrust)}）" : "位置未知";
+        ManualUvexConnectionStatus =
+            $"{FormatManualUvexConnectionState(status.ConnectionState)} · {status.PortName} · {firmware} · {trust}" +
+            (string.IsNullOrWhiteSpace(status.LastError) ? string.Empty : $" · 设备报告：{status.LastError}");
+
+        var slitName = status.SlitPosition is { } position
+            ? status.Slits.FirstOrDefault(item => item.Position == position)?.Name
+            : null;
+        var slitNameSuffix = string.IsNullOrWhiteSpace(slitName) ? string.Empty : $"（{slitName}）";
+        var slit = status.SlitPosition is { } slitPosition
+            ? $"槽位 {slitPosition}{slitNameSuffix}"
+            : "未知";
+        var focus = status.FocusPositionSteps?.ToString() ?? "未知";
+        var grating = status.GratingPositionSteps?.ToString() ?? "未知";
+        ManualUvexPositionStatus =
+            $"狭缝：{slit} · M2：{focus} 步 · 光栅：{grating} 步 · 照明灯：{status.SlitIlluminationLedState}";
+        RaiseCommandStates();
+    }
+
+    private static string FormatManualUvexConnectionState(DeviceConnectionState state) => state switch
+    {
+        DeviceConnectionState.Disconnected => "未连接",
+        DeviceConnectionState.Connecting => "正在连接",
+        DeviceConnectionState.Initializing => "正在初始化",
+        DeviceConnectionState.Ready => "已连接",
+        DeviceConnectionState.Busy => "正在执行动作",
+        DeviceConnectionState.Faulted => "连接故障",
+        DeviceConnectionState.Maintenance => "已释放给原厂软件",
+        _ => state.ToString(),
+    };
+
+    private static string FormatManualUvexPositionTrust(UvexPositionTrust trust) => trust switch
+    {
+        UvexPositionTrust.Live => "实时回读",
+        UvexPositionTrust.LastKnown => "上次记录",
+        UvexPositionTrust.Unknown => "未验证",
+        _ => trust.ToString(),
+    };
+
+    private void InvalidateManualUvexStatus()
+    {
+        hasManualUvexStatus = false;
+        manualUvexPositionKnown = false;
+        manualUvexConnectionState = DeviceConnectionState.Faulted;
+        RaiseCommandStates();
+    }
+
+    private void AutoFillConnectedNinaDevices()
+    {
+        if (!CanEditTargetPlan()) return;
+        var applied = new List<string>();
+        var telescope = telescopeMediator.GetInfo();
+        if (telescope.Connected && !string.IsNullOrWhiteSpace(telescope.DeviceId))
+        {
+            settings.ExpectedTelescopeId = telescope.DeviceId;
+            applied.Add($"赤道仪 {telescope.DeviceId}");
+        }
+
+        var camera = cameraMediator.GetInfo();
+        var cameraIdentity = string.Join('|', camera.Name, camera.DisplayName, camera.Description, camera.DeviceId);
+        if (camera.Connected &&
+            !string.IsNullOrWhiteSpace(camera.DeviceId) &&
+            cameraIdentity.Contains(settings.ExpectedCameraName, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.BoundCameraId = camera.DeviceId;
+            settings.ObservationExpectedAtrCameraId = camera.DeviceId;
+            applied.Add($"ATR585M {camera.DeviceId}");
+        }
+
+        var astrometry = activeProfileService.ActiveProfile.AstrometrySettings;
+        settings.ObservatoryLatitudeDegrees = astrometry.Latitude;
+        settings.ObservatoryLongitudeDegreesEast = astrometry.Longitude;
+        settings.ObservatoryElevationMeters = astrometry.Elevation;
+        applied.Add("站点坐标");
+        RefreshProfileOwnership();
+        RefreshAtrManualStatus();
+        Error = string.Empty;
+        OperatorNotice = applied.Count == 1
+            ? "已同步 N.I.N.A. Profile 的站点坐标；当前未连接可识别的赤道仪或 ATR585M。PHD2/G3、QHY 和不可变证据请通过 commissioning bindings 一次导入。"
+            : $"已从 N.I.N.A. 自动读取：{string.Join("、", applied)}。PHD2/G3、QHY 和不可变证据仍由 commissioning bindings 一次导入。";
+        RaisePropertyChanged(nameof(ExpectedTelescopeId));
+        RaisePropertyChanged(nameof(ExpectedAtrCameraId));
+        RaisePropertyChanged(nameof(BoundAtrCameraId));
+        RaisePropertyChanged(nameof(SiteLatitudeDegrees));
+        RaisePropertyChanged(nameof(SiteLongitudeDegreesEast));
+        RaisePropertyChanged(nameof(SiteElevationMeters));
+        RaisePropertyChanged(nameof(RealModeStatus));
+        RaisePropertyChanged(nameof(RealModeStatusSummary));
+        RaiseCommandStates();
+    }
+
+    private void SelectNightSetupSnapshot()
+    {
+        if (!CanEditTargetPlan()) return;
+        try
+        {
+            var defaultDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "UVEX-ADV",
+                "commissioning");
+            var dialog = new OpenFileDialog
+            {
+                Title = "选择本夜 Night Setup 快照",
+                Filter = "Night Setup JSON (*.json)|*.json",
+                CheckFileExists = true,
+                Multiselect = false,
+                InitialDirectory = Directory.Exists(defaultDirectory) ? defaultDirectory : null,
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            var bytes = File.ReadAllBytes(dialog.FileName);
+            var setup = JsonSerializer.Deserialize<NightSetupRecord>(bytes, CaseInsensitiveJson)
+                ?? throw new InvalidDataException("Night Setup 文件为空。 ");
+            var issues = setup.Validate();
+            if (issues.Count > 0)
+            {
+                throw new InvalidDataException($"Night Setup 内容无效：{string.Join(" ", issues)}");
+            }
+
+            settings.NightSetupSnapshotPath = Path.GetFullPath(dialog.FileName);
+            settings.NightSetupSnapshotSha256 = Convert.ToHexString(SHA256.HashData(bytes));
+            settings.ObservationNightSetupId = setup.NightSetupId;
+            settings.ExpectedUvexSlitPosition = setup.SlitPosition;
+            settings.ExpectedUvexGratingPositionSteps = setup.GratingPositionSteps;
+            settings.ExpectedUvexM2PositionSteps = setup.M2PositionSteps;
+            Error = string.Empty;
+            OperatorNotice = $"已选择并校验 Night Setup“{setup.NightSetupId}”；文件哈希、狭缝、光栅和 M2 期望值已自动填写。";
+            RaisePropertyChanged(nameof(NightSetupSnapshotPath));
+            RaisePropertyChanged(nameof(NightSetupSnapshotSha256));
+            RaisePropertyChanged(nameof(NightSetupId));
+            RaisePropertyChanged(nameof(ExpectedUvexSlitPosition));
+            RaisePropertyChanged(nameof(RealModeStatus));
+            RaiseCommandStates();
+        }
+        catch (Exception ex)
+        {
+            Error = $"选择 Night Setup 失败：{ex.Message}";
+        }
     }
 
     private void EnableMountTrackingForCommissioning()
@@ -1102,6 +1668,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         // Commit the detached target snapshot as one UI-thread operation. Do not
         // route through the public setters: those setters intentionally mark any
         // later operator edit as manual and invalidate this provenance record.
+        targetDraft.TargetName = result.TargetName;
+        SetNativeTargetCoordinates(result.RightAscensionDegrees, result.DeclinationDegrees);
+        targetDraft.PositionAngle = result.PositionAngleDegrees ?? 0;
         settings.ObservationTargetName = result.TargetName;
         settings.ObservationCatalogId = result.CatalogId;
         settings.ObservationRightAscensionDegrees = result.RightAscensionDegrees;
@@ -1125,12 +1694,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(CatalogId));
         RaisePropertyChanged(nameof(RightAscensionDegrees));
         RaisePropertyChanged(nameof(DeclinationDegrees));
+        RaisePropertyChanged(nameof(Target));
 
         HasTargetImport = true;
         TargetImportSummary = auditSummary;
         TargetImportDetails = result.Details;
         OperatorNotice = $"目标草稿已更新为 {result.TargetName}：RA {result.RightAscensionDegrees:F8}°，Dec {result.DeclinationDegrees:+0.00000000;-0.00000000;0.00000000}°（J2000）。Night Setup、commissioning、时长和安全限制未改变。";
         Error = string.Empty;
+        RaisePreparationProperties();
     }
 
     private void LoadTargetImportDisplay()
@@ -1193,6 +1764,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         HasTargetImport = false;
         TargetImportSummary = "目标由手工输入。";
         TargetImportDetails = settings.ObservationTargetImportDetails;
+        RaisePreparationProperties();
     }
 
     private async Task StartSimulationAsync()
@@ -1235,7 +1807,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             var eligibility = RealModeEligibilityIssues();
             if (eligibility.Count > 0)
             {
-                Error = string.Join(" ", eligibility);
+                SelectedWorkspaceTabIndex = 3;
+                Error = "自动观测尚不能启动：请先完成“自动准备”中标红的字段。工程级详细原因仍可在“高级设置”查看。";
                 return;
             }
             settings.ObservationUseRealMode = true;
@@ -1277,13 +1850,33 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private bool CanUseManualAtrTools() => !IsTargetImportBusy && CanEditTargetPlan();
 
+    private bool CanManageManualUvexConnection() => !IsManualUvexBusy && CanEditTargetPlan();
+
+    private bool CanConnectManualUvex() =>
+        CanManageManualUvexConnection() &&
+        (!hasManualUvexStatus || manualUvexConnectionState is
+            DeviceConnectionState.Disconnected or
+            DeviceConnectionState.Faulted or
+            DeviceConnectionState.Maintenance);
+
+    private bool CanDisconnectManualUvex() =>
+        CanManageManualUvexConnection() &&
+        hasManualUvexStatus &&
+        manualUvexConnectionState is not DeviceConnectionState.Disconnected;
+
+    private bool CanOperateManualUvex() =>
+        CanManageManualUvexConnection() &&
+        hasManualUvexStatus &&
+        manualUvexConnectionState == DeviceConnectionState.Ready &&
+        manualUvexPositionKnown;
+
     private bool CanEditTargetPlan() => RunState is
         ObservationRunState.Idle or
         ObservationRunState.Completed or
         ObservationRunState.Cancelled or
         ObservationRunState.Faulted;
 
-    private bool CanStartReal() => CanStart() && RealModeEligibilityIssues().Count == 0;
+    private bool CanStartReal() => CanStart();
 
     private void BindCurrentAtrCamera()
     {
@@ -1387,6 +1980,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private IReadOnlyList<string> RealModeEligibilityIssues()
     {
         var issues = new List<string>();
+        issues.AddRange(NinaImageFilePatternPolicy.Assess(
+            activeProfileService.ActiveProfile.ImageFileSettings.FilePattern).BlockingIssues);
         var capabilities = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
             settings.RequireSafetyMonitor,
             settings.RequireOpenDomeOrRoof,
@@ -1421,6 +2016,28 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             issues.Add("G3 连续全幅采集的驱动恢复等待必须在 250–10000 ms；本机实测 ToupTek/G3 需要 3000 ms。");
         }
+        try
+        {
+            var filterSequence = settings.ParseQhyParallelFilterSequence();
+            if (filterSequence.Count > 32) issues.Add("QHY 并行滤镜循环不能超过 32 个步骤。");
+            foreach (var step in filterSequence)
+            {
+                if (string.IsNullOrWhiteSpace(step.FilterName) || step.FilterName.Length > 32)
+                    issues.Add("QHY 并行滤镜名必须是 1–32 个字符。");
+                if (!double.IsFinite(step.ExposureSeconds) || step.ExposureSeconds <= 0)
+                    issues.Add($"QHY {step.FilterName} 并行曝光必须是正有限秒数。");
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException)
+        {
+            issues.Add($"QHY 并行滤镜循环无法解析：{ex.Message}");
+        }
+        if (settings.QhyMinimumDetectedStars < 0)
+            issues.Add("QHY 最少星数不能小于 0；0 表示只记录星数，不以它阻断。");
+        if (!double.IsFinite(settings.QhyMinimumTransparency) || settings.QhyMinimumTransparency is < 0 or > 1)
+            issues.Add("QHY 最低透明度必须在 [0,1]；0 表示只记录透明度，不以它阻断。");
+        if (!double.IsFinite(settings.QhyMaximumSaturatedFraction) || settings.QhyMaximumSaturatedFraction is <= 0 or > 1)
+            issues.Add("QHY 最大饱和比例必须在 (0,1]。");
         try
         {
             var solvePreset = new G3PlateSolveExposurePreset(
@@ -1677,7 +2294,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         HasFailure = true;
         if (!wasAlreadyShowingFailure)
         {
-            SelectedWorkspaceTabIndex = 3;
+            SelectedWorkspaceTabIndex = 5;
         }
         var guidance = ObservationOperatorGuidance.For(failureStage.Value, failureGate);
         LastFailureHeadline = $"{SimulatedObservationStageRunner.StageDisplayName(failureStage.Value)} · {GateDisplayName(failureGate.Disposition)}";
@@ -1717,6 +2334,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         RaisePropertyChanged(nameof(IsTargetPlanEditable));
         RaisePropertyChanged(nameof(RealModeStatusSummary));
+        RaisePreparationProperties();
         startSelectedModeCommand.RaiseCanExecuteChanged();
         startSimulationCommand.RaiseCanExecuteChanged();
         startRealCommand.RaiseCanExecuteChanged();
@@ -1737,6 +2355,178 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         importFromPlanetariumCommand.RaiseCanExecuteChanged();
         bindCurrentAtrCameraCommand.RaiseCanExecuteChanged();
         captureManualAtrSpectrumCommand.RaiseCanExecuteChanged();
+        refreshManualUvexStatusCommand.RaiseCanExecuteChanged();
+        connectManualUvexCommand.RaiseCanExecuteChanged();
+        disconnectManualUvexCommand.RaiseCanExecuteChanged();
+        releaseManualUvexComPortCommand.RaiseCanExecuteChanged();
+        selectManualSlit1Command.RaiseCanExecuteChanged();
+        selectManualSlit2Command.RaiseCanExecuteChanged();
+        selectManualSlit3Command.RaiseCanExecuteChanged();
+        selectManualSlit4Command.RaiseCanExecuteChanged();
+        moveManualM2NegativeCommand.RaiseCanExecuteChanged();
+        moveManualM2PositiveCommand.RaiseCanExecuteChanged();
+        manualSlitLightOnCommand.RaiseCanExecuteChanged();
+        manualSlitLightOffCommand.RaiseCanExecuteChanged();
+        autoFillConnectedNinaDevicesCommand.RaiseCanExecuteChanged();
+        selectNightSetupSnapshotCommand.RaiseCanExecuteChanged();
+        applyRecommendedImageFilePatternCommand.RaiseCanExecuteChanged();
+        restorePreviousImageFilePatternCommand.RaiseCanExecuteChanged();
+    }
+
+    private void RaisePreparationProperties()
+    {
+        RaisePropertyChanged(nameof(AutomaticPreparationIssueCount));
+        RaisePropertyChanged(nameof(AutomaticPreparationSummary));
+        RaisePropertyChanged(nameof(IsTargetPreparationMissing));
+        RaisePropertyChanged(nameof(TargetPreparationStatus));
+        RaisePropertyChanged(nameof(IsDevicePreparationMissing));
+        RaisePropertyChanged(nameof(DevicePreparationStatus));
+        RaisePropertyChanged(nameof(IsCommissioningPreparationMissing));
+        RaisePropertyChanged(nameof(CommissioningPreparationStatus));
+        RaisePropertyChanged(nameof(IsNightSetupPreparationMissing));
+        RaisePropertyChanged(nameof(NightSetupPreparationStatus));
+        RaisePropertyChanged(nameof(IsSlitChoiceMissing));
+        RaisePropertyChanged(nameof(IsAutomationPolicyPreparationMissing));
+        RaisePropertyChanged(nameof(AutomationPolicyPreparationStatus));
+    }
+
+    private bool CanApplyRecommendedImageFilePattern() =>
+        CanEditTargetPlan() &&
+        !string.Equals(
+            NinaImageFilePatternCurrent,
+            NinaImageFilePatternPolicy.RecommendedPattern,
+            StringComparison.Ordinal);
+
+    private bool CanRestorePreviousImageFilePattern() =>
+        CanEditTargetPlan() &&
+        previousNinaImageFilePattern is not null &&
+        previousNinaImageFilePatternProfileId == activeProfileService.ActiveProfile.Id;
+
+    private void ApplyRecommendedImageFilePattern()
+    {
+        if (!CanApplyRecommendedImageFilePattern()) return;
+        var profile = activeProfileService.ActiveProfile;
+        var before = profile.ImageFileSettings.FilePattern ?? string.Empty;
+        try
+        {
+            previousNinaImageFilePattern = before;
+            previousNinaImageFilePatternProfileId = profile.Id;
+            profile.ImageFileSettings.FilePattern = NinaImageFilePatternPolicy.RecommendedPattern;
+            profile.Save();
+            Error = string.Empty;
+            OperatorNotice = $"已显式更新当前 N.I.N.A. Profile 的图像文件模板。原值：{before}。可在本次 N.I.N.A. 会话中点击“撤销本次模板修改”恢复。";
+        }
+        catch (Exception ex)
+        {
+            profile.ImageFileSettings.FilePattern = before;
+            previousNinaImageFilePattern = null;
+            previousNinaImageFilePatternProfileId = null;
+            Error = $"保存 N.I.N.A. 图像文件模板失败：{ex.Message}";
+        }
+        RefreshImageFilePatternDisplay();
+    }
+
+    private void RestorePreviousImageFilePattern()
+    {
+        if (!CanRestorePreviousImageFilePattern()) return;
+        var profile = activeProfileService.ActiveProfile;
+        var restored = previousNinaImageFilePattern!;
+        try
+        {
+            profile.ImageFileSettings.FilePattern = restored;
+            profile.Save();
+            previousNinaImageFilePattern = null;
+            previousNinaImageFilePatternProfileId = null;
+            Error = string.Empty;
+            OperatorNotice = $"已恢复此前的 N.I.N.A. 图像文件模板：{restored}";
+        }
+        catch (Exception ex)
+        {
+            Error = $"恢复 N.I.N.A. 图像文件模板失败：{ex.Message}";
+        }
+        RefreshImageFilePatternDisplay();
+    }
+
+    private void OnProfileChanged(object? sender, EventArgs e)
+    {
+        previousNinaImageFilePattern = null;
+        previousNinaImageFilePatternProfileId = null;
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            LoadNativeTargetDraftFromSettings();
+            RefreshImageFilePatternDisplay();
+            RefreshProfileOwnership();
+        }
+        else
+        {
+            _ = dispatcher.BeginInvoke(() =>
+            {
+                LoadNativeTargetDraftFromSettings();
+                RefreshImageFilePatternDisplay();
+                RefreshProfileOwnership();
+            });
+        }
+    }
+
+    private void RefreshImageFilePatternDisplay()
+    {
+        RaisePropertyChanged(nameof(NinaImageFilePatternCurrent));
+        RaisePropertyChanged(nameof(NinaImageFilePatternRecommended));
+        RaisePropertyChanged(nameof(NinaImageFilePatternStatus));
+        RaisePropertyChanged(nameof(RealModeStatus));
+        RaisePropertyChanged(nameof(RealModeStatusSummary));
+        RaiseCommandStates();
+    }
+
+    private static InputTarget CreateNativeTargetDraft(
+        IProfileService profileService,
+        UvexPluginSettings settings)
+    {
+        var astrometry = profileService.ActiveProfile.AstrometrySettings;
+        return new InputTarget(
+            Angle.ByDegree(astrometry.Latitude),
+            Angle.ByDegree(astrometry.Longitude),
+            astrometry.Horizon)
+        {
+            TargetName = settings.ObservationTargetName,
+            PositionAngle = double.IsFinite(settings.ObservationTargetPositionAngleDegrees)
+                ? settings.ObservationTargetPositionAngleDegrees
+                : 0,
+            InputCoordinates = new InputCoordinates(new Coordinates(
+                settings.ObservationRightAscensionDegrees,
+                settings.ObservationDeclinationDegrees,
+                Epoch.J2000,
+                Coordinates.RAType.Degrees)),
+        };
+    }
+
+    private Coordinates NativeTargetJ2000() =>
+        targetDraft.InputCoordinates.Coordinates.Transform(Epoch.J2000);
+
+    private void SetNativeTargetCoordinates(double rightAscensionDegrees, double declinationDegrees)
+    {
+        if (!double.IsFinite(rightAscensionDegrees) || !double.IsFinite(declinationDegrees)) return;
+        targetDraft.InputCoordinates = new InputCoordinates(new Coordinates(
+            rightAscensionDegrees,
+            declinationDegrees,
+            Epoch.J2000,
+            Coordinates.RAType.Degrees));
+    }
+
+    private void LoadNativeTargetDraftFromSettings()
+    {
+        targetDraft.TargetName = settings.ObservationTargetName;
+        SetNativeTargetCoordinates(
+            settings.ObservationRightAscensionDegrees,
+            settings.ObservationDeclinationDegrees);
+        targetDraft.PositionAngle = double.IsFinite(settings.ObservationTargetPositionAngleDegrees)
+            ? settings.ObservationTargetPositionAngleDegrees
+            : 0;
+        RaisePropertyChanged(nameof(Target));
+        RaisePropertyChanged(nameof(TargetName));
+        RaisePropertyChanged(nameof(RightAscensionDegrees));
+        RaisePropertyChanged(nameof(DeclinationDegrees));
     }
 
     private void RefreshProfileOwnership()
@@ -2153,7 +2943,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         nameof(UvexPluginSettings.ObservationTargetImportSource) or
         nameof(UvexPluginSettings.ObservationTargetImportedUtc) or
         nameof(UvexPluginSettings.ObservationTargetImportDetails) or
-        nameof(UvexPluginSettings.ObservationTargetPositionAngleDegrees) => true,
+        nameof(UvexPluginSettings.ObservationTargetPositionAngleDegrees) or
+        nameof(UvexPluginSettings.ObservationTargetObservability) => true,
         _ => false,
     };
 
@@ -2281,6 +3072,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     };
 }
 
+public sealed record TargetObservabilityChoice(
+    TargetObservabilityClass Value,
+    string Label,
+    string Description);
+
 public sealed record ObservationGateRow(
     string Stage,
     string State,
@@ -2310,3 +3106,5 @@ public sealed record ObservationEvidenceRow(
     string Kind,
     string FileName,
     string AbsolutePath);
+
+public sealed record UvexSlitChoice(int Position, string DisplayName);

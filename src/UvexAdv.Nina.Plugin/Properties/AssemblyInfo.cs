@@ -3,8 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 [assembly: Guid("A4183531-55BD-4FD0-B04A-97ED7EDC15DA")]
-[assembly: AssemblyVersion("0.4.0.11")]
-[assembly: AssemblyFileVersion("0.4.0.11")]
+[assembly: AssemblyVersion("0.4.0.12")]
+[assembly: AssemblyFileVersion("0.4.0.12")]
 [assembly: AssemblyTitle("OpenAstroSpec Auto — UVEX4")]
 [assembly: AssemblyDescription("UVEX4 control, spectral closed loops, calibration acquisition and operator-visible target-observation orchestration for N.I.N.A.")]
 [assembly: AssemblyCompany("OpenAstroSpec")]

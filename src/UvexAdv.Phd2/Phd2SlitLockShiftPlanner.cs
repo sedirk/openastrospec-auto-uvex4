@@ -151,7 +151,14 @@ public sealed record Phd2SlitFieldMeasurement(
     string TargetIdentityEvidenceId,
     string FluxEvidenceLabel,
     double FluxMetric,
-    string ResidualEvidenceLabel);
+    string ResidualEvidenceLabel,
+    Phd2TargetPositionAuthority TargetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid);
+
+public enum Phd2TargetPositionAuthority
+{
+    DetectedTargetCentroid,
+    CatalogWcsProjection,
+}
 
 public sealed record Phd2LockShiftSafetySnapshot(
     bool SafetyGatePassed,
@@ -629,9 +636,20 @@ public static class Phd2SlitLockShiftPlanner
             return Denied("G3_MEASUREMENT_OUTSIDE_DOMAIN", "Guide, target, or runtime slit acquisition point is outside the commissioned PHD2 image coordinate domain.");
         if (!measurement.TargetIdentityConfirmed || string.IsNullOrWhiteSpace(measurement.TargetIdentityEvidenceId))
             return Denied("TARGET_IDENTITY_UNCONFIRMED", "Lock shifting requires confirmed target identity evidence.");
-        if (!double.IsFinite(measurement.FluxMetric) || measurement.FluxMetric < limits.MinimumFluxMetric || measurement.FluxMetric > limits.MaximumFluxMetric ||
-            string.IsNullOrWhiteSpace(measurement.FluxEvidenceLabel) || string.IsNullOrWhiteSpace(measurement.ResidualEvidenceLabel))
-            return Denied("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "Flux and residual evidence/labels must pass their configured hard gates.");
+        if (string.IsNullOrWhiteSpace(measurement.FluxEvidenceLabel) || string.IsNullOrWhiteSpace(measurement.ResidualEvidenceLabel))
+            return Denied("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "Flux and residual evidence labels must be present.");
+        if (measurement.TargetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)
+        {
+            if (measurement.FluxMetric != 0 ||
+                !string.Equals(measurement.FluxEvidenceLabel, "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE", StringComparison.Ordinal))
+                return Denied("G3_CATALOG_WCS_AUTHORITY_INVALID", "Catalogue-WCS target geometry must explicitly mark target flux as not applicable and must not fabricate a flux metric.");
+        }
+        else if (!double.IsFinite(measurement.FluxMetric) ||
+                 measurement.FluxMetric < limits.MinimumFluxMetric ||
+                 measurement.FluxMetric > limits.MaximumFluxMetric)
+        {
+            return Denied("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "Detected-target flux must pass the commissioned hard envelope.");
+        }
 
         var guideLockResidual = Distance(measurement.GuideStar, ledger.CurrentLockPosition);
         if (guideMode == Phd2SlitGuideMode.OffSlitGuideStar)

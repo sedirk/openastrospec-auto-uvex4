@@ -9,23 +9,33 @@ public sealed class ScenarioCatalogTests
     {
         var scenarios = ScenarioCatalog.Select(null);
 
-        Assert.Equal(["idle", "startup-requirements", "running", "atr-manual", "failure", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
+        Assert.Equal(["idle", "uvex-manual", "startup-requirements", "running", "atr-manual", "failure", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);
         Assert.False(scenarios.Single(item => item.Name == "idle").ViewModel.HasFailure);
         Assert.True(scenarios.Single(item => item.Name == "running").ViewModel.IsRunActive);
         var atrManual = scenarios.Single(item => item.Name == "atr-manual").ViewModel;
-        Assert.Equal(2, atrManual.SelectedWorkspaceTabIndex);
+        Assert.Equal(4, atrManual.SelectedWorkspaceTabIndex);
         Assert.Equal(2, atrManual.SelectedPreviewTabIndex);
         Assert.NotEmpty(atrManual.ManualSpectrumPoints);
         Assert.True(atrManual.CaptureManualAtrSpectrumCommand.CanExecute(null));
         Assert.True(scenarios.Single(item => item.Name == "failure").ViewModel.HasFailure);
         Assert.Equal(0, scenarios.Single(item => item.Name == "idle").ViewModel.SelectedWorkspaceTabIndex);
         var startup = scenarios.Single(item => item.Name == "startup-requirements").ViewModel;
-        Assert.Equal(5, startup.SelectedWorkspaceTabIndex);
-        Assert.Contains("12 个启动阻断项", startup.RealModeStatusSummary, StringComparison.Ordinal);
+        Assert.Equal(3, startup.SelectedWorkspaceTabIndex);
+        Assert.Contains("准备尚未完成", startup.RealModeStatusSummary, StringComparison.Ordinal);
         Assert.Contains("commissioning preset", startup.RealModeStatus, StringComparison.Ordinal);
+        Assert.True(startup.IsCommissioningPreparationMissing);
+        Assert.True(startup.IsNightSetupPreparationMissing);
+        var manual = scenarios.Single(item => item.Name == "uvex-manual").ViewModel;
+        Assert.Equal(1, manual.SelectedWorkspaceTabIndex);
+        Assert.Contains("未连接", manual.ManualUvexConnectionStatus, StringComparison.Ordinal);
+        Assert.Equal("UVEX4 / COM5", manual.SelectedManualUvexDevice);
+        Assert.True(manual.ConnectManualUvexCommand.CanExecute(null));
+        Assert.False(manual.DisconnectManualUvexCommand.CanExecute(null));
+        Assert.False(manual.SelectManualSlit1Command.CanExecute(null));
+        Assert.True(manual.ReleaseManualUvexComPortCommand.CanExecute(null));
         var advanced = scenarios.Single(item => item.Name == "advanced").ViewModel;
-        Assert.Equal(5, advanced.SelectedWorkspaceTabIndex);
+        Assert.Equal(7, advanced.SelectedWorkspaceTabIndex);
         Assert.True(advanced.BrightTargetWingCentroidEnabled);
         Assert.True(advanced.BrightTargetMinimumG3ExposureMilliseconds > 0);
         var degraded = scenarios.Single(item => item.Name == "phd2-degraded").ViewModel;
@@ -48,7 +58,7 @@ public sealed class ScenarioCatalogTests
         Assert.Contains("不能建立身份或授权运动", ghost.GhostDecisionText, StringComparison.Ordinal);
         var fastPair = scenarios.Single(item => item.Name == "qhy-g3-fast-pair").ViewModel;
         Assert.True(fastPair.QhyG3FastPairEnabled);
-        Assert.Equal(5, fastPair.SelectedWorkspaceTabIndex);
+        Assert.Equal(7, fastPair.SelectedWorkspaceTabIndex);
         Assert.Contains("0 次赤道仪命令", fastPair.QhyG3FastPairStatus, StringComparison.Ordinal);
         Assert.Contains("Candidate", fastPair.WideToSlitTransferStatus, StringComparison.Ordinal);
     }

@@ -83,7 +83,20 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 孔径，最终残差为目标到该有限中心线的垂直/端点距离，不是到历史中点的欧氏距离。
 完整现场结论见 [2026-08-23 实机调试收口](commissioning-night-2026-08-23.md)。
 
-### 4.1 ATR585M 温控与收口
+### 4.1 N.I.N.A. 原生目标、文件名与 FITS 溯源
+
+自动观测第一次安装或切换 ATR Profile 后，必须在不连接设备的状态下完成以下检查：
+
+1. 在“OpenAstroSpec 自动观测 → 高级设置 → N.I.N.A. 原生目标归档”查看当前模板；
+2. 确认模板至少精确包含大小写敏感的 `$$TARGETNAME$$`；缺少时真实运行阻断；
+3. 推荐使用 `$$DATEMINUS12$$\$$TARGETNAME$$\$$IMAGETYPE$$\$$DATETIME$$_$$TARGETNAME$$_$$EXPOSURETIME$$s_G$$GAIN$$_O$$OFFSET$$_$$FRAMENR$$`；不同布局只要保留目标令牌仍可运行，缺少 `$$IMAGETYPE$$` 作为可见建议而不是运动安全硬门；
+4. 只有操作员检查“当前值”和“推荐值”后，才点击“应用推荐的目标分目录模板”；本次 N.I.N.A. 会话可用相邻撤销按钮恢复。不得在插件加载或真实运行启动时静默改写 Profile；
+5. 在高级序列中确认 `OpenAstroSpec · UVEX4 目标观测` 能被 N.I.N.A. 识别为原生目标容器，目标名和 J2000 坐标修改后仍与兼容字段一致；
+6. 使用模拟/离线 FITS 验证器先检查 `OBJECT`、`OBSRUNID`、`UVEXSTG`、`UVEXCID`、`NIGHTSET`、`IMAGETYP` 和可选 `CATALOG`。真实保存后插件只读重开同一绝对路径；任何不一致均发布 `ATR_FITS_PROVENANCE_MISMATCH`，保留原始 FITS，不重命名、不移动、不改写，也不计为已接受科学帧。
+
+旧文件不会被追溯重排。若旧文件名没有目标，优先用当次 run manifest 建立跨相机关联；缺少 manifest 时只能读取 FITS `OBJECT` 和坐标。`OBJECT` 只保存稳定科学目标名，不得再拼入 run、probe/science、重试或帧号。完整约束见 [ADR-0007](adr/0007-nina-native-target-and-image-provenance.md)。
+
+### 4.2 ATR585M 温控与收口
 
 图谱 [ATR585M 官方手册](https://www.touptek-astro.com/dl_manual/ATR585M_en.pdf)
 说明该机使用双级 TEC、风扇和 PID 直接调节到目标温度，没有规定必须按时间斜坡升降温。

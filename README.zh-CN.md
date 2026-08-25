@@ -20,7 +20,7 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新实机收口](docs/commissioning-night-2026-08-24.md) ·
+[最新实机收口](docs/commissioning-night-2026-08-25.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
 [参与贡献](CONTRIBUTING.md)
@@ -59,7 +59,7 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 
 当前 GS350/QHY 到 C11/G3 的光轴差绝不会作为编译期常量写入程序。未来可选预定位阶段只消费由操作员明确选择、带版本和来源的记录；记录必须绑定硬件/安装指纹、赤道仪侧、环境适用性、有效期、不确定度与运动限制。默认策略为 `AutoIfValidElseSkip`，界面也必须能明确选择 `Skip`。证据缺失或过期时，系统退化为 QHY 粗居中、G3 直接解析以及有界 G3 局部搜索，不会静默复用记忆中的偏移。
 
-普通恒星的核心闭环已经在真实天空中两次从单次启动运行到完成，启动后没有人工或大模型纠偏。该结论只覆盖目标入缝、导星和 ATR/QHY 配对采集，不声称屋顶与天气系统已经无人值守。证据边界和稀疏场剩余工作见[2026-08-24/25 实机收口](docs/commissioning-night-2026-08-24.md)与[暗目标/稀疏场设计](docs/design/faint-target-and-sparse-field-acquisition.md)。
+普通恒星的核心闭环已经在真实天空中两次从单次启动运行到完成；随后 M76 又完成了稀疏邻场恢复、目录 WCS 非恒星入缝、旁星导星和 600 秒发射线光谱。启动后没有人工或大模型纠偏。该结论不声称屋顶与天气系统已经无人值守。证据边界和多节点拼图剩余工作见[2026-08-25/26 M76 实机收口](docs/commissioning-night-2026-08-25.md)与[暗目标/稀疏场设计](docs/design/faint-target-and-sparse-field-acquisition.md)。
 
 仓库贡献、数据隔离和冻结设计规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`AGENTS.md`](AGENTS.md)。当前及规划中的组件地图见 [`docs/repository-layout.md`](docs/repository-layout.md)。
 
@@ -126,9 +126,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-qhy-service.ps1 `
 
 长期问题清单、夜间主题规则、截图矩阵和操作员 UI 验收记录位于 [`docs/observation-operator-ui-acceptance.md`](docs/observation-operator-ui-acceptance.md)。隔离的 WPF 测试工具使用确定性模拟状态渲染真实生产数据模板；它不会构造生产 dockable，也不会联系设备。
 
-`OpenAstroSpec 自动观测` 面板首先提供两个明确选项：**模拟演练（不连接任何真实设备）**和**真实设备控制（必须通过全部安全硬门）**，之后只有一个理解当前模式的启动按钮。仅仅选择真实模式不会连接或移动设备。QHY/GS350、PHD2/G3 狭缝视场和 ATR 光谱预览被组织为紧凑标签页，并显示当前阶段、下一阶段、质量门、时间线、证据文件和剩余进度。持久故障卡会把最近失败的安全门及指标链接到对应的可缩放/平移预览和证据目录。
+`OpenAstroSpec 自动观测` 面板把**设备手控**和**自动观测**明确分开。设备手控保存本机 `UVEX4 / COM5` 选择，但打开服务或面板时不连接硬件；点击`连接`才打开串口并读取位置，点击`断开`后保持断开，不会被后台重新连接。连接后可通过唯一的 `UvexAdv.Service` 完成状态回读、四槽位切缝、狭缝灯和 M2 有界小步进，也可显式释放 COM5 给原厂软件；它不要求 Night Setup、PHD2、QHY、WCS 或整套自动观测 commissioning。自动观测仍提供**模拟自动观测**和**真实自动观测**两种模式及一个模式感知启动按钮；`自动准备`页会从 N.I.N.A. 自动读取已连接设备，把不可变身份/哈希由 bindings 或 Night Setup 文件一次导入，把狭缝等人工决定项做成选择器，并在缺项所在卡片就地标红。完整工程诊断只保留在高级设置，不再作为一整段错误倾倒在主界面。QHY/GS350、PHD2/G3 狭缝视场和 ATR 光谱预览被组织为紧凑标签页，并显示当前阶段、下一阶段、质量门、时间线、证据文件和剩余进度。
 
 目标草稿可以从 N.I.N.A. 构图助手，或 N.I.N.A. 已配置星图软件（包括 Stellarium）当前选定对象中一次性复制。插件把快照规范化为 J2000 度，并记录来源与时间。导入不会连接设备或启动运行，不会更改 Night Setup、commissioning、时长或安全设置，也不会改写已经创建的高级序列容器。在实现面板选择流程前，多画幅构图会被拒绝。
+
+高级序列目标观测容器现在通过 N.I.N.A. 原生 `IDeepSkyObjectContainer` / `InputTarget` 发布同一个目标；ATR 文件仍只由 N.I.N.A. 保存。推荐的当前 Profile 文件模板是 `$$DATEMINUS12$$\$$TARGETNAME$$\$$IMAGETYPE$$\$$DATETIME$$_$$TARGETNAME$$_$$EXPOSURETIME$$s_G$$GAIN$$_O$$OFFSET$$_$$FRAMENR$$`。插件在“高级设置”同时显示当前值和推荐值，只提供显式的应用/撤销按钮，不会在启动时静默改写 Profile。每张 ATR FITS 保存后会被只读重开，复核稳定 `OBJECT`、运行 ID、阶段、采集 ID、Night Setup、图像类型和可选目录身份；不一致时保留不可变原始文件，但不会把它宣称为已接受科学帧。完整决定见 [ADR-0007](docs/adr/0007-nina-native-target-and-image-provenance.md)。
 
 一次正常运行包括：
 

@@ -84,9 +84,9 @@ public sealed record QhyFrame(
 }
 
 public sealed record QhyQualityThresholds(
-    int MinimumDetectedStars = 10,
+    int MinimumDetectedStars = 0,
     double MaximumSaturatedFraction = 0.002,
-    double MinimumTransparency = 0.45,
+    double MinimumTransparency = 0,
     double SaturationAdu = 65_520,
     double DetectionSigma = 5.0);
 
@@ -210,7 +210,14 @@ public sealed record PhotometryJobRequest(
     double? TargetRightAscensionDegrees = null,
     double? TargetDeclinationDegrees = null,
     string CoordinateEpoch = "ICRS",
-    int ControlLeaseSeconds = 120);
+    int ControlLeaseSeconds = 120,
+    IReadOnlyList<QhyPhotometryFilterStep>? FilterSequence = null);
+
+/// <summary>
+/// One element of a repeating QHY photometry/imaging cycle.  An empty request
+/// sequence preserves the legacy single FilterName/ExposureSeconds behavior.
+/// </summary>
+public sealed record QhyPhotometryFilterStep(string FilterName, double ExposureSeconds);
 
 public sealed record OperatorTakeoverRequest(bool Confirmed, string Operator, string Reason);
 

@@ -14,7 +14,7 @@ public sealed class G3EffectiveSaturationTests
         const int height = 96;
         var pixels = Enumerable.Repeat((ushort)4095, width * height).ToArray();
         var configuration = new G3RunConfiguration(
-            1000, 50, 1, 4095, 1000, 2.4, false,
+            1000, 50, 1, 4095, 1000, 2.4, false, 5,
             SolveExposurePreset(),
             WcsCenteringLimits(),
             120,
@@ -49,7 +49,7 @@ public sealed class G3EffectiveSaturationTests
         const int height = 96;
         var pixels = Enumerable.Repeat((ushort)4095, width * height).ToArray();
         var configuration = new G3RunConfiguration(
-            1000, 50, 1, ushort.MaxValue, 1000, 2.4, false,
+            1000, 50, 1, ushort.MaxValue, 1000, 2.4, false, 5,
             SolveExposurePreset(),
             WcsCenteringLimits(),
             120,
@@ -149,6 +149,23 @@ public sealed class G3EffectiveSaturationTests
         settings.QhyG3FastPairMaximumMidpointSeparationSeconds++;
         Assert.False(pairLocked.MatchesCurrentProfile(settings, solver, out var pairDriftedHash));
         Assert.NotEqual(pairLocked.ActionConfigurationSha256, pairDriftedHash);
+
+        var patternLocked = RealRunConfiguration.Capture(
+            settings,
+            solver,
+            NinaImageFilePatternPolicy.RecommendedPattern);
+        Assert.True(patternLocked.MatchesCurrentProfile(
+            settings,
+            solver,
+            NinaImageFilePatternPolicy.RecommendedPattern,
+            out var samePatternHash));
+        Assert.Equal(patternLocked.ActionConfigurationSha256, samePatternHash);
+        Assert.False(patternLocked.MatchesCurrentProfile(
+            settings,
+            solver,
+            "$$TARGETNAME$$\\changed\\$$DATETIME$$",
+            out var changedPatternHash));
+        Assert.NotEqual(patternLocked.ActionConfigurationSha256, changedPatternHash);
     }
 
     [Fact]
@@ -198,6 +215,20 @@ public sealed class G3EffectiveSaturationTests
         Assert.Equal(0, settings.QhyCoarseMaximumCumulativeCorrectionArcseconds);
         Assert.Equal(0, settings.QhyCoarseMaximumCorrectionAttempts);
         Assert.Equal(0, settings.QhyCoarseMaximumCenteringMinutes);
+        Assert.Equal(0, settings.QhyMinimumDetectedStars);
+        Assert.Equal(0, settings.QhyMinimumTransparency);
+        Assert.Equal(0.002, settings.QhyMaximumSaturatedFraction);
+
+        var solver = new PlateSolverRunConfiguration(
+            "primary", "blind", "primary-type", "blind-type",
+            10, 10, 2, 500, true, 0.1, 5, 3,
+            string.Empty, string.Empty, string.Empty, string.Empty,
+            string.Empty, string.Empty, string.Empty, string.Empty);
+        var locked = RealRunConfiguration.Capture(settings, solver);
+
+        Assert.Equal(0, locked.Qhy.QualityThresholds.MinimumDetectedStars);
+        Assert.Equal(0, locked.Qhy.QualityThresholds.MinimumTransparency);
+        Assert.Equal(0.002, locked.Qhy.QualityThresholds.MaximumSaturatedFraction);
     }
 
     private static G3LocalSearchLimits SearchLimits() => new(

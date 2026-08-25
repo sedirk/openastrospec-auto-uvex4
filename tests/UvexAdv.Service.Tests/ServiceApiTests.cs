@@ -15,13 +15,18 @@ public sealed class ServiceApiTests : IClassFixture<SimulatorWebApplicationFacto
     public async Task SimulatorRequiresLeaseAndCompletesBoundedMotion()
     {
         using var client = factory.CreateClient();
-        var initial = await WaitReadyAsync(client);
-        Assert.True(initial.PositionKnown);
-        Assert.Equal(UvexPositionTrust.Live, initial.PositionTrust);
-        Assert.Equal(["300um", "15um", "25um", "35um"], initial.Slits.Select(slit => slit.Name));
-        Assert.All(initial.Slits, slit => Assert.Equal(0, slit.OffsetSteps));
-        Assert.Equal(283, initial.SlitPhotodiodeThreshold);
-        Assert.Equal(UvexOutputState.Unknown, initial.SlitIlluminationLedState);
+        var startup = await client.GetFromJsonAsync<UvexDeviceStatus>("/api/v1/device");
+        Assert.NotNull(startup);
+        Assert.Equal(DeviceConnectionState.Disconnected, startup.ConnectionState);
+        Assert.False(startup.PositionKnown);
+
+        // Merely running the Windows/API service must not open the selected
+        // device. This is deliberately analogous to opening PHD2 before the
+        // operator presses Connect.
+        await Task.Delay(250);
+        Assert.Equal(
+            DeviceConnectionState.Disconnected,
+            (await client.GetFromJsonAsync<UvexDeviceStatus>("/api/v1/device"))?.ConnectionState);
 
         using var unauthorized = await client.PostAsJsonAsync("/api/v1/focus/move", new { deltaSteps = 1 });
         Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
@@ -32,6 +37,25 @@ public sealed class ServiceApiTests : IClassFixture<SimulatorWebApplicationFacto
         leaseResponse.EnsureSuccessStatusCode();
         var lease = await leaseResponse.Content.ReadFromJsonAsync<LeaseDto>();
         Assert.NotNull(lease);
+
+        using var connect = new HttpRequestMessage(HttpMethod.Post, "/api/v1/device/connect")
+        {
+            Content = JsonContent.Create(new { }),
+        };
+        connect.Headers.Add("X-Uvex-Lease", lease.Token);
+        using var connectAccepted = await client.SendAsync(connect);
+        connectAccepted.EnsureSuccessStatusCode();
+        var connectOperation = await connectAccepted.Content.ReadFromJsonAsync<OperationDto>();
+        Assert.NotNull(connectOperation);
+        Assert.Equal("Succeeded", (await WaitOperationAsync(client, connectOperation.Id)).State);
+
+        var initial = await WaitReadyAsync(client);
+        Assert.True(initial.PositionKnown);
+        Assert.Equal(UvexPositionTrust.Live, initial.PositionTrust);
+        Assert.Equal(["300um", "15um", "25um", "35um"], initial.Slits.Select(slit => slit.Name));
+        Assert.All(initial.Slits, slit => Assert.Equal(0, slit.OffsetSteps));
+        Assert.Equal(283, initial.SlitPhotodiodeThreshold);
+        Assert.Equal(UvexOutputState.Unknown, initial.SlitIlluminationLedState);
 
         using var move = new HttpRequestMessage(HttpMethod.Post, "/api/v1/focus/move")
         {
@@ -163,6 +187,29 @@ public sealed class ServiceApiTests : IClassFixture<SimulatorWebApplicationFacto
         var dark = await client.GetFromJsonAsync<UvexDeviceStatus>("/api/v1/device");
         Assert.Equal(UvexOutputState.Off, dark?.SlitIlluminationLedState);
         Assert.True(dark?.SlitPhotodiodeValue < dark?.SlitPhotodiodeThreshold);
+
+        using var disconnect = new HttpRequestMessage(HttpMethod.Post, "/api/v1/device/disconnect")
+        {
+            Content = JsonContent.Create(new { }),
+        };
+        disconnect.Headers.Add("X-Uvex-Lease", lease.Token);
+        using var disconnectAccepted = await client.SendAsync(disconnect);
+        disconnectAccepted.EnsureSuccessStatusCode();
+        var disconnectOperation = await disconnectAccepted.Content.ReadFromJsonAsync<OperationDto>();
+        Assert.NotNull(disconnectOperation);
+        Assert.Equal("Succeeded", (await WaitOperationAsync(client, disconnectOperation.Id)).State);
+
+        var disconnected = await client.GetFromJsonAsync<UvexDeviceStatus>("/api/v1/device");
+        Assert.Equal(DeviceConnectionState.Disconnected, disconnected?.ConnectionState);
+        Assert.False(disconnected?.PositionKnown);
+
+        // The former implementation reconnected every five seconds. Waiting
+        // through that interval protects the operator-visible Disconnect
+        // contract against regression.
+        await Task.Delay(TimeSpan.FromSeconds(5.5));
+        var stillDisconnected = await client.GetFromJsonAsync<UvexDeviceStatus>("/api/v1/device");
+        Assert.Equal(DeviceConnectionState.Disconnected, stillDisconnected?.ConnectionState);
+        Assert.False(stillDisconnected?.PositionKnown);
 
         using var release = await client.DeleteAsync($"/api/v1/leases/{lease.Token}");
         release.EnsureSuccessStatusCode();

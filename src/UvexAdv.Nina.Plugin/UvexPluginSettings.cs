@@ -3,6 +3,7 @@ using NINA.Profile;
 using NINA.Profile.Interfaces;
 using UvexAdv.Observatory;
 using UvexAdv.Phd2;
+using UvexAdv.Qhy.Core;
 using UvexAdv.Spectroscopy;
 
 namespace UvexAdv.Nina.Plugin;
@@ -54,6 +55,8 @@ internal sealed class UvexPluginSettings
     public int FocusMinimum { get => values.GetValueInt32(nameof(FocusMinimum), -20_000); set => values.SetValueInt32(nameof(FocusMinimum), value); }
     public int FocusMaximum { get => values.GetValueInt32(nameof(FocusMaximum), 20_000); set => values.SetValueInt32(nameof(FocusMaximum), value); }
     public int FocusBacklash { get => values.GetValueInt32(nameof(FocusBacklash), 0); set => values.SetValueInt32(nameof(FocusBacklash), value); }
+    public int ManualM2StepSize { get => values.GetValueInt32(nameof(ManualM2StepSize), 50); set => values.SetValueInt32(nameof(ManualM2StepSize), value); }
+    public string ManualUvexSelectedDevice { get => GetString(nameof(ManualUvexSelectedDevice), "UVEX4 / COM5"); set => values.SetValueString(nameof(ManualUvexSelectedDevice), value); }
     public double WavelengthReferencePixel { get => values.GetValueDouble(nameof(WavelengthReferencePixel), double.NaN); set => values.SetValueDouble(nameof(WavelengthReferencePixel), value); }
     public double WavelengthTargetPixel { get => values.GetValueDouble(nameof(WavelengthTargetPixel), double.NaN); set => values.SetValueDouble(nameof(WavelengthTargetPixel), value); }
     public double GratingStepsPerPixel { get => values.GetValueDouble(nameof(GratingStepsPerPixel), 0); set => values.SetValueDouble(nameof(GratingStepsPerPixel), value); }
@@ -85,6 +88,17 @@ internal sealed class UvexPluginSettings
     public string ObservationTargetImportedUtc { get => GetString(nameof(ObservationTargetImportedUtc), string.Empty); set => values.SetValueString(nameof(ObservationTargetImportedUtc), value); }
     public string ObservationTargetImportDetails { get => GetString(nameof(ObservationTargetImportDetails), "尚未从构图助手或第三方星图导入。当前目标字段可手工编辑。"); set => values.SetValueString(nameof(ObservationTargetImportDetails), value); }
     public double ObservationTargetPositionAngleDegrees { get => values.GetValueDouble(nameof(ObservationTargetPositionAngleDegrees), double.NaN); set => values.SetValueDouble(nameof(ObservationTargetPositionAngleDegrees), value); }
+    public TargetObservabilityClass ObservationTargetObservability
+    {
+        get
+        {
+            var stored = values.GetValueInt32(nameof(ObservationTargetObservability), (int)TargetObservabilityClass.DirectStellar);
+            return Enum.IsDefined(typeof(TargetObservabilityClass), stored)
+                ? (TargetObservabilityClass)stored
+                : TargetObservabilityClass.DirectStellar;
+        }
+        set => values.SetValueInt32(nameof(ObservationTargetObservability), (int)value);
+    }
     public double ObservationDurationMinutes { get => values.GetValueDouble(nameof(ObservationDurationMinutes), 10); set => values.SetValueDouble(nameof(ObservationDurationMinutes), value); }
     public string ObservationNightSetupId { get => GetString(nameof(ObservationNightSetupId), "SIM-NIGHT-SETUP"); set => values.SetValueString(nameof(ObservationNightSetupId), value); }
     public double ObservatoryLatitudeDegrees { get => values.GetValueDouble(nameof(ObservatoryLatitudeDegrees), profileService.ActiveProfile.AstrometrySettings.Latitude); set => values.SetValueDouble(nameof(ObservatoryLatitudeDegrees), value); }
@@ -128,6 +142,10 @@ internal sealed class UvexPluginSettings
     public double QhyCenteringToleranceArcseconds { get => values.GetValueDouble(nameof(QhyCenteringToleranceArcseconds), 20); set => values.SetValueDouble(nameof(QhyCenteringToleranceArcseconds), value); }
     public double QhyPhotometryExposureSeconds { get => values.GetValueDouble(nameof(QhyPhotometryExposureSeconds), 5); set => values.SetValueDouble(nameof(QhyPhotometryExposureSeconds), value); }
     public double QhyPhotometryCadenceSeconds { get => values.GetValueDouble(nameof(QhyPhotometryCadenceSeconds), 8); set => values.SetValueDouble(nameof(QhyPhotometryCadenceSeconds), value); }
+    public string QhyParallelFilterSequenceCsv { get => GetString(nameof(QhyParallelFilterSequenceCsv), string.Empty); set => values.SetValueString(nameof(QhyParallelFilterSequenceCsv), value); }
+    public int QhyMinimumDetectedStars { get => values.GetValueInt32(nameof(QhyMinimumDetectedStars), 0); set => values.SetValueInt32(nameof(QhyMinimumDetectedStars), value); }
+    public double QhyMinimumTransparency { get => values.GetValueDouble(nameof(QhyMinimumTransparency), 0); set => values.SetValueDouble(nameof(QhyMinimumTransparency), value); }
+    public double QhyMaximumSaturatedFraction { get => values.GetValueDouble(nameof(QhyMaximumSaturatedFraction), 0.002); set => values.SetValueDouble(nameof(QhyMaximumSaturatedFraction), value); }
 
     public string Phd2Host { get => GetString(nameof(Phd2Host), "127.0.0.1"); set => values.SetValueString(nameof(Phd2Host), value); }
     public int Phd2Port { get => values.GetValueInt32(nameof(Phd2Port), 4400); set => values.SetValueInt32(nameof(Phd2Port), value); }
@@ -150,6 +168,7 @@ internal sealed class UvexPluginSettings
     public double G3FocalLengthMillimeters { get => values.GetValueDouble(nameof(G3FocalLengthMillimeters), 0); set => values.SetValueDouble(nameof(G3FocalLengthMillimeters), value); }
     public double G3PixelSizeMicrometers { get => values.GetValueDouble(nameof(G3PixelSizeMicrometers), 0); set => values.SetValueDouble(nameof(G3PixelSizeMicrometers), value); }
     public bool G3ExpectedWcsFlipped { get => values.GetValueBoolean(nameof(G3ExpectedWcsFlipped), false); set => values.SetValueBoolean(nameof(G3ExpectedWcsFlipped), value); }
+    public double G3MaximumPlateSolveHintOffsetDegrees { get => values.GetValueDouble(nameof(G3MaximumPlateSolveHintOffsetDegrees), 5); set => values.SetValueDouble(nameof(G3MaximumPlateSolveHintOffsetDegrees), value); }
     public int G3PlateSolveExposurePresetSchemaVersion { get => values.GetValueInt32(nameof(G3PlateSolveExposurePresetSchemaVersion), G3PlateSolveExposurePreset.CurrentSchemaVersion); set => values.SetValueInt32(nameof(G3PlateSolveExposurePresetSchemaVersion), value); }
     public string G3PlateSolveExposurePresetId { get => GetString(nameof(G3PlateSolveExposurePresetId), string.Empty); set => values.SetValueString(nameof(G3PlateSolveExposurePresetId), value); }
     public string G3PlateSolveExposureMillisecondsCsv { get => GetString(nameof(G3PlateSolveExposureMillisecondsCsv), string.Empty); set => values.SetValueString(nameof(G3PlateSolveExposureMillisecondsCsv), value); }
@@ -259,6 +278,19 @@ internal sealed class UvexPluginSettings
     public ImageRoi Roi => new(RoiX, RoiY, RoiWidth, RoiHeight);
 
     public IReadOnlyList<double> ParseQhyExposureLadder() => ParsePositiveDoubles(QhyAcquisitionExposureLadderCsv);
+    public IReadOnlyList<QhyPhotometryFilterStep> ParseQhyParallelFilterSequence()
+    {
+        if (string.IsNullOrWhiteSpace(QhyParallelFilterSequenceCsv)) return Array.Empty<QhyPhotometryFilterStep>();
+        return QhyParallelFilterSequenceCsv
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Split(':', StringSplitOptions.TrimEntries))
+            .Select(parts => parts.Length == 2
+                ? new QhyPhotometryFilterStep(
+                    parts[0],
+                    double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture))
+                : throw new FormatException("QHY parallel filter sequence must use Filter:Seconds entries, for example H:60,O:60,S:60."))
+            .ToArray();
+    }
     public IReadOnlyList<double> ParseAtrExposureLadder() => ParsePositiveDoubles(AtrExposureLadderSecondsCsv);
     public IReadOnlyList<int> ParseG3PlateSolveExposureLadder() => G3PlateSolveExposureMillisecondsCsv
         .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)

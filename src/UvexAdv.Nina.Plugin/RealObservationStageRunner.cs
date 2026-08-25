@@ -237,6 +237,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             labels["g3PlateSolveExposurePresetSchemaVersion"] = configuration.G3.PlateSolveExposurePreset.SchemaVersion.ToString(CultureInfo.InvariantCulture);
             labels["g3PlateSolveExposurePresetId"] = configuration.G3.PlateSolveExposurePreset.PresetId;
             labels["g3PlateSolveExposureMilliseconds"] = string.Join(",", configuration.G3.PlateSolveExposurePreset.ExposureMilliseconds);
+            labels["g3MaximumPlateSolveHintOffsetDegrees"] = configuration.G3.MaximumPlateSolveHintOffsetDegrees.ToString("R", CultureInfo.InvariantCulture);
             labels["g3WcsCenteringSchemaVersion"] = configuration.G3.WcsCentering.SchemaVersion.ToString(CultureInfo.InvariantCulture);
             labels["g3WcsMaximumSingleArcseconds"] = configuration.G3.WcsCentering.MaximumSingleCorrectionArcseconds.ToString("R", CultureInfo.InvariantCulture);
             labels["g3WcsMaximumRadiusArcseconds"] = configuration.G3.WcsCentering.MaximumRadiusArcseconds.ToString("R", CultureInfo.InvariantCulture);
@@ -754,7 +755,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var currentPlateSolver = PlateSolverRunConfiguration.CaptureCurrent(
             profileService.ActiveProfile.PlateSolveSettings,
             configuration.PlateSolver);
-        if (!configuration.MatchesCurrentProfile(settings, currentPlateSolver, out var currentConfigurationSha256))
+        if (!configuration.MatchesCurrentProfile(
+                settings,
+                currentPlateSolver,
+                profileService.ActiveProfile.ImageFileSettings.FilePattern,
+                out var currentConfigurationSha256))
         {
             return GateResult.Unknown(
                 "REAL_PROFILE_DRIFT",
@@ -1469,7 +1474,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var currentPlateSolver = PlateSolverRunConfiguration.CaptureCurrent(
             profileService.ActiveProfile.PlateSolveSettings,
             configuration.PlateSolver);
-        if (!configuration.MatchesCurrentProfile(settings, currentPlateSolver, out var currentConfigurationSha256))
+        if (!configuration.MatchesCurrentProfile(
+                settings,
+                currentPlateSolver,
+                profileService.ActiveProfile.ImageFileSettings.FilePattern,
+                out var currentConfigurationSha256))
         {
             return GateResult.Unknown(
                 "REAL_PROFILE_DRIFT",
@@ -2881,6 +2890,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         var brightTarget = field.BrightTargetAnalysis is not null && field.BrightTargetAuthority is not null;
         var ghostTarget = field.GhostAssistance is { Result.Decision: GhostAssistanceDecision.UseCalibratedAuxiliaryEstimate };
+        var catalogWcsTarget = field.TargetIdentification.Authority == TargetIdentificationAuthority.CatalogWcsProjection;
         var metadata = new Dictionary<string, string>
         {
             ["g3Frame"] = field.FramePath,
@@ -2924,10 +2934,19 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             AddIfPresent(metadata, "ghostMatchPolicyId", field.GhostAssistance.MatchPolicyId);
             AddIfPresent(metadata, "ghostMatchPolicySha256", field.GhostAssistance.MatchPolicySha256);
         }
+        if (catalogWcsTarget)
+        {
+            metadata["targetIdentityAuthority"] = "catalog-coordinate+formal-g3-wcs+exact-lock-geometry";
+            metadata["targetPeakRequired"] = bool.FalseString;
+            metadata["targetFluxRequired"] = bool.FalseString;
+            metadata["targetIdentificationAuthority"] = field.TargetIdentification.Authority.ToString();
+        }
         var message = ghostTarget
             ? $"Hash-bound ghost assistance supplied only an auxiliary target centroid/covariance from {field.GhostAssistance!.Extractions.Count} fresh OFF frames; catalogue identity remains {field.GhostAssistance.ExternalIdentity?.Authority}, paired slit contrast is {field.SlitDetection.ContrastSigma:F2}σ, and fresh slit/PHD2 residual authority is still required."
             : brightTarget
             ? $"G3 bright-target branch identified one unique saturated target from its unsaturated wings after {searchAttempts} bounded search attempt(s); short-frame plate solve success={field.Solve?.Result.Success == true}, paired slit contrast {field.SlitDetection.ContrastSigma:F2}σ. The target frame is excluded from focus."
+            : catalogWcsTarget
+            ? $"Formal G3 WCS projected the catalogue coordinate for a faint/non-stellar target after {searchAttempts} bounded neighbouring-field attempt(s) and {wcsCenteringAttempts} direct WCS correction(s); paired slit contrast is {field.SlitDetection.ContrastSigma:F2}σ. No target peak or target-flux threshold was applied."
             : wcsCenteringAttempts > 0
                 ? $"G3 WCS recentering placed the catalog target inside the field after {wcsCenteringAttempts} bounded N.I.N.A. correction(s); fresh paired slit contrast {field.SlitDetection.ContrastSigma:F2}σ and target residual {field.TargetIdentification.PredictionResidualPixels:F2} px."
             : searchAttempts == 0
@@ -2948,6 +2967,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ? "G3_GHOST_AUXILIARY_FIELD_IDENTIFIED"
                 : brightTarget
                 ? "G3_BRIGHT_TARGET_IDENTIFIED"
+                : catalogWcsTarget
+                ? "G3_CATALOG_WCS_TARGET_PROJECTED"
                 : wcsCenteringAttempts > 0
                     ? "G3_WCS_CENTERED_FIELD_IDENTIFIED"
                     : searchAttempts == 0 ? "G3_SLIT_FIELD_IDENTIFIED" : "G3_BOUNDED_SEARCH_IDENTIFIED",
@@ -2963,7 +2984,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ["g3SearchAttempts"] = searchAttempts,
                 ["g3WcsCenteringAttempts"] = wcsCenteringAttempts,
                 ["g3PlateSolveSucceeded"] = field.Solve?.Result.Success == true ? 1 : 0,
-                ["brightTargetFrameFocusEligible"] = brightTarget || ghostTarget ? 0 : 1,
+                ["brightTargetFrameFocusEligible"] = brightTarget || ghostTarget || catalogWcsTarget ? 0 : 1,
                 ["ghostTargetUncertaintyPixels"] = ghostTarget && double.IsFinite(field.GhostAssistance!.Result.TargetUncertaintyPixels)
                     ? field.GhostAssistance.Result.TargetUncertaintyPixels
                     : 0,
@@ -3051,12 +3072,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         if (probe.Gate.Disposition != GateDisposition.Passed)
         {
-            if (probe.Gate.Code == "G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD")
+            if (probe.Gate.Code == "G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD" ||
+                (UsesCatalogWcsTargetAuthority(context) && probe.Gate.Code == "G3_CLOUD_OR_TRANSPARENCY_INVALID"))
             {
-                // A coherent (including saturated) source proves this is not a
-                // featureless exposure. Run the existing deterministic
-                // OFF/ON/OFF analysis so the bright-target or sparse-field
-                // branch can decide; the solve-only image is never promoted.
+                // A coherent source, or an observing plan which explicitly says
+                // the target can be invisible in G3, proceeds to the deterministic
+                // OFF/ON/OFF slit sequence.  The latter does not assert clear sky:
+                // it only allows the bounded neighbouring-field recovery to
+                // distinguish a genuinely sparse target field from a transient
+                // no-WCS exposure.  The solve-only image is never promoted.
                 return await CaptureAndAnalyzeG3Async(context, cancellationToken).ConfigureAwait(false);
             }
             return G3FieldState.Failed(probe.Gate, probe.FramePath, probe.Image, probe.Solve, probe.MountBinding);
@@ -3448,38 +3472,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.G3.PixelSizeMicrometers /
             configuration.G3.FocalLengthMillimeters /
             configuration.G3.Binning;
-        var measuredPixelScale = solve.Result.Pixscale;
-        var scaleRatio = measuredPixelScale / expectedPixelScale;
-        var halfDiagonalArcseconds = 0.5d * Math.Sqrt(
-            imageWidth * (double)imageWidth + imageHeight * (double)imageHeight) * measuredPixelScale;
-        var maximumHintResidualArcseconds = halfDiagonalArcseconds +
-            configuration.G3.WcsCentering.MaximumRadiusArcseconds;
-        var metrics = new Dictionary<string, double>
-        {
-            ["g3SolveHintResidualArcseconds"] = solve.ResidualArcseconds,
-            ["g3SolveMaximumHintResidualArcseconds"] = maximumHintResidualArcseconds,
-            ["g3SolveExpectedPixelScaleArcseconds"] = expectedPixelScale,
-            ["g3SolveMeasuredPixelScaleArcseconds"] = measuredPixelScale,
-            ["g3SolvePixelScaleRatio"] = scaleRatio,
-        };
-        if (!double.IsFinite(measuredPixelScale) ||
-            measuredPixelScale <= 0 ||
-            !double.IsFinite(solve.Result.PositionAngle) ||
-            !double.IsFinite(solve.ResidualArcseconds) ||
-            !double.IsFinite(scaleRatio) ||
-            scaleRatio is < 0.70d or > 1.30d ||
-            solve.ResidualArcseconds > maximumHintResidualArcseconds)
-        {
-            return GateResult.Fail(
-                "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED",
-                $"Plate solver reported Success, but the G3 solution is inconsistent with the commissioned scale/search envelope: hint residual {solve.ResidualArcseconds:F1} arcsec (maximum {maximumHintResidualArcseconds:F1}), scale ratio {scaleRatio:F3}. It is retained as a false-solution diagnostic and cannot authorize target projection, QHY pairing, or mount motion.",
-                metrics);
-        }
-
-        return GateResult.Pass(
-            "G3_PLATE_SOLVE_PLAUSIBILITY_VALID",
-            $"G3 solution is consistent with the commissioned scale/search envelope (hint residual {solve.ResidualArcseconds:F1} arcsec, scale ratio {scaleRatio:F3}).",
-            metrics);
+        return G3PlateSolveTrustPolicy.Evaluate(
+            formalSuccess: solve.Result.Success,
+            hasCoordinates: solve.Result.Coordinates is not null,
+            measuredPixelScaleArcseconds: solve.Result.Pixscale,
+            expectedPixelScaleArcseconds: expectedPixelScale,
+            positionAngleDegrees: solve.Result.PositionAngle,
+            hintResidualArcseconds: solve.ResidualArcseconds,
+            imageWidth,
+            imageHeight,
+            configuration.G3.MaximumPlateSolveHintOffsetDegrees);
     }
 
     private static bool IsRecoverableG3SearchGate(GateResult gate) => gate.Code is
@@ -3492,6 +3494,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         "BRIGHT_TARGET_SATURATED_CORE_NOT_FOUND" or
         "BRIGHT_TARGET_WINGS_UNUSABLE" or
         "BRIGHT_TARGET_AMBIGUOUS";
+
+    private static bool UsesCatalogWcsTargetAuthority(ObservationContext context) =>
+        context.Plan.TargetObservability != TargetObservabilityClass.DirectStellar;
 
     private static bool IsRecoverableSparseG3Field(
         G3StellarFocusMeasurement focusMeasurement,
@@ -6021,6 +6026,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 $"C11 Star Focuser Pro moved from {focusOwnerBefore.PositionSteps} to {focusOwnerAfter.PositionSteps} steps while the six OFF frames were being combined, so their main-focus metric is not a single immutable optical state. Only Star Focuser Pro/Gemini on COM8 may be adjusted; UVEX M2 and the GS350 ToupTek AAF are prohibited substitutes.",
                 C11MainFocusPolicy.MeasurementMetrics(focusMeasurement));
         }
+        else if (UsesCatalogWcsTargetAuthority(context))
+        {
+            focusGate = GateResult.Pass(
+                "G3_MAIN_FOCUS_LOCKED_NONSTELLAR_TARGET",
+                $"The plan declares {context.Plan.TargetObservability}; the stable, Night-Setup-bound C11 focus position is authoritative. The target field's {focusMeasurement.DetectedStarCount} stellar detections are telemetry and are not required to resemble the science target.",
+                C11MainFocusPolicy.MeasurementMetrics(focusMeasurement));
+        }
         await PublishG3MainFocusEvidenceAsync(
             context,
             sequence,
@@ -6259,12 +6271,19 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             properties.Width,
             properties.Height,
             solve.SolverIdentity);
-        var rawIdentification = SlitTargetIdentifier.Identify(
-            candidates,
-            predictedPoint,
-            configuration.Slit.TargetPredictionTolerancePixels);
+        var rawIdentification = UsesCatalogWcsTargetAuthority(context)
+            ? TargetIdentification.FromCatalogWcs(
+                predictedPoint,
+                properties.Width,
+                properties.Height,
+                $"The formal WCS projects the catalogue coordinate for the declared {context.Plan.TargetObservability} target. No stellar peak, minimum SNR, or minimum source count is required at that pixel.")
+            : SlitTargetIdentifier.Identify(
+                candidates,
+                predictedPoint,
+                configuration.Slit.TargetPredictionTolerancePixels);
         var identified = rawIdentification;
-        if (rawIdentification.Gate.Disposition != GateDisposition.Passed && candidates.Count <= 1)
+        if (!UsesCatalogWcsTargetAuthority(context) &&
+            rawIdentification.Gate.Disposition != GateDisposition.Passed && candidates.Count <= 1)
         {
             identified = rawIdentification with
             {
@@ -6301,7 +6320,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 cancellationToken).ConfigureAwait(false);
             if (brightTarget is not null) return brightTarget with { SlitIdentity = slitIdentity, SlitIdentityEvidencePath = slitIdentityEvidencePath };
         }
-        var caption = identified.Target is { } target
+        var caption = identified.Authority == TargetIdentificationAuthority.CatalogWcsProjection
+            ? $"G3 paired LED: catalogue-WCS target ({predictedPoint.X:F1},{predictedPoint.Y:F1}), measured slit ({slitDetection.Geometry.AcquisitionPoint.X:F1},{slitDetection.Geometry.AcquisitionPoint.Y:F1}), target peak not required, field stars {candidates.Count}."
+            : identified.Target is { } target
             ? $"G3 paired LED: target ({target.Centroid.X:F1},{target.Centroid.Y:F1}), measured slit ({slitDetection.Geometry.AcquisitionPoint.X:F1},{slitDetection.Geometry.AcquisitionPoint.Y:F1}), WCS residual {identified.PredictionResidualPixels:F2}px, stars {candidates.Count}."
             : $"G3 paired LED: target unresolved; predicted ({predictedPoint.X:F1},{predictedPoint.Y:F1}), stars {candidates.Count}.";
         PublishG3Preview(
@@ -8788,7 +8809,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             return Failed(ObservationStage.StartQhyPhotometry, "QHY_IDENTITY_CHANGED", "QHY identity changed before photometry.");
         }
-        var cadence = Math.Max(configuration.Qhy.PhotometryExposureSeconds, configuration.Qhy.PhotometryCadenceSeconds);
+        var longestFilterExposure = configuration.Qhy.ParallelFilterSequence.Count == 0
+            ? configuration.Qhy.PhotometryExposureSeconds
+            : configuration.Qhy.ParallelFilterSequence.Max(step => step.ExposureSeconds);
+        var cadence = Math.Max(longestFilterExposure, configuration.Qhy.PhotometryCadenceSeconds);
         var count = Math.Max(1, (int)Math.Ceiling(context.Plan.PlannedDuration.TotalSeconds / cadence));
         await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
         var clientRequestId = $"{context.Plan.ObservationRunId}:qhy-photometry:{qhyPhotometryAttempt}";
@@ -8815,7 +8839,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             TargetRightAscensionDegrees: context.Plan.Target.RightAscensionDegrees,
             TargetDeclinationDegrees: context.Plan.Target.DeclinationDegrees,
             CoordinateEpoch: "ICRS",
-            ControlLeaseSeconds: 120);
+            ControlLeaseSeconds: 120,
+            FilterSequence: configuration.Qhy.ParallelFilterSequence);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         pendingQhyRequests[clientRequestId] = new PendingQhyRequest(context.Plan.ObservationRunId, QhyJobKind.Photometry, clientRequestId, request);
         var started = await qhy.StartOrAdoptPhotometryAsync(request, cancellationToken).ConfigureAwait(false);
@@ -8841,6 +8866,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 ["requestedFrames"] = count,
                 ["exposureSeconds"] = configuration.Qhy.PhotometryExposureSeconds,
+                ["parallelFilterCount"] = configuration.Qhy.ParallelFilterSequence.Count,
                 ["cadenceSeconds"] = cadence,
             });
     }
@@ -9128,6 +9154,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var binding = configuration.Commissioning;
         if (!configuration.RealModeAuthorized) issues.Add("The immutable real-run configuration was captured while the Profile did not authorize REAL mode.");
         if (!binding.RealModeCommissioned) issues.Add("Real mode was not commissioned when this immutable run configuration was captured.");
+        issues.AddRange(NinaImageFilePatternPolicy.Assess(configuration.NinaImageFilePattern).BlockingIssues);
         var capability = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
             configuration.Environment.RequireSafetyMonitor,
             configuration.Environment.RequireOpenDomeOrRoof,
@@ -9175,6 +9202,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (configuration.G3.ExposureMilliseconds <= 0 || configuration.G3.Binning <= 0 || configuration.G3.GainPercent is < 0 or > 100) issues.Add("G3 exposure, binning or gain is invalid.");
         if (configuration.G3.SaturationAdu is <= 0 or > ushort.MaxValue) issues.Add("G3 saturation ADU is outside the unsigned 16-bit FITS container range.");
         if (configuration.G3.FocalLengthMillimeters <= 0 || configuration.G3.PixelSizeMicrometers <= 0) issues.Add("Measured G3 focal length and pixel size are required.");
+        if (!double.IsFinite(configuration.G3.MaximumPlateSolveHintOffsetDegrees) ||
+            configuration.G3.MaximumPlateSolveHintOffsetDegrees is <= 0 or > 30)
+        {
+            issues.Add("G3 plate-solve hint offset must be within (0, 30] degrees and is independent of the smaller correction-motion limits.");
+        }
         issues.AddRange(configuration.G3.PlateSolveExposurePreset.Validate());
         issues.AddRange(configuration.G3.WcsCentering.Validate());
         if (!double.IsFinite(configuration.G3.MotionWorstCaseActionSeconds) || configuration.G3.MotionWorstCaseActionSeconds <= 0)
@@ -9943,25 +9975,37 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         };
         var exposure = await imagingMediator.CaptureImage(sequence, cancellationToken, progress, reason).ConfigureAwait(false);
         var image = await exposure.ToImageData(progress, cancellationToken).ConfigureAwait(false);
-        image.MetaData.Target.Name = context.Plan.Target.Name;
+        var targetName = context.Plan.Target.Name.Trim();
+        var stageRole = string.Equals(imageType, CaptureSequence.ImageTypes.LIGHT, StringComparison.Ordinal)
+            ? "SCIENCE"
+            : "PROBE";
+        image.MetaData.Target.Name = targetName;
         image.MetaData.Target.Coordinates = TargetCoordinates(context.Plan);
+        image.MetaData.Sequence.Title = $"OpenAstroSpec Auto · {targetName}";
         var captureToken = Guid.NewGuid().ToString("N");
         image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
             "OBSRUNID",
             context.Plan.ObservationRunId,
-            "UVEX-ADV observation run identifier"));
+            "OpenAstroSpec observation run identifier"));
         image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
             "UVEXSTG",
-            imageType,
-            "UVEX-ADV acquisition role"));
+            stageRole,
+            "OpenAstroSpec acquisition stage"));
         image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
             "UVEXCID",
             captureToken,
-            "UVEX-ADV image-save correlation identifier"));
+            "OpenAstroSpec image-save correlation identifier"));
         image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
             "NIGHTSET",
             context.Plan.NightSetupId,
-            "Locked UVEX-ADV Night Setup identifier"));
+            "Locked OpenAstroSpec Night Setup identifier"));
+        if (!string.IsNullOrWhiteSpace(context.Plan.Target.CatalogId))
+        {
+            image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
+                "CATALOG",
+                context.Plan.Target.CatalogId.Trim(),
+                "Stable target catalog identifier"));
+        }
         var degradedSupervised = IsDegradedSupervisedScience();
         image.MetaData.GenericHeaders.Add(new StringMetaDataHeader(
             "UVEXDGR",
@@ -9975,7 +10019,19 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 "PHD2 calibration quality grade"));
         }
         var metrics = MeasureSpectralProbe(image, exposureSeconds);
-        return new AtrCapture(image, metrics, captureToken, imageType);
+        return new AtrCapture(
+            image,
+            metrics,
+            captureToken,
+            imageType,
+            new FitsProvenanceExpectation(
+                targetName,
+                context.Plan.ObservationRunId,
+                stageRole,
+                captureToken,
+                context.Plan.NightSetupId,
+                imageType,
+                context.Plan.Target.CatalogId.Trim()));
     }
 
     private async Task<string> SaveAtrImageAsync(
@@ -10009,6 +10065,27 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             await imageSaveMediator.Enqueue(capture.Image, rendered, progress, cancellationToken).ConfigureAwait(false);
             var path = await saved.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
             var metrics = capture.Metrics;
+            var provenance = AtrFitsProvenance.Verify(path, capture.Provenance);
+            if (!provenance.IsValid)
+            {
+                var provenanceMessage = string.Join(" ", provenance.Issues);
+                host.PublishEvidence(
+                    capture.Role == CaptureSequence.ImageTypes.LIGHT ? "atr-science-fits" : "atr-probe-fits",
+                    path,
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["captureId"] = capture.CaptureToken,
+                        ["role"] = capture.Role,
+                        ["attemptNumber"] = attemptNumber.ToString(CultureInfo.InvariantCulture),
+                        ["qualityAccepted"] = false.ToString(CultureInfo.InvariantCulture),
+                        ["qualityDisposition"] = GateDisposition.Failed.ToString(),
+                        ["qualityCode"] = "ATR_FITS_PROVENANCE_MISMATCH",
+                        ["qualityMessage"] = provenanceMessage,
+                        ["fitsProvenanceVerified"] = false.ToString(CultureInfo.InvariantCulture),
+                    });
+                throw new InvalidDataException(
+                    $"N.I.N.A. saved the immutable ATR FITS, but its target/provenance header did not round-trip: {provenanceMessage}");
+            }
             host.PublishEvidence(
                 capture.Role == CaptureSequence.ImageTypes.LIGHT ? "atr-science-fits" : "atr-probe-fits",
                 path,
@@ -10021,6 +10098,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     ["qualityDisposition"] = qualityDisposition.ToString(),
                     ["qualityCode"] = qualityCode,
                     ["qualityMessage"] = qualityMessage,
+                    ["fitsProvenanceVerified"] = true.ToString(CultureInfo.InvariantCulture),
+                    ["targetName"] = capture.Provenance.TargetName,
+                    ["stageRole"] = capture.Provenance.StageRole,
+                    ["observationRunId"] = capture.Provenance.ObservationRunId,
+                    ["nightSetupId"] = capture.Provenance.NightSetupId,
                     ["exposureSeconds"] = metrics.ExposureSeconds.ToString("R", CultureInfo.InvariantCulture),
                     ["biasLevelAdu"] = metrics.BiasLevelAdu.ToString("R", CultureInfo.InvariantCulture),
                     ["highPercentileAdu"] = metrics.HighPercentileAdu.ToString("R", CultureInfo.InvariantCulture),
@@ -11281,7 +11363,8 @@ internal sealed record AtrCapture(
     IImageData Image,
     SpectralProbeMetrics Metrics,
     string CaptureToken,
-    string Role);
+    string Role,
+    FitsProvenanceExpectation Provenance);
 
 internal sealed record PendingQhyRequest(
     string ObservationRunId,

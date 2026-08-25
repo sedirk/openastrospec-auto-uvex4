@@ -43,6 +43,10 @@ internal sealed class UvexServiceClient : IDisposable
         PostOperationAsync("/api/v1/grating/move", new { deltaSteps }, leaseToken, cancellationToken);
     public Task<ServiceOperation> SelectSlitAsync(int position, string leaseToken, CancellationToken cancellationToken) =>
         PostOperationAsync("/api/v1/slit/select", new { position }, leaseToken, cancellationToken);
+    public Task<ServiceOperation> ConnectAsync(string leaseToken, CancellationToken cancellationToken) =>
+        PostOperationAsync("/api/v1/device/connect", new { }, leaseToken, cancellationToken);
+    public Task<ServiceOperation> DisconnectAsync(string leaseToken, CancellationToken cancellationToken) =>
+        PostOperationAsync("/api/v1/device/disconnect", new { }, leaseToken, cancellationToken);
     public Task<ServiceOperation> GotoWavelengthAsync(double wavelengthNm, string leaseToken, CancellationToken cancellationToken) =>
         PostOperationAsync("/api/v1/grating/wavelength", new { wavelengthNm }, leaseToken, cancellationToken);
     public Task<ServiceOperation> HomeGratingAsync(string leaseToken, CancellationToken cancellationToken) =>
@@ -178,6 +182,137 @@ internal sealed class UvexServiceClient : IDisposable
 
         public string Token { get; }
 
+        public async Task<UvexDeviceStatus> ConnectAndVerifyAsync(CancellationToken cancellationToken)
+        {
+            var before = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (before?.ConnectionState == DeviceConnectionState.Ready && before.PositionKnown)
+            {
+                return before;
+            }
+
+            var operation = before?.ConnectionState == DeviceConnectionState.Maintenance
+                ? await owner.ExitMaintenanceAsync(Token, cancellationToken).ConfigureAwait(false)
+                : await owner.ConnectAsync(Token, cancellationToken).ConfigureAwait(false);
+            await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+            var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state after connecting COM5.");
+            if (after.ConnectionState != DeviceConnectionState.Ready || !after.PositionKnown)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX connect completed without trustworthy position readback: state={after.ConnectionState}, positionKnown={after.PositionKnown}.");
+            }
+
+            return after;
+        }
+
+        public async Task<UvexDeviceStatus> DisconnectAndVerifyAsync(CancellationToken cancellationToken)
+        {
+            var before = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (before?.ConnectionState == DeviceConnectionState.Disconnected)
+            {
+                return before;
+            }
+
+            var operation = await owner.DisconnectAsync(Token, cancellationToken).ConfigureAwait(false);
+            await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+            var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state after disconnecting COM5.");
+            if (after.ConnectionState != DeviceConnectionState.Disconnected || after.PositionKnown)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX disconnect completed without releasing live state: state={after.ConnectionState}, positionKnown={after.PositionKnown}.");
+            }
+
+            return after;
+        }
+
+        public async Task<UvexDeviceStatus> RequireReadyAsync(CancellationToken cancellationToken)
+        {
+            var status = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state.");
+            if (status.ConnectionState != DeviceConnectionState.Ready || !status.PositionKnown)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX4 is not connected with trustworthy position readback: state={status.ConnectionState}, positionKnown={status.PositionKnown}. Click Connect before operating the slit, M2, or illumination.");
+            }
+
+            return status;
+        }
+
+        public async Task<UvexDeviceStatus> ReleaseComPortAndVerifyAsync(CancellationToken cancellationToken)
+        {
+            var before = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (before?.ConnectionState == DeviceConnectionState.Maintenance)
+            {
+                return before;
+            }
+
+            var operation = await owner.EnterMaintenanceAsync(Token, cancellationToken).ConfigureAwait(false);
+            await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+            var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state after releasing COM5.");
+            if (after.ConnectionState != DeviceConnectionState.Maintenance)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX service did not enter maintenance mode after releasing COM5: state={after.ConnectionState}.");
+            }
+
+            return after;
+        }
+
+        public async Task<UvexDeviceStatus> SelectSlitAndVerifyAsync(
+            int position,
+            CancellationToken cancellationToken)
+        {
+            if (position is < 1 or > 4)
+            {
+                throw new ArgumentOutOfRangeException(nameof(position), position, "UVEX4 slit position must be 1 through 4.");
+            }
+
+            _ = await RequireReadyAsync(cancellationToken).ConfigureAwait(false);
+            var operation = await owner.SelectSlitAsync(position, Token, cancellationToken).ConfigureAwait(false);
+            await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+            var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state after selecting the slit.");
+            if (after.ConnectionState != DeviceConnectionState.Ready ||
+                !after.PositionKnown ||
+                after.SlitPosition != position)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX slit operation completed without the requested readback: requested={position}, actual={after.SlitPosition?.ToString() ?? "unknown"}, state={after.ConnectionState}.");
+            }
+
+            return after;
+        }
+
+        public async Task<UvexDeviceStatus> MoveFocusAndVerifyAsync(
+            int deltaSteps,
+            CancellationToken cancellationToken)
+        {
+            if (deltaSteps == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(deltaSteps), "M2 focus movement must be non-zero.");
+            }
+
+            var before = await RequireReadyAsync(cancellationToken).ConfigureAwait(false);
+            var beforePosition = before.FocusPositionSteps
+                ?? throw new InvalidOperationException("UVEX M2 position is unavailable; relative focus movement is blocked.");
+            var expected = checked(beforePosition + deltaSteps);
+            var operation = await owner.MoveFocusAsync(deltaSteps, Token, cancellationToken).ConfigureAwait(false);
+            await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+            var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("UVEX service returned no device state after moving M2.");
+            if (after.ConnectionState != DeviceConnectionState.Ready ||
+                !after.PositionKnown ||
+                after.FocusPositionSteps != expected)
+            {
+                throw new InvalidOperationException(
+                    $"UVEX M2 operation completed without the requested readback: expected={expected}, actual={after.FocusPositionSteps?.ToString() ?? "unknown"}, state={after.ConnectionState}.");
+            }
+
+            return after;
+        }
+
         /// <summary>
         /// Commands the positioning/slit-illumination LED under this live lease,
         /// waits for the service operation to finish, and verifies the service's
@@ -185,10 +320,13 @@ internal sealed class UvexServiceClient : IDisposable
         /// state query; this is therefore a command-completion/readback proof,
         /// not a photometric proof that the LED illuminated the detector.
         /// </summary>
-        public Task<UvexDeviceStatus> SetSlitIlluminationAsync(
+        public async Task<UvexDeviceStatus> SetSlitIlluminationAsync(
             bool enabled,
-            CancellationToken cancellationToken) =>
-            owner.SetSlitIlluminationAsync(enabled, Token, cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            _ = await RequireReadyAsync(cancellationToken).ConfigureAwait(false);
+            return await owner.SetSlitIlluminationAsync(enabled, Token, cancellationToken).ConfigureAwait(false);
+        }
 
         public async ValueTask DisposeAsync()
         {

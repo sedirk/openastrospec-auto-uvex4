@@ -68,6 +68,34 @@ public sealed class QhyCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task PhotometryCyclesConfiguredFiltersWithIndependentExposureTimes()
+    {
+        await using var coordinator = CreateCoordinator(new ScriptedAdapter());
+        var started = coordinator.StartPhotometry(new PhotometryJobRequest(
+            "run-sho-cycle",
+            "M76",
+            5,
+            10,
+            256,
+            4,
+            0,
+            PauseOnQualityFailure: false,
+            QualityThresholds: PassingThresholds(),
+            FilterSequence:
+            [
+                new QhyPhotometryFilterStep("H", 60),
+                new QhyPhotometryFilterStep("O", 45),
+                new QhyPhotometryFilterStep("S", 90),
+            ])).Job;
+
+        var completed = await WaitForStateAsync(coordinator, started.Id, QhyJobState.Completed);
+
+        Assert.Equal(["H", "O", "S", "H"], completed.Frames.Select(frame => frame.Settings.FilterName));
+        Assert.Equal([60d, 45d, 90d, 60d], completed.Frames.Select(frame => frame.Settings.ExposureSeconds));
+        Assert.Equal(["PHOTOMETRY-H", "PHOTOMETRY-O", "PHOTOMETRY-S", "PHOTOMETRY-H"], completed.Frames.Select(frame => frame.Role));
+    }
+
+    [Fact]
     public async Task QualityRejectedFramesDoNotIncrementAcceptedCount()
     {
         await using var coordinator = CreateCoordinator(new ScriptedAdapter());

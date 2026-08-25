@@ -24,6 +24,7 @@ internal sealed record RealRunConfiguration(
     string Phd2Host,
     int Phd2Port,
     bool AllowDegradedSupervisedScience,
+    string NinaImageFilePattern,
     string ExpectedTelescopeId,
     int ExpectedUvexSlitPosition,
     int ExpectedUvexGratingPositionSteps,
@@ -41,7 +42,8 @@ internal sealed record RealRunConfiguration(
 {
     public static RealRunConfiguration Capture(
         UvexPluginSettings settings,
-        PlateSolverRunConfiguration plateSolver)
+        PlateSolverRunConfiguration plateSolver,
+        string ninaImageFilePattern = "")
     {
         var payload = new ActionPayload(
             settings.ObservationUseRealMode,
@@ -50,6 +52,7 @@ internal sealed record RealRunConfiguration(
             settings.Phd2Host,
             settings.Phd2Port,
             settings.AllowDegradedSupervisedScience,
+            ninaImageFilePattern ?? string.Empty,
             settings.ExpectedTelescopeId,
             settings.ExpectedUvexSlitPosition,
             settings.ExpectedUvexGratingPositionSteps,
@@ -93,7 +96,11 @@ internal sealed record RealRunConfiguration(
                 settings.QhyCenteringToleranceArcseconds,
                 settings.QhyPhotometryExposureSeconds,
                 settings.QhyPhotometryCadenceSeconds,
-                new QhyQualityThresholds(),
+                Array.AsReadOnly(settings.ParseQhyParallelFilterSequence().ToArray()),
+                new QhyQualityThresholds(
+                    settings.QhyMinimumDetectedStars,
+                    settings.QhyMaximumSaturatedFraction,
+                    settings.QhyMinimumTransparency),
                 new QhyCoarseCenteringLimits(
                     settings.QhyCoarseCenteringSchemaVersion,
                     settings.QhyCoarseMaximumSingleCorrectionArcseconds,
@@ -110,6 +117,7 @@ internal sealed record RealRunConfiguration(
                 settings.G3FocalLengthMillimeters,
                 settings.G3PixelSizeMicrometers,
                 settings.G3ExpectedWcsFlipped,
+                settings.G3MaximumPlateSolveHintOffsetDegrees,
                 new G3PlateSolveExposurePreset(
                     settings.G3PlateSolveExposurePresetSchemaVersion,
                     settings.G3PlateSolveExposurePresetId.Trim(),
@@ -250,6 +258,7 @@ internal sealed record RealRunConfiguration(
             payload.Phd2Host,
             payload.Phd2Port,
             payload.AllowDegradedSupervisedScience,
+            payload.NinaImageFilePattern,
             payload.ExpectedTelescopeId,
             payload.ExpectedUvexSlitPosition,
             payload.ExpectedUvexGratingPositionSteps,
@@ -270,8 +279,15 @@ internal sealed record RealRunConfiguration(
         UvexPluginSettings settings,
         PlateSolverRunConfiguration currentPlateSolver,
         out string actualSha256)
+        => MatchesCurrentProfile(settings, currentPlateSolver, NinaImageFilePattern, out actualSha256);
+
+    public bool MatchesCurrentProfile(
+        UvexPluginSettings settings,
+        PlateSolverRunConfiguration currentPlateSolver,
+        string currentNinaImageFilePattern,
+        out string actualSha256)
     {
-        try { actualSha256 = Capture(settings, currentPlateSolver).ActionConfigurationSha256; }
+        try { actualSha256 = Capture(settings, currentPlateSolver, currentNinaImageFilePattern).ActionConfigurationSha256; }
         catch { actualSha256 = string.Empty; return false; }
         return string.Equals(ActionConfigurationSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
     }
@@ -283,6 +299,7 @@ internal sealed record RealRunConfiguration(
         string Phd2Host,
         int Phd2Port,
         bool AllowDegradedSupervisedScience,
+        string NinaImageFilePattern,
         string ExpectedTelescopeId,
         int ExpectedUvexSlitPosition,
         int ExpectedUvexGratingPositionSteps,
@@ -426,6 +443,7 @@ internal sealed record QhyRunConfiguration(
     double CenteringToleranceArcseconds,
     double PhotometryExposureSeconds,
     double PhotometryCadenceSeconds,
+    IReadOnlyList<QhyPhotometryFilterStep> ParallelFilterSequence,
     QhyQualityThresholds QualityThresholds,
     QhyCoarseCenteringLimits CoarseCenteringLimits);
 
@@ -437,6 +455,7 @@ internal sealed record G3RunConfiguration(
     double FocalLengthMillimeters,
     double PixelSizeMicrometers,
     bool ExpectedWcsFlipped,
+    double MaximumPlateSolveHintOffsetDegrees,
     G3PlateSolveExposurePreset PlateSolveExposurePreset,
     G3WcsCenteringLimits WcsCentering,
     double MotionWorstCaseActionSeconds,

@@ -17,3 +17,4 @@ Current accepted decisions:
 - [ADR-0004: Optional, versioned wide-field-to-slit-field transfer](0004-optional-versioned-wide-to-slit-field-transfer.md)
 - [ADR-0005: PHD2-calibration-guided slit placement with versioned fallbacks](0005-phd2-calibration-guided-slit-placement.md)
 - [ADR-0006: Runtime-measured slit midpoint as the science destination](0006-runtime-slit-midpoint-as-science-destination.md)
+- [ADR-0007: N.I.N.A.-native target identity and image provenance](0007-nina-native-target-and-image-provenance.md)

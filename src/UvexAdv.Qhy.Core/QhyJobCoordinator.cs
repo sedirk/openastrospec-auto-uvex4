@@ -556,20 +556,23 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var thresholds = request.QualityThresholds ?? options.DefaultQualityThresholds;
-        double? baselineStarFlux = null;
+        var baselineStarFluxByFilter = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         for (var sequence = 1; sequence <= request.FrameCount; sequence++)
         {
             await CheckpointAsync(execution, cancellationToken).ConfigureAwait(false);
-            var settings = CreateSettings(request);
+            var filterStep = EffectivePhotometryFilterStep(request, sequence);
+            var settings = CreateSettings(request, filterStep);
+            baselineStarFluxByFilter.TryGetValue(filterStep.FilterName, out var baselineStarFlux);
             var (frame, metrics) = await CaptureWithRecoveryAsync(
                     execution,
                     settings,
                     thresholds,
-                    baselineStarFlux,
+                    baselineStarFluxByFilter.ContainsKey(filterStep.FilterName) ? baselineStarFlux : null,
                     cancellationToken)
                 .ConfigureAwait(false);
-            baselineStarFlux ??= metrics.MedianStarFlux;
-            await StoreFrameAsync(execution, frame, metrics, sequence, "PHOTOMETRY", cancellationToken).ConfigureAwait(false);
+            if (metrics.MedianStarFlux is { } measuredBaseline)
+                baselineStarFluxByFilter.TryAdd(filterStep.FilterName, measuredBaseline);
+            await StoreFrameAsync(execution, frame, metrics, sequence, $"PHOTOMETRY-{filterStep.FilterName}", cancellationToken).ConfigureAwait(false);
             await CheckpointAsync(execution, cancellationToken).ConfigureAwait(false);
 
             if (request.PauseOnQualityFailure && metrics.QualityFlags.Count > 0)
@@ -882,9 +885,18 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             FilterName: request.FilterName,
             TargetTemperatureC: request.TargetTemperatureC);
 
-    private static QhyFrameSettings CreateSettings(PhotometryJobRequest request) =>
+    private static QhyPhotometryFilterStep EffectivePhotometryFilterStep(PhotometryJobRequest request, int sequence)
+    {
+        if (request.FilterSequence is not { Count: > 0 })
+            return new QhyPhotometryFilterStep(request.FilterName, request.ExposureSeconds);
+        return request.FilterSequence[(sequence - 1) % request.FilterSequence.Count];
+    }
+
+    private static QhyFrameSettings CreateSettings(
+        PhotometryJobRequest request,
+        QhyPhotometryFilterStep filterStep) =>
         new(
-            request.ExposureSeconds,
+            filterStep.ExposureSeconds,
             request.Gain,
             request.Offset,
             request.BinningX,
@@ -896,7 +908,7 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             ReadoutMode: request.ReadoutMode,
             BitDepth: request.BitDepth,
             UsbTraffic: request.UsbTraffic,
-            FilterName: request.FilterName,
+            FilterName: filterStep.FilterName,
             TargetTemperatureC: request.TargetTemperatureC);
 
     private static void Validate(AcquisitionJobRequest request)
@@ -928,6 +940,16 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         ValidateLease(request.ControlLeaseSeconds);
         ValidateFilterName(request.FilterName);
         if (!double.IsFinite(request.ExposureSeconds) || request.ExposureSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(request.ExposureSeconds));
+        if (request.FilterSequence is { Count: > 0 })
+        {
+            if (request.FilterSequence.Count > 32) throw new ArgumentOutOfRangeException(nameof(request.FilterSequence));
+            foreach (var step in request.FilterSequence)
+            {
+                ValidateFilterName(step.FilterName);
+                if (!double.IsFinite(step.ExposureSeconds) || step.ExposureSeconds <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(request.FilterSequence), "Every filter-sequence exposure must be positive and finite.");
+            }
+        }
         if (request.FrameCount is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(request.FrameCount));
         if (!double.IsFinite(request.CadenceSeconds) || request.CadenceSeconds < 0 || request.CadenceSeconds > 86_400)
         {

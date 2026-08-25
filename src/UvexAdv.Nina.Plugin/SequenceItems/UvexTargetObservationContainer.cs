@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel.Composition;
 using System.Runtime.Versioning;
 using System.Windows;
+using NINA.Astrometry;
+using NINA.Astrometry.Interfaces;
 using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Profile.Interfaces;
@@ -23,24 +25,34 @@ namespace UvexAdv.Nina.Plugin.SequenceItems;
 [Export(typeof(ISequenceContainer))]
 [JsonObject(MemberSerialization.OptIn)]
 [SupportedOSPlatform("windows")]
-public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutableContainer
+public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutableContainer, IDeepSkyObjectContainer
 {
+    private readonly IProfileService profileService;
+    private readonly INighttimeCalculator nighttimeCalculator;
     private readonly ObservationCoordinatorHost host;
     private readonly UvexPluginSettings settings;
     private readonly RealObservationStageRunnerFactory realRunnerFactory;
     private SequencerStageBridge? activeBridge;
     private bool useRealMode;
+    private InputTarget target;
 
     [ImportingConstructor]
     public UvexTargetObservationContainer(
         IProfileService profileService,
+        INighttimeCalculator nighttimeCalculator,
         ObservationCoordinatorHost host,
         RealObservationStageRunnerFactory realRunnerFactory)
         : base(new SequentialStrategy())
     {
+        this.profileService = profileService;
+        this.nighttimeCalculator = nighttimeCalculator;
         this.host = host;
         this.realRunnerFactory = realRunnerFactory;
         settings = new UvexPluginSettings(profileService);
+        target = CreateTarget(profileService);
+        AttachTarget(target);
+        NighttimeData = nighttimeCalculator.Calculate(null);
+        nighttimeCalculator.OnReferenceDayChanged += OnReferenceDayChanged;
         LoadDefaults();
         SeedStageItems();
     }
@@ -48,14 +60,22 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     private UvexTargetObservationContainer(UvexTargetObservationContainer copy)
         : base(new SequentialStrategy())
     {
+        profileService = copy.profileService;
+        nighttimeCalculator = copy.nighttimeCalculator;
         host = copy.host;
         settings = copy.settings;
         realRunnerFactory = copy.realRunnerFactory;
+        target = CreateTarget(profileService);
+        AttachTarget(target);
+        NighttimeData = nighttimeCalculator.Calculate(null);
+        nighttimeCalculator.OnReferenceDayChanged += OnReferenceDayChanged;
         CopyMetaData(copy);
         TargetName = copy.TargetName;
         CatalogId = copy.CatalogId;
+        TargetObservability = copy.TargetObservability;
         RightAscensionDegrees = copy.RightAscensionDegrees;
         DeclinationDegrees = copy.DeclinationDegrees;
+        Target.PositionAngle = copy.Target.PositionAngle;
         DurationMinutes = copy.DurationMinutes;
         NightSetupId = copy.NightSetupId;
         SiteLatitudeDegrees = copy.SiteLatitudeDegrees;
@@ -76,16 +96,60 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     }
 
     [JsonProperty]
-    public string TargetName { get; set; } = string.Empty;
+    public InputTarget Target
+    {
+        get => target;
+        set
+        {
+            if (ReferenceEquals(target, value) || value is null) return;
+            DetachTarget(target);
+            target = value;
+            AttachTarget(target);
+            RaiseTargetPropertiesChanged();
+        }
+    }
+
+    [JsonIgnore]
+    public NighttimeData NighttimeData { get; private set; }
+
+    // Kept as serialized proxies so existing .astroproj files remain readable.
+    // The native InputTarget above is the single source of truth.
+    [JsonProperty]
+    public string TargetName
+    {
+        get => Target.TargetName ?? string.Empty;
+        set
+        {
+            var normalized = value ?? string.Empty;
+            if (string.Equals(Target.TargetName, normalized, StringComparison.Ordinal)) return;
+            Target.TargetName = normalized;
+            RaisePropertyChanged();
+        }
+    }
 
     [JsonProperty]
     public string CatalogId { get; set; } = string.Empty;
 
     [JsonProperty]
-    public double RightAscensionDegrees { get; set; }
+    public TargetObservabilityClass TargetObservability { get; set; }
+
+    [JsonIgnore]
+    public IReadOnlyList<TargetObservabilityClass> AvailableTargetObservabilityClasses { get; } =
+        Enum.GetValues<TargetObservabilityClass>();
 
     [JsonProperty]
-    public double DeclinationDegrees { get; set; }
+    public double RightAscensionDegrees
+    {
+        get => Target.InputCoordinates.Coordinates.Transform(Epoch.J2000).RADegrees;
+        set => SetJ2000Coordinates(value, DeclinationDegrees);
+    }
+
+    [JsonProperty]
+    public double DeclinationDegrees
+    {
+        get => Target.InputCoordinates.Coordinates.Transform(Epoch.J2000).Dec;
+        set => SetJ2000Coordinates(RightAscensionDegrees, value);
+    }
 
     [JsonProperty]
     public double DurationMinutes { get; set; }
@@ -250,6 +314,11 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         }
         if (UseRealMode)
         {
+            foreach (var issue in NinaImageFilePatternPolicy.Assess(
+                         profileService.ActiveProfile.ImageFileSettings.FilePattern).BlockingIssues)
+            {
+                Issues.Add(issue);
+            }
             var capabilities = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
                 settings.RequireSafetyMonitor,
                 settings.RequireOpenDomeOrRoof,
@@ -296,13 +365,15 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
             ExpectedG3ProfileName,
             ExpectedQhyCameraId,
             motion,
-            lockedConfiguration?.Environment.RequireSafetyMonitor ?? settings.RequireSafetyMonitor);
+            lockedConfiguration?.Environment.RequireSafetyMonitor ?? settings.RequireSafetyMonitor,
+            TargetObservability);
     }
 
     private void LoadDefaults()
     {
         TargetName = settings.ObservationTargetName;
         CatalogId = settings.ObservationCatalogId;
+        TargetObservability = settings.ObservationTargetObservability;
         RightAscensionDegrees = settings.ObservationRightAscensionDegrees;
         DeclinationDegrees = settings.ObservationDeclinationDegrees;
         DurationMinutes = settings.ObservationDurationMinutes;
@@ -318,6 +389,76 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         ExpectedQhyCameraId = settings.ObservationExpectedQhyCameraId;
         SimulationStageMilliseconds = settings.ObservationSimulationStageMilliseconds;
         UseRealMode = settings.ObservationUseRealMode;
+    }
+
+    private static InputTarget CreateTarget(IProfileService profileService)
+    {
+        var astrometry = profileService.ActiveProfile.AstrometrySettings;
+        var created = new InputTarget(
+            Angle.ByDegree(astrometry.Latitude),
+            Angle.ByDegree(astrometry.Longitude),
+            astrometry.Horizon)
+        {
+            TargetName = string.Empty,
+            InputCoordinates = new InputCoordinates(
+                new Coordinates(0, 0, Epoch.J2000, Coordinates.RAType.Degrees)),
+        };
+        return created;
+    }
+
+    private void SetJ2000Coordinates(double rightAscensionDegrees, double declinationDegrees)
+    {
+        if (!double.IsFinite(rightAscensionDegrees) || !double.IsFinite(declinationDegrees)) return;
+        var current = Target.InputCoordinates.Coordinates.Transform(Epoch.J2000);
+        if (Math.Abs(current.RADegrees - rightAscensionDegrees) < 1e-12 &&
+            Math.Abs(current.Dec - declinationDegrees) < 1e-12)
+        {
+            return;
+        }
+        Target.InputCoordinates = new InputCoordinates(
+            new Coordinates(rightAscensionDegrees, declinationDegrees, Epoch.J2000, Coordinates.RAType.Degrees));
+        RaisePropertyChanged(nameof(RightAscensionDegrees));
+        RaisePropertyChanged(nameof(DeclinationDegrees));
+    }
+
+    private void AttachTarget(InputTarget value)
+    {
+        value.CoordinatesChanged += OnTargetCoordinatesChanged;
+        value.PropertyChanged += OnTargetPropertyChanged;
+    }
+
+    private void DetachTarget(InputTarget value)
+    {
+        value.CoordinatesChanged -= OnTargetCoordinatesChanged;
+        value.PropertyChanged -= OnTargetPropertyChanged;
+    }
+
+    private void OnTargetCoordinatesChanged(object? sender, EventArgs e)
+    {
+        RaisePropertyChanged(nameof(RightAscensionDegrees));
+        RaisePropertyChanged(nameof(DeclinationDegrees));
+    }
+
+    private void OnTargetPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(InputTarget.TargetName), StringComparison.Ordinal))
+        {
+            RaisePropertyChanged(nameof(TargetName));
+        }
+    }
+
+    private void RaiseTargetPropertiesChanged()
+    {
+        RaisePropertyChanged(nameof(Target));
+        RaisePropertyChanged(nameof(TargetName));
+        RaisePropertyChanged(nameof(RightAscensionDegrees));
+        RaisePropertyChanged(nameof(DeclinationDegrees));
+    }
+
+    private void OnReferenceDayChanged(object? sender, EventArgs e)
+    {
+        NighttimeData = nighttimeCalculator.Calculate(null);
+        RaisePropertyChanged(nameof(NighttimeData));
     }
 
     private void SeedStageItems()

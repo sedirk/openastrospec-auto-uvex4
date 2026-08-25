@@ -72,6 +72,22 @@ public sealed record MotionLimits(
     public TimeSpan EffectiveMaximumAcquisitionTime => MaximumAcquisitionTime ?? TimeSpan.FromMinutes(12);
 }
 
+/// <summary>
+/// Declares what the G3 acquisition camera is expected to see at the catalogue
+/// coordinate.  This is an observing-plan input, not a value inferred from a
+/// target name.  Non-stellar modes keep catalogue/WCS geometry authoritative
+/// when the science target is too faint, extended, or already hidden by the
+/// slit to provide a repeatable stellar centroid.
+/// </summary>
+public enum TargetObservabilityClass
+{
+    DirectStellar,
+    FaintPointSource,
+    CompactExtended,
+    ExtendedNebula,
+    InvisibleInG3,
+}
+
 public sealed record ObservationPlan(
     string ObservationRunId,
     string NightSetupId,
@@ -84,7 +100,8 @@ public sealed record ObservationPlan(
     string ExpectedAtrCameraId,
     string ExpectedG3ProfileName,
     string ExpectedQhyCameraId,
-    bool RequireSafetyMonitor = true)
+    bool RequireSafetyMonitor = true,
+    TargetObservabilityClass TargetObservability = TargetObservabilityClass.DirectStellar)
 {
     public IReadOnlyList<string> Validate()
     {

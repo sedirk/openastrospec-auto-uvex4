@@ -1741,6 +1741,7 @@ internal sealed partial class RealObservationStageRunner
             PixelPoint targetLocal;
             double targetFlux;
             string targetEvidence;
+            var targetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid;
             if (lastG3Field?.BrightTargetAuthority is not null)
             {
                 var wing = BrightTargetWingCentroidAnalyzer.Analyze(frame, configuration.G3.EffectiveBrightTarget.CentroidOptions);
@@ -1751,6 +1752,14 @@ internal sealed partial class RealObservationStageRunner
                 targetLocal = wing.Target.Centroid;
                 targetFlux = wing.Target.WingFluxAdu;
                 targetEvidence = lastG3Field.BrightTargetEvidencePath ?? lastG3Field.BrightTargetAuthority.G3FrameSha256;
+            }
+            else if (guideMode == Phd2SlitGuideMode.OffSlitGuideStar &&
+                     lastG3Field?.TargetIdentification.Authority == TargetIdentificationAuthority.CatalogWcsProjection)
+            {
+                targetLocal = expectedTargetLocal;
+                targetFlux = 0;
+                targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsProjection;
+                targetEvidence = $"catalog-wcs:{context.Plan.Target.CatalogId}:{lastG3Field.Solve?.SolverIdentity}:{lastG3Field.FramePath}";
             }
             else
             {
@@ -1815,9 +1824,12 @@ internal sealed partial class RealObservationStageRunner
                 exposureMilliseconds,
                 CommissionedMinimumExposureApplied: exposureMatched,
                 targetEvidence,
-                guideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding ? "DEGRADED_DIRECT_TARGET_FLUX" : "TARGET_FLUX",
+                targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection
+                    ? "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE"
+                    : guideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding ? "DEGRADED_DIRECT_TARGET_FLUX" : "TARGET_FLUX",
                 targetFlux,
-                $"fresh-target-slit={targetResidual:F4}px;fresh-guide-lock={guideResidual:F4}px");
+                $"fresh-target-slit={targetResidual:F4}px;fresh-guide-lock={guideResidual:F4}px",
+                targetPositionAuthority);
             var gate = GateResult.Pass(
                 "PHD2_FRESH_GUIDING_RESIDUAL",
                 $"Fresh guiding FITS proved target/slit-midpoint {targetResidual:F3}px and guide/lock {guideResidual:F3}px residuals.",
@@ -2113,6 +2125,17 @@ internal sealed partial class RealObservationStageRunner
                 seedField.TargetIdentification.Target?.Centroid ?? wing.Centroid,
                 seedField.TargetIdentification.Target is { } priorTarget ? PixelDistance(wing.Centroid, priorTarget.Centroid) : 0,
                 brightAnalysis.UniquenessRatio);
+        }
+        else if (resolvedMode == Phd2SlitGuideMode.OffSlitGuideStar &&
+                 seedField.TargetIdentification.Authority == TargetIdentificationAuthority.CatalogWcsProjection)
+        {
+            var predictedTarget = seedField.TargetIdentification.Target?.Centroid
+                ?? seedField.TargetIdentification.PredictedPoint;
+            identification = TargetIdentification.FromCatalogWcs(
+                predictedTarget,
+                properties.Width,
+                properties.Height,
+                $"Fresh {resolvedMode} selection retains the catalogue-WCS target geometry; target flux continuity is not applicable.");
         }
         else
         {

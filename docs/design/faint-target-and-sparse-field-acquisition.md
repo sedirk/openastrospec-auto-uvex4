@@ -1,8 +1,10 @@
 # Faint-target, sparse-field and adaptive-spectrum acquisition design
 
-Status: design accepted from the 2026-08-24/25 commissioning night; the
-bright/ordinary-star core loop has real-sky evidence, while the sparse-field
-mosaic and invisible-target branches remain implementation work.
+Status: implemented in stages and partly validated on sky. The 2026-08-25/26
+M76 run validated one-node neighbouring-field recovery, formal PlateSolve3
+trust, catalogue-WCS placement for a non-stellar target, off-slit PHD2 guiding
+and adaptive 600 s ATR acquisition. A connected multi-node overlap graph is
+still future work.
 
 This document extends the ordinary-star route without changing the device
 ownership or raw-data invariants in the frozen observatory baseline. It is
@@ -30,10 +32,13 @@ exposed two design gaps:
 2. simply accepting a low-match or high-source-count result is unsafe because a
    plate solver can return a false or geometrically inconsistent solution.
 
-The east-field success is evidence that an overlapping neighbouring-field
-route is viable. It is not, by itself, authority for a science-target move: a
-single seven-match solution differed by about 5 arcmin from the simple fixed
-boresight hypothesis used for comparison.
+The next same-night M76 run resolved the ambiguity. The target field again did
+not solve at the short tier, the automatic 5 arcmin east neighbour produced a
+formal PlateSolve3 solution, and a direct WCS correction moved the catalogue
+target into the slit field. Fresh post-move WCS response, dark-slit midpoint,
+PHD2 exact-lock and science signal independently agreed. PlateSolve3's source
+and match counts are therefore telemetry, not a second project-authored
+minimum-star veto.
 
 ## 2. Non-negotiable ownership and evidence rules
 
@@ -47,9 +52,13 @@ boresight hypothesis used for comparison.
 - N.I.N.A.'s native centring machinery is preferred for ordinary wide-field
   solve/correct/repeat work. Project code supplies QHY frames, ownership checks,
   motion envelopes, durable intent and fresh WCS verification.
-- A plate-solver `Success=true`, the number of extracted sources, a target-name
-  lookup or an image-language interpretation is never sufficient motion
-  authority by itself.
+- A formal PlateSolve3 success is trusted when it contains finite coordinates,
+  position angle and residual, has a physically plausible plate scale, and is
+  within the configured two-optical-axis reach envelope. Source/match counts
+  are retained as telemetry rather than re-litigated with a hidden minimum.
+  Any large correction still requires fresh post-move WCS response and the
+  normal bounded-motion ledger. A target-name lookup or image-language
+  interpretation is not motion authority.
 
 ## 3. Target classes
 
@@ -74,12 +83,22 @@ No universal `minimum stars` literal decides whether an observation can
 continue. The solver's own extraction/match diagnostics are retained, but the
 coordinator evaluates one of these versioned evidence classes:
 
-### A. Strong same-field pair
+### A. Formal PlateSolve3 solution
 
-Two fresh, independent solutions agree in centre, pixel scale, orientation and
-parity within configured limits. Each solution has a strong match count and is
-consistent with the commanded field hint. This remains the fast ordinary-field
-route.
+The fast production route accepts PlateSolve3's formal result without a
+project-authored minimum source or match count when all physical checks pass:
+
+- coordinates, position angle and solver residual are finite;
+- plate scale lies in the configured optical range (the current policy uses
+  0.70–1.30 of the value predicted from focal length, pixel size and binning);
+- parity matches the locked installation record;
+- distance from the mount hint is no more than the configurable maximum
+  two-optical-axis offset plus half of the G3 detector diagonal.
+
+The last item describes what the two telescopes can physically see, not how far
+one correction may move. The motion family's much smaller single-step,
+cumulative, attempt, time and return-reserve limits remain independent. After
+a large direct WCS move, a fresh solve must show the expected sky response.
 
 ### B. Low-match temporal cluster
 
@@ -93,9 +112,9 @@ requires all of the following:
 - the same pier side, ROI, binning, camera identity and installation epoch;
 - a fresh mount timestamp and no motion during any exposure.
 
-The required frame count, minimum/maximum match band and geometry tolerances are
-configuration fields with a policy ID and SHA-256. They are not hidden source
-literals.
+This cluster is a fallback only when no formal solution is available. Its frame
+count and geometry tolerances are configuration fields with a policy ID and
+SHA-256. They are not hidden source literals.
 
 ### C. Overlapping multi-field mosaic
 
@@ -168,11 +187,15 @@ bind:
 - any direct-target-to-off-slit epoch translation;
 - post-settle samples and a post-capture target/slit proxy.
 
-The program must not require a visible stellar target peak in the final guide
-frame for these classes. Completion instead uses WCS uncertainty plus lock
-uncertainty, and later the expected ATR aperture/signal. The current production
-runner does not yet implement the durable mid-stage direct-to-off-slit epoch
-handoff; it remains fail-closed until that record exists.
+The program does not require a visible stellar target peak or fabricate target
+flux in the final guide frame for these classes. The production runner records
+`CatalogWcsProjection`, marks target flux not applicable, lets PHD2 perform
+native off-slit selection, and closes on catalogue/WCS geometry, exact-lock
+translation, fresh dark-slit midpoint, fresh guide/lock residual and settle.
+If an auto guide policy falls back to direct-target guiding, the target must be
+actually re-detected at that exposure; a synthetic WCS point cannot be selected
+as a guide star. Durable mid-stage direct-to-off-slit handoff after a later loss
+remains fail-closed.
 
 ## 7. Adaptive ATR science exposure
 
@@ -210,17 +233,41 @@ defect candidate, not mistaken for spectral clipping.
 
 ## 8. Acceptance milestones
 
-This branch is complete only after separate real-sky tests demonstrate:
+Acceptance status after the M76 run:
 
 1. a sparse stellar field solved by a consistent low-match cluster;
 2. a target field recovered by a two-or-more-node overlapping mosaic and
    returned to its origin on a forced failure;
-3. a faint point target placed without a visible final G3 peak, held by an
-   off-slit guide and verified by ATR signal;
-4. a compact/extended nebular target that does not pass through a stellar-shape
-   gate;
+3. **partly passed:** M76 was placed from WCS geometry, held by an off-slit
+   guide and verified by emission-line SNR; a 3C 273-class invisible point
+   target remains to be replayed;
+4. **passed for the field-tool route and implemented in production:** M76 did
+   not require the nebula to pass a stellar-shape gate;
 5. adaptive exposure responding both upward and downward during a science block
    without clipping or silently discarding frames;
 6. all routes preserving N.I.N.A./PHD2/QHY/UVEX ownership, bounded motion,
    immutable evidence and operator-controlled roof safety.
 
+## 9. 15 µm slit interpretation and parallel QHY imaging
+
+The M76 commissioning exposure used slit-wheel slot 2, nominally 15 µm. This
+was the correct retained setup for the preceding nova but is throughput-limited
+for a planetary nebula whose surface brightness is poorer than an approximately
+8th-magnitude point source. A low continuum SNR is therefore not a placement
+failure. At 600 s the accepted M76 frame measured continuum SNR/resolution
+element about 2.02 but line SNR/resolution element about 19.90, with zero
+trace-saturated fraction and no clipped dispersion columns. Target selection
+for emission nebulae must prioritize line and accumulated-stack SNR; choosing a
+wider slit is an explicit resolution/throughput observing-plan decision.
+
+QHYminiCam8M and its integrated filter wheel may operate concurrently with the
+N.I.N.A.-owned ATR585M because they are different physical cameras with
+different owners. A photometry request can now carry a repeating, configured
+`Filter:ExposureSeconds` sequence such as `H:60,O:60,S:60`. The QHY service
+moves and reads back the wheel for every frame, writes the actual filter to
+FITS, labels roles `PHOTOMETRY-H/O/S`, and maintains a separate transparency
+baseline per filter. The production default records detected-star count and
+transparency but does not impose the former hidden 10-star veto or a
+cross-filter transparency veto (`0` disables each blocking threshold); the
+configured saturation fraction remains a hard pixel-quality gate. This is
+optional sidecar imaging; it never borrows ATR or G3 ownership.

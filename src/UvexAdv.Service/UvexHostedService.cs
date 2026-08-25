@@ -24,11 +24,13 @@ internal sealed class UvexHostedService(
             {
                 try
                 {
-                    if (controller.Status.ConnectionState is DeviceConnectionState.Disconnected or DeviceConnectionState.Faulted)
-                    {
-                        await controller.ConnectAsync(stoppingToken).ConfigureAwait(false);
-                    }
-                    else if (controller.Status.ConnectionState == DeviceConnectionState.Ready)
+                    // The service owns the protocol session, but service lifetime is
+                    // deliberately not device-connection lifetime.  Like PHD2, it
+                    // starts disconnected and only opens COM5 after an explicit
+                    // operator/API connect request.  A normal disconnect must remain
+                    // disconnected; otherwise the old five-second retry loop races
+                    // the vendor application and makes the Disconnect button a lie.
+                    if (controller.Status.ConnectionState == DeviceConnectionState.Ready)
                     {
                         await controller.RefreshAsync(stoppingToken).ConfigureAwait(false);
                     }
@@ -39,7 +41,7 @@ internal sealed class UvexHostedService(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "UVEX background connection/refresh failed; retrying without moving hardware");
+                    logger.LogWarning(ex, "UVEX background status refresh failed; the service will not reconnect COM5 automatically");
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);

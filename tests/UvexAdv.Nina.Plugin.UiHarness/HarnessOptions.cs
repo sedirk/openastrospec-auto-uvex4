@@ -10,7 +10,7 @@ public sealed record HarnessOptions(
 {
     public const string Usage =
         "Usage: UvexAdv.Nina.Plugin.UiHarness --render [--output <directory>] " +
-        "[--scenario idle|startup-requirements|running|failure|phd2-degraded|phd2-direct-target|ghost-assistance|qhy-g3-fast-pair|narrow|advanced]\n" +
+        "[--scenario idle|uvex-manual|startup-requirements|running|atr-manual|failure|phd2-degraded|phd2-direct-target|ghost-assistance|qhy-g3-fast-pair|narrow|advanced]\n" +
         "The --render switch is mandatory. The harness is offline and never instantiates the production dockable view model.";
 
     public static bool TryParse(

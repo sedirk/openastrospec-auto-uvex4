@@ -7,6 +7,16 @@ public sealed class QhyCodecAndAnalysisTests : IDisposable
     private readonly string directory = Path.Combine(Path.GetTempPath(), "UVEX-ADV-QHY.Tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void DefaultQualityThresholdsDoNotRejectSparseOrNarrowbandFields()
+    {
+        var thresholds = new QhyQualityThresholds();
+
+        Assert.Equal(0, thresholds.MinimumDetectedStars);
+        Assert.Equal(0, thresholds.MinimumTransparency);
+        Assert.Equal(0.002, thresholds.MaximumSaturatedFraction);
+    }
+
+    [Fact]
     public void AnalyzerFindsSyntheticStarsAndPreviewIsGrayscalePng()
     {
         var frame = CreateStarFrame();

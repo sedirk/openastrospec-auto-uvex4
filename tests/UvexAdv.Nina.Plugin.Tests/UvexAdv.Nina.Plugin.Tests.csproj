@@ -18,6 +18,7 @@
     <Reference Include="NINA.PlateSolving" HintPath="$(NinaInstallDir)\NINA.PlateSolving.dll" Private="true" />
     <Reference Include="NINA.Profile" HintPath="$(NinaInstallDir)\NINA.Profile.dll" Private="true" />
     <Reference Include="NINA.Plugin" HintPath="$(NinaInstallDir)\NINA.Plugin.dll" Private="true" />
+    <Reference Include="NINA.Sequencer" HintPath="$(NinaInstallDir)\NINA.Sequencer.dll" Private="true" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\UvexAdv.Nina.Plugin\UvexAdv.Nina.Plugin.csproj" />

@@ -254,7 +254,66 @@ public sealed record TargetIdentification(
     StarCandidate? Target,
     PixelPoint PredictedPoint,
     double PredictionResidualPixels,
-    double UniquenessRatio);
+    double UniquenessRatio,
+    TargetIdentificationAuthority Authority = TargetIdentificationAuthority.StellarCentroid)
+{
+    public static TargetIdentification FromCatalogWcs(
+        PixelPoint predictedPoint,
+        int imageWidth,
+        int imageHeight,
+        string message)
+    {
+        if (!double.IsFinite(predictedPoint.X) || !double.IsFinite(predictedPoint.Y) ||
+            predictedPoint.X < 0 || predictedPoint.X >= imageWidth ||
+            predictedPoint.Y < 0 || predictedPoint.Y >= imageHeight)
+        {
+            return new TargetIdentification(
+                GateResult.Unknown(
+                    "G3_SOLVED_TARGET_OUTSIDE",
+                    $"The formal WCS projects the catalogue coordinate outside the {imageWidth}x{imageHeight} G3 frame; bounded N.I.N.A. WCS centering is required."),
+                null,
+                predictedPoint,
+                double.PositiveInfinity,
+                0,
+                TargetIdentificationAuthority.CatalogWcsProjection);
+        }
+        var edgeDistance = Math.Max(0, Math.Min(
+            Math.Min(predictedPoint.X, imageWidth - 1 - predictedPoint.X),
+            Math.Min(predictedPoint.Y, imageHeight - 1 - predictedPoint.Y)));
+        var geometryPoint = new StarCandidate(
+            predictedPoint,
+            PeakAdu: 0,
+            FluxAdu: 0,
+            SignalToNoise: 0,
+            FwhmPixels: 0,
+            Ellipticity: 0,
+            SaturatedFraction: 0,
+            EdgeDistancePixels: edgeDistance);
+        return new TargetIdentification(
+            GateResult.Pass(
+                "TARGET_CATALOG_WCS_PROJECTED",
+                message,
+                new Dictionary<string, double>
+                {
+                    ["predictedX"] = predictedPoint.X,
+                    ["predictedY"] = predictedPoint.Y,
+                    ["targetPeakRequired"] = 0,
+                }),
+            geometryPoint,
+            predictedPoint,
+            PredictionResidualPixels: 0,
+            UniquenessRatio: double.PositiveInfinity,
+            TargetIdentificationAuthority.CatalogWcsProjection);
+    }
+}
+
+public enum TargetIdentificationAuthority
+{
+    StellarCentroid,
+    CatalogWcsProjection,
+    BrightWingCentroid,
+    GhostAssistedCentroid,
+}
 
 public static class SlitTargetIdentifier
 {

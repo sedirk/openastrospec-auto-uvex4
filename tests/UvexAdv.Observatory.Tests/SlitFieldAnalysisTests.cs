@@ -34,6 +34,40 @@ public sealed class SlitFieldAnalysisTests
     }
 
     [Fact]
+    public void CatalogWcsTargetDoesNotInventAStellarDetectionOrFlux()
+    {
+        var predicted = new PixelPoint(123.25, 456.75);
+
+        var result = TargetIdentification.FromCatalogWcs(
+            predicted,
+            imageWidth: 1920,
+            imageHeight: 1080,
+            "M76 catalogue centre projected by trusted WCS.");
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("TARGET_CATALOG_WCS_PROJECTED", result.Gate.Code);
+        Assert.Equal(TargetIdentificationAuthority.CatalogWcsProjection, result.Authority);
+        Assert.Equal(predicted, result.Target!.Centroid);
+        Assert.Equal(0, result.Target.FluxAdu);
+        Assert.Equal(0, result.Target.SignalToNoise);
+        Assert.Equal(0, result.PredictionResidualPixels);
+    }
+
+    [Fact]
+    public void CatalogWcsTargetOutsideFrameRequiresCentering()
+    {
+        var result = TargetIdentification.FromCatalogWcs(
+            new PixelPoint(2000, 400),
+            imageWidth: 1920,
+            imageHeight: 1080,
+            "outside");
+
+        Assert.Equal(GateDisposition.Indeterminate, result.Gate.Disposition);
+        Assert.Equal("G3_SOLVED_TARGET_OUTSIDE", result.Gate.Code);
+        Assert.Null(result.Target);
+    }
+
+    [Fact]
     public void GuideStarInsideSlitGuardIsRejected()
     {
         var slit = new SlitGeometry("slit", new PixelPoint(100, 100), 90, 150, 3, 1, "g3", 1, 1);

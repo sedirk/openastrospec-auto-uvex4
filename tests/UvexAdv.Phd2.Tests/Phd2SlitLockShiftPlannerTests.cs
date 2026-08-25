@@ -39,6 +39,56 @@ public sealed class Phd2SlitLockShiftPlannerTests
     }
 
     [Fact]
+    public void CatalogWcsGeometryCanPlanOffSlitShiftWithoutFabricatedTargetFlux()
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(
+            guide: new Phd2Point(100, 100),
+            target: new Phd2Point(200, 200),
+            slit: new Phd2Point(215, 200),
+            fluxLabel: "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE",
+            fluxMetric: 0,
+            targetPositionAuthority: Phd2TargetPositionAuthority.CatalogWcsProjection);
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.True(result.IsAllowed, $"{result.Code}: {result.Message}");
+        Assert.Equal(new Phd2Point(15, 0), result.Stage!.TargetToSlitDelta);
+    }
+
+    [Fact]
+    public void CatalogWcsGeometryRejectsFabricatedFluxEvidence()
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(
+            guide: new Phd2Point(100, 100),
+            target: new Phd2Point(200, 200),
+            slit: new Phd2Point(215, 200),
+            targetPositionAuthority: Phd2TargetPositionAuthority.CatalogWcsProjection);
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal("G3_CATALOG_WCS_AUTHORITY_INVALID", result.Code);
+    }
+
+    [Fact]
     public void TargetAlreadyOnSlitEdgeStillMovesToRecognizedMidpoint()
     {
         var fixture = CreateFixture();
@@ -495,6 +545,8 @@ public sealed class Phd2SlitLockShiftPlannerTests
         bool minimumExposureApplied = true,
         int exposureMilliseconds = 1000,
         string fluxLabel = "FLUX_PASS",
+        double fluxMetric = 100,
+        Phd2TargetPositionAuthority targetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid,
         string? frameSha = null,
         Phd2SensorTopology? topology = null) => new(
         frameSha ?? Hash('F'),
@@ -509,8 +561,9 @@ public sealed class Phd2SlitLockShiftPlannerTests
         minimumExposureApplied,
         "catalog+wcs+continuity",
         fluxLabel,
-        FluxMetric: 100,
-        "FRESH_G3_TARGET_SLIT_RESIDUAL");
+        fluxMetric,
+        "FRESH_G3_TARGET_SLIT_RESIDUAL",
+        targetPositionAuthority);
 
     private static string Hash(char value) => new(value, 64);
 

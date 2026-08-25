@@ -15,6 +15,7 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("uvex-manual", 1180, 800, ObservationDockMockViewModel.UvexManual()),
         new("startup-requirements", 1180, 900, ObservationDockMockViewModel.StartupRequirements()),
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
@@ -40,10 +41,10 @@ public sealed class ObservationDockMockViewModel
     private static readonly ICommand EnabledCommand = new NoOpCommand(true);
     private static readonly ICommand DisabledCommand = new NoOpCommand(false);
 
-    public string ModeText { get; init; } = "模拟演练";
+    public string ModeText { get; init; } = "自动观测：模拟演练";
     public string ModeDescription { get; init; } = "只运行模拟状态机，不连接相机、赤道仪、PHD2 或 COM5。";
     public string RealModeStatus { get; init; } = "真实模式有 3 个启动阻断项；当前演练不受影响。";
-    public string RealModeStatusSummary { get; init; } = "真实模式：3 个启动阻断项。完整清单已移到“高级设置”。";
+    public string RealModeStatusSummary { get; init; } = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
     public string StartButtonText { get; init; } = "启动模拟演练（不连接设备）";
     public string StateText { get; init; } = "空闲";
     public string StatusMessage { get; init; } = "尚未启动；可以先检查计划与运行模式。";
@@ -150,6 +151,43 @@ public sealed class ObservationDockMockViewModel
     public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
     public string ManualSpectrumSummary { get; init; } = "尚未采集光谱";
     public PointCollection ManualSpectrumPoints { get; init; } = CreateEmptyManualSpectrumPoints();
+    public string ManualUvexServiceUrl { get; init; } = "http://127.0.0.1:47844";
+    public IReadOnlyList<string> ManualUvexDeviceChoices { get; init; } = ["UVEX4 / COM5"];
+    public string SelectedManualUvexDevice { get; init; } = "UVEX4 / COM5";
+    public string ManualUvexConnectionStatus { get; init; } = "Ready · COM5 · 固件 2.3 · 位置可信（Live）";
+    public string ManualUvexPositionStatus { get; init; } = "狭缝：槽位 2（15um） · M2：12500 步 · 光栅：-1923 步 · 照明灯：Off";
+    public string ManualUvexLastAction { get; init; } = "状态已刷新；没有执行任何机械运动。";
+    public string ManualUvexError { get; init; } = string.Empty;
+    public bool HasManualUvexError => !string.IsNullOrWhiteSpace(ManualUvexError);
+    public bool IsManualUvexBusy { get; init; }
+    public bool IsManualUvexConnected { get; init; } = true;
+    public int ManualM2StepSize { get; init; } = 50;
+    public string ManualM2NegativeButtonText => $"M2 −{ManualM2StepSize} 步";
+    public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
+
+    public int AutomaticPreparationIssueCount { get; init; } = 4;
+    public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
+    public bool IsTargetPreparationMissing { get; init; }
+    public string TargetPreparationStatus { get; init; } = "已选择：Vega · J2000 RA 279.23473° / Dec +38.78369°";
+    public bool IsDevicePreparationMissing { get; init; } = true;
+    public string DevicePreparationStatus { get; init; } = "未完成：点击自动读取 N.I.N.A. 已连接设备；PHD2/G3 与 QHY 身份由 commissioning 文件一次导入。";
+    public bool IsCommissioningPreparationMissing { get; init; } = true;
+    public string CommissioningPreparationStatus { get; init; } = "未完成：请选择 commissioning bindings；ID、哈希、设备身份和运动限额会自动填写，不需要逐项抄写。";
+    public bool IsNightSetupPreparationMissing { get; init; } = true;
+    public string NightSetupPreparationStatus { get; init; } = "未完成：本夜设备快照尚未选择。";
+    public bool IsSlitChoiceMissing { get; init; }
+    public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
+    public string AutomationPolicyPreparationStatus => IsAutomationPolicyPreparationMissing
+        ? "后台一致性尚未通过；多数项目会在导入 bindings 与 Night Setup 后自动完成，不需要逐项填写。"
+        : "已通过：后台配置结构、设备所有权和运动限额完整。";
+    public int ExpectedUvexSlitPosition { get; init; } = 2;
+    public IReadOnlyList<MockUvexSlitChoice> UvexSlitChoices { get; init; } =
+    [
+        new(1, "槽位 1 · 标称 300 µm"),
+        new(2, "槽位 2 · 标称 15 µm"),
+        new(3, "槽位 3 · 标称 25 µm"),
+        new(4, "槽位 4 · 标称 35 µm"),
+    ];
 
     public IReadOnlyList<MockGateRow> GateRows { get; init; } = [];
     public IReadOnlyList<MockTimelineRow> TimelineRows { get; init; } = [];
@@ -232,6 +270,10 @@ public sealed class ObservationDockMockViewModel
     public ICommand ImportCommissioningBindingsCommand => EnabledCommand;
     public ICommand ShowObservationPlanCommand => EnabledCommand;
     public ICommand ShowStartupRequirementsCommand => EnabledCommand;
+    public ICommand ShowManualUvexControlCommand => EnabledCommand;
+    public ICommand ShowAdvancedSettingsCommand => EnabledCommand;
+    public ICommand AutoFillConnectedNinaDevicesCommand => EnabledCommand;
+    public ICommand SelectNightSetupSnapshotCommand => EnabledCommand;
     public ICommand RefreshProfileOwnershipCommand => EnabledCommand;
     public ICommand ImportFromFramingAssistantCommand =>
         IsRunActive || IsPausedNeedsAttention || IsTargetImportBusy ? DisabledCommand : EnabledCommand;
@@ -247,6 +289,18 @@ public sealed class ObservationDockMockViewModel
     public ICommand BindCurrentAtrCameraCommand => IsRunActive ? DisabledCommand : EnabledCommand;
     public ICommand RefreshAtrManualStatusCommand => EnabledCommand;
     public ICommand CaptureManualAtrSpectrumCommand => IsRunActive ? DisabledCommand : EnabledCommand;
+    public ICommand RefreshManualUvexStatusCommand => IsRunActive ? DisabledCommand : EnabledCommand;
+    public ICommand ConnectManualUvexCommand => IsRunActive || IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand DisconnectManualUvexCommand => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand ReleaseManualUvexComPortCommand => IsRunActive ? DisabledCommand : EnabledCommand;
+    public ICommand SelectManualSlit1Command => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand SelectManualSlit2Command => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand SelectManualSlit3Command => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand SelectManualSlit4Command => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand MoveManualM2NegativeCommand => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand MoveManualM2PositiveCommand => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand ManualSlitLightOnCommand => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
+    public ICommand ManualSlitLightOffCommand => IsRunActive || !IsManualUvexConnected ? DisabledCommand : EnabledCommand;
 
     public static ObservationDockMockViewModel Idle() => new()
     {
@@ -264,21 +318,41 @@ public sealed class ObservationDockMockViewModel
         EvidenceRows = []
     };
 
+    public static ObservationDockMockViewModel UvexManual() => new()
+    {
+        ModeText = "自动观测：真实设备",
+        ModeDescription = "设备手控与自动观测准入相互独立。",
+        StartButtonText = "启动真实设备自动观测",
+        RealModeStatusSummary = "自动观测准备尚未完成；不影响“设备手控”。",
+        IsSimulationMode = false,
+        SelectedWorkspaceTabIndex = 1,
+        IsManualUvexConnected = false,
+        ManualUvexConnectionStatus = "未连接 · COM5 · 固件 2.3 · 位置未知",
+        ManualUvexPositionStatus = "上次位置：狭缝槽位 2（15um） · M2 12500 步 · 光栅 -1923 步；连接后重新读取。",
+        ManualUvexLastAction = "设备选择已保存；打开本页不会连接 COM5。请点击“连接”。",
+        OperatorNotice = "离线设备手控截图；按钮没有连接任何真实设备。",
+    };
+
     public static ObservationDockMockViewModel StartupRequirements() => new()
     {
-        ModeText = "真实设备控制",
-        ModeDescription = "只有点击固定标题栏中的启动按钮后才会进入真实流程；启动前仍会逐项检查不可变证据、设备身份、安全门和运动限额。仅切换到此模式不会连接或移动设备。",
+        ModeText = "自动观测：真实设备",
+        ModeDescription = "这里只选择自动观测的执行方式；手控不要求整套自动观测准入。",
         RealModeStatus = "真实模式当前有 12 个启动阻断项：\n• 真实模式尚未标记为已调试。\n• 缺少 commissioning preset 文件。\n• 缺少 commissioning preset ID。\n• 缺少 commissioning preset SHA-256。\n• 缺少硬件 fingerprint SHA-256。\n• 缺少 Night Setup 快照文件。\n• 缺少 Night Setup SHA-256。\n• 缺少赤道仪 DeviceId。\n• 缺少真实 ATR585M DeviceId。\n• 缺少真实 QHY StableId。\n• PHD2 Profile/G3/赤道仪身份不完整。\n• 缺少 PHD2 注册表证据 SHA-256。",
-        RealModeStatusSummary = "真实模式：12 个启动阻断项。完整清单已移到“高级设置”。",
+        RealModeStatusSummary = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
-        SelectedWorkspaceTabIndex = 5,
+        SelectedWorkspaceTabIndex = 3,
+        AutomaticPreparationIssueCount = 12,
+        AutomaticPreparationSummary = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。",
+        IsDevicePreparationMissing = true,
+        IsCommissioningPreparationMissing = true,
+        IsNightSetupPreparationMissing = true,
         OperatorNotice = "离线启动条件截图；没有连接任何设备。",
     };
 
     public static ObservationDockMockViewModel Running() => new()
     {
-        ModeText = "真实设备控制",
+        ModeText = "自动观测：真实设备",
         ModeDescription = "全部启动硬门已经通过；流程正在自动推进，人工可随时暂停。",
         RealModeStatus = "✓ 真实模式启动条件已通过",
         RealModeStatusSummary = "真实模式：启动条件已通过。",
@@ -291,7 +365,7 @@ public sealed class ObservationDockMockViewModel
         RunManifestPath = @"C:\UVEX-ADV\runs\simulated-running\manifest.json",
         IsSimulationMode = false,
         IsRunActive = true,
-        SelectedWorkspaceTabIndex = 2,
+        SelectedWorkspaceTabIndex = 4,
         SelectedPreviewTabIndex = 1,
         QhyPreviewImage = PreviewImageFactory.CreateQhyField(),
         G3PreviewImage = PreviewImageFactory.CreateG3SlitField(false),
@@ -311,7 +385,7 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel Failure() => new()
     {
-        ModeText = "真实设备控制",
+        ModeText = "自动观测：真实设备",
         ModeDescription = "自动流程已停止发起新动作；人工检查后可恢复并重新验证全部失效门。",
         RealModeStatus = "✓ 已锁定本次运行的 Night Setup 与设备身份",
         RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
@@ -325,7 +399,7 @@ public sealed class ObservationDockMockViewModel
         RunManifestPath = @"C:\UVEX-ADV\runs\simulated-failure\manifest.json",
         IsSimulationMode = false,
         HasFailure = true,
-        SelectedWorkspaceTabIndex = 3,
+        SelectedWorkspaceTabIndex = 5,
         SelectedPreviewTabIndex = 1,
         LastFailureHeadline = "C11 主焦点质量门未通过",
         LastFailureCode = "G3_FOCUS_STARS_TOO_BROAD",
@@ -348,13 +422,13 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel AtrManual() => new()
     {
-        ModeText = "真实设备控制",
+        ModeText = "自动观测：真实设备",
         ModeDescription = "离线界面验收：单帧检查区已并入自动观测；本截图没有连接相机或触发曝光。",
         RealModeStatus = "离线示例；单帧检查不会启动入缝、导星或 UVEX 运动。",
         RealModeStatusSummary = "真实模式：离线界面验收。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
-        SelectedWorkspaceTabIndex = 2,
+        SelectedWorkspaceTabIndex = 4,
         SelectedPreviewTabIndex = 2,
         AtrPreviewImage = PreviewImageFactory.CreateAtrSpectrum(),
         AtrPreviewCaption = "最近自动探测帧：即时一维提取 SNR 31.7；该帧属于自动观测证据链。",
@@ -369,7 +443,7 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel Phd2Degraded() => new()
     {
-        ModeText = "真实设备控制 · 有人监督",
+        ModeText = "自动观测：真实设备 · 有人监督",
         ModeDescription = "离线界面验收：显示降级校准的权限边界；没有连接或移动设备。",
         RealModeStatus = "PHD2 降级模式只能由本轮显式选择，不能成为无人值守科学权威。",
         RealModeStatusSummary = "真实模式：启动条件已通过；等待本轮监督选择。",
@@ -399,7 +473,7 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel Phd2DirectTarget() => new()
     {
-        ModeText = "真实设备控制 · 有人监督",
+        ModeText = "自动观测：真实设备 · 有人监督",
         ModeDescription = "离线界面验收：普通导星星不可用时，显示短曝光直接导目标星的退化路线；没有连接或移动设备。",
         RealModeStatus = "直接导目标星始终需要本轮显式监督许可，校准本身合格也不能获得无人值守权限。",
         RealModeStatusSummary = "真实模式：启动条件已通过；等待本轮监督选择。",
@@ -429,7 +503,7 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel GhostAssistance() => new()
     {
-        ModeText = "真实设备控制",
+        ModeText = "自动观测：真实设备",
         ModeDescription = "离线界面验收：已显示确定性鬼影辅助的完整权限边界；没有连接或移动设备。",
         RealModeStatus = "✓ schema 4 commissioning preset、四槽位光学身份与 action configuration 已锁定",
         RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
@@ -469,7 +543,7 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel QhyG3FastPair() => new()
     {
-        ModeText = "真实设备控制 · 候选学习",
+        ModeText = "自动观测：真实设备 · 候选学习",
         ModeDescription = "离线界面验收：G3 解算后立即配对 QHY WCS；没有连接、曝光或移动设备。",
         RealModeStatus = "✓ 快速双解算 policy 已进入不可变 action configuration",
         RealModeStatusSummary = "真实模式：本次运行的启动条件已通过。",
@@ -481,7 +555,7 @@ public sealed class ObservationDockMockViewModel
         ProgressPercent = 44,
         IsSimulationMode = false,
         IsRunActive = true,
-        SelectedWorkspaceTabIndex = 5,
+        SelectedWorkspaceTabIndex = 7,
         QhyG3FastPairEnabled = true,
         QhyG3FastPairStatus = "已启用候选学习：优先复用 ≤15s 的同位置 QHY WCS；否则只拍 1 张 2s QHY 帧。全过程 0 次赤道仪命令，候选不能直接授权运动。",
         WideToSlitTransferStatus = "自动预定位仍为 Skip；本轮 paired-WCS 只生成 Candidate，需多样本独立验证后才能激活。",
@@ -509,7 +583,7 @@ public sealed class ObservationDockMockViewModel
             HasTargetImport = true,
             IsSimulationMode = running.IsSimulationMode,
             IsRunActive = true,
-            SelectedWorkspaceTabIndex = 1,
+            SelectedWorkspaceTabIndex = 2,
             SelectedPreviewTabIndex = 0,
             QhyPreviewImage = running.QhyPreviewImage,
             G3PreviewImage = running.G3PreviewImage,
@@ -530,12 +604,12 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel Advanced() => new()
     {
-        ModeText = "真实设备控制",
+        ModeText = "自动观测：真实设备",
         ModeDescription = "离线界面验收；不连接任何设备。",
         RealModeStatus = "超亮目标例外分支已显示；本截图不授权设备动作。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
-        SelectedWorkspaceTabIndex = 5,
+        SelectedWorkspaceTabIndex = 7,
         BrightTargetWingCentroidEnabled = true,
         BrightTargetMinimumG3ExposureMilliseconds = 125,
         BrightTargetMaximumQhyWcsAgeMinutes = 5,
@@ -662,3 +736,5 @@ internal sealed class NoOpCommand(bool canExecute) : ICommand
     {
     }
 }
+
+public sealed record MockUvexSlitChoice(int Position, string DisplayName);

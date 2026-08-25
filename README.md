@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest real-sky closeout](docs/commissioning-night-2026-08-24.md) ·
+[latest real-sky closeout](docs/commissioning-night-2026-08-25.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [contributing](CONTRIBUTING.md)
@@ -97,7 +97,7 @@ without manual or model correction after launch. This is evidence for target
 placement, guiding and paired ATR/QHY acquisition—not a claim that the roof and
 weather system are unattended. The evidence boundary and remaining sparse-field
 work are documented in the
-[`2026-08-24/25 commissioning closeout`](docs/commissioning-night-2026-08-24.md)
+[`2026-08-25/26 M76 faint-target closeout`](docs/commissioning-night-2026-08-25.md)
 and the
 [`faint-target and sparse-field design`](docs/design/faint-target-and-sparse-field-acquisition.md).
 
@@ -203,14 +203,22 @@ acceptance record are in
 Its isolated WPF harness renders the real production data template with deterministic
 mock states; it never constructs the production dockable or contacts equipment.
 
-The `OpenAstroSpec 自动观测` (`OpenAstroSpec Automated Observation`) dock begins with
-two explicit choices: **Simulation rehearsal (connects no real equipment)** and
-**Real-equipment control (must pass every hard safety gate)**. It then uses one
-mode-aware start button. Selecting real mode by itself never connects or moves equipment. The dock
-shows QHY/GS350, PHD2/G3 slit-field, and ATR spectrum previews as narrow-layout tabs,
-alongside the current stage, next stage, quality gates, timeline, evidence files, and
-remaining progress. A persistent failure card links the latest failed gate and metrics
-to the relevant zoom/pan preview and evidence directory. A normal run is:
+The `OpenAstroSpec 自动观测` (`OpenAstroSpec Automated Observation`) dock now separates
+**UVEX manual preparation** from **automated observation**. It remembers the selected
+`UVEX4 / COM5` device but opening the service or dock does not connect hardware. The
+operator explicitly presses Connect to open COM5 and read live positions; Disconnect
+closes the port and remains disconnected without a background retry. Once connected,
+manual preparation uses the sole `UvexAdv.Service` owner to select any of the four
+mechanical slit positions, toggle slit illumination, jog M2 within service-enforced
+bounds, or explicitly release COM5 to the vendor application. It does not require Night Setup,
+PHD2, QHY, WCS, or the full automated-observation commissioning package. Automated
+observation still offers **simulated automation** and **real automation** with one
+mode-aware start button. Its structured preparation form reads connected N.I.N.A.
+identities automatically, imports immutable bindings and Night Setup evidence in one
+selection, uses selectors for operator choices, and marks the incomplete field card in
+red instead of dumping internal validation strings into the main footer. The dock also
+shows QHY/GS350, PHD2/G3 slit-field, and ATR spectrum previews, the current and next
+stage, quality gates, timeline, evidence files, and remaining progress. A normal run is:
 
 The target draft can be copied once from N.I.N.A.'s Framing Assistant or from the
 currently selected object in N.I.N.A.'s configured planetarium (including
@@ -219,6 +227,17 @@ source and time. Import never connects equipment or starts a run, does not alter
 Night Setup, commissioning, duration, or safety settings, and does not rewrite
 Advanced Sequence containers that were already created. Multi-panel framing is
 rejected until a panel-selection workflow exists.
+
+Advanced Sequence target-observation containers now publish that target through
+N.I.N.A.'s native `IDeepSkyObjectContainer`/`InputTarget` contract. ATR files are
+still saved only by N.I.N.A. The recommended active-profile file pattern is
+`$$DATEMINUS12$$\$$TARGETNAME$$\$$IMAGETYPE$$\$$DATETIME$$_$$TARGETNAME$$_$$EXPOSURETIME$$s_G$$GAIN$$_O$$OFFSET$$_$$FRAMENR$$`.
+The Advanced Settings page displays the current and recommended values and offers
+explicit apply/undo commands; the plugin never rewrites a profile at startup. Each
+saved ATR FITS is then reopened read-only and checked for stable `OBJECT`, run ID,
+stage, capture ID, Night Setup, image type, and optional catalogue identity. A
+mismatch retains the immutable raw file but prevents it from being claimed as
+accepted science. See [ADR-0007](docs/adr/0007-nina-native-target-and-image-provenance.md).
 
 1. Validate the immutable Night Setup, schema-3 commissioning preset, exact device
    identities, environment, target horizon for the remaining worst-case block, UVEX

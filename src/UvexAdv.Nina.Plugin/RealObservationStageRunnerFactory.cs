@@ -103,6 +103,7 @@ public sealed class RealObservationStageRunnerFactory
         var blindSolver = plateSolverFactory.GetBlindSolver(plateSettings);
         return RealRunConfiguration.Capture(
             settings,
-            PlateSolverRunConfiguration.Capture(plateSettings, primarySolver, blindSolver));
+            PlateSolverRunConfiguration.Capture(plateSettings, primarySolver, blindSolver),
+            profileService.ActiveProfile.ImageFileSettings.FilePattern);
     }
 }
