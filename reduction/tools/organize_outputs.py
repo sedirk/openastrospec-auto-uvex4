@@ -96,6 +96,7 @@ def _specs() -> list[ProductSpec]:
     ngc_12 = RUNS_ROOT / "20260512-sharpcap" / "ngc6543-final"
     ngc_21 = RUNS_ROOT / "full-20260221"
     order2 = QUALITY_ROOT / "order2-study-20260218"
+    nova_20260826 = RUNS_ROOT / "nova-sge-2026-20260826" / "workflow"
 
     specs = [
         ProductSpec(
@@ -454,6 +455,74 @@ def _specs() -> list[ProductSpec]:
             ngc_12 / "standard-no-flat",
             "Vega",
             notes=("Same-night relative-response standard for NGC 6543.",),
+        ),
+        ProductSpec(
+            target="PNV-J19450648+1822422",
+            date="2026-08-25",
+            display_name="PNV J19450648+1822422 / Nova Sge 2026",
+            source_csv=nova_20260826 / "final" / "Nova_Sge_2026_calibrated_1d.csv",
+            source_fits=nova_20260826 / "final" / "Nova_Sge_2026_calibrated_1d.fits",
+            diagnostics={
+                "normalized_source.png": nova_20260826
+                / "final"
+                / "Nova_Sge_2026_normalised_1d.png",
+                "trace.png": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_trace_overlay.png",
+                "alignment.png": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_alignment.png",
+                "preprocessed_2d.png": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_preprocessed.png",
+                "wavelength_residuals.png": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_wavelength_residuals.png",
+                "pipeline_spectrum.png": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_spectrum.png",
+                "line_diagnostics_narrow_model_not_applicable.png": nova_20260826
+                / "final"
+                / "Nova_Sge_2026_line_diagnostics.png",
+            },
+            calibration={
+                "response.csv": nova_20260826 / "final" / "relative_response.csv",
+                "response.fits": nova_20260826 / "final" / "relative_response.fits",
+                "response.png": nova_20260826 / "final" / "relative_response.png",
+            },
+            metadata={
+                "processing.json": nova_20260826
+                / "science-preferred"
+                / "Nova_Sge_2026_run.json",
+                "workflow.json": nova_20260826 / "full_workflow.json",
+                "calibration.json": nova_20260826
+                / "final"
+                / "Nova_Sge_2026_calibration.json",
+                "line_analysis_narrow_model_not_applicable.json": nova_20260826
+                / "final"
+                / "Nova_Sge_2026_line_analysis.json",
+                "input_inspection.json": QUALITY_ROOT
+                / "inspection"
+                / "20260826-nova-sge-2026.json",
+                "input_inspection.csv": QUALITY_ROOT
+                / "inspection"
+                / "20260826-nova-sge-2026.csv",
+            },
+            notes=(
+                "Seven accepted 600 s spectra; 4200 s total integration.",
+                "Same-session Vega transfer; relative response only, not absolute flux.",
+                "The generic narrow-emission-line model is not applicable to this broad, absorption-dominated nova spectrum.",
+            ),
+        ),
+        _pipeline_spec(
+            "Vega",
+            "2026-08-25",
+            nova_20260826 / "standard-flat-trial",
+            "Vega",
+            notes=(
+                "Same-session wavelength and relative-response standard for PNV J19450648+1822422.",
+                "The accepted LED flat was validated against the no-flat control reduction.",
+            ),
         ),
     ]
     return specs

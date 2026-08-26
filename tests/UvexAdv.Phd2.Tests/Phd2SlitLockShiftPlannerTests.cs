@@ -7,6 +7,54 @@ public sealed class Phd2SlitLockShiftPlannerTests
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void PierAdaptiveTopologyAcceptsPHD2AutomaticFlipAndCreatesCurrentSideFingerprint()
+    {
+        var source = Topology() with { PierSide = "East" };
+
+        var result = Phd2PierAdaptiveTopologyPolicy.Resolve(
+            source,
+            source.ComputeFingerprintSha256(),
+            "pierWest",
+            automaticPierFlipEvidenceComplete: true);
+
+        Assert.True(result.IsAllowed, result.Message);
+        Assert.Equal("PHD2_PIER_SIDE_ADAPTED", result.Code);
+        Assert.Equal("pierWest", result.RuntimeTopology!.PierSide);
+        Assert.NotEqual(source.ComputeFingerprintSha256(), result.RuntimeTopology.ComputeFingerprintSha256());
+    }
+
+    [Fact]
+    public void PierAdaptiveTopologyRejectsOppositeSideWithoutCommissionedPHD2FlipEvidence()
+    {
+        var source = Topology() with { PierSide = "East" };
+
+        var result = Phd2PierAdaptiveTopologyPolicy.Resolve(
+            source,
+            source.ComputeFingerprintSha256(),
+            "West",
+            automaticPierFlipEvidenceComplete: false);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal("PHD2_AUTOMATIC_PIER_FLIP_UNCOMMISSIONED", result.Code);
+        Assert.Null(result.RuntimeTopology);
+    }
+
+    [Fact]
+    public void PierAdaptiveTopologyStillRejectsChangedCommissionedSourceTopology()
+    {
+        var source = Topology() with { PierSide = "East" };
+
+        var result = Phd2PierAdaptiveTopologyPolicy.Resolve(
+            source,
+            Hash('F'),
+            "East",
+            automaticPierFlipEvidenceComplete: true);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal("PHD2_COMMISSIONED_TOPOLOGY_HASH_MISMATCH", result.Code);
+    }
+
+    [Fact]
     public void OffSlitFormulaUsesGuidePlusTargetToSlitDeltaAndSegments()
     {
         var fixture = CreateFixture();

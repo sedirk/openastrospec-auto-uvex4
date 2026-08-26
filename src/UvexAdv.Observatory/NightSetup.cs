@@ -183,9 +183,13 @@ public static class NightSetupCompatibility
             }
 
             var expected = expectedMatches[0];
-            gates.Add(evaluatedUtc >= expected.VerifiedUtc && evaluatedUtc <= expected.ValidUntilUtc
-                ? GateResult.Pass(code + "_EVIDENCE_FRESHNESS", $"{role} focus evidence is valid through {expected.ValidUntilUtc:O}.")
-                : GateResult.Fail(code + "_EVIDENCE_FRESHNESS", $"{role} focus evidence verified at {expected.VerifiedUtc:O} is not valid at {evaluatedUtc:O}; validity ended at {expected.ValidUntilUtc:O}."));
+            gates.Add(evaluatedUtc >= expected.VerifiedUtc
+                ? GateResult.Pass(
+                    code + "_EVIDENCE_STATE_BOUND",
+                    $"{role} focus evidence has no automatic calendar expiry; live owner, identity, topology, position and current metric gates determine whether it is still applicable.")
+                : GateResult.Fail(
+                    code + "_EVIDENCE_STATE_BOUND",
+                    $"{role} focus evidence verification time {expected.VerifiedUtc:O} is in the future relative to {evaluatedUtc:O}."));
             gates.Add(double.IsFinite(expected.Confidence) && expected.Confidence > 0 && expected.Confidence <= 1
                 ? GateResult.Pass(code + "_CONFIDENCE", $"{role} focus evidence confidence is {expected.Confidence:F3}.", new Dictionary<string, double> { ["confidence"] = expected.Confidence })
                 : GateResult.Unknown(code + "_CONFIDENCE", $"{role} focus evidence confidence is missing or invalid."));

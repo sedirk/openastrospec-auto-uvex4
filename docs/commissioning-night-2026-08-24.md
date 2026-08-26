@@ -84,7 +84,7 @@ N.I.N.A. 原生拍摄完成 `10 s LIGHT ×3`、gain 100。旧质量门当夜把�
 
 源码 `0.4.0.11` 改为先在配置的空间提取孔径内自动找谱迹，再分别记录迹线局部饱和比例、任意迹线像素削顶的波长列比例和最长连续削顶列。默认梯度包含 `0.01/0.03/0.1/0.3/1/3/10/15/30… s`，初始探针为 `0.1 s`；具体梯度和初始档仍是用户可见配置，不是按目标名硬编码。选档结果与当前探针不同时，必须在新档位再拍一张 fresh 探针并重新通过同一门，不能用已经削顶的帧线性外推后直接开始科学曝光。科学块每张候选帧复用相同硬门，失败帧不可变保留并触发重新探针。
 
-QHY service 同时在 physical R/slot 5 完成 run
+QHY service 同时在当时标为 physical R/slot 5、经 2026-08-26 校正确认为实际 Sloan i′/slot 5 的轮位完成 run
 `deneb-slit-midpoint-20260824T130121Z`：`5 s ×4`、gain 20、offset 20、`-10°C`，4/4 接受。manifest 位于：
 
 `C:\ProgramData\UVEX-ADV\qhy\data\runs\deneb-slit-midpoint-20260824T130121Z\qhy-01d1c05016064f35bd5b30869c558a50\manifest.json`
@@ -113,7 +113,7 @@ Deneb 的物理闭环有人工/大模型监督。PlateSolve3 raw PA 造成错误
 
 `output/commissioning/2026-08-24-night/mirfak-unattended-20260824T193125Z/`
 
-本地时间 `03:31:25–03:37:15`，manifest `Succeeded=true`。流程由 N.I.N.A. 目录转向开始，QHY R/5 s 固定轴见证后，G3 每个位置使用两张独立 10 s 解算。大残差由 N.I.N.A. 直接移动，不用 PHD2 蠕动；目标—狭缝粗残差约由 `3608.16 px → 81.27 px → 23.99 px`，对应各步 fresh N.I.N.A. 响应残差约 `30.96″、8.94″、9.17″`。
+本地时间 `03:31:25–03:37:15`，manifest `Succeeded=true`。流程由 N.I.N.A. 目录转向开始，QHY 旧标 R/实际 i′、5 s 固定轴见证后，G3 每个位置使用两张独立 10 s 解算。大残差由 N.I.N.A. 直接移动，不用 PHD2 蠕动；目标—狭缝粗残差约由 `3608.16 px → 81.27 px → 23.99 px`，对应各步 fresh N.I.N.A. 响应残差约 `30.96″、8.94″、9.17″`。
 
 最终程序使用 PHD2 `find_star` 返回的原生旁星，不自己排序替换；目标测量进入 `SlitObscuredSaturatedCore`，fresh 黑缝中点的目标峰残差 `2.708 px`、exact-lock 残差 `0.0051 px`，PHD2 保持 guiding。ATR 自动访问 `0.01 → 0.03 → 3 s`，以 fresh 3 s 探针验证后接受 `3×3 s`；同时取得 3 张配对 QHY 帧，ATR 迹线削顶列/局部饱和均为 0。
 
@@ -149,7 +149,7 @@ ATR 自动访问 `0.01 → 0.03 → 3 → 10 s`，不是按 Algol 名称或固�
 
 `output/commissioning/2026-08-24-night/hd19445-v8-06-epoch2026-unattended-20260824T201846Z/`
 
-N.I.N.A. 正常转向，QHY R/5 s 见证帧检测 32 星、最大值 `2555 ADU`、无饱和。随后：
+N.I.N.A. 正常转向，QHY 旧标 R/实际 i′、5 s 见证帧检测 32 星、最大值 `2555 ADU`、无饱和。随后：
 
 | G3 位置/曝光 | 提取源 | 目录匹配 | PlateSolve3 |
 |---|---:|---:|---|

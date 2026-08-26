@@ -9,6 +9,12 @@ using UvexAdv.Spectroscopy;
 
 namespace UvexAdv.Nina.Plugin;
 
+public enum M2FocusOperationMode
+{
+    KeepCurrentPosition,
+    CommissionedSpectralAutofocus,
+}
+
 [Export(typeof(IPluginManifest))]
 public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
 {
@@ -54,6 +60,23 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
         {
             settings.SpectralAutofocusCommissioned = value;
             Raise();
+            Raise(nameof(M2FocusMode));
+            Raise(nameof(SpectralAutofocusStatus));
+        }
+    }
+
+    public M2FocusOperationMode M2FocusMode
+    {
+        get => settings.SpectralAutofocusCommissioned
+            ? M2FocusOperationMode.CommissionedSpectralAutofocus
+            : M2FocusOperationMode.KeepCurrentPosition;
+        set
+        {
+            var commissioned = value == M2FocusOperationMode.CommissionedSpectralAutofocus;
+            if (settings.SpectralAutofocusCommissioned == commissioned) return;
+            settings.SpectralAutofocusCommissioned = commissioned;
+            Raise();
+            Raise(nameof(SpectralAutofocusCommissioned));
             Raise(nameof(SpectralAutofocusStatus));
         }
     }
@@ -145,7 +168,7 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
         {
             if (!settings.SpectralAutofocusCommissioned)
             {
-                return "未授权：只允许查看和影子采集，不允许自动移动 UVEX M2。";
+                return "保持当前位置：不会自动移动 UVEX M2；Night Setup 仍会核对当前步数和谱线质量。";
             }
 
             if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
@@ -208,6 +231,7 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
         Raise(nameof(BoundCameraId));
         Raise(nameof(Commissioned));
         Raise(nameof(SpectralAutofocusCommissioned));
+        Raise(nameof(M2FocusMode));
         Raise(nameof(WavelengthLockCommissioned));
         Raise(nameof(ExposureSeconds));
         Raise(nameof(Gain));

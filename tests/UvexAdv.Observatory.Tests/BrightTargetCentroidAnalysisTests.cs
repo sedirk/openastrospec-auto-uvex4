@@ -91,7 +91,7 @@ public sealed class BrightTargetCentroidAnalysisTests
     [Theory]
     [InlineData("disabled")]
     [InlineData("stale-qhy")]
-    [InlineData("expired-focus")]
+    [InlineData("future-focus")]
     [InlineData("focus-position")]
     [InlineData("wrong-exposure")]
     [InlineData("used-for-focus")]
@@ -106,7 +106,7 @@ public sealed class BrightTargetCentroidAnalysisTests
         {
             "disabled" => evidence with { Enabled = false },
             "stale-qhy" => evidence with { QhyFrameCompletedUtc = now.AddMinutes(-11) },
-            "expired-focus" => evidence with { C11FocusValidUntilUtc = now.AddSeconds(-1) },
+            "future-focus" => evidence with { C11FocusVerifiedUtc = now.AddSeconds(1) },
             "focus-position" => evidence with { C11CurrentPositionSteps = 5001 },
             "wrong-exposure" => evidence with { G3ExposureMilliseconds = 101 },
             "used-for-focus" => evidence with { G3FrameUsedForFocus = true },

@@ -540,7 +540,7 @@ public sealed record BrightTargetAuthorityEvidence(
     string ExpectedG3SourceCameraStableId,
     double C11FocusMetricValue,
     DateTimeOffset C11FocusVerifiedUtc,
-    DateTimeOffset C11FocusValidUntilUtc,
+    DateTimeOffset? C11FocusValidUntilUtc,
     double C11FocusConfidence,
     int C11LockedPositionSteps,
     int C11CurrentPositionSteps,
@@ -599,8 +599,8 @@ public static class BrightTargetAuthorityGate
             failures.Add("C11 focus source-camera identity does not match the locked G3 camera");
         if (!double.IsFinite(evidence.C11FocusMetricValue) || evidence.C11FocusMetricValue <= 0)
             failures.Add("independent C11 focus metric value is not finite and positive");
-        if (evidence.EvaluatedUtc < evidence.C11FocusVerifiedUtc || evidence.EvaluatedUtc > evidence.C11FocusValidUntilUtc || evidence.C11FocusValidUntilUtc <= evidence.C11FocusVerifiedUtc)
-            failures.Add("independent C11 focus evidence is not currently valid");
+        if (evidence.EvaluatedUtc < evidence.C11FocusVerifiedUtc)
+            failures.Add("independent C11 focus evidence is future-dated");
         if (!double.IsFinite(evidence.C11FocusConfidence) || evidence.C11FocusConfidence < options.MinimumC11FocusConfidence || evidence.C11FocusConfidence > 1)
             failures.Add("independent C11 focus confidence is below the configured limit");
         if (evidence.C11LockedPositionSteps < 0 || evidence.C11CurrentPositionSteps != evidence.C11LockedPositionSteps)

@@ -102,7 +102,7 @@ public sealed class NightSetupTests
     }
 
     [Fact]
-    public void CompatibilityFailsExpiredFocusEvidenceIndependently()
+    public void LegacyFocusDeadlineDoesNotExpireAnOtherwiseUnchangedState()
     {
         var setup = CreateSetup();
         var domains = setup.FocusDomains!;
@@ -119,9 +119,8 @@ public sealed class NightSetupTests
             CreateLiveSetup(CreateLiveFocusStates(setup)),
             evaluatedUtc: setup.LockedUtc.AddHours(1));
 
-        Assert.Contains(gates, gate => gate.Code == "FOCUS_GS350_WIDE_FIELD_EVIDENCE_FRESHNESS" && gate.Disposition == GateDisposition.Failed);
-        Assert.DoesNotContain(gates, gate => gate.Code == "FOCUS_C11_MAIN_EVIDENCE_FRESHNESS" && gate.Disposition != GateDisposition.Passed);
-        Assert.DoesNotContain(gates, gate => gate.Code == "FOCUS_UVEX_SPECTRAL_EVIDENCE_FRESHNESS" && gate.Disposition != GateDisposition.Passed);
+        Assert.Contains(gates, gate => gate.Code == "FOCUS_GS350_WIDE_FIELD_EVIDENCE_STATE_BOUND" && gate.Disposition == GateDisposition.Passed);
+        Assert.DoesNotContain(gates, gate => gate.Code.EndsWith("_EVIDENCE_FRESHNESS", StringComparison.Ordinal));
     }
 
     [Fact]

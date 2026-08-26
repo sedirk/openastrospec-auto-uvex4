@@ -35,7 +35,7 @@ Automation must reduce repetitive manual work without hiding uncertainty. A fail
 
 - ATR585M is the spectral camera. Its commissioned normal setting is gain 100, offset 256, 1×1, High Conversion Gain, and −10 °C unless an explicitly versioned equipment preset says otherwise.
 - G3M2210M images the slit field and supplies the guide stream.
-- A roughly coaxial GS350 guide scope (350 mm, f/6) carries the photometric QHYminiCam8M. It is used first for wide-field plate solving and coarse centering, then remains active for simultaneous time-series photometry during spectral acquisition.
+- A roughly coaxial GS350 guide scope (350 mm, f/6) carries the photometric QHYminiCam8M. It is used first for a wide-field plate-solve witness, then remains active for simultaneous time-series photometry during spectral acquisition. In the production route validated on sky, QHY WCS does not itself authorize mount motion: fresh G3 WCS owns large acquisition corrections and post-move verification.
 - The GS350, main telescope, and slit camera are not assumed to be perfectly rigid or exactly coaligned. Their transformations are calibrated measurements that can depend on pier side, orientation, temperature, and flexure.
 
 ### Local horizon
@@ -87,18 +87,18 @@ Bias and dark masters may be reused across nights when camera identity, gain, of
 
 1. The QHY service remains the camera owner from acquisition through the end of simultaneous photometry.
 2. It captures a raw, full-field solve frame and supplies it to the configured plate solver.
-3. The coordinator compares solved coordinates with the requested target and asks the N.I.N.A. telescope mediator for a bounded correction.
-4. It repeats until the target falls within the calibrated transfer region for the G3 slit field.
-5. Failure recovery progresses deterministically: longer exposure or adjusted detection threshold, then a bounded square/spiral search with maximum radius, attempt count, elapsed time, and a return-to-start rule.
-6. Frames taken during slewing/search are tagged `ACQUISITION` and are never mixed into scientific photometry.
+3. The coordinator retains the formal QHY WCS, target residual, immutable frame identity, mount readback and solver evidence as a wide-field witness. It does not send a mount command from that QHY result in the default production route.
+4. A failed QHY solve advances the commissioned QHY exposure ladder. It does not invent a minimum-star-count veto after the configured solver has returned a physically plausible formal solution.
+5. The coordinator then hands acquisition to a fresh G3 frame. An independently activated, versioned QHY-to-G3 transfer may remain an optional optimization under ADR-0004, but it is not the production default and never replaces the fresh G3 verification.
+6. QHY frames taken for acquisition are tagged `ACQUISITION` and are never mixed into scientific photometry.
 
 Random unbounded mount nudging is not an automated strategy.
 
 ### 5.2 Slit-field acquisition with G3/PHD2
 
 1. PHD2 remains the only G3 owner.
-2. A full slit-field frame is retained for plate solving or registered transfer from the calibrated QHY-to-G3 geometry.
-3. If a direct G3 solve fails, the coordinator may use the recent QHY WCS, calibrated transformation, and a bounded local search. It must retain every attempt and confidence score.
+2. A full slit-field frame is retained and solved. A formal, physically plausible fresh G3 WCS is the authority for a large acquisition correction through the N.I.N.A. telescope mediator; the commanded endpoint is not optical success evidence.
+3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Only the fresh post-move G3 WCS may prove response and arrival. If direct G3 solving fails, the coordinator uses a bounded overlapping neighbouring-field search; an applicable QHY-to-G3 transfer remains optional. It must retain every attempt and confidence score.
 4. The expected target is identified using catalogue coordinates, WCS, temporal continuity, and stellar morphology. Brightness alone is insufficient.
 5. The target centroid is moved to the calibrated slit locus using a selected,
    versioned fine-motion authority. The preferred authority is a current,
@@ -158,9 +158,9 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Target Observation` container composes reusable items rather than putting all logic in one command:
 
 1. Validate and lock Night Setup.
-2. Start/verify QHY service and acquire the wide field.
-3. Coarse solve and center through the telescope mediator.
-4. Acquire/solve the G3 slit field through PHD2.
+2. Start/verify QHY service, acquire the wide field and retain its formal WCS as a no-motion witness.
+3. Acquire/solve a fresh G3 slit field through PHD2; when the target is outside the field, issue a bounded N.I.N.A. WCS correction and prove its response with another fresh G3 solve. If no direct solve is available, use the bounded overlapping neighbouring-field search.
+4. Confirm that the catalogue target is inside the usable G3 field from fresh evidence.
 5. Select the versioned fine-motion authority. With PHD2 calibration authority,
    select the guide source and establish a current settle epoch; with an
    independent transform, retain the original acquisition-first order.

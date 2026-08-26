@@ -78,7 +78,7 @@ public sealed class QhyServiceHealthTests
             "camera-a",
             SdkHash,
             1,
-            new Dictionary<string, int> { ["R"] = 5 });
+            new Dictionary<string, int> { ["R"] = 6 });
 
         Assert.Contains(
             (proof with { ExpectedStableId = "camera-b" }).Validate(),
@@ -114,7 +114,7 @@ public sealed class QhyServiceHealthTests
             "camera-a",
             SdkHash,
             1,
-            new Dictionary<string, int> { ["G"] = 4, ["R"] = 4 }));
+            new Dictionary<string, int> { ["Z"] = 4, ["I"] = 4 }));
         Assert.Throws<ArgumentOutOfRangeException>(() => QhyServiceConfigurationProof.Create(
             false,
             "qhy-native",

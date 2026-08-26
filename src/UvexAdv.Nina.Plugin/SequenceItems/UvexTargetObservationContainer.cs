@@ -323,7 +323,8 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
                 settings.RequireSafetyMonitor,
                 settings.RequireOpenDomeOrRoof,
                 settings.RequireWeatherData,
-                settings.RequireOpenOpticalCover);
+                settings.RequireOpenOpticalCover,
+                settings.WeakSupervisionEnabled);
             if (capabilities.Disposition != GateDisposition.Passed)
             {
                 Issues.Add($"{capabilities.Code}: {capabilities.Message}");

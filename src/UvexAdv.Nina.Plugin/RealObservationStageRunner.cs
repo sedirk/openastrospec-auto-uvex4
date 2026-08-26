@@ -35,6 +35,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     // Command-acceptance tolerance, not an optical-centering tolerance. A
     // stopped slew farther away cannot be treated as an attained waypoint.
     private const double MountCommandArrivalToleranceArcseconds = 2d;
+    // The production default follows the two unattended on-sky successes:
+    // QHY records the wide-field witness, while fresh G3 WCS owns the large
+    // correction and its post-move validation.  The older QHY-motion path is
+    // retained below for replay/forensics, but is not selected by the UI.
+    private static readonly bool UseOnSkyValidatedG3FirstAcquisition = true;
     // The mature N.I.N.A. 3.2 CenteringSolver owns the solve/correct/repeat
     // algorithm. QHY capture and every physical slew remain behind this
     // project's ownership and commissioning guards.
@@ -81,12 +86,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private readonly CancellationTokenSource qhyLeaseLifetime = new();
     private readonly Task qhyLeaseRenewalLoop;
     private readonly SemaphoreSlim slitIlluminationGate = new(1, 1);
+    private readonly SemaphoreSlim atrCoolingCommandGate = new(1, 1);
     private DateTimeOffset? fineAcquisitionStartedUtc;
     private LoadedCommissioningPreset? commissioning;
     private LoadedNightSetupSnapshot? nightSetup;
     private Phd2ProfileBindingSnapshot? phdProfileEvidence;
     private Guid? qhyAcquisitionJobId;
     private int qhyAcquisitionAttempt;
+    private double qhyAcquisitionMinimumExposureSeconds;
     private QhyJobSnapshot? lastQhyAcquisition;
     private Guid? qhyAcquisitionMountReadbackJobId;
     private G3FrameMountReadback? qhyAcquisitionBeforeJobMountReadback;
@@ -123,6 +130,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private int resumeRecoveryRequired;
     private int phd2GuidingEverStarted;
     private int mountClockRecoveryAttempted;
+    private int atrScienceTemperatureRequired;
+    private int atrStableTemperatureEstablished;
+    private Task<bool>? atrPreCoolingTask;
     private UvexServiceClient? activeSlitIlluminationClient;
     private UvexServiceClient.UvexLeaseSession? activeSlitIlluminationLease;
     private string? activeSlitIlluminationSequenceId;
@@ -250,6 +260,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             labels["brightTargetMinimumG3ExposureMilliseconds"] = configuration.G3.EffectiveBrightTarget.MinimumG3ExposureMilliseconds.ToString(CultureInfo.InvariantCulture);
             labels["ghostAssistanceMode"] = configuration.G3.GhostAssistanceMode.ToString();
             labels["allowDegradedSupervisedScience"] = configuration.AllowDegradedSupervisedScience.ToString(CultureInfo.InvariantCulture);
+            labels["weakSupervisionEnabled"] = configuration.Environment.WeakSupervisionEnabled.ToString(CultureInfo.InvariantCulture);
+            labels["requireSafetyMonitor"] = configuration.Environment.RequireSafetyMonitor.ToString(CultureInfo.InvariantCulture);
+            labels["requireOpenDomeOrRoof"] = configuration.Environment.RequireOpenDomeOrRoof.ToString(CultureInfo.InvariantCulture);
+            labels["requireWeatherData"] = configuration.Environment.RequireWeatherData.ToString(CultureInfo.InvariantCulture);
+            labels["requireOpenOpticalCover"] = configuration.Environment.RequireOpenOpticalCover.ToString(CultureInfo.InvariantCulture);
             labels["wideToSlitTransferMode"] = configuration.G3.WideToSlitTransferMode.ToString();
             labels["qhyG3FastPairEnabled"] = configuration.G3.EffectiveFastSolvePair.Enabled.ToString();
             labels["qhyG3FastPairPolicyId"] = configuration.G3.EffectiveFastSolvePair.PolicyId;
@@ -716,6 +731,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         qhy.Dispose();
         qhyLeaseLifetime.Dispose();
         slitIlluminationGate.Dispose();
+        atrCoolingCommandGate.Dispose();
     }
 
     private async Task<StageResult> ValidateNightSetupAsync(ObservationContext context, CancellationToken cancellationToken)
@@ -909,10 +925,17 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             qhyState,
             focusDomains: focusEvidence.FocusDomains,
             evaluatedUtc: DateTimeOffset.UtcNow);
+        var requireScienceTemperature = Volatile.Read(ref atrScienceTemperatureRequired) != 0;
         var incompatibleSetup = liveSetupGates.FirstOrDefault(gate =>
             gate.Disposition != GateDisposition.Passed &&
+            (requireScienceTemperature || gate.Code != "ATR_TEMPERATURE") &&
             !CanDeferInitialGs350Metric(gate, nightSetup.Value, currentQhyFocusMetric));
         if (incompatibleSetup is not null) return incompatibleSetup;
+        if (requireScienceTemperature)
+        {
+            var coolingReadiness = ReadAtrCoolingReadiness(context.Plan.ExpectedAtrCameraId);
+            if (coolingReadiness.Disposition != GateDisposition.Passed) return coolingReadiness;
+        }
 
         await WriteAuditBestEffortAsync("night-setup-revalidated", new
         {
@@ -931,6 +954,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             c11FocuserPositionSteps = c11Focus.PositionSteps,
             g3SaturationAdu = configuration.G3.SaturationAdu,
             gs350FocusMetricDeferred = currentQhyFocusMetric is null,
+            atrPreCoolingInParallel = !requireScienceTemperature,
         }).ConfigureAwait(false);
         context.Set("realRunConfigurationSha256", configuration.ActionConfigurationSha256);
         context.Set("commissioningPresetSha256", commissioning.Sha256);
@@ -1135,6 +1159,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     return GateResult.Unknown("ATR_CONNECT_FAILED", "N.I.N.A. could not connect the camera selected in the locked Profile.");
                 }
             }
+
+            // Cooling is preparation, not a reason to serialize the entire
+            // acquisition pipeline.  Command the locked target immediately
+            // after exact N.I.N.A.-owned camera identity is known, before
+            // connecting the remaining equipment.  Science readiness is
+            // awaited only immediately before the first ATR probe.
+            var coolingStartGate = await StartAtrPreCoolingAsync(context, cancellationToken).ConfigureAwait(false);
+            if (coolingStartGate.Disposition != GateDisposition.Passed) return coolingStartGate;
+
             if (!telescopeMediator.GetInfo().Connected)
             {
                 await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
@@ -1170,15 +1203,27 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     return GateResult.Unknown("GUIDER_CONNECT_FAILED", "N.I.N.A. could not connect the PHD2 guider selected in the locked Profile.");
                 }
             }
-            if (configuration.Environment.RequireOpenOpticalCover && !flatDeviceMediator.GetInfo().Connected)
+            var selectedFlatDeviceId = profileService.ActiveProfile.FlatDeviceSettings.Id;
+            var trustedOptionalCoverSelected = string.Equals(
+                selectedFlatDeviceId,
+                NinaProfileOwnerPreflight.OpticalCoverDeviceId,
+                StringComparison.Ordinal);
+            if ((configuration.Environment.RequireOpenOpticalCover || trustedOptionalCoverSelected) &&
+                !flatDeviceMediator.GetInfo().Connected)
             {
                 await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
                 ownerGate = ValidateNinaProfileOwnerSelections(context.Plan);
                 if (ownerGate.Disposition != GateDisposition.Passed) return ownerGate;
-                Report("按当前 N.I.N.A. Profile 自动连接主光路电动镜盖");
+                Report(configuration.Environment.RequireOpenOpticalCover
+                    ? "按当前 N.I.N.A. Profile 自动连接主光路电动镜盖"
+                    : "有人弱监督：检测到可信的主光路电动镜盖选择，仍自动连接并使用它");
                 if (!await flatDeviceMediator.Connect().ConfigureAwait(false))
                 {
-                    return GateResult.Unknown("OPTICAL_COVER_CONNECT_FAILED", "N.I.N.A. could not connect the flat-device/cover selected in the locked Profile.");
+                    if (configuration.Environment.RequireOpenOpticalCover)
+                    {
+                        return GateResult.Unknown("OPTICAL_COVER_CONNECT_FAILED", "N.I.N.A. could not connect the flat-device/cover selected in the locked Profile.");
+                    }
+                    Report("有人弱监督：已选择的主光路镜盖连接失败；记录警告并由现场操作员负责确认主光路已打开");
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
@@ -1189,6 +1234,188 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             return GateResult.Unknown("NINA_EQUIPMENT_CONNECT_EXCEPTION", $"N.I.N.A. equipment connection failed: {ex.Message}");
         }
+    }
+
+    private async Task<GateResult> StartAtrPreCoolingAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        await atrCoolingCommandGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var camera = cameraMediator.GetInfo();
+            if (!camera.Connected)
+            {
+                return GateResult.Unknown("ATR_PRECOOLING_DISCONNECTED", "ATR585M disconnected before the pre-cooling command.");
+            }
+            if (!string.Equals(camera.DeviceId, context.Plan.ExpectedAtrCameraId, StringComparison.Ordinal))
+            {
+                return GateResult.Fail(
+                    "ATR_PRECOOLING_IDENTITY_MISMATCH",
+                    $"Pre-cooling refused because connected DeviceId '{camera.DeviceId}' is not locked ATR '{context.Plan.ExpectedAtrCameraId}'.");
+            }
+            if (!camera.CanSetTemperature)
+            {
+                return GateResult.Unknown("ATR_PRECOOLING_UNSUPPORTED", "The locked ATR585M does not report controllable cooling.");
+            }
+            if (camera.IsExposing)
+            {
+                return GateResult.Unknown("ATR_PRECOOLING_CAMERA_BUSY", "ATR585M is already exposing; automatic pre-cooling will not alter it mid-exposure.");
+            }
+
+            var setPointAlreadyApplied = camera.CoolerOn &&
+                double.IsFinite(camera.TemperatureSetPoint) &&
+                Math.Abs(camera.TemperatureSetPoint - configuration.Atr.TargetTemperatureC) <= AtrCoolingReadinessPolicy.SetPointToleranceC;
+            if (setPointAlreadyApplied)
+            {
+                return GateResult.Pass(
+                    "ATR_PRECOOLING_ALREADY_ACTIVE",
+                    $"ATR585M is already cooling toward {configuration.Atr.TargetTemperatureC:F1} °C; preparation continues in parallel.");
+            }
+
+            if (atrPreCoolingTask is { } existingTask)
+            {
+                if (!existingTask.IsCompleted)
+                {
+                    return GateResult.Pass(
+                        "ATR_PRECOOLING_RUNNING",
+                        $"N.I.N.A. is cooling ATR585M toward {configuration.Atr.TargetTemperatureC:F1} °C in parallel with acquisition preparation.");
+                }
+
+                bool priorAccepted;
+                try { priorAccepted = await existingTask.ConfigureAwait(false); }
+                catch (OperationCanceledException)
+                {
+                    return GateResult.Unknown("ATR_PRECOOLING_CANCELLED", "The N.I.N.A. ATR585M cooling operation was cancelled.");
+                }
+                catch (Exception ex)
+                {
+                    return GateResult.Unknown("ATR_PRECOOLING_EXCEPTION", $"The N.I.N.A. ATR585M cooling operation failed: {ex.Message}");
+                }
+                if (!priorAccepted)
+                {
+                    return GateResult.Unknown("ATR_PRECOOLING_COMMAND_REJECTED", "N.I.N.A. rejected or did not complete the direct ATR585M cooling command.");
+                }
+            }
+
+            Report($"ATR 预冷并行启动：由 N.I.N.A. 直接设定 {configuration.Atr.TargetTemperatureC:F1} °C；指向、解析、入缝和导星无需等待");
+            // N.I.N.A.'s CoolCamera task intentionally does not complete until
+            // the camera reaches target.  Retain and observe that task, but do
+            // not await it here: awaiting here would serialize the entire
+            // Night Setup stage and make the advertised pre-cooling fake.
+            atrPreCoolingTask = cameraMediator.CoolCamera(
+                configuration.Atr.TargetTemperatureC,
+                TimeSpan.Zero,
+                progress,
+                cancellationToken);
+            await WriteAuditBestEffortAsync("atr-precooling-commanded", new
+            {
+                targetTemperatureC = configuration.Atr.TargetTemperatureC,
+                cameraDeviceId = camera.DeviceId,
+                directToTarget = true,
+                parallelWithAcquisitionPreparation = true,
+            }).ConfigureAwait(false);
+            return GateResult.Pass(
+                "ATR_PRECOOLING_STARTED",
+                $"N.I.N.A. accepted direct cooling to {configuration.Atr.TargetTemperatureC:F1} °C; non-ATR preparation may continue in parallel.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return GateResult.Unknown("ATR_PRECOOLING_EXCEPTION", $"ATR585M pre-cooling could not be started: {ex.Message}");
+        }
+        finally
+        {
+            atrCoolingCommandGate.Release();
+        }
+    }
+
+    private GateResult ReadAtrCoolingReadiness(string expectedDeviceId)
+    {
+        var camera = cameraMediator.GetInfo();
+        return AtrCoolingReadinessPolicy.Evaluate(
+            new AtrCoolingTelemetry(
+                camera.Connected,
+                camera.DeviceId ?? string.Empty,
+                camera.CanSetTemperature,
+                camera.CoolerOn,
+                camera.Temperature,
+                camera.TemperatureSetPoint,
+                camera.CoolerPower),
+            expectedDeviceId,
+            configuration.Atr.TargetTemperatureC);
+    }
+
+    private async Task<GateResult> WaitForAtrScienceTemperatureAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        Volatile.Write(ref atrScienceTemperatureRequired, 1);
+        var start = await StartAtrPreCoolingAsync(context, cancellationToken).ConfigureAwait(false);
+        if (start.Disposition != GateDisposition.Passed) return start;
+
+        if (Volatile.Read(ref atrStableTemperatureEstablished) != 0)
+        {
+            var current = ReadAtrCoolingReadiness(context.Plan.ExpectedAtrCameraId);
+            if (current.Disposition == GateDisposition.Passed) return current;
+            Volatile.Write(ref atrStableTemperatureEstablished, 0);
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(30);
+        var stableSamples = 0;
+        Report($"ATR 即将曝光：等待实温稳定在 {configuration.Atr.TargetTemperatureC:F1} ± {AtrCoolingReadinessPolicy.TemperatureToleranceC:F1} °C；QHY 测光与导星保持运行");
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (atrPreCoolingTask is { IsCompleted: true } completedCooling)
+            {
+                try
+                {
+                    if (!await completedCooling.ConfigureAwait(false))
+                    {
+                        return GateResult.Unknown("ATR_PRECOOLING_COMMAND_REJECTED", "N.I.N.A. rejected or did not complete the direct ATR585M cooling command.");
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    return GateResult.Unknown("ATR_PRECOOLING_CANCELLED", "The N.I.N.A. ATR585M cooling operation was cancelled before science readiness.");
+                }
+                catch (Exception ex)
+                {
+                    return GateResult.Unknown("ATR_PRECOOLING_EXCEPTION", $"The N.I.N.A. ATR585M cooling operation failed before science readiness: {ex.Message}");
+                }
+            }
+            var readiness = ReadAtrCoolingReadiness(context.Plan.ExpectedAtrCameraId);
+            if (readiness.Disposition == GateDisposition.Failed) return readiness;
+            if (readiness.Disposition == GateDisposition.Passed)
+            {
+                stableSamples++;
+                if (stableSamples >= AtrCoolingReadinessPolicy.RequiredStableSamples)
+                {
+                    Volatile.Write(ref atrStableTemperatureEstablished, 1);
+                    await WriteAuditBestEffortAsync("atr-science-temperature-ready", new
+                    {
+                        requiredStableSamples = AtrCoolingReadinessPolicy.RequiredStableSamples,
+                        temperatureToleranceC = AtrCoolingReadinessPolicy.TemperatureToleranceC,
+                        readiness.Metrics,
+                    }).ConfigureAwait(false);
+                    return readiness;
+                }
+            }
+            else
+            {
+                stableSamples = 0;
+            }
+
+            Report($"{readiness.Message} 稳定样本 {stableSamples}/{AtrCoolingReadinessPolicy.RequiredStableSamples}");
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
+
+        var last = ReadAtrCoolingReadiness(context.Plan.ExpectedAtrCameraId);
+        return GateResult.Unknown(
+            "ATR_SCIENCE_TEMPERATURE_TIMEOUT",
+            $"ATR585M did not provide {AtrCoolingReadinessPolicy.RequiredStableSamples} consecutive science-ready samples within 30 minutes. Last state: {last.Message}",
+            last.Metrics);
     }
 
     private GateResult ValidateNinaProfileOwnerSelections(ObservationPlan plan)
@@ -1498,20 +1725,25 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (environment.Disposition != GateDisposition.Passed) return environment;
         var clock = ValidateMountClock();
         if (clock.Disposition != GateDisposition.Passed) return clock;
-        return GateResult.Pass(
-            "CURRENT_ACTION_PREREQUISITES_VALID",
-            "Current real-mode authorization, immutable Profile, safety monitor, roof, weather, horizon and mount UTC passed immediately before the action.",
-            clock.Metrics);
+        return configuration.Environment.WeakSupervisionEnabled
+            ? GateResult.Pass(
+                "CURRENT_ACTION_PREREQUISITES_WEAK_SUPERVISION",
+                $"Current real-mode authorization, immutable Profile, horizon and mount UTC passed immediately before the action. {environment.Message} Optical-cover availability is evaluated separately. This is not unattended authority.",
+                clock.Metrics)
+            : GateResult.Pass(
+                "CURRENT_ACTION_PREREQUISITES_VALID",
+                "Current real-mode authorization, immutable Profile, safety monitor, roof, weather, horizon and mount UTC passed immediately before the action.",
+                clock.Metrics);
     }
 
     private GateResult ValidateLoadedAutomaticScienceCommissioning()
     {
         var loaded = commissioning;
-        if (loaded is null || loaded.Value.SchemaVersion != 4)
+        if (loaded is null || loaded.Value.SchemaVersion != 5)
         {
             return GateResult.Unknown(
-                "REAL_SCIENCE_SCHEMA4_REQUIRED",
-                "Automatic real science requires a hash-verified commissioning preset schema 4, including four-slot optical slit identity, before any physical action.");
+                "REAL_SCIENCE_SCHEMA5_REQUIRED",
+                "Automatic real science requires a hash-verified commissioning preset schema 5, including four-slot optical slit identity, before any physical action.");
         }
         if (!SameHash(loaded.Sha256, configuration.Commissioning.PresetSha256))
         {
@@ -1534,8 +1766,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var issues = phd2Preset.Validate().Concat(slitIdentity.Validate()).ToArray();
         return issues.Length == 0
             ? GateResult.Pass(
-                "REAL_SCIENCE_SCHEMA4_COMMISSIONING_VALID",
-                "The loaded schema-4 preset, PHD2 slit-placement payload and four-slot optical slit-identity library remain valid and hash-bound.")
+                "REAL_SCIENCE_SCHEMA5_COMMISSIONING_VALID",
+                "The loaded schema-5 preset, PHD2 slit-placement payload and four-slot optical slit-identity library remain valid and hash-bound.")
             : GateResult.Unknown(
                 "REAL_SCIENCE_PHD2_COMMISSIONING_INVALID",
                 string.Join(" ", issues));
@@ -1545,9 +1777,31 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         if (!configuration.Environment.RequireOpenOpticalCover)
         {
-            return GateResult.Unknown(
-                "FULL_AUTOMATION_OPTICAL_COVER_DISABLED",
-                "A full REAL observation cannot disable the optical-cover interlock. Use the separate supervised manual commissioning procedure instead.");
+            try
+            {
+                var optionalCover = flatDeviceMediator.GetInfo();
+                if (!optionalCover.Connected)
+                {
+                    return GateResult.Pass(
+                        "WEAK_SUPERVISION_OPTICAL_COVER_UNAVAILABLE",
+                        "The optical-cover adapter is unavailable and weak supervision is active. The run is not unattended.");
+                }
+                return optionalCover.CoverState switch
+                {
+                    CoverState.Open => GateResult.Pass("OPTIONAL_OPTICAL_COVER_OPEN", "The optional optical cover reports open."),
+                    CoverState.Closed => GateResult.Fail("OPTICAL_COVER_CLOSED", "The connected optical cover explicitly reports closed; weak supervision does not override it."),
+                    CoverState.Error => GateResult.Fail("OPTICAL_COVER_ERROR", "The connected optical cover explicitly reports an error."),
+                    _ => GateResult.Pass(
+                        "WEAK_SUPERVISION_OPTICAL_COVER_UNVERIFIED",
+                        $"The optional optical-cover state is {optionalCover.CoverState}; weak supervision records a warning and continues."),
+                };
+            }
+            catch (Exception ex)
+            {
+                return GateResult.Pass(
+                    "WEAK_SUPERVISION_OPTICAL_COVER_UNAVAILABLE",
+                    $"The optional optical-cover state could not be read ({ex.Message}); weak supervision records a warning and continues.");
+            }
         }
         try
         {
@@ -1574,8 +1828,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         CancellationToken cancellationToken)
     {
         var current = ValidateOpticalCoverOpen();
-        if (current.Disposition == GateDisposition.Passed ||
-            !configuration.Environment.RequireOpenOpticalCover)
+        if (current.Disposition == GateDisposition.Passed)
         {
             return current;
         }
@@ -1711,22 +1964,36 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.Environment.RequireSafetyMonitor,
             configuration.Environment.RequireOpenDomeOrRoof,
             configuration.Environment.RequireWeatherData,
-            configuration.Environment.RequireOpenOpticalCover);
+            configuration.Environment.RequireOpenOpticalCover,
+            configuration.Environment.WeakSupervisionEnabled);
         if (capability.Disposition != GateDisposition.Passed) return capability;
+
+        var weakWarnings = new List<string>();
 
         var safety = safetyMonitorMediator.GetInfo();
         if (!safety.Connected)
         {
-            return GateResult.Unknown("SAFETY_MONITOR_MISSING", "A connected safety monitor is required for a full REAL observation.");
+            if (configuration.Environment.RequireSafetyMonitor)
+            {
+                return GateResult.Unknown("SAFETY_MONITOR_MISSING", "A connected safety monitor is required for this REAL observation.");
+            }
+            weakWarnings.Add("safety monitor unavailable");
         }
-        if (!safety.IsSafe) return GateResult.Fail("SAFETY_MONITOR_UNSAFE", "N.I.N.A. safety monitor reports unsafe.");
+        else if (!safety.IsSafe)
+        {
+            return GateResult.Fail("SAFETY_MONITOR_UNSAFE", "N.I.N.A. safety monitor explicitly reports unsafe; weak supervision never overrides a measured unsafe state.");
+        }
 
         var dome = domeMediator.GetInfo();
         if (!dome.Connected)
         {
-            return GateResult.Unknown("ROOF_STATE_UNKNOWN", "A connected dome/roof adapter is required for a full REAL observation; roof state will not be guessed.");
+            if (configuration.Environment.RequireOpenDomeOrRoof)
+            {
+                return GateResult.Unknown("ROOF_STATE_UNKNOWN", "A connected dome/roof adapter is required for this REAL observation; roof state will not be guessed.");
+            }
+            weakWarnings.Add("roof/dome adapter unavailable");
         }
-        if (dome.ShutterStatus != ShutterState.ShutterOpen)
+        else if (dome.ShutterStatus != ShutterState.ShutterOpen)
         {
             return GateResult.Fail("ROOF_NOT_OPEN", $"Dome/roof shutter state is {dome.ShutterStatus}, not open.");
         }
@@ -1734,20 +2001,42 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var weather = weatherDataMediator.GetInfo();
         if (!weather.Connected)
         {
-            return GateResult.Unknown("WEATHER_STATE_UNKNOWN", "A connected weather adapter is required for a full REAL observation; weather will not be guessed.");
+            if (configuration.Environment.RequireWeatherData)
+            {
+                return GateResult.Unknown("WEATHER_STATE_UNKNOWN", "A connected weather adapter is required for this REAL observation; weather will not be guessed.");
+            }
+            weakWarnings.Add("weather adapter unavailable");
         }
-        var missing = new List<string>();
-        if (!double.IsFinite(weather.RainRate)) missing.Add("rain rate");
-        if (!double.IsFinite(weather.CloudCover)) missing.Add("cloud cover");
-        if (!double.IsFinite(weather.Humidity)) missing.Add("humidity");
-        if (!double.IsFinite(weather.WindSpeed)) missing.Add("wind speed");
-        if (missing.Count > 0) return GateResult.Unknown("WEATHER_METRICS_MISSING", $"Weather adapter does not provide {string.Join(", ", missing)}.");
-        if (weather.RainRate > 0) return GateResult.Fail("RAIN_DETECTED", $"Rain rate is {weather.RainRate:F3}.");
-        if (weather.CloudCover > configuration.Environment.MaximumCloudCoverPercent) return GateResult.Fail("CLOUD_LIMIT", $"Cloud cover {weather.CloudCover:F1}% exceeds {configuration.Environment.MaximumCloudCoverPercent:F1}%.");
-        if (weather.Humidity > configuration.Environment.MaximumHumidityPercent) return GateResult.Fail("HUMIDITY_LIMIT", $"Humidity {weather.Humidity:F1}% exceeds {configuration.Environment.MaximumHumidityPercent:F1}%.");
-        if (weather.WindSpeed > configuration.Environment.MaximumWindSpeedMetersPerSecond) return GateResult.Fail("WIND_LIMIT", $"Wind speed {weather.WindSpeed:F1} exceeds {configuration.Environment.MaximumWindSpeedMetersPerSecond:F1} m/s.");
+        else
+        {
+            var missing = new List<string>();
+            if (!double.IsFinite(weather.RainRate)) missing.Add("rain rate");
+            if (!double.IsFinite(weather.CloudCover)) missing.Add("cloud cover");
+            if (!double.IsFinite(weather.Humidity)) missing.Add("humidity");
+            if (!double.IsFinite(weather.WindSpeed)) missing.Add("wind speed");
+            if (missing.Count > 0)
+            {
+                if (configuration.Environment.RequireWeatherData)
+                {
+                    return GateResult.Unknown("WEATHER_METRICS_MISSING", $"Weather adapter does not provide {string.Join(", ", missing)}.");
+                }
+                weakWarnings.Add($"weather metrics missing: {string.Join(", ", missing)}");
+            }
+            if (double.IsFinite(weather.RainRate) && weather.RainRate > 0) return GateResult.Fail("RAIN_DETECTED", $"Rain rate is {weather.RainRate:F3}.");
+            if (double.IsFinite(weather.CloudCover) && weather.CloudCover > configuration.Environment.MaximumCloudCoverPercent) return GateResult.Fail("CLOUD_LIMIT", $"Cloud cover {weather.CloudCover:F1}% exceeds {configuration.Environment.MaximumCloudCoverPercent:F1}%.");
+            if (double.IsFinite(weather.Humidity) && weather.Humidity > configuration.Environment.MaximumHumidityPercent) return GateResult.Fail("HUMIDITY_LIMIT", $"Humidity {weather.Humidity:F1}% exceeds {configuration.Environment.MaximumHumidityPercent:F1}%.");
+            if (double.IsFinite(weather.WindSpeed) && weather.WindSpeed > configuration.Environment.MaximumWindSpeedMetersPerSecond) return GateResult.Fail("WIND_LIMIT", $"Wind speed {weather.WindSpeed:F1} exceeds {configuration.Environment.MaximumWindSpeedMetersPerSecond:F1} m/s.");
+        }
 
-        return HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToGateResult();
+        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToGateResult();
+        if (horizon.Disposition != GateDisposition.Passed) return horizon;
+        return weakWarnings.Count == 0
+            ? horizon
+            : GateResult.Pass(
+                "WEAK_SUPERVISION_ENVIRONMENT_WARNING",
+                $"Operator weak supervision is active; {string.Join("; ", weakWarnings)}. " +
+                "The run is not unattended. Connected adapters that explicitly report danger still block actions.",
+                horizon.Metrics);
     }
 
     private static bool IsKnownPierSide(string? value) =>
@@ -1981,6 +2270,23 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             cancellationToken).ConfigureAwait(false);
         if (!lastQhySolve.Result.Success)
         {
+            var nextExposure = configuration.Qhy.AcquisitionExposureLadderSeconds
+                .FirstOrDefault(candidate => candidate > accepted.Settings.ExposureSeconds + 1e-9);
+            if (nextExposure > 0)
+            {
+                Report(
+                    $"QHY {accepted.Settings.ExposureSeconds:G4}s 原始 FITS 未被 N.I.N.A./PL3 解出；保留该帧并自动尝试曝光阶梯下一档 {nextExposure:G4}s");
+                qhyAcquisitionMinimumExposureSeconds = nextExposure;
+                qhyAcquisitionJobId = null;
+                lastQhyAcquisition = null;
+                lastQhySolve = null;
+                lastQhySolveMountBinding = null;
+                lastQhyAcceptedFrameMountBinding = null;
+                qhyAcquisitionMountReadbackJobId = null;
+                qhyAcquisitionBeforeJobMountReadback = null;
+                qhyAcquisitionAttempt++;
+                return await AcquireQhyWideFieldAsync(context, cancellationToken).ConfigureAwait(false);
+            }
             return Attention(ObservationStage.AcquireQhyWideField, "QHY_PLATE_SOLVE_FAILED", "N.I.N.A. plate solver did not solve the immutable QHY FITS; no centering correction is permitted.");
         }
         lastQhySolveMountBinding = CaptureGhostQhySolveMountBinding(context, accepted, lastQhySolve, lastQhyAcceptedFrameMountBinding);
@@ -2057,10 +2363,18 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
             var clientRequestId = $"{context.Plan.ObservationRunId}:acquire-qhy-wide-field:{qhyAcquisitionAttempt}";
+            var exposureLadder = configuration.Qhy.AcquisitionExposureLadderSeconds
+                .Where(candidate => candidate + 1e-9 >= qhyAcquisitionMinimumExposureSeconds)
+                .ToArray();
+            if (exposureLadder.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"No QHY acquisition exposure remains at or above {qhyAcquisitionMinimumExposureSeconds:G4}s.");
+            }
             var request = new AcquisitionJobRequest(
                 context.Plan.ObservationRunId,
                 context.Plan.Target.Name,
-                configuration.Qhy.AcquisitionExposureLadderSeconds,
+                exposureLadder,
                 configuration.Qhy.Gain,
                 configuration.Qhy.Offset,
                 MaximumAttempts: 4,
@@ -2102,6 +2416,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (lastQhySolve is null || lastQhyAcquisition is null)
         {
             return Attention(ObservationStage.CoarseCenter, "QHY_SOLVE_REQUIRED", "No completed, accepted and solved QHY acquisition is available.");
+        }
+        if (UseOnSkyValidatedG3FirstAcquisition)
+        {
+            return await AcceptQhyWitnessAndDeferMotionToFreshG3Async(context, cancellationToken).ConfigureAwait(false);
         }
         var limits = configuration.Qhy.CoarseCenteringLimits;
         var limitIssues = limits.Validate();
@@ -2463,6 +2781,71 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             context.RemainingWorstCaseDuration = previousWorstCaseDuration;
         }
+    }
+
+    private async Task<StageResult> AcceptQhyWitnessAndDeferMotionToFreshG3Async(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        var acquisition = lastQhyAcquisition!;
+        var solve = lastQhySolve!;
+        if (acquisition.AcceptedFrameId is not { } frameId ||
+            acquisition.Frames.SingleOrDefault(frame => frame.FrameId == frameId) is not { } frame)
+        {
+            return Attention(
+                ObservationStage.CoarseCenter,
+                "QHY_WITNESS_SOURCE_FRAME_MISSING",
+                "The solved QHY witness is not the accepted immutable acquisition frame.");
+        }
+
+        var target = TargetCoordinates(context.Plan);
+        var residual = AngularSeparationArcseconds(target, solve.Result.Coordinates);
+        if (!solve.Result.Success || !double.IsFinite(residual))
+        {
+            return Attention(
+                ObservationStage.CoarseCenter,
+                "QHY_WITNESS_SOLVE_INVALID",
+                "The accepted QHY wide-field witness does not contain a finite formal WCS solution.");
+        }
+
+        var evidencePath = await PublishRunJsonEvidenceAsync(
+            "qhy-wide-field-witness-accepted",
+            "QHY wide-field WCS retained without mount motion; acquisition handed to fresh G3 WCS",
+            new
+            {
+                route = "on-sky-validated-g3-first-v1",
+                qhyMotionAuthorized = false,
+                qhyFrameId = frame.FrameId,
+                qhyFramePath = frame.FitsPath,
+                qhySolveEvidencePath = solve.EvidencePath,
+                solve.SolverIdentity,
+                solvedRaDegrees = solve.Result.Coordinates.RADegrees,
+                solvedDecDegrees = solve.Result.Coordinates.Dec,
+                targetRaDegrees = target.RADegrees,
+                targetDecDegrees = target.Dec,
+                qhyTargetResidualArcseconds = residual,
+                nextAuthority = "fresh-g3-wcs-or-bounded-overlapping-neighbour-search",
+                largeCorrectionOwner = "N.I.N.A.-telescope-mediator-after-fresh-G3-WCS",
+                finalArrivalAuthority = "fresh-post-move-G3-WCS",
+            },
+            frame.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+
+        return Passed(
+            "QHY_WIDE_FIELD_WITNESS_ACCEPTED",
+            $"QHY formal WCS is retained as a {residual:F1} arcsec wide-field witness. No QHY-derived mount move was sent; fresh G3 WCS now owns acquisition.",
+            new Dictionary<string, double>
+            {
+                ["qhyTargetResidualArcseconds"] = residual,
+                ["qhyMotionCommands"] = 0,
+            },
+            new Dictionary<string, string>
+            {
+                ["route"] = "on-sky-validated-g3-first-v1",
+                ["solver"] = solve.SolverIdentity,
+                ["qhyWitnessEvidencePath"] = evidencePath,
+                ["nextAuthority"] = "fresh-g3-wcs",
+            });
     }
 
     private GateResult ValidateQhyCoarseMountState(string expectedPierSide)
@@ -3187,9 +3570,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 false,
                 RawConverterEnum.FREEIMAGE,
                 cancellationToken).ConfigureAwait(false);
+            PublishG3Preview(
+                image,
+                $"G3 解算曝光 {index + 1}/{preset.ExposureMilliseconds.Count} · {exposureMilliseconds} ms · 已拍摄，正在检测星场并解算。");
             var imageGate = ValidateG3SolveProbeImage(captured, image, exposureMilliseconds);
             if (imageGate.Disposition != GateDisposition.Passed)
             {
+                PublishG3Preview(image, imageGate.Message);
                 var invalidAttemptPath = await PublishRunJsonEvidenceAsync(
                     "g3-plate-solve-ladder-attempt",
                     $"G3 plate-solve exposure ladder attempt {index + 1}",
@@ -3227,6 +3614,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var bufferGate = GateResult.Unknown(
                     "G3_SOLVE_PROBE_PIXEL_BUFFER_UNSUPPORTED",
                     "N.I.N.A. returned an unsupported G3 pixel buffer for solve-only content validation.");
+                PublishG3Preview(image, bufferGate.Message);
                 var invalidAttemptPath = await PublishRunJsonEvidenceAsync(
                     "g3-plate-solve-ladder-attempt",
                     $"G3 plate-solve exposure ladder attempt {index + 1}",
@@ -3263,6 +3651,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 G3FrameInputPolicy.Create(properties.Width, properties.Height, raw, configuration.G3));
             if (!content.HasCoherentSource)
             {
+                PublishG3Preview(image, content.Gate.Message);
                 var cloudAttemptPath = await PublishRunJsonEvidenceAsync(
                     "g3-plate-solve-ladder-attempt",
                     $"G3 plate-solve exposure ladder attempt {index + 1}",
@@ -3355,6 +3744,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         : $"G3 长曝光已解算，目标投影 ({projected.X:F1},{projected.Y:F1}) 在可用画幅内；将拍新照明序列确认狭缝和目标。",
                     target: projectedTarget);
             }
+            if (projectedTarget is null)
+            {
+                PublishG3Preview(image, resultGate.Message);
+            }
 
             var attemptPath = await PublishRunJsonEvidenceAsync(
                 "g3-plate-solve-ladder-attempt",
@@ -3369,7 +3762,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     resultGate.Code,
                     resultGate.Message,
                     solveSucceeded = solve.Result.Success,
-                    solve.ResidualArcseconds,
+                    residualArcseconds = double.IsFinite(solve.ResidualArcseconds)
+                        ? solve.ResidualArcseconds
+                        : (double?)null,
                     solvedRaDegrees = solve.Result.Coordinates?.RADegrees,
                     solvedDecDegrees = solve.Result.Coordinates?.Dec,
                     projectedTarget,
@@ -3671,6 +4066,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         string expectedPierSide,
         string expectedEpoch,
         string operation,
+        double maximumCommandResidualArcseconds,
         CancellationToken cancellationToken)
     {
         var settleSeconds = configuration.G3.MotionPostSlewSettleSeconds;
@@ -3703,14 +4099,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         var drift = AngularSeparationArcseconds(reportedImmediatelyAfterSlew, settled);
         var commandResidual = AngularSeparationArcseconds(settled, commanded);
-        if (!double.IsFinite(drift) || !double.IsFinite(commandResidual) ||
+        if (!double.IsFinite(maximumCommandResidualArcseconds) || maximumCommandResidualArcseconds <= 0 ||
+            !double.IsFinite(drift) || !double.IsFinite(commandResidual) ||
             drift > MountCommandArrivalToleranceArcseconds ||
-            commandResidual > MountCommandArrivalToleranceArcseconds)
+            commandResidual > maximumCommandResidualArcseconds)
         {
             return new G3PostSlewStabilityResult(
                 GateResult.Unknown(
                     "G3_POST_SLEW_POSITION_UNSTABLE",
-                    $"After waiting {settleSeconds:F2}s, reported drift was {drift:F2} arcsec and command residual was {commandResidual:F2} arcsec; no fresh G3 frame is authorized."),
+                    $"After waiting {settleSeconds:F2}s, reported drift was {drift:F2} arcsec (limit {MountCommandArrivalToleranceArcseconds:F2}) and command residual was {commandResidual:F2} arcsec (fresh-frame limit {maximumCommandResidualArcseconds:F2}); no fresh G3 frame is authorized."),
                 settled,
                 settleStartedUtc,
                 DateTimeOffset.UtcNow,
@@ -3720,7 +4117,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         return new G3PostSlewStabilityResult(
             GateResult.Pass(
                 "G3_POST_SLEW_POSITION_STABLE",
-                $"The mount remained within {MountCommandArrivalToleranceArcseconds:F2} arcsec through the commissioned {settleSeconds:F2}s settle interval."),
+                $"The mount drifted no more than {MountCommandArrivalToleranceArcseconds:F2} arcsec and remained within the {maximumCommandResidualArcseconds:F2} arcsec fresh-frame authorization envelope through the commissioned {settleSeconds:F2}s settle interval."),
             settled,
             settleStartedUtc,
             DateTimeOffset.UtcNow,
@@ -4570,16 +4967,44 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 break;
             }
             var initialCommandResidual = AngularSeparationArcseconds(after, commanded);
-            if (!double.IsFinite(initialCommandResidual) || initialCommandResidual > state.ArrivalToleranceArcseconds)
+            var actualMoveArcseconds = AngularSeparationArcseconds(immediatelyBefore, after);
+            var actualOriginOffset = G3AcquisitionMotionPlanner.SignedTangentOffsetArcseconds(
+                state.OriginRaDegrees,
+                state.OriginDeclinationDegrees,
+                NormalizeDegrees(after.RADegrees),
+                after.Dec);
+            var actualOriginRadiusArcseconds = Math.Sqrt(
+                actualOriginOffset.RaArcseconds * actualOriginOffset.RaArcseconds +
+                actualOriginOffset.DecArcseconds * actualOriginOffset.DecArcseconds);
+            var additionalActualMotionCharge = Math.Max(
+                0,
+                actualMoveArcseconds - reserve.MoveFromCurrentArcseconds - state.ArrivalToleranceArcseconds);
+            if (!double.IsFinite(initialCommandResidual) ||
+                initialCommandResidual > configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds ||
+                !double.IsFinite(actualMoveArcseconds) ||
+                actualMoveArcseconds > state.MaximumSingleCorrectionArcseconds ||
+                !double.IsFinite(actualOriginRadiusArcseconds) ||
+                actualOriginRadiusArcseconds > state.MaximumRadiusArcseconds ||
+                state.CumulativeMotionArcseconds + additionalActualMotionCharge > state.MaximumCumulativeMotionArcseconds)
             {
                 state = ReanchorG3AcquisitionMotionFromReportedPosition(state, after) with
                 {
                     UpdatedUtc = DateTimeOffset.UtcNow,
-                    LastReason = $"WCS command stopped {initialCommandResidual:F2} arcsec from its endpoint; fresh solve was withheld.",
+                    LastReason = $"WCS arrival was outside the fresh-verification envelope: command residual {initialCommandResidual:F2} arcsec, actual move {actualMoveArcseconds:F2} arcsec, origin radius {actualOriginRadiusArcseconds:F2} arcsec; fresh solve was withheld.",
                 };
                 await PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
-                stopReason = $"The mount stopped {initialCommandResidual:F2} arcsec from the WCS command; reported coordinates were retained and fresh solve was withheld.";
+                stopReason = $"The WCS arrival cannot be safely verified (command residual {initialCommandResidual:F2} arcsec, actual move {actualMoveArcseconds:F2} arcsec, origin radius {actualOriginRadiusArcseconds:F2} arcsec); reported coordinates were retained and fresh solve was withheld.";
                 break;
+            }
+            if (additionalActualMotionCharge > 0)
+            {
+                state = state with
+                {
+                    CumulativeMotionArcseconds = state.CumulativeMotionArcseconds + additionalActualMotionCharge,
+                    UpdatedUtc = DateTimeOffset.UtcNow,
+                    LastReason = $"Actual WCS move exceeded its precharged command allowance by {additionalActualMotionCharge:F2} arcsec; the durable cumulative ledger was charged before fresh verification.",
+                };
+                await PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
             }
 
             var stability = await WaitForG3PostSlewStabilityAsync(
@@ -4589,6 +5014,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 state.PierSide,
                 state.CoordinateEpoch,
                 "G3 WCS-centering",
+                configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds,
                 cancellationToken).ConfigureAwait(false);
             if (stability.Gate.Disposition != GateDisposition.Passed || stability.Reported is null)
             {
@@ -5176,6 +5602,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     originPierSide,
                     durableSearch.CoordinateEpoch,
                     "G3 bounded-search",
+                    MountCommandArrivalToleranceArcseconds,
                     cancellationToken).ConfigureAwait(false);
                 if (stability.Gate.Disposition != GateDisposition.Passed || stability.Reported is null)
                 {
@@ -7134,6 +7561,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             throw new InvalidOperationException(
                 $"PHD2 did not attest that the commissioned exposure was applied for {role}.");
         }
+        var previewImage = await imageDataFactory.CreateFromFile(
+            captured.Path,
+            16,
+            false,
+            RawConverterEnum.FREEIMAGE,
+            cancellationToken).ConfigureAwait(false);
+        PublishG3Preview(
+            previewImage,
+            $"G3 狭缝照明 HDR {exposureMilliseconds} ms · {PhaseDisplayName(phase)} {index}/{G3SlitIlluminationPolicy.FramesPerPhase} · 已保存。");
         frames.Add(new G3CapturedIlluminationFrame(
             sequenceId,
             phase,
@@ -8883,6 +9319,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return Attention(ObservationStage.SelectAtrExposure, "ATR_PROBE_NOT_IN_LADDER", "ATR probe exposure must be one of the configured tiers.");
         }
 
+        // Everything before this point (slew, solve, slit placement, guiding
+        // and QHY photometry) intentionally ran while ATR pre-cooled.  This is
+        // the first point at which ATR science readiness is actually required.
+        var temperatureGate = await WaitForAtrScienceTemperatureAsync(context, cancellationToken).ConfigureAwait(false);
+        if (temperatureGate.Disposition != GateDisposition.Passed) return new StageResult(temperatureGate);
+
         var coverGate = await EnsureOpticalCoverOpenAsync(context, cancellationToken).ConfigureAwait(false);
         if (coverGate.Disposition != GateDisposition.Passed) return new StageResult(coverGate);
 
@@ -9159,7 +9601,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.Environment.RequireSafetyMonitor,
             configuration.Environment.RequireOpenDomeOrRoof,
             configuration.Environment.RequireWeatherData,
-            configuration.Environment.RequireOpenOpticalCover);
+            configuration.Environment.RequireOpenOpticalCover,
+            configuration.Environment.WeakSupervisionEnabled);
         if (capability.Disposition != GateDisposition.Passed) issues.Add(capability.Message);
 
         var lockedMotion = new MotionLimits(
@@ -9225,6 +9668,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             issues.Add("G3 WCS single-correction limit must exceed twice the arrival tolerance to guarantee return progress.");
         }
+        if (!double.IsFinite(configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds) ||
+            configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds <= MountCommandArrivalToleranceArcseconds ||
+            configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds > configuration.G3.WcsCentering.MaximumSingleCorrectionArcseconds)
+        {
+            issues.Add("G3 WCS fresh-solve authorization residual must be finite, exceed the static 2 arcsec binding tolerance, and not exceed the WCS single-correction limit.");
+        }
         if (configuration.G3.WideToSlitTransferMode != WideToSlitTransferMode.Skip)
         {
             issues.Add("No independently verified Active QHY-to-G3 transfer can be loaded by this runner; WideToSlitTransferMode must remain Skip and paired-WCS Candidates cannot authorize motion.");
@@ -9250,8 +9699,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         issues.AddRange(configuration.G3.EffectiveBrightTarget
             .Validate(configuration.G3.ExposureMilliseconds));
         if (configuration.Qhy.FocalLengthMillimeters <= 0 || configuration.Qhy.PixelSizeMicrometers <= 0) issues.Add("Measured GS350/QHY focal length and pixel size are required.");
-        if (configuration.Qhy.CenteringToleranceArcseconds <= 0) issues.Add("QHY centering tolerance must be positive.");
-        issues.AddRange(configuration.Qhy.CoarseCenteringLimits.Validate());
+        // The on-sky validated production route never authorizes a mount move
+        // from QHY WCS.  Legacy QHY motion limits remain readable for old-run
+        // recovery, but cannot block a new G3-first observation.
         if (configuration.Qhy.ReadoutMode < 0 || configuration.Qhy.RoiX < 0 || configuration.Qhy.RoiY < 0 || configuration.Qhy.RoiWidth < 0 || configuration.Qhy.RoiHeight < 0) issues.Add("QHY readout mode and ROI are invalid.");
         if (configuration.Atr.ScienceFrameCount <= 0 || configuration.Atr.MaximumScienceAttempts < configuration.Atr.ScienceFrameCount) issues.Add("ATR science frame count must be positive and maximum attempts must cover every accepted frame.");
         if (!double.IsFinite(configuration.Environment.MountClockMaximumOffsetSeconds) ||

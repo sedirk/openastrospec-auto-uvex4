@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -251,7 +252,7 @@ public sealed class ObservationTargetImportService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var targetName = RequireName(
+        var importedDisplayName = RequireName(
             snapshot.TargetName,
             "PLANETARIUM_NO_NAMED_TARGET",
             "第三方星图中没有明确选中的命名目标。请先在 Stellarium 中点击目标，再重试。");
@@ -259,15 +260,22 @@ public sealed class ObservationTargetImportService
             snapshot.TargetBodyCoordinates,
             "PLANETARIUM_COORDINATES_MISSING",
             "第三方星图所选目标没有有效坐标。请重新选择一个命名目标后重试。");
+        var catalogId = NormalizeAsciiIdentifier(snapshot.CatalogId);
+        var targetName = SelectAsciiTargetName(importedDisplayName, catalogId, targetBody);
         var sourceName = NormalizeSourceName(snapshot.SourceName, "N.I.N.A. 第三方星图");
         var details = $"已从 {sourceName} 复制一次当前选择；目标 J2000 {FormatCoordinates(targetBody)}。"
-            + "N.I.N.A. 当前公开星图接口没有提供可与名称独立核验的目录号，本次已清空旧目录 ID。"
+            + (string.Equals(targetName, importedDisplayName, StringComparison.Ordinal)
+                ? $"目标/文件名采用“{targetName}”。"
+                : $"星图显示名为“{importedDisplayName}”；为避免 FITS OBJECT 与文件名使用本地化字符，目标/文件名采用“{targetName}”。")
+            + (string.IsNullOrWhiteSpace(catalogId)
+                ? "没有取得可复用的 ASCII 目录标识，本次已清空旧目录 ID。"
+                : $"目录标识为 {catalogId}。")
             + "导入仅修改目标草稿，不会连接设备、移动赤道仪或启动观测。"
             + AppendSourceDetails(snapshot.SourceDetails);
 
         return new ObservationTargetImportResult(
             targetName,
-            string.Empty,
+            catalogId,
             targetBody.RightAscensionDegrees,
             targetBody.DeclinationDegrees,
             sourceName,
@@ -279,6 +287,51 @@ public sealed class ObservationTargetImportService
             null,
             null,
             false);
+    }
+
+    private static string SelectAsciiTargetName(
+        string importedDisplayName,
+        string catalogId,
+        ObservationTargetCoordinates coordinates)
+    {
+        var normalizedName = NormalizeAsciiIdentifier(importedDisplayName);
+        if (!string.IsNullOrWhiteSpace(normalizedName)) return normalizedName;
+        if (!string.IsNullOrWhiteSpace(catalogId)) return catalogId;
+        return CoordinateDesignation(coordinates);
+    }
+
+    private static string NormalizeAsciiIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var trimmed = value.Trim();
+        if (trimmed.Any(character => character is < ' ' or > '~')) return string.Empty;
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(trimmed
+            .Select(character => invalid.Contains(character) ? '_' : character)
+            .ToArray())
+            .Trim()
+            .TrimEnd('.', ' ');
+        return sanitized;
+    }
+
+    private static string CoordinateDesignation(ObservationTargetCoordinates coordinates)
+    {
+        var totalHours = coordinates.RightAscensionDegrees / 15d;
+        var hours = (int)Math.Floor(totalHours);
+        var totalMinutes = (totalHours - hours) * 60d;
+        var minutes = (int)Math.Floor(totalMinutes);
+        var seconds = (totalMinutes - minutes) * 60d;
+
+        var absoluteDeclination = Math.Abs(coordinates.DeclinationDegrees);
+        var degrees = (int)Math.Floor(absoluteDeclination);
+        var totalArcMinutes = (absoluteDeclination - degrees) * 60d;
+        var arcMinutes = (int)Math.Floor(totalArcMinutes);
+        var arcSeconds = (totalArcMinutes - arcMinutes) * 60d;
+        var sign = coordinates.DeclinationDegrees < 0 ? '-' : '+';
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"J{hours:00}{minutes:00}{seconds:00.00}{sign}{degrees:00}{arcMinutes:00}{arcSeconds:00.0}");
     }
 
     private static string BuildFramingDetails(

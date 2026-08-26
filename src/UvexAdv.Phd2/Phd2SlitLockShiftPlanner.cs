@@ -99,6 +99,82 @@ public sealed record Phd2SensorTopology(
     }
 }
 
+public sealed record Phd2PierAdaptiveTopologyResolution(
+    bool IsAllowed,
+    string Code,
+    string Message,
+    Phd2SensorTopology? RuntimeTopology);
+
+/// <summary>
+/// Transports a hash-locked PHD2 detector topology to the mount's current
+/// pier side without transporting any independent pixel-to-mount matrix.
+/// PHD2 remains the motion authority and performs its own ASCOM/aux-mount
+/// meridian-flip calibration adjustment. A flip may only start a new guide
+/// epoch; changing side during an outstanding lock-shift ledger is still
+/// rejected by that ledger's runtime topology fingerprint.
+/// </summary>
+public static class Phd2PierAdaptiveTopologyPolicy
+{
+    public static Phd2PierAdaptiveTopologyResolution Resolve(
+        Phd2SensorTopology commissionedSourceTopology,
+        string lockedSourceFingerprintSha256,
+        string currentPierSide,
+        bool automaticPierFlipEvidenceComplete)
+    {
+        ArgumentNullException.ThrowIfNull(commissionedSourceTopology);
+        var sourceSide = NormalizePierSide(commissionedSourceTopology.PierSide);
+        var runtimeSide = NormalizePierSide(currentPierSide);
+        if (sourceSide is null || runtimeSide is null)
+        {
+            return new(
+                false,
+                "PHD2_PIER_SIDE_UNKNOWN",
+                $"PHD2 pier-side adaptation requires exact East/West values (commissioned '{commissionedSourceTopology.PierSide}', current '{currentPierSide}').",
+                null);
+        }
+
+        var sourceFingerprint = commissionedSourceTopology.ComputeFingerprintSha256();
+        if (!IsSha256(lockedSourceFingerprintSha256) ||
+            !string.Equals(sourceFingerprint, lockedSourceFingerprintSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return new(
+                false,
+                "PHD2_COMMISSIONED_TOPOLOGY_HASH_MISMATCH",
+                "The commissioned PHD2 source-side topology no longer matches its immutable fingerprint.",
+                null);
+        }
+
+        if (!string.Equals(sourceSide, runtimeSide, StringComparison.Ordinal) &&
+            !automaticPierFlipEvidenceComplete)
+        {
+            return new(
+                false,
+                "PHD2_AUTOMATIC_PIER_FLIP_UNCOMMISSIONED",
+                "The current side differs from the calibration source side and no complete PHD2 automatic meridian-flip evidence is locked.",
+                null);
+        }
+
+        var runtime = commissionedSourceTopology with { PierSide = currentPierSide };
+        return new(
+            true,
+            string.Equals(sourceSide, runtimeSide, StringComparison.Ordinal)
+                ? "PHD2_SOURCE_PIER_SIDE_REUSED"
+                : "PHD2_PIER_SIDE_ADAPTED",
+            string.Equals(sourceSide, runtimeSide, StringComparison.Ordinal)
+                ? "The runtime side matches the hash-locked PHD2 calibration source side."
+                : "PHD2 automatic meridian-flip calibration handling is commissioned; a fresh guide/settle epoch will validate the current side before lock-shift motion.",
+            runtime);
+    }
+
+    private static string? NormalizePierSide(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "east" or "piereast" => "East",
+        "west" or "pierwest" => "West",
+        _ => null,
+    };
+    private static bool IsSha256(string? value) => value?.Length == 64 && value.All(Uri.IsHexDigit);
+}
+
 public sealed record Phd2LockShiftQualificationLimits(
     TimeSpan MaximumCalibrationAge,
     TimeSpan MaximumValidationAge,

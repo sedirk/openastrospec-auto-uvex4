@@ -132,10 +132,24 @@ public sealed record SlitWheelIdentityCalibration(
                     issues.Add($"Slit position {fingerprint.WheelPosition} physical dark aperture is unresolved; a reflected-edge width cannot be commissioned.");
                 if (!double.IsFinite(fingerprint.ReflectiveEdgeToApertureCenterPixels))
                     issues.Add($"Slit position {fingerprint.WheelPosition} is missing its reflective-edge to physical-aperture-centre offset.");
-                else if (PositiveFinite(fingerprint.MeasuredWidthPixels) && PositiveFinite(fingerprint.WidthUncertaintyPixels) &&
-                    Math.Abs(Math.Abs(fingerprint.ReflectiveEdgeToApertureCenterPixels) * 2 - fingerprint.MeasuredWidthPixels) >
-                    Math.Max(1, fingerprint.WidthUncertaintyPixels * 3))
-                    issues.Add($"Slit position {fingerprint.WheelPosition} edge-to-centre offset is inconsistent with its physical aperture width.");
+                else if (PositiveFinite(fingerprint.MeasuredWidthPixels) && PositiveFinite(fingerprint.WidthUncertaintyPixels))
+                {
+                    // The LED reflective ridge is a blurred optical feature,
+                    // not one of the two physical dark-aperture edges.  Its
+                    // centroid may therefore sit several commissioned edge-
+                    // PSF scales outside the fitted edge while still yielding
+                    // a valid aperture midpoint.  Reject grossly inconsistent
+                    // offsets, but do not force ridge-to-centre to equal half
+                    // the physical slit width exactly.
+                    var residual = Math.Abs(
+                        Math.Abs(fingerprint.ReflectiveEdgeToApertureCenterPixels) -
+                        fingerprint.MeasuredWidthPixels / 2d);
+                    var tolerance = Math.Max(
+                        fingerprint.WidthUncertaintyPixels * 3,
+                        EdgePsfAlphaPixels * 4);
+                    if (residual > tolerance)
+                        issues.Add($"Slit position {fingerprint.WheelPosition} edge-to-centre offset is inconsistent with its physical aperture width.");
+                }
                 if (!double.IsFinite(fingerprint.SecondaryEdgeAmplitudeRatio) || fingerprint.SecondaryEdgeAmplitudeRatio is <= 0 or >= 1)
                     issues.Add($"Slit position {fingerprint.WheelPosition} requires a finite secondary-edge amplitude ratio between zero and one.");
                 if (!IsSha256(fingerprint.ShortExposureEvidenceSha256) || !IsSha256(fingerprint.LongExposureEvidenceSha256))

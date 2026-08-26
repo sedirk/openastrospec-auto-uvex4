@@ -87,7 +87,7 @@ public sealed record CommissioningMeasurementDefinition(
     int SchemaVersion,
     string PresetId,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset ValidUntilUtc,
+    DateTimeOffset? ValidUntilUtc,
     string Provenance,
     string Phd2CalibrationTimestampUtc,
     string TelescopeDeviceId,
@@ -180,7 +180,7 @@ public sealed record CommissioningBindings(
     string NightSetupSha256,
     string Phd2EvidencePath,
     string Phd2ProfileEvidenceSha256,
-    DateTimeOffset ValidUntilUtc,
+    DateTimeOffset? ValidUntilUtc,
     IReadOnlyDictionary<string, object?> NinaProfileValues);
 
 public sealed record Phd2EvidenceBindings(

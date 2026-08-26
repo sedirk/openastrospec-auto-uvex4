@@ -46,6 +46,27 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         new(TargetObservabilityClass.InvisibleInG3, "G3 中不可见", "允许目标峰完全不可见；依赖目录 WCS、旁星与光谱信号。"),
     ];
 
+    private static readonly IReadOnlyList<PreparationOptionChoice> SpectralRegionChoices =
+    [
+        new("VisibleWide", "UVEX 可见光宽谱（推荐）", "中心波长和上下限由实际波长标定回填，界面不猜测步数。"),
+        new("HAlphaRed", "Hα 红区", "用于 Hα 附近观测；仍需由实际波长标定确认范围。"),
+        new("ExistingLocked", "沿用已锁定配置", "从既有 schema-2 Night Setup 读取波段，不手工重录。"),
+    ];
+
+    private static readonly IReadOnlyList<PreparationOptionChoice> CalibrationReferenceChoices =
+    [
+        new("Vega", "亮标准星（Vega 等）", "使用可识别的亮参考星进行波长/响应复核。"),
+        new("CompactEmission", "紧致发射线天体 / PN", "使用已知发射线的紧致目标。"),
+        new("ExternalLamp", "外部标定灯", "使用独立标定灯采集参考谱。"),
+        new("NightSky", "夜天光谱线", "用夜天光线作辅助标定。"),
+    ];
+
+    private static readonly IReadOnlyList<PreparationOptionChoice> SafetyCapabilityChoices =
+    [
+        new("NinaSafetyStack", "N.I.N.A. 安全链（无人值守）", "启动时必须回读安全监视器、天气、屋顶和光路盖状态。"),
+        new("OperatorWeakSupervision", "有人弱监督（默认）", "四项适配器缺失或未连接时只警告并继续；已连接设备明确报告危险或关闭时仍阻断。绝不授予无人值守权限。"),
+    ];
+
     private static readonly IReadOnlyList<string> ManualUvexDevices = ["UVEX4 / COM5"];
 
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new()
@@ -86,7 +107,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand showAdvancedSettingsCommand;
     private readonly SimpleCommand autoFillConnectedNinaDevicesCommand;
     private readonly SimpleCommand selectNightSetupSnapshotCommand;
+    private readonly SimpleCommand createNightSetupDraftCommand;
+    private readonly SimpleCommand openPreparationDraftFolderCommand;
     private readonly SimpleCommand importCommissioningBindingsCommand;
+    private readonly SimpleCommand refreshCommissioningProfilesCommand;
+    private readonly SimpleCommand applySelectedCommissioningProfileCommand;
     private readonly SimpleCommand refreshProfileOwnershipCommand;
     private readonly SimpleCommand enableMountTrackingCommand;
     private readonly SimpleCommand applyRecommendedImageFilePatternCommand;
@@ -133,14 +158,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string latestEvidencePath = string.Empty;
     private string latestEvidenceSummary = "尚未生成运行证据。";
     private string phd2CalibrationGradeText = "尚未评估";
-    private string phd2CalibrationPolicyText = "等待读取实际 commissioning policy";
-    private string phd2CommissioningRouteText = "路线：等待读取 commissioning preset";
+    private string phd2CalibrationPolicyText = "等待读取实际标定策略";
+    private string phd2CommissioningRouteText = "路线：等待读取设备标定方案";
     private string phd2CalibrationPermissionText = "验证导星：等待 · exact-lock：等待 · 无人值守科学：否";
     private string phd2CalibrationScaleText = "步长/残差缩放：等待 PostSettle 证据";
     private string phd2CalibrationReasonText = "当前生产路径只评估 PHD2 当前 active calibration（单候选）；本轮真实 settle 和 fresh residual 到齐后才授予 exact-lock 或科学权限。";
     private string phd2CalibrationOverviewGradeText = "尚未评估";
     private string phd2CalibrationOverviewText = "启动导星后自动评估；评估前不执行精调或科学曝光。";
-    private string ghostCalibrationSummaryText = "标定：尚未读取经过 SHA-256 验证的 commissioning preset。";
+    private string ghostCalibrationSummaryText = "标定：尚未读取经过 SHA-256 验证的设备标定方案。";
     private string slitIdentityStatusText = "狭缝光学身份：尚未读取经过 SHA-256 验证的四槽位 LED 宽度指纹。";
     private string ghostApplicabilityText = "适用性：尚未运行；需同时核对新鲜 OFF 帧、相机/Profile、ROI/binning、方向、pier side、外部目录身份和独立 C11 焦点。";
     private string ghostDecisionText = "决定：尚未运行。Skip/Auto 继续既有 WCS/居中/搜索；只有 Require 无效时暂停。";
@@ -169,6 +194,20 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private int selectedWorkspaceTabIndex;
     private string? previousNinaImageFilePattern;
     private Guid? previousNinaImageFilePatternProfileId;
+    private IReadOnlyList<CommissioningProfileChoice> commissioningProfiles = [];
+    private IReadOnlyList<DeviceIdentityChoice> telescopeCandidates = [];
+    private IReadOnlyList<DeviceIdentityChoice> atrCameraCandidates = [];
+    private IReadOnlyList<DeviceIdentityChoice> g3CameraCandidates = [];
+    private IReadOnlyList<DeviceIdentityChoice> qhyCameraCandidates = [];
+    private CommissioningProfileChoice? selectedCommissioningProfile;
+    private DeviceIdentityChoice? selectedTelescopeCandidate;
+    private DeviceIdentityChoice? selectedAtrCameraCandidate;
+    private DeviceIdentityChoice? selectedG3CameraCandidate;
+    private DeviceIdentityChoice? selectedQhyCameraCandidate;
+    private string commissioningProfileLoadStatus = "尚未读取台站配置方案。";
+    private string preparationDraftPath = string.Empty;
+    private string preparationDraftStatus = "尚未生成本次观测配置草稿。";
+    private AutomaticPreparationEvidenceReport preparationEvidence = new(false, 0, 0, 0, 0, [], []);
 
     [ImportingConstructor]
     public ObservationDockable(
@@ -192,7 +231,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         this.telescopeMediator = telescopeMediator;
         targetImportService = ObservationTargetImportNinaSources.CreateService(
             framingAssistant,
-            planetariumFactory);
+            planetariumFactory,
+            () =>
+            {
+                var planetarium = profileService.ActiveProfile.PlanetariumSettings;
+                if (!string.Equals(planetarium.PreferredPlanetarium.ToString(), "STELLARIUM", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+                var hostName = string.IsNullOrWhiteSpace(planetarium.StellariumHost)
+                    ? "localhost"
+                    : planetarium.StellariumHost.Trim();
+                return new UriBuilder(Uri.UriSchemeHttp, hostName, planetarium.StellariumPort).Uri;
+            });
         Title = "OpenAstroSpec 自动观测";
         var icon = new GeometryGroup();
         icon.Children.Add(Geometry.Parse("M1,14 L5,9 8,11 12,4 15,6 M2,3 L2,7 M0,5 L4,5"));
@@ -242,7 +293,18 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         selectNightSetupSnapshotCommand = new SimpleCommand(
             SelectNightSetupSnapshot,
             CanEditTargetPlan);
+        createNightSetupDraftCommand = new SimpleCommand(
+            CreateNightSetupPreparationDraft,
+            CanEditTargetPlan);
+        openPreparationDraftFolderCommand = new SimpleCommand(
+            () => OpenContainingDirectory(PreparationDraftPath, "本次观测配置草稿"),
+            () => PathExists(PreparationDraftPath));
         importCommissioningBindingsCommand = new SimpleCommand(ImportCommissioningBindings);
+        refreshCommissioningProfilesCommand = new SimpleCommand(
+            () => RefreshCommissioningProfileCatalog(applySelected: false));
+        applySelectedCommissioningProfileCommand = new SimpleCommand(
+            ApplySelectedCommissioningProfile,
+            () => CanEditTargetPlan() && SelectedCommissioningProfile is not null);
         refreshProfileOwnershipCommand = new SimpleCommand(RefreshProfileOwnership);
         enableMountTrackingCommand = new SimpleCommand(EnableMountTrackingForCommissioning);
         applyRecommendedImageFilePatternCommand = new SimpleCommand(
@@ -292,6 +354,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             CanOperateManualUvex);
 
         LoadTargetImportDisplay();
+        RefreshCommissioningProfileCatalog(applySelected: true);
         RefreshGhostCommissioningSummary();
         RefreshSlitIdentitySummary();
         RefreshAtrManualStatus();
@@ -324,7 +387,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ShowAdvancedSettingsCommand => showAdvancedSettingsCommand;
     public ICommand AutoFillConnectedNinaDevicesCommand => autoFillConnectedNinaDevicesCommand;
     public ICommand SelectNightSetupSnapshotCommand => selectNightSetupSnapshotCommand;
+    public ICommand CreateNightSetupDraftCommand => createNightSetupDraftCommand;
+    public ICommand OpenPreparationDraftFolderCommand => openPreparationDraftFolderCommand;
     public ICommand ImportCommissioningBindingsCommand => importCommissioningBindingsCommand;
+    public ICommand RefreshCommissioningProfilesCommand => refreshCommissioningProfilesCommand;
+    public ICommand ApplySelectedCommissioningProfileCommand => applySelectedCommissioningProfileCommand;
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
     public ICommand EnableMountTrackingCommand => enableMountTrackingCommand;
     public ICommand ApplyRecommendedImageFilePatternCommand => applyRecommendedImageFilePatternCommand;
@@ -350,6 +417,184 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ObservableCollection<ObservationGateRow> GateRows { get; } = new();
     public ObservableCollection<ObservationTimelineRow> TimelineRows { get; } = new();
     public ObservableCollection<ObservationEvidenceRow> EvidenceRows { get; } = new();
+
+    public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles => commissioningProfiles;
+    public IReadOnlyList<DeviceIdentityChoice> TelescopeCandidates => telescopeCandidates;
+    public IReadOnlyList<DeviceIdentityChoice> AtrCameraCandidates => atrCameraCandidates;
+    public IReadOnlyList<DeviceIdentityChoice> G3CameraCandidates => g3CameraCandidates;
+    public IReadOnlyList<DeviceIdentityChoice> QhyCameraCandidates => qhyCameraCandidates;
+
+    public CommissioningProfileChoice? SelectedCommissioningProfile
+    {
+        get => selectedCommissioningProfile;
+        set
+        {
+            if (Equals(selectedCommissioningProfile, value)) return;
+            selectedCommissioningProfile = value;
+            if (value is not null)
+            {
+                settings.SelectedCommissioningProfileId = value.Id;
+                settings.SelectedCommissioningProfilePath = value.BindingsPath ?? string.Empty;
+            }
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(SelectedCommissioningProfileDescription));
+            applySelectedCommissioningProfileCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string SelectedCommissioningProfileDescription =>
+        SelectedCommissioningProfile?.Description ?? "未选择台站配置方案。";
+
+    public string CommissioningProfileLoadStatus
+    {
+        get => commissioningProfileLoadStatus;
+        private set { commissioningProfileLoadStatus = value; RaisePropertyChanged(); }
+    }
+
+    public IReadOnlyList<PreparationOptionChoice> PreparationSpectralRegionChoices => SpectralRegionChoices;
+    public IReadOnlyList<PreparationOptionChoice> PreparationCalibrationReferenceChoices => CalibrationReferenceChoices;
+    public IReadOnlyList<PreparationOptionChoice> PreparationSafetyCapabilityChoices => SafetyCapabilityChoices;
+
+    public string SelectedPreparationSpectralRegion
+    {
+        get => settings.PreparationSpectralRegionPreset;
+        set
+        {
+            if (string.Equals(settings.PreparationSpectralRegionPreset, value, StringComparison.Ordinal)) return;
+            settings.PreparationSpectralRegionPreset = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    public string SelectedPreparationCalibrationReference
+    {
+        get => settings.PreparationCalibrationReferencePreset;
+        set
+        {
+            if (string.Equals(settings.PreparationCalibrationReferencePreset, value, StringComparison.Ordinal)) return;
+            settings.PreparationCalibrationReferencePreset = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    public string SelectedPreparationSafetyCapability
+    {
+        get => settings.PreparationSafetyCapabilityPreset;
+        set
+        {
+            if (string.Equals(settings.PreparationSafetyCapabilityPreset, value, StringComparison.Ordinal)) return;
+            settings.PreparationSafetyCapabilityPreset = value;
+            ApplyPreparationSafetyCapability();
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ModeText));
+            RaisePropertyChanged(nameof(ModeDescription));
+            RaisePropertyChanged(nameof(RealModeStatus));
+            RaisePropertyChanged(nameof(RealModeStatusSummary));
+            RaiseCommandStates();
+        }
+    }
+
+    public bool PreparationOrderSortingFilterInstalled
+    {
+        get => settings.PreparationOrderSortingFilterInstalled;
+        set
+        {
+            if (settings.PreparationOrderSortingFilterInstalled == value) return;
+            settings.PreparationOrderSortingFilterInstalled = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    public string PreparationEvidenceInventorySummary => preparationEvidence.InventorySummary;
+    public string PreparationDraftPath => preparationDraftPath;
+    public string PreparationDraftStatus
+    {
+        get => preparationDraftStatus;
+        private set
+        {
+            preparationDraftStatus = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(PreparationDraftPath));
+            openPreparationDraftFolderCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    public DeviceIdentityChoice? SelectedTelescopeCandidate
+    {
+        get => selectedTelescopeCandidate;
+        set
+        {
+            if (Equals(selectedTelescopeCandidate, value)) return;
+            selectedTelescopeCandidate = value;
+            if (value is not null) settings.ExpectedTelescopeId = value.Id;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ExpectedTelescopeId));
+            RaiseCommandStates();
+        }
+    }
+
+    public DeviceIdentityChoice? SelectedAtrCameraCandidate
+    {
+        get => selectedAtrCameraCandidate;
+        set
+        {
+            if (Equals(selectedAtrCameraCandidate, value)) return;
+            selectedAtrCameraCandidate = value;
+            if (value is not null)
+            {
+                settings.BoundCameraId = value.Id;
+                settings.ObservationExpectedAtrCameraId = value.Id;
+            }
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ExpectedAtrCameraId));
+            RaisePropertyChanged(nameof(BoundAtrCameraId));
+            RaiseCommandStates();
+        }
+    }
+
+    public DeviceIdentityChoice? SelectedG3CameraCandidate
+    {
+        get => selectedG3CameraCandidate;
+        set
+        {
+            if (Equals(selectedG3CameraCandidate, value)) return;
+            selectedG3CameraCandidate = value;
+            if (value is not null)
+            {
+                settings.Phd2ProfileId = value.Phd2ProfileId ?? settings.Phd2ProfileId;
+                settings.Phd2ProfileName = value.Phd2ProfileName ?? settings.Phd2ProfileName;
+                settings.ObservationExpectedG3ProfileName = value.Phd2ProfileName ?? settings.ObservationExpectedG3ProfileName;
+                settings.Phd2CameraName = value.CameraName ?? settings.Phd2CameraName;
+                settings.Phd2CameraStableId = value.Id;
+                settings.Phd2MountName = value.MountName ?? settings.Phd2MountName;
+                settings.Phd2RuntimeCameraName = "G3M2210M";
+                settings.Phd2RuntimeMountName = "On-Step (ASCOM)";
+                settings.Phd2ProfileEvidenceSha256 = value.ProfileEvidenceSha256 ?? settings.Phd2ProfileEvidenceSha256;
+            }
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ExpectedG3ProfileName));
+            RaisePropertyChanged(nameof(Phd2ProfileEvidenceSha256));
+            RaisePropertyChanged(nameof(Phd2RegistryCameraName));
+            RaisePropertyChanged(nameof(Phd2RegistryMountName));
+            RaisePropertyChanged(nameof(Phd2RuntimeCameraName));
+            RaisePropertyChanged(nameof(Phd2RuntimeMountName));
+            RaiseCommandStates();
+        }
+    }
+
+    public DeviceIdentityChoice? SelectedQhyCameraCandidate
+    {
+        get => selectedQhyCameraCandidate;
+        set
+        {
+            if (Equals(selectedQhyCameraCandidate, value)) return;
+            selectedQhyCameraCandidate = value;
+            if (value is not null) settings.ObservationExpectedQhyCameraId = value.Id;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ExpectedQhyCameraId));
+            RaiseCommandStates();
+        }
+    }
 
     public string TargetName
     {
@@ -716,6 +961,12 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         set { settings.G3WcsMaximumCenteringMinutes = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
     }
 
+    public double G3WcsFreshSolveAuthorizationResidualArcseconds
+    {
+        get => settings.G3WcsFreshSolveAuthorizationResidualArcseconds;
+        set { settings.G3WcsFreshSolveAuthorizationResidualArcseconds = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(RealModeStatus)); RaiseCommandStates(); }
+    }
+
     public double G3TargetInsideFieldMarginPixels
     {
         get => settings.G3TargetInsideFieldMarginPixels;
@@ -993,11 +1244,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    public string ModeText => UseRealMode ? "自动观测：真实设备" : "自动观测：模拟演练";
+    public string ModeText => UseRealMode
+        ? settings.WeakSupervisionEnabled ? "自动观测：真实设备 · 有人弱监督" : "自动观测：真实设备 · 完整安全链"
+        : "自动观测：模拟演练";
     public bool IsSimulationMode => !UseRealMode;
     public bool IsRealMode => UseRealMode;
     public string ModeDescription => UseRealMode
-        ? "这里只选择自动观测的执行方式。UVEX 切缝、狭缝灯和 M2 小步进请使用“设备手控”，不要求整套自动观测准入。"
+        ? settings.WeakSupervisionEnabled
+            ? "有人弱监督：Safety Monitor、屋顶、天气和镜盖适配器缺失时记录警告并继续；已连接适配器明确报告危险或关闭时仍阻断。本模式不是无人值守。"
+            : "完整安全链：Safety Monitor、屋顶、天气和镜盖必须实时通过。UVEX 切缝、狭缝灯和 M2 小步进仍可使用“设备手控”。"
         : "模拟演练不会连接相机、赤道仪、PHD2 或 UVEX，可用于熟悉自动推进、暂停、恢复、取消、诊断和证据界面。";
     public string StartButtonText => UseRealMode
         ? "启动真实设备自动观测"
@@ -1008,7 +1263,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             var issues = RealModeEligibilityIssues();
             return issues.Count == 0
-                ? "✓ 真实模式启动条件已填写完整。点击启动后仍会重新读取并核验全部实时状态。"
+                ? settings.WeakSupervisionEnabled
+                    ? "⚠ 真实模式静态条件完整；当前为有人弱监督，缺失的四类环境适配器只警告，不能称为无人值守。"
+                    : "✓ 真实模式启动条件已填写完整。点击启动后仍会重新读取并核验全部实时状态。"
                 : $"真实模式当前有 {issues.Count} 个启动阻断项：{Environment.NewLine}• {string.Join($"{Environment.NewLine}• ", issues)}";
         }
     }
@@ -1018,7 +1275,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             var issueCount = RealModeEligibilityIssues().Count;
             return issueCount == 0
-                ? "✓ 真实模式启动资料已填写；启动时仍会重新核验实时状态。"
+                ? settings.WeakSupervisionEnabled
+                    ? "⚠ 已就绪：有人弱监督；环境适配器缺失只警告，明确危险仍阻断。"
+                    : "✓ 真实模式启动资料已填写；启动时仍会重新核验实时状态。"
                 : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
         }
     }
@@ -1042,7 +1301,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         settings.Phd2ProfileId < 0 ||
         string.IsNullOrWhiteSpace(settings.Phd2CameraStableId);
     public string DevicePreparationStatus => IsDevicePreparationMissing
-        ? "未完成：点击自动读取 N.I.N.A. 已连接设备；PHD2/G3 与 QHY 身份由 commissioning 文件一次导入。"
+        ? "未完成：请从下拉候选选择设备；候选来自 N.I.N.A.、PHD2 与 QHY 服务保存的配置，不需要先连接。"
         : $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}";
     public bool IsCommissioningPreparationMissing =>
         !settings.RealModeCommissioned ||
@@ -1052,20 +1311,20 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256) ||
         string.IsNullOrWhiteSpace(settings.CommissioningHardwareFingerprintSha256);
     public string CommissioningPreparationStatus => IsCommissioningPreparationMissing
-        ? "未完成：请选择 commissioning bindings；ID、哈希、设备身份和运动限额会自动填写，不需要逐项抄写。"
+        ? $"未完成：{preparationEvidence.InstallationStatus}"
         : $"已导入：{settings.CommissioningPresetId}";
     public bool IsNightSetupPreparationMissing =>
         string.IsNullOrWhiteSpace(settings.NightSetupSnapshotPath) ||
         !File.Exists(settings.NightSetupSnapshotPath) ||
         string.IsNullOrWhiteSpace(settings.NightSetupSnapshotSha256);
     public string NightSetupPreparationStatus => IsNightSetupPreparationMissing
-        ? "未完成：本夜设备快照尚未选择。优先由 commissioning bindings 或本夜准备流程生成/导入。"
+        ? $"未完成：{preparationEvidence.NightSetupStatus}"
         : $"已选择：{settings.ObservationNightSetupId} · {Path.GetFileName(settings.NightSetupSnapshotPath)}";
     public bool IsSlitChoiceMissing => ExpectedUvexSlitPosition is < 1 or > 4;
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
     public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
         ? "已通过：后台配置结构、设备所有权和运动限额完整。"
-        : "后台一致性尚未通过；多数项目会在导入 bindings 与 Night Setup 后自动完成，不需要逐项填写。";
+        : $"尚未通过：当前还有 {AutomaticPreparationIssueCount} 项一致性检查未满足。这里仅汇总结果；请在上方导入锁定包或生成准备草稿，不需要逐项填写哈希和工程限额。";
     public string AutomaticPreparationSummary => AutomaticPreparationIssueCount == 0
         ? "✓ 表单已完成；启动时会自动读取实时状态并做最后复核。"
         : "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
@@ -1498,6 +1757,253 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RaiseCommandStates();
     }
 
+    private void RefreshCommissioningProfileCatalog(bool applySelected)
+    {
+        try
+        {
+            var programDataRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "UVEX-ADV");
+            var result = CommissioningProfileCatalog.Discover(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NINA", "Profiles"),
+                programDataRoot,
+                settings.SelectedCommissioningProfilePath);
+            preparationEvidence = AutomaticPreparationService.Discover(programDataRoot);
+            commissioningProfiles = result.Profiles;
+            telescopeCandidates = IncludeCurrentCandidate(result.Telescopes, settings.ExpectedTelescopeId, "当前保存的赤道仪", "OpenAstroSpec 当前配置");
+            atrCameraCandidates = IncludeCurrentCandidate(result.AtrCameras, settings.ObservationExpectedAtrCameraId, "当前保存的 ATR585M", "OpenAstroSpec 当前配置");
+            g3CameraCandidates = IncludeCurrentCandidate(result.G3Cameras, settings.Phd2CameraStableId, "当前保存的 G3M2210M", "OpenAstroSpec 当前配置");
+            qhyCameraCandidates = IncludeCurrentCandidate(result.QhyCameras, settings.ObservationExpectedQhyCameraId, "当前保存的 QHYminiCam8M", "OpenAstroSpec 当前配置");
+
+            RaisePropertyChanged(nameof(CommissioningProfiles));
+            RaisePropertyChanged(nameof(TelescopeCandidates));
+            RaisePropertyChanged(nameof(AtrCameraCandidates));
+            RaisePropertyChanged(nameof(G3CameraCandidates));
+            RaisePropertyChanged(nameof(QhyCameraCandidates));
+            RaisePropertyChanged(nameof(PreparationEvidenceInventorySummary));
+            RaisePropertyChanged(nameof(CommissioningPreparationStatus));
+            RaisePropertyChanged(nameof(NightSetupPreparationStatus));
+
+            selectedCommissioningProfile = applySelected
+                ? CommissioningProfileCatalog.SelectStartupProfile(
+                    commissioningProfiles,
+                    settings.SelectedCommissioningProfileId,
+                    settings.AutoLoadNewestCompleteCommissioningPackage)
+                : commissioningProfiles.FirstOrDefault(item =>
+                    string.Equals(item.Id, settings.SelectedCommissioningProfileId, StringComparison.OrdinalIgnoreCase))
+                    ?? commissioningProfiles.FirstOrDefault(item => item.IsAutomatic)
+                    ?? commissioningProfiles.FirstOrDefault();
+            RaisePropertyChanged(nameof(SelectedCommissioningProfile));
+            RaisePropertyChanged(nameof(SelectedCommissioningProfileDescription));
+            MatchSelectedDeviceCandidates();
+
+            CommissioningProfileLoadStatus =
+                $"已发现 {commissioningProfiles.Count} 个台站方案、{telescopeCandidates.Count} 个赤道仪、{atrCameraCandidates.Count} 个 ATR、{g3CameraCandidates.Count} 个 G3/PHD2、{qhyCameraCandidates.Count} 个 QHY 候选；未连接任何设备。";
+            if (applySelected) ApplySelectedCommissioningProfile(startup: true);
+            else RaiseCommandStates();
+        }
+        catch (Exception ex)
+        {
+            CommissioningProfileLoadStatus = $"读取台站配置方案失败：{ex.Message}";
+            Error = CommissioningProfileLoadStatus;
+        }
+    }
+
+    private void ApplySelectedCommissioningProfile() => ApplySelectedCommissioningProfile(startup: false);
+
+    private void ApplySelectedCommissioningProfile(bool startup)
+    {
+        if (SelectedCommissioningProfile is not { } profile) return;
+        try
+        {
+            if (profile.IsAutomatic)
+            {
+                ApplyAutomaticSiteProfile(profile.BindingsPath);
+            }
+            else if (!string.IsNullOrWhiteSpace(profile.BindingsPath))
+            {
+                // A complete commissioning bundle supplies immutable evidence
+                // and identities; the machine-local operational template
+                // supplies the site's exposure ladders and bounded WCS/search
+                // defaults.  Compose them in that order so selecting the
+                // newest formal bundle does not resurrect zero-valued runtime
+                // fields on a fresh N.I.N.A. Profile.  The formal bundle then
+                // overwrites all evidence-bound values, and neither source
+                // grants real-mode authority.
+                var automatic = commissioningProfiles.FirstOrDefault(item => item.IsAutomatic);
+                ApplyAutomaticSiteProfile(automatic?.BindingsPath);
+                ApplyCommissioningBindings(profile.BindingsPath, rememberSelection: true);
+            }
+            else
+            {
+                throw new InvalidDataException("所选台站配置没有可加载的内容。");
+            }
+
+            settings.SelectedCommissioningProfileId = profile.Id;
+            settings.SelectedCommissioningProfilePath = profile.BindingsPath ?? string.Empty;
+            ApplyPreparationSafetyCapability();
+            var approval = TryAutoApproveSelectedCommissioningPackage(profile);
+            CommissioningProfileLoadStatus = startup
+                ? $"启动时已自动加载“{profile.DisplayName}”。{approval}候选仅来自保存的配置，未连接任何设备。"
+                : $"已加载“{profile.DisplayName}”。{approval}候选仅来自保存的配置，未连接任何设备。";
+            Error = string.Empty;
+            OperatorNotice = CommissioningProfileLoadStatus + " 点击开始真实观测后，程序仍会按设备所有权逐项实时复核。";
+            MatchSelectedDeviceCandidates();
+            RaisePropertyChanged(string.Empty);
+            RaiseCommandStates();
+        }
+        catch (Exception ex)
+        {
+            Error = $"加载台站配置方案失败：{ex.Message}";
+            CommissioningProfileLoadStatus = Error;
+        }
+    }
+
+    private void ApplyAutomaticSiteProfile(string? operationalProfilePath)
+    {
+        // Identity discovery is owned by N.I.N.A., PHD2 and the QHY service.
+        // Site-specific operational values are loaded from a machine-local file,
+        // never compiled into the open-source plugin. Neither path manufactures
+        // commissioning/Night Setup evidence or grants real-mode authority.
+        settings.RealModeCommissioned = false;
+        if (telescopeCandidates.FirstOrDefault() is { } telescope) SelectedTelescopeCandidate = telescope;
+        if (atrCameraCandidates.FirstOrDefault() is { } atr) SelectedAtrCameraCandidate = atr;
+        if (g3CameraCandidates.FirstOrDefault() is { } g3) SelectedG3CameraCandidate = g3;
+        if (qhyCameraCandidates.FirstOrDefault() is { } qhy) SelectedQhyCameraCandidate = qhy;
+
+        var site = activeProfileService.ActiveProfile.AstrometrySettings;
+        settings.ObservatoryLatitudeDegrees = site.Latitude;
+        settings.ObservatoryLongitudeDegreesEast = site.Longitude;
+        settings.ObservatoryElevationMeters = site.Elevation;
+        if (!string.IsNullOrWhiteSpace(operationalProfilePath))
+        {
+            ApplyOperationalProfileValues(operationalProfilePath);
+        }
+        ApplyPreparationSafetyCapability();
+        settings.RealModeCommissioned = false;
+    }
+
+    private void ApplyPreparationSafetyCapability()
+    {
+        var weak = string.Equals(
+            settings.PreparationSafetyCapabilityPreset,
+            "OperatorWeakSupervision",
+            StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                settings.PreparationSafetyCapabilityPreset,
+                "OperatorSupervised",
+                StringComparison.OrdinalIgnoreCase);
+        settings.WeakSupervisionEnabled = weak;
+        settings.RequireSafetyMonitor = !weak;
+        settings.RequireOpenDomeOrRoof = !weak;
+        settings.RequireWeatherData = !weak;
+        settings.RequireOpenOpticalCover = !weak;
+    }
+
+    private string TryAutoApproveSelectedCommissioningPackage(CommissioningProfileChoice profile)
+    {
+        settings.RealModeCommissioned = false;
+        if (profile.IsAutomatic || string.IsNullOrWhiteSpace(profile.BindingsPath)) return string.Empty;
+        if (!settings.AutoApproveValidatedCommissioningPackage)
+        {
+            return "自动确认已关闭；请人工复核后确认。";
+        }
+
+        try
+        {
+            settings.RealModeCommissioned = true;
+            var configuration = realRunnerFactory.CaptureConfiguration(settings);
+            var plan = ObservationPlanFactory.FromSettings(settings, configuration);
+            var staticIssues = RealModeEligibilityIssues().Concat(plan.Validate()).ToList();
+            var loadedPreset = RealCommissioningPresetLoader
+                .LoadAsync(configuration, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            staticIssues.AddRange(loadedPreset.Issues);
+            if (loadedPreset.Preset is { } preset)
+            {
+                var loadedNight = LockedNightSetupSnapshotLoader
+                    .LoadAsync(configuration, plan, preset, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                staticIssues.AddRange(loadedNight.Issues);
+            }
+            else
+            {
+                staticIssues.Add("设备标定方案未能形成可验证的锁定 preset。");
+            }
+
+            var failures = staticIssues
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (failures.Length == 0)
+            {
+                return settings.WeakSupervisionEnabled
+                    ? "SHA-256、内部引用和设备身份静态校验通过，已自动确认；当前为有人弱监督，不是无人值守。"
+                    : "SHA-256、内部引用和设备身份静态校验通过，已自动确认。";
+            }
+
+            settings.RealModeCommissioned = false;
+            return $"自动确认未通过（{failures.Length} 项），保留为未确认；";
+        }
+        catch (Exception ex)
+        {
+            settings.RealModeCommissioned = false;
+            return $"自动确认失败：{ex.Message}；";
+        }
+    }
+
+    private int ApplyOperationalProfileValues(string path)
+    {
+        var values = CommissioningProfileCatalog.ReadProfileValues(path);
+        var assignments = new List<(PropertyInfo Property, object Value)>();
+        foreach (var item in values)
+        {
+            if (!CommissioningProfileCatalog.IsOperationalProfileSetting(item.Key))
+            {
+                throw new InvalidDataException($"本机运行模板包含不允许自动写入的设置 '{item.Key}'。");
+            }
+            var property = typeof(UvexPluginSettings).GetProperty(
+                item.Key,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase)
+                ?? throw new InvalidDataException($"本机运行模板包含当前插件不认识的设置 '{item.Key}'。");
+            if (!property.CanWrite)
+            {
+                throw new InvalidDataException($"本机运行模板设置 '{item.Key}' 不可写。");
+            }
+            assignments.Add((property, ConvertBindingValue(item.Value, property.PropertyType, item.Key)));
+        }
+        foreach (var assignment in assignments) assignment.Property.SetValue(settings, assignment.Value);
+        return assignments.Count;
+    }
+
+    private void MatchSelectedDeviceCandidates()
+    {
+        selectedTelescopeCandidate = telescopeCandidates.FirstOrDefault(item => SameIdentity(item.Id, settings.ExpectedTelescopeId));
+        selectedAtrCameraCandidate = atrCameraCandidates.FirstOrDefault(item => SameIdentity(item.Id, settings.ObservationExpectedAtrCameraId));
+        selectedG3CameraCandidate = g3CameraCandidates.FirstOrDefault(item => SameIdentity(item.Id, settings.Phd2CameraStableId));
+        selectedQhyCameraCandidate = qhyCameraCandidates.FirstOrDefault(item => SameIdentity(item.Id, settings.ObservationExpectedQhyCameraId));
+        RaisePropertyChanged(nameof(SelectedTelescopeCandidate));
+        RaisePropertyChanged(nameof(SelectedAtrCameraCandidate));
+        RaisePropertyChanged(nameof(SelectedG3CameraCandidate));
+        RaisePropertyChanged(nameof(SelectedQhyCameraCandidate));
+    }
+
+    private static IReadOnlyList<DeviceIdentityChoice> IncludeCurrentCandidate(
+        IReadOnlyList<DeviceIdentityChoice> candidates,
+        string currentId,
+        string displayName,
+        string source)
+    {
+        if (string.IsNullOrWhiteSpace(currentId) || currentId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase) ||
+            candidates.Any(item => SameIdentity(item.Id, currentId))) return candidates;
+        return candidates.Append(new DeviceIdentityChoice(currentId, displayName, source)).ToArray();
+    }
+
+    private static bool SameIdentity(string left, string right) =>
+        string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
+
     private void AutoFillConnectedNinaDevices()
     {
         if (!CanEditTargetPlan()) return;
@@ -1529,8 +2035,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RefreshAtrManualStatus();
         Error = string.Empty;
         OperatorNotice = applied.Count == 1
-            ? "已同步 N.I.N.A. Profile 的站点坐标；当前未连接可识别的赤道仪或 ATR585M。PHD2/G3、QHY 和不可变证据请通过 commissioning bindings 一次导入。"
-            : $"已从 N.I.N.A. 自动读取：{string.Join("、", applied)}。PHD2/G3、QHY 和不可变证据仍由 commissioning bindings 一次导入。";
+            ? "已同步 N.I.N.A. 配置的站点坐标；当前未连接可识别的赤道仪或 ATR585M。PHD2/G3、QHY 和不可变证据请通过台站配置方案一次导入。"
+            : $"已从 N.I.N.A. 自动读取：{string.Join("、", applied)}。PHD2/G3、QHY 和不可变证据仍由台站配置方案一次导入。";
         RaisePropertyChanged(nameof(ExpectedTelescopeId));
         RaisePropertyChanged(nameof(ExpectedAtrCameraId));
         RaisePropertyChanged(nameof(BoundAtrCameraId));
@@ -1540,6 +2046,70 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(RealModeStatus));
         RaisePropertyChanged(nameof(RealModeStatusSummary));
         RaiseCommandStates();
+    }
+
+    private void CreateNightSetupPreparationDraft()
+    {
+        if (!CanEditTargetPlan()) return;
+        try
+        {
+            var programDataRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "UVEX-ADV");
+            preparationEvidence = AutomaticPreparationService.Discover(programDataRoot);
+            var input = new NightSetupPreparationDraftInput(
+                TargetName,
+                CatalogId,
+                settings.ExpectedTelescopeId,
+                settings.ObservationExpectedAtrCameraId,
+                settings.Gain,
+                settings.Offset,
+                settings.Binning,
+                settings.RoiX,
+                settings.RoiY,
+                settings.RoiWidth,
+                settings.RoiHeight,
+                settings.AtrTargetTemperatureC,
+                settings.AtrReadoutModeIndex,
+                settings.Phd2CameraStableId,
+                settings.Phd2ProfileName,
+                settings.G3ExposureMilliseconds,
+                settings.G3GainPercent,
+                settings.G3SaturationAdu,
+                settings.ObservationExpectedQhyCameraId,
+                settings.QhyGain,
+                settings.QhyOffset,
+                settings.QhyBinning,
+                settings.QhyReadoutMode,
+                settings.QhyRoiX,
+                settings.QhyRoiY,
+                settings.QhyRoiWidth,
+                settings.QhyRoiHeight,
+                double.IsFinite(settings.QhyTargetTemperatureC) ? settings.QhyTargetTemperatureC : null,
+                settings.ExpectedUvexSlitPosition,
+                settings.ExpectedUvexGratingPositionSteps == int.MinValue ? null : settings.ExpectedUvexGratingPositionSteps,
+                settings.ExpectedUvexM2PositionSteps == int.MinValue ? null : settings.ExpectedUvexM2PositionSteps,
+                settings.HorizonMinimumDegrees,
+                settings.HorizonStartMarginDegrees,
+                settings.HorizonContinueMarginDegrees,
+                settings.PreparationSpectralRegionPreset,
+                settings.PreparationCalibrationReferencePreset,
+                settings.PreparationSafetyCapabilityPreset,
+                settings.PreparationOrderSortingFilterInstalled,
+                preparationEvidence);
+
+            preparationDraftPath = AutomaticPreparationService.WriteDraft(programDataRoot, input);
+            PreparationDraftStatus =
+                $"已自动汇总并保存准备草稿：{Path.GetFileName(preparationDraftPath)}。它不会冒充锁定配置；缺失的实测证据已列在 UnresolvedItems 中。";
+            Error = string.Empty;
+            OperatorNotice = PreparationDraftStatus;
+            RaisePropertyChanged(nameof(PreparationEvidenceInventorySummary));
+            RaisePreparationProperties();
+        }
+        catch (Exception ex)
+        {
+            Error = $"生成本次观测配置草稿失败：{ex.Message}";
+        }
     }
 
     private void SelectNightSetupSnapshot()
@@ -1553,8 +2123,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 "commissioning");
             var dialog = new OpenFileDialog
             {
-                Title = "选择本夜 Night Setup 快照",
-                Filter = "Night Setup JSON (*.json)|*.json",
+                Title = "选择本夜光学设置快照",
+                Filter = "本夜光学设置 JSON (*.json)|*.json",
                 CheckFileExists = true,
                 Multiselect = false,
                 InitialDirectory = Directory.Exists(defaultDirectory) ? defaultDirectory : null,
@@ -1569,6 +2139,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             {
                 throw new InvalidDataException($"Night Setup 内容无效：{string.Join(" ", issues)}");
             }
+            if (setup.SchemaVersion != NightSetupRecord.CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"Night Setup schema {setup.SchemaVersion} 只能作为历史记录读取；真实自动观测必须使用含三焦域独立证据的 schema {NightSetupRecord.CurrentSchemaVersion}。 ");
+            }
 
             settings.NightSetupSnapshotPath = Path.GetFullPath(dialog.FileName);
             settings.NightSetupSnapshotSha256 = Convert.ToHexString(SHA256.HashData(bytes));
@@ -1578,6 +2153,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             settings.ExpectedUvexM2PositionSteps = setup.M2PositionSteps;
             Error = string.Empty;
             OperatorNotice = $"已选择并校验 Night Setup“{setup.NightSetupId}”；文件哈希、狭缝、光栅和 M2 期望值已自动填写。";
+            preparationDraftPath = string.Empty;
+            PreparationDraftStatus = "已导入锁定的 schema-2 本夜配置；不再使用此前草稿。";
             RaisePropertyChanged(nameof(NightSetupSnapshotPath));
             RaisePropertyChanged(nameof(NightSetupSnapshotSha256));
             RaisePropertyChanged(nameof(NightSetupId));
@@ -1699,7 +2276,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         HasTargetImport = true;
         TargetImportSummary = auditSummary;
         TargetImportDetails = result.Details;
-        OperatorNotice = $"目标草稿已更新为 {result.TargetName}：RA {result.RightAscensionDegrees:F8}°，Dec {result.DeclinationDegrees:+0.00000000;-0.00000000;0.00000000}°（J2000）。Night Setup、commissioning、时长和安全限制未改变。";
+            OperatorNotice = $"目标草稿已更新为 {result.TargetName}：RA {result.RightAscensionDegrees:F8}°，Dec {result.DeclinationDegrees:+0.00000000;-0.00000000;0.00000000}°（J2000）。本夜光学设置、设备标定、时长和安全限制未改变。";
         Error = string.Empty;
         RaisePreparationProperties();
     }
@@ -1986,18 +2563,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             settings.RequireSafetyMonitor,
             settings.RequireOpenDomeOrRoof,
             settings.RequireWeatherData,
-            settings.RequireOpenOpticalCover);
+            settings.RequireOpenOpticalCover,
+            settings.WeakSupervisionEnabled);
         if (capabilities.Disposition != GateDisposition.Passed) issues.Add(capabilities.Message);
         if (!settings.RealModeCommissioned) issues.Add("真实模式尚未标记为已调试。");
-        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) || !File.Exists(settings.CommissioningPresetPath)) issues.Add("缺少 commissioning preset 文件。");
-        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetId)) issues.Add("缺少 commissioning preset ID。");
-        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256)) issues.Add("缺少 commissioning preset SHA-256。");
+        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) || !File.Exists(settings.CommissioningPresetPath)) issues.Add("缺少不可变设备标定文件。");
+        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetId)) issues.Add("缺少设备标定方案 ID。");
+        if (string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256)) issues.Add("缺少设备标定方案 SHA-256。");
         if (!string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) && File.Exists(settings.CommissioningPresetPath) &&
             !string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256))
             issues.AddRange(ValidateCommissioningPresetUiRequirements());
-        if (string.IsNullOrWhiteSpace(settings.CommissioningHardwareFingerprintSha256)) issues.Add("缺少硬件 fingerprint SHA-256。");
-        if (string.IsNullOrWhiteSpace(settings.NightSetupSnapshotPath) || !File.Exists(settings.NightSetupSnapshotPath)) issues.Add("缺少 Night Setup 快照文件。");
-        if (string.IsNullOrWhiteSpace(settings.NightSetupSnapshotSha256)) issues.Add("缺少 Night Setup SHA-256。");
+        if (string.IsNullOrWhiteSpace(settings.CommissioningHardwareFingerprintSha256)) issues.Add("缺少硬件指纹 SHA-256。");
+        if (string.IsNullOrWhiteSpace(settings.NightSetupSnapshotPath) || !File.Exists(settings.NightSetupSnapshotPath)) issues.Add("缺少本夜光学设置快照文件。");
+        if (string.IsNullOrWhiteSpace(settings.NightSetupSnapshotSha256)) issues.Add("缺少本夜光学设置 SHA-256。");
         if (string.IsNullOrWhiteSpace(settings.ExpectedTelescopeId)) issues.Add("缺少赤道仪 DeviceId。");
         if (string.IsNullOrWhiteSpace(settings.ObservationExpectedAtrCameraId) || settings.ObservationExpectedAtrCameraId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase)) issues.Add("缺少真实 ATR585M DeviceId。");
         if (string.IsNullOrWhiteSpace(settings.ObservationExpectedQhyCameraId) || settings.ObservationExpectedQhyCameraId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase)) issues.Add("缺少真实 QHY StableId。");
@@ -2010,7 +2588,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
         if (settings.G3ExposureMilliseconds <= 0 || settings.G3GainPercent is < 0 or > 100)
         {
-            issues.Add("G3 曝光/增益无效；它们必须由 commissioning bindings 显式锁定。");
+            issues.Add("G3 曝光/增益无效；它们必须由设备标定方案显式锁定。");
         }
         if (settings.G3CameraRecoveryDelayMilliseconds is < 250 or > 10_000)
         {
@@ -2063,8 +2641,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             TimeSpan.FromMinutes(wcsMinutes),
             settings.G3TargetInsideFieldMarginPixels);
         issues.AddRange(wcsCentering.Validate().Select(issue => $"G3 WCS 居中：{issue}"));
+        if (!double.IsFinite(settings.G3WcsFreshSolveAuthorizationResidualArcseconds) ||
+            settings.G3WcsFreshSolveAuthorizationResidualArcseconds <= 2 ||
+            settings.G3WcsFreshSolveAuthorizationResidualArcseconds > settings.G3WcsMaximumSingleCorrectionArcseconds)
+        {
+            issues.Add("G3 WCS fresh 验证帧终点残差必须大于 2 arcsec，且不超过 WCS 单次运动上限。");
+        }
         if (!double.IsFinite(settings.G3MotionPostSlewSettleSeconds) || settings.G3MotionPostSlewSettleSeconds <= 0)
-            issues.Add("G3 移动后稳定等待必须是经 commissioning 显式确认的正秒数。");
+            issues.Add("G3 移动后稳定等待必须是经设备标定显式确认的正秒数。");
         if (!double.IsFinite(settings.G3MotionWorstCaseActionSeconds) ||
             settings.G3MotionWorstCaseActionSeconds <= settings.G3MotionPostSlewSettleSeconds)
             issues.Add("G3 单动作最坏时长必须大于移动后稳定等待，并覆盖移动、等待与复核。");
@@ -2130,15 +2714,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             QhyG3FastPairPolicy.ValidationTimeSpanFromHours(settings.QhyG3FastPairCandidateValidityHours),
             settings.QhyG3FastPairMaximumCandidateUncertaintyArcseconds);
         issues.AddRange(fastPair.Validate().Select(issue => $"QHY/G3 快速配对：{issue}"));
-        var coarseLimits = new QhyCoarseCenteringLimits(
-            settings.QhyCoarseCenteringSchemaVersion,
-            settings.QhyCoarseMaximumSingleCorrectionArcseconds,
-            settings.QhyCoarseMaximumCumulativeCorrectionArcseconds,
-            settings.QhyCoarseMaximumCorrectionAttempts,
-            TimeSpan.FromMinutes(double.IsFinite(settings.QhyCoarseMaximumCenteringMinutes)
-                ? settings.QhyCoarseMaximumCenteringMinutes
-                : 0));
-        issues.AddRange(coarseLimits.Validate().Select(issue => $"QHY 广域粗居中：{issue}"));
+        // QHY is a no-motion WCS witness in the current production route.
+        // Do not surface the retained legacy QHY movement envelope as a
+        // startup requirement.
         var searchLimits = new G3LocalSearchLimits(
             settings.G3SearchPattern,
             settings.G3SearchStepArcseconds,
@@ -2151,19 +2729,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         issues.AddRange(searchLimits.Validate().Select(issue => $"G3 有界搜索：{issue}"));
         if (settings.G3SearchStepArcseconds > settings.MaximumSingleCorrectionArcseconds)
         {
-            issues.Add("G3 搜索步长超过 commissioning 的单次运动上限。");
+            issues.Add("G3 搜索步长超过设备标定的单次运动上限。");
         }
         if (settings.G3SearchMaximumCumulativeArcseconds > settings.MaximumCumulativeCorrectionArcseconds)
         {
-            issues.Add("G3 搜索累计运动上限超过 commissioning 的累计运动上限。");
+            issues.Add("G3 搜索累计运动上限超过设备标定的累计运动上限。");
         }
         if (settings.G3SearchMaximumAttempts > settings.MaximumCorrectionAttempts)
         {
-            issues.Add("G3 搜索尝试次数超过 commissioning 的总修正次数上限。");
+            issues.Add("G3 搜索尝试次数超过设备标定的总修正次数上限。");
         }
         if (settings.G3SearchMaximumMinutes > settings.MaximumAcquisitionMinutes)
         {
-            issues.Add("G3 搜索耗时上限超过 commissioning 的总采集耗时上限。");
+            issues.Add("G3 搜索耗时上限超过设备标定的总采集耗时上限。");
         }
         return issues;
     }
@@ -2369,6 +2947,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         manualSlitLightOffCommand.RaiseCanExecuteChanged();
         autoFillConnectedNinaDevicesCommand.RaiseCanExecuteChanged();
         selectNightSetupSnapshotCommand.RaiseCanExecuteChanged();
+        createNightSetupDraftCommand.RaiseCanExecuteChanged();
+        openPreparationDraftFolderCommand.RaiseCanExecuteChanged();
+        applySelectedCommissioningProfileCommand.RaiseCanExecuteChanged();
         applyRecommendedImageFilePatternCommand.RaiseCanExecuteChanged();
         restorePreviousImageFilePatternCommand.RaiseCanExecuteChanged();
     }
@@ -2383,8 +2964,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(DevicePreparationStatus));
         RaisePropertyChanged(nameof(IsCommissioningPreparationMissing));
         RaisePropertyChanged(nameof(CommissioningPreparationStatus));
+        RaisePropertyChanged(nameof(PreparationEvidenceInventorySummary));
         RaisePropertyChanged(nameof(IsNightSetupPreparationMissing));
         RaisePropertyChanged(nameof(NightSetupPreparationStatus));
+        RaisePropertyChanged(nameof(PreparationDraftStatus));
         RaisePropertyChanged(nameof(IsSlitChoiceMissing));
         RaisePropertyChanged(nameof(IsAutomationPolicyPreparationMissing));
         RaisePropertyChanged(nameof(AutomationPolicyPreparationStatus));
@@ -2455,6 +3038,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         if (dispatcher is null || dispatcher.CheckAccess())
         {
             LoadNativeTargetDraftFromSettings();
+            RefreshCommissioningProfileCatalog(applySelected: true);
             RefreshImageFilePatternDisplay();
             RefreshProfileOwnership();
         }
@@ -2463,6 +3047,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             _ = dispatcher.BeginInvoke(() =>
             {
                 LoadNativeTargetDraftFromSettings();
+                RefreshCommissioningProfileCatalog(applySelected: true);
                 RefreshImageFilePatternDisplay();
                 RefreshProfileOwnership();
             });
@@ -2860,65 +3445,24 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 "commissioning");
             var dialog = new OpenFileDialog
             {
-                Title = "导入 OpenAstroSpec Auto — UVEX4 commissioning bindings",
-                Filter = "OpenAstroSpec commissioning bindings (*.bindings.json)|*.bindings.json|JSON (*.json)|*.json",
+                Title = "导入 OpenAstroSpec Auto — UVEX4 设备标定方案",
+                Filter = "OpenAstroSpec 设备标定方案 (*.bindings.json)|*.bindings.json|JSON (*.json)|*.json",
                 CheckFileExists = true,
                 Multiselect = false,
                 InitialDirectory = Directory.Exists(defaultDirectory) ? defaultDirectory : null,
             };
             if (dialog.ShowDialog() != true) return;
-
-            using var document = JsonDocument.Parse(File.ReadAllBytes(dialog.FileName));
-            if (!TryGetProperty(document.RootElement, "ninaProfileValues", out var values) ||
-                values.ValueKind != JsonValueKind.Object)
-            {
-                throw new InvalidDataException("所选文件不含 NinaProfileValues 对象。");
-            }
-
-            var assignments = new List<(PropertyInfo Property, object Value)>();
-            foreach (var item in values.EnumerateObject())
-            {
-                if (IsTargetPlanOrProvenanceSetting(item.Name))
-                {
-                    throw new InvalidDataException(
-                        $"commissioning bindings 不得修改观测目标或目标导入来源（'{item.Name}'）。请在观测计划区手工编辑，或使用构图助手/第三方星图导入。");
-                }
-                var property = typeof(UvexPluginSettings).GetProperty(
-                    item.Name,
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
-                if (property is null || !property.CanWrite)
-                {
-                    throw new InvalidDataException($"bindings 包含当前插件不认识的设置 '{item.Name}'。");
-                }
-                assignments.Add((property, ConvertBindingValue(item.Value, property.PropertyType, item.Name)));
-            }
-
-            var required = new[]
-            {
-                nameof(UvexPluginSettings.CommissioningPresetPath),
-                nameof(UvexPluginSettings.CommissioningPresetId),
-                nameof(UvexPluginSettings.CommissioningPresetSha256),
-                nameof(UvexPluginSettings.CommissioningHardwareFingerprintSha256),
-                nameof(UvexPluginSettings.NightSetupSnapshotPath),
-                nameof(UvexPluginSettings.NightSetupSnapshotSha256),
-                nameof(UvexPluginSettings.Phd2ProfileEvidenceSha256),
-                nameof(UvexPluginSettings.Phd2RuntimeCameraName),
-                nameof(UvexPluginSettings.Phd2RuntimeMountName),
-                nameof(UvexPluginSettings.G3ExposureMilliseconds),
-                nameof(UvexPluginSettings.G3GainPercent),
-                nameof(UvexPluginSettings.ObservationExpectedAtrCameraId),
-                nameof(UvexPluginSettings.ObservationExpectedQhyCameraId),
-                nameof(UvexPluginSettings.ExpectedTelescopeId),
-            };
-            var supplied = assignments.Select(item => item.Property.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var missing = required.Where(name => !supplied.Contains(name)).ToArray();
-            if (missing.Length > 0)
-            {
-                throw new InvalidDataException($"bindings 缺少关键设置：{string.Join(", ", missing)}。");
-            }
-
-            foreach (var assignment in assignments) assignment.Property.SetValue(settings, assignment.Value);
-            OperatorNotice = $"已导入并保存 {assignments.Count} 项锁定设置：{Path.GetFullPath(dialog.FileName)}";
+            var assignmentCount = ApplyCommissioningBindings(dialog.FileName, rememberSelection: true);
+            RefreshCommissioningProfileCatalog(applySelected: false);
+            selectedCommissioningProfile = commissioningProfiles.FirstOrDefault(item =>
+                string.Equals(item.BindingsPath, Path.GetFullPath(dialog.FileName), StringComparison.OrdinalIgnoreCase));
+            ApplyPreparationSafetyCapability();
+            var approval = selectedCommissioningProfile is { } importedProfile
+                ? TryAutoApproveSelectedCommissioningPackage(importedProfile)
+                : string.Empty;
+            RaisePropertyChanged(nameof(SelectedCommissioningProfile));
+            RaisePropertyChanged(nameof(SelectedCommissioningProfileDescription));
+            OperatorNotice = $"已导入并保存 {assignmentCount} 项设备标定设置：{Path.GetFullPath(dialog.FileName)}。{approval}";
             Error = string.Empty;
             RaisePropertyChanged(string.Empty);
             RaisePropertyChanged(nameof(ModeText));
@@ -2929,8 +3473,62 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
         catch (Exception ex)
         {
-            Error = $"导入 commissioning bindings 失败：{ex.Message}";
+            Error = $"导入设备标定方案失败：{ex.Message}";
         }
+    }
+
+    private int ApplyCommissioningBindings(string path, bool rememberSelection)
+    {
+        var values = CommissioningProfileCatalog.ReadProfileValues(path);
+        var assignments = new List<(PropertyInfo Property, object Value)>();
+        foreach (var item in values)
+        {
+            if (IsTargetPlanOrProvenanceSetting(item.Key))
+            {
+                throw new InvalidDataException(
+                    $"设备标定方案不得修改观测目标或目标导入来源（'{item.Key}'）。请在观测计划区编辑，或使用构图助手/第三方星图导入。");
+            }
+            var property = typeof(UvexPluginSettings).GetProperty(
+                item.Key,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            if (property is null || !property.CanWrite)
+            {
+                throw new InvalidDataException($"设备标定方案包含当前插件不认识的设置 '{item.Key}'。");
+            }
+            assignments.Add((property, ConvertBindingValue(item.Value, property.PropertyType, item.Key)));
+        }
+
+        var required = new[]
+        {
+            nameof(UvexPluginSettings.CommissioningPresetPath),
+            nameof(UvexPluginSettings.CommissioningPresetId),
+            nameof(UvexPluginSettings.CommissioningPresetSha256),
+            nameof(UvexPluginSettings.CommissioningHardwareFingerprintSha256),
+            nameof(UvexPluginSettings.NightSetupSnapshotPath),
+            nameof(UvexPluginSettings.NightSetupSnapshotSha256),
+            nameof(UvexPluginSettings.Phd2ProfileEvidenceSha256),
+            nameof(UvexPluginSettings.Phd2RuntimeCameraName),
+            nameof(UvexPluginSettings.Phd2RuntimeMountName),
+            nameof(UvexPluginSettings.G3ExposureMilliseconds),
+            nameof(UvexPluginSettings.G3GainPercent),
+            nameof(UvexPluginSettings.ObservationExpectedAtrCameraId),
+            nameof(UvexPluginSettings.ObservationExpectedQhyCameraId),
+            nameof(UvexPluginSettings.ExpectedTelescopeId),
+        };
+        var supplied = assignments.Select(item => item.Property.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = required.Where(name => !supplied.Contains(name)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidDataException($"设备标定方案缺少关键设置：{string.Join(", ", missing)}。");
+        }
+
+        foreach (var assignment in assignments) assignment.Property.SetValue(settings, assignment.Value);
+        if (rememberSelection)
+        {
+            settings.SelectedCommissioningProfileId = Path.GetFullPath(path);
+            settings.SelectedCommissioningProfilePath = Path.GetFullPath(path);
+        }
+        return assignments.Count;
     }
 
     private static bool IsTargetPlanOrProvenanceSetting(string name) => name switch
@@ -3058,7 +3656,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         ObservationRunState.Idle => "空闲",
         ObservationRunState.Validating => "正在验证",
-        ObservationRunState.RunningAuto => "无人值守自动推进",
+        ObservationRunState.RunningAuto => "自动推进",
         ObservationRunState.PauseRequested => "请求暂停（等待有界动作结束）",
         ObservationRunState.Paused => "已暂停",
         ObservationRunState.PausedNeedsAttention => "质量门失败，等待人工处理",

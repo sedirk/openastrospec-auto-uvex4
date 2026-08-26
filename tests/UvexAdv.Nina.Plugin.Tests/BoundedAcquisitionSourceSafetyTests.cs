@@ -10,6 +10,50 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         "RealObservationStageRunner.cs"));
 
     [Fact]
+    public void ProductionRouteKeepsQhyAsNoMotionWitnessAndHandsAcquisitionToFreshG3()
+    {
+        var body = MethodBody(
+            "private async Task<StageResult> CoarseCenterAsync(",
+            "private GateResult ValidateQhyCoarseMountState(");
+
+        var productionBranch = body.IndexOf("UseOnSkyValidatedG3FirstAcquisition", StringComparison.Ordinal);
+        var legacyNativeCentering = body.IndexOf("UseNinaNativeQhyCentering", StringComparison.Ordinal);
+        Assert.True(productionBranch >= 0 && productionBranch < legacyNativeCentering);
+        Assert.Contains("AcceptQhyWitnessAndDeferMotionToFreshG3Async", body, StringComparison.Ordinal);
+        Assert.Contains("qhyMotionAuthorized = false", body, StringComparison.Ordinal);
+        Assert.Contains("on-sky-validated-g3-first-v1", body, StringComparison.Ordinal);
+        Assert.Contains("nextAuthority = \"fresh-g3-wcs-or-bounded-overlapping-neighbour-search\"", body, StringComparison.Ordinal);
+
+        var validation = MethodBody(
+            "private IReadOnlyList<string> ValidateStaticConfiguration(",
+            "private Phd2IdentityRequirement PhdIdentityRequirement()");
+        Assert.DoesNotContain("configuration.Qhy.CoarseCenteringLimits.Validate()", validation, StringComparison.Ordinal);
+        Assert.DoesNotContain("QHY centering tolerance must be positive", validation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LargeG3WcsMoveUsesFreshSolveAuthorizationWithoutRelaxingStaticBindingOrLocalSearch()
+    {
+        var wcs = MethodBody(
+            "private async Task<StageResult> RunG3WcsCenteringAsync(",
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
+        var settle = MethodBody(
+            "private async Task<G3PostSlewStabilityResult> WaitForG3PostSlewStabilityAsync(",
+            "private async Task<G3AcquisitionMotionReturnResult> ReturnDurableG3AcquisitionToOriginAsync(");
+        var search = MethodBody(
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(",
+            "private GateResult ValidateG3SearchMountState(");
+
+        Assert.Contains("configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds", wcs, StringComparison.Ordinal);
+        Assert.Contains("actualMoveArcseconds > state.MaximumSingleCorrectionArcseconds", wcs, StringComparison.Ordinal);
+        Assert.Contains("actualOriginRadiusArcseconds > state.MaximumRadiusArcseconds", wcs, StringComparison.Ordinal);
+        Assert.Contains("additionalActualMotionCharge", wcs, StringComparison.Ordinal);
+        Assert.Contains("maximumCommandResidualArcseconds", settle, StringComparison.Ordinal);
+        Assert.Contains("drift > MountCommandArrivalToleranceArcseconds", settle, StringComparison.Ordinal);
+        Assert.Contains("MountCommandArrivalToleranceArcseconds,", search, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void QhyCoarseCenteringUsesIndependentVersionedEnvelopeAndFreshSolves()
     {
         var body = MethodBody(
@@ -158,6 +202,24 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
+    public void EverySolveLadderFrameIsPublishedBeforeContentAndSolveGates()
+    {
+        var body = MethodBody(
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private static bool IsRecoverableG3SearchGate(");
+
+        var load = body.IndexOf("imageDataFactory.CreateFromFile", StringComparison.Ordinal);
+        var preview = body.IndexOf("PublishG3Preview", load, StringComparison.Ordinal);
+        var content = body.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
+        var solve = body.IndexOf("SolveImageAsync", StringComparison.Ordinal);
+
+        Assert.True(load >= 0 && preview > load && content > preview && solve > content);
+        Assert.Contains("已拍摄，正在检测星场并解算", body, StringComparison.Ordinal);
+        Assert.Contains("PublishG3Preview(image, content.Gate.Message)", body, StringComparison.Ordinal);
+        Assert.Contains("PublishG3Preview(image, resultGate.Message)", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void G3MotionWaitsCommissionedSettleAndReattestsDriftBeforeFreshCapture()
     {
         var settle = MethodBody(
@@ -270,6 +332,55 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.True(CountOccurrences(coarse, "ValidateQhyAcceptedFrameMountBindingForMotionAsync") >= 3);
         Assert.Contains("reportedBeforeDispatch", coarse, StringComparison.Ordinal);
         Assert.Contains("QHY_COARSE_SOURCE_POSITION_CHANGED", coarse, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void QhyPlateSolveFailureAdvancesExposureLadderWithoutStarCountAuthority()
+    {
+        var acquisition = MethodBody(
+            "private async Task<StageResult> AcquireQhyWideFieldAsync(",
+            "private async Task<QhyJobSnapshot> AcquireOrContinueQhyAcquisitionAsync(");
+        var job = MethodBody(
+            "private async Task<QhyJobSnapshot> AcquireOrContinueQhyAcquisitionAsync(",
+            "private async Task<StageResult> CoarseCenterAsync(");
+
+        Assert.Contains("candidate > accepted.Settings.ExposureSeconds", acquisition, StringComparison.Ordinal);
+        Assert.Contains("qhyAcquisitionMinimumExposureSeconds = nextExposure", acquisition, StringComparison.Ordinal);
+        Assert.Contains("return await AcquireQhyWideFieldAsync", acquisition, StringComparison.Ordinal);
+        Assert.Contains("candidate + 1e-9 >= qhyAcquisitionMinimumExposureSeconds", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("MinimumDetectedStars", acquisition, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailedG3SolveWritesNullResidualAndContinuesTheExposureLadder()
+    {
+        var ladder = MethodBody(
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private GateResult ValidateG3SolveProbeImage(");
+
+        Assert.Contains(
+            "residualArcseconds = double.IsFinite(solve.ResidualArcseconds)",
+            ladder,
+            StringComparison.Ordinal);
+        Assert.Contains(": (double?)null", ladder, StringComparison.Ordinal);
+        Assert.DoesNotContain("                    solve.ResidualArcseconds,", ladder, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WeakSupervisionStillConnectsAndOpensTrustedSelectedCover()
+    {
+        var connect = MethodBody(
+            "private async Task<GateResult> EnsureNinaEquipmentConnectedAsync(",
+            "private async Task<GateResult> StartAtrPreCoolingAsync(");
+        var open = MethodBody(
+            "private async Task<GateResult> EnsureOpticalCoverOpenAsync(",
+            "private async Task<GateResult> WaitForOpticalCoverStateAsync(");
+
+        Assert.Contains("trustedOptionalCoverSelected", connect, StringComparison.Ordinal);
+        Assert.Contains("NinaProfileOwnerPreflight.OpticalCoverDeviceId", connect, StringComparison.Ordinal);
+        Assert.Contains("flatDeviceMediator.Connect", connect, StringComparison.Ordinal);
+        Assert.DoesNotContain("!configuration.Environment.RequireOpenOpticalCover", open, StringComparison.Ordinal);
+        Assert.Contains("flatDeviceMediator.OpenCover", open, StringComparison.Ordinal);
     }
 
     [Fact]

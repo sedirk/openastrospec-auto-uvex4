@@ -17,6 +17,7 @@ public sealed class G3EffectiveSaturationTests
             1000, 50, 1, 4095, 1000, 2.4, false, 5,
             SolveExposurePreset(),
             WcsCenteringLimits(),
+            60,
             120,
             3,
             WideToSlitTransferMode.Skip,
@@ -52,6 +53,7 @@ public sealed class G3EffectiveSaturationTests
             1000, 50, 1, ushort.MaxValue, 1000, 2.4, false, 5,
             SolveExposurePreset(),
             WcsCenteringLimits(),
+            60,
             120,
             3,
             WideToSlitTransferMode.Skip,
@@ -202,8 +204,10 @@ public sealed class G3EffectiveSaturationTests
             : Default(method.ReturnType));
         var settings = new UvexPluginSettings(profileService, accessor);
 
+        Assert.Equal(60, settings.ObservationDurationMinutes);
         Assert.Equal(10_000, settings.G3ExposureMilliseconds);
         Assert.Equal(100, settings.G3GainPercent);
+        Assert.Equal(60, settings.G3WcsFreshSolveAuthorizationResidualArcseconds);
         Assert.Equal("G3M2210M", settings.Phd2RuntimeCameraName);
         Assert.Equal("On-Step (ASCOM)", settings.Phd2RuntimeMountName);
         Assert.Equal(WideToSlitTransferMode.Skip, settings.WideToSlitTransferMode);

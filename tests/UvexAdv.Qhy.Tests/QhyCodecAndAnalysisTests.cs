@@ -1,4 +1,6 @@
 using UvexAdv.Qhy.Core;
+using System.Buffers.Binary;
+using System.IO.Compression;
 
 namespace UvexAdv.Qhy.Tests;
 
@@ -30,6 +32,32 @@ public sealed class QhyCodecAndAnalysisTests : IDisposable
         var preview = QhyPreviewEncoder.Encode(Guid.NewGuid(), Guid.NewGuid(), frame, metrics);
         Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, preview.PngBytes[..8]);
         Assert.Equal(0, preview.PngBytes[25]); // PNG IHDR color type: 0 = grayscale.
+    }
+
+    [Fact]
+    public void DownsampledPreviewPreservesACompactStarBetweenNearestNeighbourSamples()
+    {
+        const int width = 9;
+        const int height = 9;
+        var pixels = Enumerable.Repeat((ushort)100, width * height).ToArray();
+        pixels[(1 * width) + 1] = 1_000;
+        var frame = CreateFrame(width, height, pixels);
+        var metrics = new QhyFrameMetrics(
+            100, 1_000, 111, 100, 1,
+            100, 100, 500,
+            0, 0, 1, 2, 0, 900, null, []);
+
+        var preview = QhyPreviewEncoder.Encode(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            frame,
+            metrics,
+            maximumDimension: 3);
+        var grayscale = DecodeUnfilteredGrayscalePng(preview.PngBytes, preview.Width, preview.Height);
+
+        Assert.Equal(3, preview.Width);
+        Assert.Equal(3, preview.Height);
+        Assert.Equal(255, grayscale[0]);
     }
 
     [Fact]
@@ -204,6 +232,35 @@ public sealed class QhyCodecAndAnalysisTests : IDisposable
         var first = 1 - random.NextDouble();
         var second = 1 - random.NextDouble();
         return Math.Sqrt(-2 * Math.Log(first)) * Math.Cos(2 * Math.PI * second);
+    }
+
+    private static byte[] DecodeUnfilteredGrayscalePng(byte[] png, int width, int height)
+    {
+        using var compressed = new MemoryStream();
+        var offset = 8;
+        while (offset < png.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(offset, 4));
+            var type = System.Text.Encoding.ASCII.GetString(png, offset + 4, 4);
+            if (type == "IDAT") compressed.Write(png, offset + 8, length);
+            offset += 12 + length;
+            if (type == "IEND") break;
+        }
+
+        compressed.Position = 0;
+        using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        zlib.CopyTo(raw);
+        var scanlines = raw.ToArray();
+        var pixels = new byte[checked(width * height)];
+        for (var y = 0; y < height; y++)
+        {
+            var rowOffset = y * (width + 1);
+            Assert.Equal(0, scanlines[rowOffset]);
+            Array.Copy(scanlines, rowOffset + 1, pixels, y * width, width);
+        }
+
+        return pixels;
     }
 
     private static void AddGaussian(ushort[] pixels, int width, int height, int centerX, int centerY, double amplitude, double sigma)

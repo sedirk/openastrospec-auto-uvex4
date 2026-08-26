@@ -113,6 +113,31 @@ public sealed class SlitWheelIdentityTests
         Assert.NotEqual(original.CalibrationSha256, changed.CalibrationSha256);
     }
 
+    [Fact]
+    public void Calibration_AcceptsMeasuredReflectiveRidgeOffsetsWithinCommissionedPsfTolerance()
+    {
+        var original = Calibration();
+        var entries = original.Fingerprints.ToArray();
+        entries[0] = entries[0] with { MeasuredWidthPixels = 71.75, WidthUncertaintyPixels = 0.25, ReflectiveEdgeToApertureCenterPixels = 37.625 };
+        entries[1] = entries[1] with { MeasuredWidthPixels = 3.50, WidthUncertaintyPixels = 0.50, ReflectiveEdgeToApertureCenterPixels = 1.50, Resolution = SlitDarkApertureResolution.SharedPsfModel };
+        entries[2] = entries[2] with { MeasuredWidthPixels = 6.25, WidthUncertaintyPixels = 0.25, ReflectiveEdgeToApertureCenterPixels = 2.875 };
+        entries[3] = entries[3] with { MeasuredWidthPixels = 8.75, WidthUncertaintyPixels = 0.25, ReflectiveEdgeToApertureCenterPixels = 5.125 };
+        var measured = (original with { Fingerprints = entries, CalibrationSha256 = string.Empty }).WithComputedSha256();
+
+        Assert.Empty(measured.Validate());
+    }
+
+    [Fact]
+    public void Calibration_StillRejectsGrosslyInconsistentReflectiveRidgeOffset()
+    {
+        var original = Calibration();
+        var entries = original.Fingerprints.ToArray();
+        entries[1] = entries[1] with { ReflectiveEdgeToApertureCenterPixels = 30 };
+        var invalid = (original with { Fingerprints = entries, CalibrationSha256 = string.Empty }).WithComputedSha256();
+
+        Assert.Contains(invalid.Validate(), issue => issue.Contains("edge-to-centre offset", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static SlitWheelIdentityCalibration Calibration()
     {
         var entries = new[]

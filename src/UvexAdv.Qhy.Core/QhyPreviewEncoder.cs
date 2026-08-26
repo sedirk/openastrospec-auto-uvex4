@@ -20,11 +20,11 @@ public static class QhyPreviewEncoder
         {
             var rowOffset = targetY * (width + 1);
             raw[rowOffset] = 0;
-            var sourceY = Math.Min(frame.Height - 1, (int)(targetY / scale));
             for (var targetX = 0; targetX < width; targetX++)
             {
-                var sourceX = Math.Min(frame.Width - 1, (int)(targetX / scale));
-                var value = frame.Pixels[(sourceY * frame.Width) + sourceX];
+                var value = scale < 1
+                    ? MaximumInSourceCell(frame, targetX, targetY, scale)
+                    : frame.Pixels[(targetY * frame.Width) + targetX];
                 var normalized = Math.Clamp((value - displayMinimum) / (displayMaximum - displayMinimum), 0, 1);
                 raw[rowOffset + targetX + 1] = (byte)Math.Round(255 * Math.Asinh(8 * normalized) / Math.Asinh(8));
             }
@@ -47,6 +47,29 @@ public static class QhyPreviewEncoder
         WriteChunk(output, "IDAT"u8, compressed.ToArray());
         WriteChunk(output, "IEND"u8, ReadOnlySpan<byte>.Empty);
         return new QhyPreview(jobId, frameId, width, height, displayMinimum, displayMaximum, output.ToArray(), DateTimeOffset.UtcNow);
+    }
+
+    private static ushort MaximumInSourceCell(QhyFrame frame, int targetX, int targetY, double scale)
+    {
+        // Maximum pooling is intentionally limited to the operator preview. It
+        // preserves a compact 2-3 px stellar core when the 3856 px sensor is
+        // reduced to a 1600 px panel; raw FITS and scientific metrics remain
+        // untouched. Nearest-neighbour sampling can miss the core entirely.
+        var startX = Math.Clamp((int)Math.Floor(targetX / scale), 0, frame.Width - 1);
+        var startY = Math.Clamp((int)Math.Floor(targetY / scale), 0, frame.Height - 1);
+        var endX = Math.Clamp((int)Math.Ceiling((targetX + 1) / scale), startX + 1, frame.Width);
+        var endY = Math.Clamp((int)Math.Ceiling((targetY + 1) / scale), startY + 1, frame.Height);
+        ushort maximum = 0;
+        for (var sourceY = startY; sourceY < endY; sourceY++)
+        {
+            var row = sourceY * frame.Width;
+            for (var sourceX = startX; sourceX < endX; sourceX++)
+            {
+                maximum = Math.Max(maximum, frame.Pixels[row + sourceX]);
+            }
+        }
+
+        return maximum;
     }
 
     private static void WriteChunk(Stream stream, ReadOnlySpan<byte> type, ReadOnlySpan<byte> payload)

@@ -10,9 +10,11 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed class UvexPluginSettings
 {
+    private const int WeakSupervisionSelectionSemanticsVersion = 1;
     public static readonly Guid PluginGuid = Guid.Parse("A4183531-55BD-4FD0-B04A-97ED7EDC15DA");
     public const int Atr585mDefaultOffset = 256;
     public const int G3M2210mDefaultSaturationAdu = 4095;
+    private const int ObservationPlanningDurationSemanticsVersion = 1;
     private readonly IProfileService profileService;
     private readonly IPluginOptionsAccessor values;
 
@@ -25,6 +27,8 @@ internal sealed class UvexPluginSettings
     {
         this.profileService = profileService;
         this.values = values;
+        MigrateObservationPlanningDuration();
+        MigrateWeakSupervisionSelection();
     }
 
     public string ServiceUrl { get => GetString(nameof(ServiceUrl), "http://127.0.0.1:47844"); set => values.SetValueString(nameof(ServiceUrl), value); }
@@ -99,14 +103,14 @@ internal sealed class UvexPluginSettings
         }
         set => values.SetValueInt32(nameof(ObservationTargetObservability), (int)value);
     }
-    public double ObservationDurationMinutes { get => values.GetValueDouble(nameof(ObservationDurationMinutes), 10); set => values.SetValueDouble(nameof(ObservationDurationMinutes), value); }
+    public double ObservationDurationMinutes { get => values.GetValueDouble(nameof(ObservationDurationMinutes), 60); set => values.SetValueDouble(nameof(ObservationDurationMinutes), value); }
     public string ObservationNightSetupId { get => GetString(nameof(ObservationNightSetupId), "SIM-NIGHT-SETUP"); set => values.SetValueString(nameof(ObservationNightSetupId), value); }
     public double ObservatoryLatitudeDegrees { get => values.GetValueDouble(nameof(ObservatoryLatitudeDegrees), profileService.ActiveProfile.AstrometrySettings.Latitude); set => values.SetValueDouble(nameof(ObservatoryLatitudeDegrees), value); }
     public double ObservatoryLongitudeDegreesEast { get => values.GetValueDouble(nameof(ObservatoryLongitudeDegreesEast), profileService.ActiveProfile.AstrometrySettings.Longitude); set => values.SetValueDouble(nameof(ObservatoryLongitudeDegreesEast), value); }
     public double ObservatoryElevationMeters { get => values.GetValueDouble(nameof(ObservatoryElevationMeters), profileService.ActiveProfile.AstrometrySettings.Elevation); set => values.SetValueDouble(nameof(ObservatoryElevationMeters), value); }
-    public double HorizonMinimumDegrees { get => values.GetValueDouble(nameof(HorizonMinimumDegrees), 40); set => values.SetValueDouble(nameof(HorizonMinimumDegrees), value); }
-    public double HorizonStartMarginDegrees { get => values.GetValueDouble(nameof(HorizonStartMarginDegrees), 5); set => values.SetValueDouble(nameof(HorizonStartMarginDegrees), value); }
-    public double HorizonContinueMarginDegrees { get => values.GetValueDouble(nameof(HorizonContinueMarginDegrees), 2); set => values.SetValueDouble(nameof(HorizonContinueMarginDegrees), value); }
+    public double HorizonMinimumDegrees { get => values.GetValueDouble(nameof(HorizonMinimumDegrees), 30); set => values.SetValueDouble(nameof(HorizonMinimumDegrees), value); }
+    public double HorizonStartMarginDegrees { get => values.GetValueDouble(nameof(HorizonStartMarginDegrees), 0); set => values.SetValueDouble(nameof(HorizonStartMarginDegrees), value); }
+    public double HorizonContinueMarginDegrees { get => values.GetValueDouble(nameof(HorizonContinueMarginDegrees), 0); set => values.SetValueDouble(nameof(HorizonContinueMarginDegrees), value); }
     public string ObservationExpectedAtrCameraId { get => GetString(nameof(ObservationExpectedAtrCameraId), "SIM-ATR585M"); set => values.SetValueString(nameof(ObservationExpectedAtrCameraId), value); }
     public string ObservationExpectedG3ProfileName { get => GetString(nameof(ObservationExpectedG3ProfileName), "SIM-PHD2-G3M2210M"); set => values.SetValueString(nameof(ObservationExpectedG3ProfileName), value); }
     public string ObservationExpectedQhyCameraId { get => GetString(nameof(ObservationExpectedQhyCameraId), "SIM-QHYMINICAM8M"); set => values.SetValueString(nameof(ObservationExpectedQhyCameraId), value); }
@@ -116,12 +120,20 @@ internal sealed class UvexPluginSettings
     // Real target-observation mode is deliberately opt-in. Empty calibration/identity values are
     // interpreted as uncommissioned and cause a NeedsAttention gate instead of guessed motion.
     public bool RealModeCommissioned { get => values.GetValueBoolean(nameof(RealModeCommissioned), false); set => values.SetValueBoolean(nameof(RealModeCommissioned), value); }
+    public bool AutoLoadNewestCompleteCommissioningPackage { get => values.GetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), true); set => values.SetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), value); }
+    public bool AutoApproveValidatedCommissioningPackage { get => values.GetValueBoolean(nameof(AutoApproveValidatedCommissioningPackage), true); set => values.SetValueBoolean(nameof(AutoApproveValidatedCommissioningPackage), value); }
+    public string SelectedCommissioningProfileId { get => GetString(nameof(SelectedCommissioningProfileId), CommissioningProfileChoice.AutomaticSiteProfileId); set => values.SetValueString(nameof(SelectedCommissioningProfileId), value); }
+    public string SelectedCommissioningProfilePath { get => GetString(nameof(SelectedCommissioningProfilePath), string.Empty); set => values.SetValueString(nameof(SelectedCommissioningProfilePath), value); }
     public string CommissioningPresetPath { get => GetString(nameof(CommissioningPresetPath), string.Empty); set => values.SetValueString(nameof(CommissioningPresetPath), value); }
     public string CommissioningPresetId { get => GetString(nameof(CommissioningPresetId), string.Empty); set => values.SetValueString(nameof(CommissioningPresetId), value); }
     public string CommissioningPresetSha256 { get => GetString(nameof(CommissioningPresetSha256), string.Empty); set => values.SetValueString(nameof(CommissioningPresetSha256), value); }
     public string CommissioningHardwareFingerprintSha256 { get => GetString(nameof(CommissioningHardwareFingerprintSha256), string.Empty); set => values.SetValueString(nameof(CommissioningHardwareFingerprintSha256), value); }
     public string NightSetupSnapshotPath { get => GetString(nameof(NightSetupSnapshotPath), string.Empty); set => values.SetValueString(nameof(NightSetupSnapshotPath), value); }
     public string NightSetupSnapshotSha256 { get => GetString(nameof(NightSetupSnapshotSha256), string.Empty); set => values.SetValueString(nameof(NightSetupSnapshotSha256), value); }
+    public string PreparationSpectralRegionPreset { get => GetString(nameof(PreparationSpectralRegionPreset), "VisibleWide"); set => values.SetValueString(nameof(PreparationSpectralRegionPreset), value); }
+    public string PreparationCalibrationReferencePreset { get => GetString(nameof(PreparationCalibrationReferencePreset), "Vega"); set => values.SetValueString(nameof(PreparationCalibrationReferencePreset), value); }
+    public string PreparationSafetyCapabilityPreset { get => GetString(nameof(PreparationSafetyCapabilityPreset), "OperatorWeakSupervision"); set => values.SetValueString(nameof(PreparationSafetyCapabilityPreset), value); }
+    public bool PreparationOrderSortingFilterInstalled { get => values.GetValueBoolean(nameof(PreparationOrderSortingFilterInstalled), false); set => values.SetValueBoolean(nameof(PreparationOrderSortingFilterInstalled), value); }
     public string ExpectedTelescopeId { get => GetString(nameof(ExpectedTelescopeId), string.Empty); set => values.SetValueString(nameof(ExpectedTelescopeId), value); }
     public double AtrTargetTemperatureC { get => values.GetValueDouble(nameof(AtrTargetTemperatureC), -10); set => values.SetValueDouble(nameof(AtrTargetTemperatureC), value); }
     public short AtrReadoutModeIndex { get => values.GetValueInt16(nameof(AtrReadoutModeIndex), 1); set => values.SetValueInt16(nameof(AtrReadoutModeIndex), value); }
@@ -178,6 +190,7 @@ internal sealed class UvexPluginSettings
     public double G3WcsMaximumCumulativeMotionArcseconds { get => values.GetValueDouble(nameof(G3WcsMaximumCumulativeMotionArcseconds), 0); set => values.SetValueDouble(nameof(G3WcsMaximumCumulativeMotionArcseconds), value); }
     public int G3WcsMaximumCorrectionAttempts { get => values.GetValueInt32(nameof(G3WcsMaximumCorrectionAttempts), 0); set => values.SetValueInt32(nameof(G3WcsMaximumCorrectionAttempts), value); }
     public double G3WcsMaximumCenteringMinutes { get => values.GetValueDouble(nameof(G3WcsMaximumCenteringMinutes), 0); set => values.SetValueDouble(nameof(G3WcsMaximumCenteringMinutes), value); }
+    public double G3WcsFreshSolveAuthorizationResidualArcseconds { get => values.GetValueDouble(nameof(G3WcsFreshSolveAuthorizationResidualArcseconds), 60); set => values.SetValueDouble(nameof(G3WcsFreshSolveAuthorizationResidualArcseconds), value); }
     public double G3TargetInsideFieldMarginPixels { get => values.GetValueDouble(nameof(G3TargetInsideFieldMarginPixels), 0); set => values.SetValueDouble(nameof(G3TargetInsideFieldMarginPixels), value); }
     public double G3MotionWorstCaseActionSeconds { get => values.GetValueDouble(nameof(G3MotionWorstCaseActionSeconds), 0); set => values.SetValueDouble(nameof(G3MotionWorstCaseActionSeconds), value); }
     public double G3MotionPostSlewSettleSeconds { get => values.GetValueDouble(nameof(G3MotionPostSlewSettleSeconds), 0); set => values.SetValueDouble(nameof(G3MotionPostSlewSettleSeconds), value); }
@@ -267,6 +280,7 @@ internal sealed class UvexPluginSettings
     public bool RequireOpenDomeOrRoof { get => values.GetValueBoolean(nameof(RequireOpenDomeOrRoof), true); set => values.SetValueBoolean(nameof(RequireOpenDomeOrRoof), value); }
     public bool RequireWeatherData { get => values.GetValueBoolean(nameof(RequireWeatherData), true); set => values.SetValueBoolean(nameof(RequireWeatherData), value); }
     public bool RequireOpenOpticalCover { get => values.GetValueBoolean(nameof(RequireOpenOpticalCover), true); set => values.SetValueBoolean(nameof(RequireOpenOpticalCover), value); }
+    public bool WeakSupervisionEnabled { get => values.GetValueBoolean(nameof(WeakSupervisionEnabled), true); set => values.SetValueBoolean(nameof(WeakSupervisionEnabled), value); }
     public bool CloseOpticalCoverOnFinalize { get => values.GetValueBoolean(nameof(CloseOpticalCoverOnFinalize), true); set => values.SetValueBoolean(nameof(CloseOpticalCoverOnFinalize), value); }
     public bool CloseOpticalCoverOnFailure { get => values.GetValueBoolean(nameof(CloseOpticalCoverOnFailure), true); set => values.SetValueBoolean(nameof(CloseOpticalCoverOnFailure), value); }
     public int OpticalCoverTransitionTimeoutSeconds { get => values.GetValueInt32(nameof(OpticalCoverTransitionTimeoutSeconds), 45); set => values.SetValueInt32(nameof(OpticalCoverTransitionTimeoutSeconds), value); }
@@ -307,6 +321,45 @@ internal sealed class UvexPluginSettings
         .ToArray();
 
     private string GetString(string name, string defaultValue) => values.GetValueString(name, defaultValue) ?? defaultValue;
+
+    private void MigrateObservationPlanningDuration()
+    {
+        var versionKey = nameof(ObservationPlanningDurationSemanticsVersion);
+        if (values.GetValueInt32(versionKey, 0) >= ObservationPlanningDurationSemanticsVersion) return;
+
+        // 10 minutes was the old factory default.  It was displayed as a generic
+        // "plan duration", even though the runner uses it for the initial horizon
+        // envelope and the parallel QHY job rather than as an ATR exposure timeout.
+        // Preserve every deliberate non-default value; only migrate the untouched
+        // legacy default to the more useful one-hour planning window.
+        var legacyMinutes = values.GetValueDouble(nameof(ObservationDurationMinutes), 10);
+        if (Math.Abs(legacyMinutes - 10d) < 1e-9)
+        {
+            values.SetValueDouble(nameof(ObservationDurationMinutes), 60d);
+        }
+        values.SetValueInt32(versionKey, ObservationPlanningDurationSemanticsVersion);
+    }
+
+    private void MigrateWeakSupervisionSelection()
+    {
+        var versionKey = nameof(WeakSupervisionSelectionSemanticsVersion);
+        if (values.GetValueInt32(versionKey, 0) < WeakSupervisionSelectionSemanticsVersion)
+        {
+            // Earlier builds defaulted every existing Profile to the full N.I.N.A.
+            // safety stack even when the station had no Safety Monitor. Migrate
+            // exactly once; a later deliberate selection of the full stack is
+            // preserved because the semantics version has already been recorded.
+            values.SetValueString(nameof(PreparationSafetyCapabilityPreset), "OperatorWeakSupervision");
+            values.SetValueInt32(versionKey, WeakSupervisionSelectionSemanticsVersion);
+            return;
+        }
+
+        var selected = GetString(nameof(PreparationSafetyCapabilityPreset), "OperatorWeakSupervision");
+        if (string.Equals(selected, "OperatorSupervised", StringComparison.OrdinalIgnoreCase))
+        {
+            values.SetValueString(nameof(PreparationSafetyCapabilityPreset), "OperatorWeakSupervision");
+        }
+    }
 
     private static IReadOnlyList<double> ParsePositiveDoubles(string value) => value
         .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)

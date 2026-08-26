@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Xunit;
@@ -24,6 +25,9 @@ public sealed class EmbeddedImageViewerControlTests
                     Caption = "10 s · gain 95 · R filter",
                     EmptyTitle = "尚无测试图像",
                     EmptyDetails = "等待模拟帧",
+                    PopoutCommand = new RoutedCommand(),
+                    PopoutLabel = "弹出测试大图",
+                    ShowPopoutButton = true,
                 };
 
                 viewer.Measure(new Size(800, 500));
@@ -38,8 +42,10 @@ public sealed class EmbeddedImageViewerControlTests
                 viewer.UpdateLayout();
                 Assert.True(viewer.HasImage);
                 var toolbarButtons = Descendants<Button>(viewer).ToArray();
-                Assert.Equal(4, toolbarButtons.Length);
-                Assert.All(toolbarButtons, button => Assert.True(button.IsEnabled));
+                Assert.Equal(5, toolbarButtons.Length);
+                var popoutButton = Assert.Single(toolbarButtons, button => Equals(button.Content, "弹出测试大图"));
+                Assert.Equal(Visibility.Visible, popoutButton.Visibility);
+                Assert.All(toolbarButtons.Where(button => !ReferenceEquals(button, popoutButton)), button => Assert.True(button.IsEnabled));
 
                 viewer.FitToViewport();
                 Assert.InRange(viewer.Zoom, 0.05, 1.0);
@@ -50,6 +56,7 @@ public sealed class EmbeddedImageViewerControlTests
                 viewer.PreviewImage = null;
                 Assert.False(viewer.HasImage);
                 Assert.Equal(1.0, viewer.Zoom, precision: 10);
+                Assert.Equal(Visibility.Collapsed, popoutButton.Visibility);
             }
             catch (Exception exception)
             {

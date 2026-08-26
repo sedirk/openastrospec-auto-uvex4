@@ -40,6 +40,7 @@ dist/
 # Local runtime state and generated products
 tmp/
 /output/
+/outputs/
 /reduction/output/
 logs/
 *.log

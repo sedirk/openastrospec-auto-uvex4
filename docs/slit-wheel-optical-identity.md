@@ -30,6 +30,20 @@ schema 4 commissioning preset 必须包含一个自哈希的 `SlitWheelIdentityC
 
 ## 运行时判定
 
+自动观测只在进入 `AcquireG3SlitField`（取得 G3 狭缝场）并且确实要生成 fresh 目标/狭缝
+几何时自动亮灯检测；单独在“设备手控”中打开 LED 只改变灯的状态，不会自动启动分析。
+自动序列开始前必须已经加载 schema-5 commissioning 与四槽身份库，Night Setup 的 C11
+焦点所有者/锁定位置通过，PHD2 身份与不可变 Profile 证据通过，光路盖已打开，并且即时
+安全/设备所有权门允许。随后程序在赤道仪无运动状态下分别按锁定短曝光和长曝光执行
+`OFF×3 → ON×3 → OFF×3`，合计 18 张 G3 FITS；每个 LED 命令必须完成并回读，所有帧都
+绑定即时 mount readback 和 SHA-256。正常结束、暂停、取消、异常或超时都会在 `finally`
+中强制关灯并核对 OFF，关灯无法证明时流程保持阻断。
+
+G3 长曝光解算阶梯本身不亮 LED。只有阶梯已经取得可用 WCS（或按稀疏场/目录目标策略
+允许继续尝试狭缝几何）后，才进入上述 18 帧检测。邻场搜索、失败后的 fresh reacquire 或
+重新开始 `AcquireG3SlitField` 会再次运行，因为旧帧不能证明移动后的当前狭缝/目标关系；
+普通科学曝光和持续导星期间不会周期性闪灯。
+
 运行时将本轮测量不确定度与每个参考指纹不确定度按平方和合并：
 
 `sigmaCombined = sqrt(sigmaFresh² + sigmaReference²)`

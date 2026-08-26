@@ -182,12 +182,13 @@ internal static class RealCommissioningPresetLoader
         if (!string.Equals(preset.PresetId, binding.PresetId, StringComparison.Ordinal)) issues.Add("Commissioning preset ID does not match the locked run binding.");
         if (preset.CreatedUtc == default) issues.Add("Commissioning preset creation timestamp is missing.");
         if (preset.CreatedUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("Commissioning preset creation timestamp is in the future.");
-        if (preset.ValidUntilUtc is not { } validUntil) issues.Add("Commissioning preset validity deadline is missing.");
-        else
-        {
-            if (validUntil <= preset.CreatedUtc) issues.Add("Commissioning preset validity deadline must be after creation.");
-            if (validUntil <= DateTimeOffset.UtcNow) issues.Add($"Commissioning preset expired at {validUntil:O}.");
-        }
+        // Commissioning is invalidated by a changed installation epoch,
+        // hardware/profile fingerprint, Night Setup hash, optical position or
+        // live quality evidence.  It does not expire merely because a wall
+        // clock deadline passed.  Keep accepting legacy deadlines only as
+        // provenance and reject an internally impossible interval.
+        if (preset.ValidUntilUtc is { } validUntil && validUntil <= preset.CreatedUtc)
+            issues.Add("Legacy commissioning validity deadline must be after creation when supplied.");
         if (string.IsNullOrWhiteSpace(preset.Provenance)) issues.Add("Commissioning preset provenance is missing.");
         if (!string.Equals(preset.NightSetupId, configuration.NightSetup.NightSetupId, StringComparison.Ordinal)) issues.Add("Commissioning preset Night Setup ID mismatch.");
         if (!string.Equals(NormalizeHash(preset.NightSetupSha256), NormalizeHash(configuration.NightSetup.SnapshotSha256), StringComparison.OrdinalIgnoreCase)) issues.Add("Commissioning preset Night Setup SHA-256 mismatch.");

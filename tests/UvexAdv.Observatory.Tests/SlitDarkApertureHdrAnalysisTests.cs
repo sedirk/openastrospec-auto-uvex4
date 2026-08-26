@@ -39,7 +39,7 @@ public sealed class SlitDarkApertureHdrAnalysisTests
     }
 
     [Fact]
-    public void CompletelyClippedLongExposureIsRejectedEvenThoughReflectionSaturationIsAllowed()
+    public void CompletelyClippedLongExposureDoesNotVetoDirectShortExposureTwoEdgeMeasurement()
     {
         var shortPair = Pair(8, 1_500, 180, 1);
         var pixels = Enumerable.Repeat((ushort)4_095, 200 * 180).ToArray();
@@ -55,10 +55,32 @@ public sealed class SlitDarkApertureHdrAnalysisTests
             Seed,
             Options(sharedPsf: true));
 
-        Assert.Equal("SLIT_DARK_APERTURE_LONG_EXPOSURE_CLIPPED", result.Gate.Code);
-        Assert.True(
-            result.Gate.Disposition != GateDisposition.Passed,
-            $"{result.Gate.Code}: width={result.ApertureWidthPixels:F3}, ratio={result.SecondaryEdgeAmplitudeRatio:F3}, dBIC={result.DeltaBic:F3}");
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("SLIT_DARK_APERTURE_SHORT_EXPOSURE_DIRECTLY_MEASURED", result.Gate.Code);
+        Assert.Equal(SlitDarkApertureResolution.DirectTwoEdge, result.Resolution);
+        Assert.InRange(result.ApertureWidthPixels, 7.25, 8.75);
+        Assert.Contains("short frame independently resolved both edges", result.Gate.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CompletelyClippedLongExposureStillRejectsAShortSingleReflectiveRidge()
+    {
+        var shortPair = Pair(8, 1_500, 0, 1);
+        var pixels = Enumerable.Repeat((ushort)4_095, 200 * 180).ToArray();
+        var longPair = (
+            Off: new MonochromeFrame(200, 180, pixels, 4_095),
+            On: new MonochromeFrame(200, 180, pixels, 4_095));
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            longPair.Off,
+            longPair.On,
+            Seed,
+            Options(sharedPsf: true));
+
+        Assert.Equal("SLIT_DARK_APERTURE_SECOND_EDGE_NOT_FOUND", result.Gate.Code);
+        Assert.NotEqual(GateDisposition.Passed, result.Gate.Disposition);
     }
 
     [Fact]

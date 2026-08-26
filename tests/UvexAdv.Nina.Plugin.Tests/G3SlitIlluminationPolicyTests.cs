@@ -275,6 +275,27 @@ public sealed class G3SlitIlluminationPolicyTests
     }
 
     [Fact]
+    public void EverySlitIlluminationFrameIsPublishedImmediatelyAfterCapture()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.cs"));
+        var body = Slice(
+            source,
+            "private async Task CaptureG3IlluminationFrameAsync(",
+            "private GateResult ValidateG3SequenceImage(");
+
+        var capture = body.IndexOf("phd2.CaptureFullFrameAsync", StringComparison.Ordinal);
+        var load = body.IndexOf("imageDataFactory.CreateFromFile", capture, StringComparison.Ordinal);
+        var preview = body.IndexOf("PublishG3Preview", load, StringComparison.Ordinal);
+        var recoveryDelay = body.IndexOf("Task.Delay", preview, StringComparison.Ordinal);
+
+        Assert.True(capture >= 0 && load > capture && preview > load && recoveryDelay > preview);
+        Assert.Contains("· 已保存。", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RealRunnerPacesRepeatedToupTekFullFrameCapturesWithHashBoundSetting()
     {
         var source = File.ReadAllText(Path.Combine(

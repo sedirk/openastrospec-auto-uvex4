@@ -118,29 +118,32 @@ public static class SlitDarkApertureHdrAnalyzer
             ["longValidFraction"] = longProfile.ValidFraction,
             ["longDynamicRangeAdu"] = longDynamicRange,
         };
-        if (longProfile.ValidFraction < options.MinimumLongExposureValidFraction ||
-            longDynamicRange < options.MinimumLongExposureDynamicRangeAdu)
-        {
-            return Failure(
-                GateResult.Unknown(
-                    "SLIT_DARK_APERTURE_LONG_EXPOSURE_CLIPPED",
-                    $"The long LED exposure retained only {longProfile.ValidFraction:P1} valid profile samples and {longDynamicRange:F1} ADU dynamic range. " +
-                    "Specular-edge saturation is allowed, but a completely clipped dark aperture contains no physical-width information.",
-                    metrics),
-                seed,
-                reference,
-                shortProfile,
-                longProfile,
-                longDynamicRange);
-        }
+        var longExposureUsable =
+            longProfile.ValidFraction >= options.MinimumLongExposureValidFraction &&
+            longDynamicRange >= options.MinimumLongExposureDynamicRangeAdu;
+        metrics["longExposureUsable"] = longExposureUsable ? 1 : 0;
 
-        var fit = FitTwoEdges(shortProfile, longProfile, options);
+        var fit = FitTwoEdges(shortProfile, longProfile, options, longExposureUsable);
         metrics["apertureWidthPixels"] = fit.SeparationPixels;
         metrics["secondaryEdgeAmplitudeRatio"] = fit.SecondaryAmplitudeRatio;
         metrics["deltaBic"] = fit.DeltaBic;
         metrics["fitSignalToNoise"] = fit.SignalToNoise;
         if (!fit.IsValid || fit.SignalToNoise < options.MinimumProfileSignalToNoise)
         {
+            if (!longExposureUsable)
+            {
+                return Failure(
+                    GateResult.Unknown(
+                        "SLIT_DARK_APERTURE_LONG_EXPOSURE_CLIPPED",
+                        $"The long LED exposure retained only {longProfile.ValidFraction:P1} valid profile samples and {longDynamicRange:F1} ADU dynamic range, " +
+                        "and the short exposure did not independently resolve both physical aperture edges. Specular reflection may clip, but a reflective ridge alone cannot authorize slit width.",
+                        metrics),
+                    seed,
+                    reference,
+                    shortProfile,
+                    longProfile,
+                    longDynamicRange);
+            }
             return Failure(
                 GateResult.Unknown(
                     "SLIT_DARK_APERTURE_SECOND_EDGE_NOT_FOUND",
@@ -169,14 +172,30 @@ public static class SlitDarkApertureHdrAnalyzer
                 longDynamicRange);
         }
 
-        var resolution = fit.DeltaBic >= options.MinimumTwoEdgeDeltaBic &&
+        var directlyResolved = fit.DeltaBic >= options.MinimumTwoEdgeDeltaBic &&
             fit.SeparationPixels >= options.MinimumDirectEdgeSeparationPsfAlpha * options.EdgePsfAlphaPixels
+            ;
+        var resolution = directlyResolved
             ? SlitDarkApertureResolution.DirectTwoEdge
-            : options.SharedPsfIsCommissioned
+            : longExposureUsable && options.SharedPsfIsCommissioned
                 ? SlitDarkApertureResolution.SharedPsfModel
                 : SlitDarkApertureResolution.Unresolved;
         if (resolution == SlitDarkApertureResolution.Unresolved)
         {
+            if (!longExposureUsable)
+            {
+                return Failure(
+                    GateResult.Unknown(
+                        "SLIT_DARK_APERTURE_LONG_EXPOSURE_CLIPPED",
+                        $"The long LED exposure is clipped ({longProfile.ValidFraction:P1} valid profile samples; {longDynamicRange:F1} ADU dynamic range), " +
+                        $"and the short exposure's two-edge evidence is not independently direct (ΔBIC {fit.DeltaBic:F2}, separation {fit.SeparationPixels:F2}px).",
+                        metrics),
+                    seed,
+                    reference,
+                    shortProfile,
+                    longProfile,
+                    longDynamicRange);
+            }
             return Failure(
                 GateResult.Unknown(
                     "SLIT_DARK_APERTURE_MODEL_NOT_COMMISSIONED",
@@ -208,13 +227,18 @@ public static class SlitDarkApertureHdrAnalyzer
             UncertaintyPixels = Math.Max(reference.UncertaintyPixels, widthUncertainty),
         };
         var gateCode = resolution == SlitDarkApertureResolution.DirectTwoEdge
-            ? "SLIT_DARK_APERTURE_DIRECTLY_MEASURED"
+            ? longExposureUsable
+                ? "SLIT_DARK_APERTURE_DIRECTLY_MEASURED"
+                : "SLIT_DARK_APERTURE_SHORT_EXPOSURE_DIRECTLY_MEASURED"
             : "SLIT_DARK_APERTURE_MODEL_RESOLVED";
+        var exposureQualification = longExposureUsable
+            ? string.Empty
+            : " The long LED frame clipped, but it was not used as width authority because the short frame independently resolved both edges.";
         return new SlitDarkApertureHdrAnalysis(
             GateResult.Pass(
                 gateCode,
                 $"Physical dark aperture measured edge-to-edge as {fit.SeparationPixels:F2}±{widthUncertainty:F2}px; " +
-                $"the acquisition point is the aperture midpoint, {centreShift:+0.00;-0.00;0.00}px from the reflective ridge.",
+                $"the acquisition point is the aperture midpoint, {centreShift:+0.00;-0.00;0.00}px from the reflective ridge.{exposureQualification}",
                 metrics),
             geometry,
             reference,
@@ -318,7 +342,11 @@ public static class SlitDarkApertureHdrAnalyzer
         return true;
     }
 
-    private static EdgeFit FitTwoEdges(CrossProfile shortProfile, CrossProfile longProfile, SlitDarkApertureHdrOptions options)
+    private static EdgeFit FitTwoEdges(
+        CrossProfile shortProfile,
+        CrossProfile longProfile,
+        SlitDarkApertureHdrOptions options,
+        bool longExposureUsable)
     {
         var bestOne = ModelScore.Invalid;
         var bestTwo = ModelScore.Invalid;
@@ -345,8 +373,17 @@ public static class SlitDarkApertureHdrAnalyzer
                         direction,
                         options,
                         includeSecond: false,
-                        comparisonSeparation: separation);
-                    var two = EvaluateModel(shortProfile, longProfile, primary, separation, direction, options, includeSecond: true);
+                        comparisonSeparation: separation,
+                        longExposureUsable: longExposureUsable);
+                    var two = EvaluateModel(
+                        shortProfile,
+                        longProfile,
+                        primary,
+                        separation,
+                        direction,
+                        options,
+                        includeSecond: true,
+                        longExposureUsable: longExposureUsable);
                     if (!one.IsValid || !two.IsValid || one.SampleCount != two.SampleCount) continue;
                     if (!bestTwo.IsValid || two.Score / two.SampleCount < bestTwo.Score / bestTwo.SampleCount)
                     {
@@ -385,11 +422,14 @@ public static class SlitDarkApertureHdrAnalyzer
         int direction,
         SlitDarkApertureHdrOptions options,
         bool includeSecond,
-        double comparisonSeparation = 0)
+        double comparisonSeparation = 0,
+        bool longExposureUsable = true)
     {
         var shortFit = FitProfile(shortProfile, primary, separation, direction, options, includeSecond, comparisonSeparation);
         if (!shortFit.IsValid) return ModelScore.Invalid;
         var longFit = FitProfile(longProfile, primary, separation, direction, options, includeSecond, comparisonSeparation);
+        if (includeSecond && !longExposureUsable)
+            longFit = shortFit;
         if (includeSecond && !longFit.IsValid)
             longFit = FitClippedLongExposureSecondEdge(longProfile, primary + direction * separation, options);
         // On very narrow physical apertures the deliberately longer exposure

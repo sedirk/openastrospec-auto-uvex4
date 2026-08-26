@@ -156,7 +156,7 @@ public static class EvidenceBuilders
                 ArtifactIO.NormalizeHash(inputs.NightSetupSha256),
                 Path.GetFullPath(inputs.Phd2EvidencePath),
                 ArtifactIO.NormalizeHash(inputs.Phd2ProfileEvidenceSha256),
-                preset.ValidUntilUtc!.Value,
+                preset.ValidUntilUtc,
                 CreateNinaProfileValues(preset, artifact.Sha256, source.Definition, source.NightSetup, source.Phd2Evidence, artifact.AbsolutePath, inputs.NightSetupPath)),
             cancellationToken,
             ArtifactIO.CommissioningPresetJsonOptions).ConfigureAwait(false);
@@ -449,14 +449,6 @@ public static class EvidenceBuilders
         if (setup.HorizonPolicy.StartMarginDegrees < 0 || setup.HorizonPolicy.ContinueMarginDegrees < 0) issues.Add("Horizon margins cannot be negative.");
         if (setup.HorizonPolicy.EffectiveSampleInterval <= TimeSpan.Zero) issues.Add("Horizon sample interval must be positive.");
         if (setup.SecondOrderRiskOnsetAngstrom is { } onset && (!double.IsFinite(onset) || onset <= 0)) issues.Add("Second-order risk onset must be finite and positive when supplied.");
-        if (setup.SchemaVersion == NightSetupRecord.CurrentSchemaVersion && setup.FocusDomains is not null)
-        {
-            var now = DateTimeOffset.UtcNow;
-            foreach (var binding in setup.FocusDomains.Where(binding => binding.ValidUntilUtc <= now))
-            {
-                issues.Add($"Focus domain {binding.Role} evidence expired at {binding.ValidUntilUtc:O}.");
-            }
-        }
         return issues;
     }
 
@@ -481,7 +473,8 @@ public static class EvidenceBuilders
             issues.Add($"Commissioning measurement definition schema must be {CommissioningMeasurementDefinition.CurrentSchemaVersion}.");
         if (string.IsNullOrWhiteSpace(definition.PresetId)) issues.Add("PresetId is required.");
         if (definition.CreatedUtc == default || definition.CreatedUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("CreatedUtc is missing or in the future.");
-        if (definition.ValidUntilUtc <= definition.CreatedUtc || definition.ValidUntilUtc <= DateTimeOffset.UtcNow) issues.Add("ValidUntilUtc must be after CreatedUtc and in the future.");
+        if (definition.ValidUntilUtc is { } legacyValidUntil && legacyValidUntil <= definition.CreatedUtc)
+            issues.Add("Legacy ValidUntilUtc must be after CreatedUtc when supplied.");
         if (string.IsNullOrWhiteSpace(definition.Provenance)) issues.Add("Measurement provenance is required.");
         if (!DateTimeOffset.TryParse(definition.Phd2CalibrationTimestampUtc, out var calibrationUtc) || calibrationUtc.Offset != TimeSpan.Zero || calibrationUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("PHD2 calibration timestamp is missing, not UTC, invalid, or in the future.");
         if (string.IsNullOrWhiteSpace(definition.TelescopeDeviceId)) issues.Add("Exact telescope device identity is required.");
@@ -496,13 +489,6 @@ public static class EvidenceBuilders
         if (nightSetup.FocusDomains is null || nightSetup.FocusDomains.Count != 3)
         {
             issues.Add("Commissioning requires three focus-domain bindings from Night Setup schema 2.");
-        }
-        else
-        {
-            foreach (var focus in nightSetup.FocusDomains.Where(focus => focus.ValidUntilUtc < definition.ValidUntilUtc))
-            {
-                issues.Add($"Commissioning validity cannot extend past {focus.Role} focus evidence expiry {focus.ValidUntilUtc:O}.");
-            }
         }
 
         if (!Enum.IsDefined(typeof(CommissioningFineMotionAuthority), definition.FineMotionAuthority))
@@ -772,9 +758,8 @@ public static class EvidenceBuilders
         if (calibration.Detector != expectedDetector)
             issues.Add("Ghost calibration detector geometry does not match the PHD2 delivered-frame ROI and commissioned G3 binning.");
         if (calibration.CreatedUtc > definition.CreatedUtc.AddMinutes(5) ||
-            calibration.ValidUntilUtc < definition.ValidUntilUtc ||
-            definition.ValidUntilUtc - calibration.CreatedUtc > policy.MaximumCalibrationAge)
-            issues.Add("Ghost calibration time/expiry does not cover the complete commissioning-preset validity interval under its match policy.");
+            definition.CreatedUtc - calibration.CreatedUtc > policy.MaximumCalibrationAge)
+            issues.Add("Ghost calibration age does not cover commissioning creation under its match policy.");
 
         var c11Focus = nightSetup.FocusDomains?
             .Where(binding => binding.Role == FocusDomainRole.C11Main)
@@ -808,7 +793,8 @@ public static class EvidenceBuilders
         else
             issues.AddRange(preset.SlitWheelIdentity.Validate());
         if (preset.CreatedUtc == default || preset.CreatedUtc > DateTimeOffset.UtcNow.AddMinutes(5)) issues.Add("Preset creation timestamp is invalid.");
-        if (preset.ValidUntilUtc is not { } validUntil || validUntil <= preset.CreatedUtc || validUntil <= DateTimeOffset.UtcNow) issues.Add("Preset validity deadline is missing or expired.");
+        if (preset.ValidUntilUtc is { } legacyValidUntil && legacyValidUntil <= preset.CreatedUtc)
+            issues.Add("Legacy preset validity deadline must be after creation when supplied.");
         if (preset.HardwareFingerprint is null) issues.Add("Hardware fingerprint is missing.");
         else
         {
@@ -854,6 +840,10 @@ public static class EvidenceBuilders
     {
         var atrReadout = int.Parse(nightSetup.Atr585m.ReadoutMode, System.Globalization.CultureInfo.InvariantCulture);
         var qhyReadout = int.Parse(nightSetup.QhyMiniCam8m.ReadoutMode, System.Globalization.CultureInfo.InvariantCulture);
+        var weakSupervision =
+            !preset.Environment.RequireSafetyMonitor &&
+            !preset.Environment.RequireOpenDomeOrRoof &&
+            !preset.Environment.RequireWeatherData;
         var values = new SortedDictionary<string, object?>(StringComparer.Ordinal)
         {
             // The current loader does not bind every action-bearing Profile
@@ -941,6 +931,16 @@ public static class EvidenceBuilders
             ["RequireSafetyMonitor"] = preset.Environment.RequireSafetyMonitor,
             ["RequireOpenDomeOrRoof"] = preset.Environment.RequireOpenDomeOrRoof,
             ["RequireWeatherData"] = preset.Environment.RequireWeatherData,
+            // The schema-5 environment object owns the three external
+            // environment capabilities. Optical-cover availability is a
+            // N.I.N.A.-Profile capability, so bind it consistently here. A
+            // generated weak-supervision package is portable to another
+            // installation and does not depend on a private local API patch.
+            ["RequireOpenOpticalCover"] = !weakSupervision,
+            ["WeakSupervisionEnabled"] = weakSupervision,
+            ["PreparationSafetyCapabilityPreset"] = weakSupervision
+                ? "OperatorWeakSupervision"
+                : "NinaSafetyStack",
             ["MaximumCloudCoverPercent"] = preset.Environment.MaximumCloudCoverPercent,
             ["MaximumHumidityPercent"] = preset.Environment.MaximumHumidityPercent,
             ["MaximumWindSpeedMetersPerSecond"] = preset.Environment.MaximumWindSpeedMetersPerSecond,
@@ -1098,19 +1098,22 @@ public static class EvidenceBuilders
             slitFingerprintIndex++;
         }
         var mount = GetProperty(root, "MountTransform");
-        RequireProperties(mount, "Commissioning MountTransform", [
-            "CalibrationId", "MeasuredUtc", "PierSide", "MaximumResidualArcseconds", "MaximumConditionEstimate",
-            "MaximumSampleMotionArcseconds", "Samples"
-        ]);
-        var samples = GetProperty(mount, "Samples");
-        if (samples.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Commissioning MountTransform.Samples must be an array.");
-        var index = 0;
-        foreach (var sample in samples.EnumerateArray())
+        if (mount.ValueKind != JsonValueKind.Null)
         {
-            RequireProperties(sample, $"Commissioning MountTransform.Samples[{index}]", [
-                "CommandedRaArcseconds", "CommandedDecArcseconds", "MeasuredPixelShiftX", "MeasuredPixelShiftY"
+            RequireProperties(mount, "Commissioning MountTransform", [
+                "CalibrationId", "MeasuredUtc", "PierSide", "MaximumResidualArcseconds", "MaximumConditionEstimate",
+                "MaximumSampleMotionArcseconds", "Samples"
             ]);
-            index++;
+            var samples = GetProperty(mount, "Samples");
+            if (samples.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Commissioning MountTransform.Samples must be an array.");
+            var index = 0;
+            foreach (var sample in samples.EnumerateArray())
+            {
+                RequireProperties(sample, $"Commissioning MountTransform.Samples[{index}]", [
+                    "CommandedRaArcseconds", "CommandedDecArcseconds", "MeasuredPixelShiftX", "MeasuredPixelShiftY"
+                ]);
+                index++;
+            }
         }
         RequireProperties(GetProperty(root, "Motion"), "Commissioning Motion", [
             "MaximumSingleCorrectionArcseconds", "MaximumCumulativeCorrectionArcseconds", "MaximumCorrectionAttempts", "MaximumAcquisitionMinutes"

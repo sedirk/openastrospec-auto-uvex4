@@ -44,6 +44,21 @@ public sealed class ObservationAutomationPolicyTests
     }
 
     [Fact]
+    public void WeakSupervisionAllowsMissingCapabilitiesWithoutClaimingUnattendedSafety()
+    {
+        var result = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
+            requireSafetyMonitor: false,
+            requireOpenDomeOrRoof: false,
+            requireWeatherData: false,
+            requireOpenOpticalCover: false,
+            allowWeakSupervision: true);
+
+        Assert.Equal(GateDisposition.Passed, result.Disposition);
+        Assert.Equal("WEAK_SUPERVISION_CAPABILITIES_DECLARED", result.Code);
+        Assert.Contains("not unattended", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ImmediateActionCompositionFailsClosedOnIndeterminateRoof()
     {
         var result = ObservationAutomationPolicy.CombineImmediateActionGates(

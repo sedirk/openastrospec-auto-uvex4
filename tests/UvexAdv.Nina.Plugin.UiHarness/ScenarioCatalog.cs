@@ -41,6 +41,15 @@ public sealed class ObservationDockMockViewModel
     private static readonly ICommand EnabledCommand = new NoOpCommand(true);
     private static readonly ICommand DisabledCommand = new NoOpCommand(false);
 
+    public ObservationDockMockViewModel()
+    {
+        SelectedCommissioningProfile = CommissioningProfiles[0];
+        SelectedTelescopeCandidate = TelescopeCandidates[0];
+        SelectedAtrCameraCandidate = AtrCameraCandidates[0];
+        SelectedG3CameraCandidate = G3CameraCandidates[0];
+        SelectedQhyCameraCandidate = QhyCameraCandidates[0];
+    }
+
     public string ModeText { get; init; } = "自动观测：模拟演练";
     public string ModeDescription { get; init; } = "只运行模拟状态机，不连接相机、赤道仪、PHD2 或 COM5。";
     public string RealModeStatus { get; init; } = "真实模式有 3 个启动阻断项；当前演练不受影响。";
@@ -165,20 +174,61 @@ public sealed class ObservationDockMockViewModel
     public string ManualM2NegativeButtonText => $"M2 −{ManualM2StepSize} 步";
     public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
 
-    public int AutomaticPreparationIssueCount { get; init; } = 4;
+    public int AutomaticPreparationIssueCount { get; init; } = 3;
     public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
+    public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles { get; init; } =
+    [
+        new(
+            CommissioningProfileChoice.AutomaticSiteProfileId,
+            "默认台站配置（大丰 UVEX4）",
+            "启动时读取本机实测运行模板，并从各设备所有者保存的配置读取身份候选；不连接设备。",
+            @"C:\ProgramData\UVEX-ADV\commissioning\station-profiles\default.station-profile.json",
+            true),
+    ];
+    public CommissioningProfileChoice? SelectedCommissioningProfile { get; set; }
+    public string SelectedCommissioningProfileDescription => SelectedCommissioningProfile?.Description ?? "启动时从各设备所有者保存的配置读取候选；不连接设备。";
+    public string CommissioningProfileLoadStatus { get; init; } = "已发现 1 个台站方案、1 个赤道仪、1 个 ATR、1 个 G3/PHD2、1 个 QHY 候选；未连接任何设备。";
+    public IReadOnlyList<DeviceIdentityChoice> TelescopeCandidates { get; init; } = [new("ASCOM.OnStep.Telescope", "On-Step · N.I.N.A. 配置“光谱观测”", "N.I.N.A.")];
+    public IReadOnlyList<DeviceIdentityChoice> AtrCameraCandidates { get; init; } = [new("ToupTek_ATR_STABLE", "ATR585M · 既有绑定", "N.I.N.A.")];
+    public IReadOnlyList<DeviceIdentityChoice> G3CameraCandidates { get; init; } = [new("USB-G3-STABLE", "G3M2210M · PHD2 配置“c11+slit+2210”", "PHD2")];
+    public IReadOnlyList<DeviceIdentityChoice> QhyCameraCandidates { get; init; } = [new("QHYminiCam8M-STABLE", "QHYminiCam8M · QHY 服务配置", "QHY 服务")];
+    public DeviceIdentityChoice? SelectedTelescopeCandidate { get; set; }
+    public DeviceIdentityChoice? SelectedAtrCameraCandidate { get; set; }
+    public DeviceIdentityChoice? SelectedG3CameraCandidate { get; set; }
+    public DeviceIdentityChoice? SelectedQhyCameraCandidate { get; set; }
     public bool IsTargetPreparationMissing { get; init; }
     public string TargetPreparationStatus { get; init; } = "已选择：Vega · J2000 RA 279.23473° / Dec +38.78369°";
-    public bool IsDevicePreparationMissing { get; init; } = true;
-    public string DevicePreparationStatus { get; init; } = "未完成：点击自动读取 N.I.N.A. 已连接设备；PHD2/G3 与 QHY 身份由 commissioning 文件一次导入。";
+    public bool IsDevicePreparationMissing { get; init; }
+    public string DevicePreparationStatus { get; init; } = "已从各设备所有者保存的配置恢复候选；这里只选择期望身份，不会连接设备。";
     public bool IsCommissioningPreparationMissing { get; init; } = true;
-    public string CommissioningPreparationStatus { get; init; } = "未完成：请选择 commissioning bindings；ID、哈希、设备身份和运动限额会自动填写，不需要逐项抄写。";
+    public string CommissioningPreparationStatus { get; init; } = "未完成：请选择经过审核的设备标定方案；ID、哈希和运动限额会整体加载，不需要逐项抄写。";
+    public string PreparationEvidenceInventorySummary { get; init; } = "本机证据：台站运行模板已找到 · PHD2 1 份 · schema-2 本夜配置 0 份 · schema-5 安装标定 0 份 · 完整绑定包 0 份。扫描只读取文件，不连接设备。";
     public bool IsNightSetupPreparationMissing { get; init; } = true;
-    public string NightSetupPreparationStatus { get; init; } = "未完成：本夜设备快照尚未选择。";
+    public string NightSetupPreparationStatus { get; init; } = "未完成：尚无可锁定的 schema-2 本夜配置；可先自动生成准备草稿。";
+    public IReadOnlyList<PreparationOptionChoice> PreparationSpectralRegionChoices { get; init; } =
+    [
+        new("VisibleWide", "UVEX 可见光宽谱（推荐）", "中心波长由标定回填。"),
+        new("HAlphaRed", "Hα 红区", "Hα 附近。"),
+    ];
+    public IReadOnlyList<PreparationOptionChoice> PreparationCalibrationReferenceChoices { get; init; } =
+    [
+        new("Vega", "亮标准星（Vega 等）", "亮参考星。"),
+        new("CompactEmission", "紧致发射线天体 / PN", "已知发射线。"),
+    ];
+    public IReadOnlyList<PreparationOptionChoice> PreparationSafetyCapabilityChoices { get; init; } =
+    [
+        new("NinaSafetyStack", "N.I.N.A. 安全链（无人值守）", "完整安全回读。"),
+        new("OperatorWeakSupervision", "有人弱监督（默认）", "四类环境适配器缺失仅警告；已连接设备明确报告危险仍阻断；不授予无人值守。"),
+    ];
+    public string SelectedPreparationSpectralRegion { get; set; } = "VisibleWide";
+    public string SelectedPreparationCalibrationReference { get; set; } = "Vega";
+    public string SelectedPreparationSafetyCapability { get; set; } = "OperatorWeakSupervision";
+    public bool PreparationOrderSortingFilterInstalled { get; set; }
+    public string PreparationDraftStatus { get; init; } = "尚未生成本次观测配置草稿。";
     public bool IsSlitChoiceMissing { get; init; }
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
     public string AutomationPolicyPreparationStatus => IsAutomationPolicyPreparationMissing
-        ? "后台一致性尚未通过；多数项目会在导入 bindings 与 Night Setup 后自动完成，不需要逐项填写。"
+        ? "后台一致性尚未通过；多数项目会在导入设备标定方案与本夜光学设置后自动完成，不需要逐项填写。"
         : "已通过：后台配置结构、设备所有权和运动限额完整。";
     public int ExpectedUvexSlitPosition { get; init; } = 2;
     public IReadOnlyList<MockUvexSlitChoice> UvexSlitChoices { get; init; } =
@@ -268,12 +318,16 @@ public sealed class ObservationDockMockViewModel
     public ICommand TakeoverCommand => IsRunActive || IsPausedNeedsAttention ? EnabledCommand : DisabledCommand;
     public ICommand CancelCommand => IsRunActive || IsPausedNeedsAttention ? EnabledCommand : DisabledCommand;
     public ICommand ImportCommissioningBindingsCommand => EnabledCommand;
+    public ICommand RefreshCommissioningProfilesCommand => EnabledCommand;
+    public ICommand ApplySelectedCommissioningProfileCommand => EnabledCommand;
     public ICommand ShowObservationPlanCommand => EnabledCommand;
     public ICommand ShowStartupRequirementsCommand => EnabledCommand;
     public ICommand ShowManualUvexControlCommand => EnabledCommand;
     public ICommand ShowAdvancedSettingsCommand => EnabledCommand;
     public ICommand AutoFillConnectedNinaDevicesCommand => EnabledCommand;
     public ICommand SelectNightSetupSnapshotCommand => EnabledCommand;
+    public ICommand CreateNightSetupDraftCommand => EnabledCommand;
+    public ICommand OpenPreparationDraftFolderCommand => DisabledCommand;
     public ICommand RefreshProfileOwnershipCommand => EnabledCommand;
     public ICommand ImportFromFramingAssistantCommand =>
         IsRunActive || IsPausedNeedsAttention || IsTargetImportBusy ? DisabledCommand : EnabledCommand;
@@ -337,14 +391,14 @@ public sealed class ObservationDockMockViewModel
     {
         ModeText = "自动观测：真实设备",
         ModeDescription = "这里只选择自动观测的执行方式；手控不要求整套自动观测准入。",
-        RealModeStatus = "真实模式当前有 12 个启动阻断项：\n• 真实模式尚未标记为已调试。\n• 缺少 commissioning preset 文件。\n• 缺少 commissioning preset ID。\n• 缺少 commissioning preset SHA-256。\n• 缺少硬件 fingerprint SHA-256。\n• 缺少 Night Setup 快照文件。\n• 缺少 Night Setup SHA-256。\n• 缺少赤道仪 DeviceId。\n• 缺少真实 ATR585M DeviceId。\n• 缺少真实 QHY StableId。\n• PHD2 Profile/G3/赤道仪身份不完整。\n• 缺少 PHD2 注册表证据 SHA-256。",
+        RealModeStatus = "真实模式仍缺少经过审核的设备标定证据与本夜光学设置；已自动恢复台站运行模板和四类设备候选。",
         RealModeStatusSummary = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
         SelectedWorkspaceTabIndex = 3,
-        AutomaticPreparationIssueCount = 12,
+        AutomaticPreparationIssueCount = 8,
         AutomaticPreparationSummary = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。",
-        IsDevicePreparationMissing = true,
+        IsDevicePreparationMissing = false,
         IsCommissioningPreparationMissing = true,
         IsNightSetupPreparationMissing = true,
         OperatorNotice = "离线启动条件截图；没有连接任何设备。",

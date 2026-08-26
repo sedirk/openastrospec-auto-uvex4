@@ -73,7 +73,7 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
         var wheel = await client.GetFromJsonAsync<QhyFilterWheelStatus>("/api/v1/camera/filter-wheel");
         Assert.NotNull(wheel);
         Assert.True(wheel.PositionKnown);
-        Assert.Equal(5, wheel.Position);
+        Assert.Equal(6, wheel.Position);
         Assert.Equal("R", wheel.FilterName);
 
         using var selectResponse = await client.PostAsJsonAsync(
@@ -82,7 +82,7 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
         selectResponse.EnsureSuccessStatusCode();
         var green = await selectResponse.Content.ReadFromJsonAsync<QhyFilterWheelStatus>();
         Assert.NotNull(green);
-        Assert.Equal(4, green.Position);
+        Assert.Equal(7, green.Position);
         Assert.Equal("G", green.FilterName);
 
         using var preview = await client.GetAsync($"/api/v1/jobs/{started.Id}/preview");
@@ -140,6 +140,14 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
         var started = await startResponse.Content.ReadFromJsonAsync<QhyJobSnapshot>();
         Assert.NotNull(started);
         await WaitForStateAsync(client, started.Id, QhyJobState.PausedNeedsAttention);
+
+        using var renewLease = await client.PostAsJsonAsync(
+            $"/api/v1/jobs/{started.Id}/lease/renew",
+            new QhyLeaseRenewalRequest(ownerToken, 90, "api-test-owner"));
+        renewLease.EnsureSuccessStatusCode();
+        var renewed = await renewLease.Content.ReadFromJsonAsync<QhyJobSnapshot>();
+        Assert.NotNull(renewed);
+        Assert.Equal(90, renewed.ControlLeaseSeconds);
 
         using var anonymousResume = await client.PostAsJsonAsync(
             $"/api/v1/jobs/{started.Id}/resume",
@@ -218,8 +226,14 @@ public sealed class QhySimulatorWebApplicationFactory : WebApplicationFactory<Pr
                 ["Qhy:NativeSdkPath"] = string.Empty,
                 ["Qhy:NativeSdkSha256"] = string.Empty,
                 ["Qhy:NativeReadoutMode"] = "1",
-                ["Qhy:NativeFilterPositions:G"] = "4",
-                ["Qhy:NativeFilterPositions:R"] = "5",
+                ["Qhy:NativeFilterPositions:U"] = "0",
+                ["Qhy:NativeFilterPositions:O"] = "1",
+                ["Qhy:NativeFilterPositions:H"] = "2",
+                ["Qhy:NativeFilterPositions:S"] = "3",
+                ["Qhy:NativeFilterPositions:Z"] = "4",
+                ["Qhy:NativeFilterPositions:I"] = "5",
+                ["Qhy:NativeFilterPositions:R"] = "6",
+                ["Qhy:NativeFilterPositions:G"] = "7",
             });
         });
     }

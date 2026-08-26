@@ -514,7 +514,7 @@ internal sealed partial class RealObservationStageRunner
         if (ownerBeforeGate.Disposition != GateDisposition.Passed) failures.Add(ownerBeforeGate.Message);
         if (ownerAfterGate.Disposition != GateDisposition.Passed) failures.Add(ownerAfterGate.Message);
         if (ownerBefore.PositionSteps != ownerAfter.PositionSteps) failures.Add("Star Focuser Pro moved during the paired slit sequence");
-        if (focus.ValidUntilUtc <= evaluatedUtc || focus.VerifiedUtc > evaluatedUtc.AddMinutes(5)) failures.Add("independent C11 focus evidence is stale or future-dated");
+        if (focus.VerifiedUtc > evaluatedUtc.AddMinutes(5)) failures.Add("independent C11 focus evidence is future-dated");
         if (focus.Confidence < ghost.MinimumC11FocusConfidence) failures.Add($"independent C11 focus confidence {focus.Confidence:F3} is below {ghost.MinimumC11FocusConfidence:F3}");
         if (focus.Metric.Kind != FocusMetricKind.G3StellarShape) failures.Add("independent focus evidence belongs to a different metric domain");
         if (!string.Equals(focus.Metric.SourceCameraStableDeviceId, configuration.Phd2.CameraStableId, StringComparison.OrdinalIgnoreCase))

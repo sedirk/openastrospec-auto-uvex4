@@ -100,6 +100,9 @@ public sealed class EvidenceBuildersTests : IDisposable
         Assert.Equal(false, created.Bindings.NinaProfileValues["ObservationUseRealMode"]);
         Assert.Equal(false, created.Bindings.NinaProfileValues["RealModeCommissioned"]);
         Assert.Equal(false, created.Bindings.NinaProfileValues["AllowDegradedSupervisedScience"]);
+        Assert.Equal(false, created.Bindings.NinaProfileValues["WeakSupervisionEnabled"]);
+        Assert.Equal(true, created.Bindings.NinaProfileValues["RequireOpenOpticalCover"]);
+        Assert.Equal("NinaSafetyStack", created.Bindings.NinaProfileValues["PreparationSafetyCapabilityPreset"]);
         Assert.Equal(0, created.Bindings.NinaProfileValues["GhostAssistanceMode"]);
         Assert.Equal(false, created.Bindings.NinaProfileValues["QhyG3FastPairEnabled"]);
         Assert.Equal(QhyG3FastPairPolicy.CurrentSchemaVersion, created.Bindings.NinaProfileValues["QhyG3FastPairSchemaVersion"]);
@@ -111,6 +114,24 @@ public sealed class EvidenceBuildersTests : IDisposable
         Assert.Equal(2d, created.Bindings.NinaProfileValues["QhyG3FastPairMaximumMountSpanArcseconds"]);
         Assert.Equal(24d, created.Bindings.NinaProfileValues["QhyG3FastPairCandidateValidityHours"]);
         Assert.Equal(20d, created.Bindings.NinaProfileValues["QhyG3FastPairMaximumCandidateUncertaintyArcseconds"]);
+
+        var weakDefinition = definition with
+        {
+            PresetId = "preset-weak-supervision",
+            Environment = new EnvironmentContract(false, false, false, 50, 90, 12),
+        };
+        var weakDefinitionArtifact = await ArtifactIO.WriteJsonAtomicallyAsync(
+            Path.Combine(root, "commissioning-definition-weak.json"), weakDefinition, false);
+        var weakInputs = inputs with
+        {
+            DefinitionPath = weakDefinitionArtifact.AbsolutePath,
+            DefinitionSha256 = weakDefinitionArtifact.Sha256,
+        };
+        var weakCreated = await EvidenceBuilders.CreateCommissioningPresetAsync(
+            weakInputs, Path.Combine(root, "preset-weak.json"), false, verifyCurrentPhd2Registry: false);
+        Assert.Equal(true, weakCreated.Bindings.NinaProfileValues["WeakSupervisionEnabled"]);
+        Assert.Equal(false, weakCreated.Bindings.NinaProfileValues["RequireOpenOpticalCover"]);
+        Assert.Equal("OperatorWeakSupervision", weakCreated.Bindings.NinaProfileValues["PreparationSafetyCapabilityPreset"]);
         using (var presetJson = JsonDocument.Parse(await File.ReadAllBytesAsync(created.Artifact.AbsolutePath)))
         {
             Assert.Equal(JsonValueKind.Number, presetJson.RootElement.GetProperty("FineMotionAuthority").ValueKind);
@@ -122,6 +143,40 @@ public sealed class EvidenceBuildersTests : IDisposable
         }
         Assert.True(File.Exists(created.Artifact.AbsolutePath + ".sha256"));
         Assert.True(File.Exists(created.Artifact.AbsolutePath + ".bindings.json"));
+    }
+
+    [Fact]
+    public async Task Phd2OnlyFineMotionAcceptsExplicitNullIndependentMountTransform()
+    {
+        Directory.CreateDirectory(root);
+        var setup = CreateNightSetup();
+        var setupDefinition = await ArtifactIO.WriteJsonAtomicallyAsync(Path.Combine(root, "night-definition.json"), setup, false);
+        var locked = await EvidenceBuilders.CreateNightSetupAsync(
+            setupDefinition.AbsolutePath, setupDefinition.Sha256, Path.Combine(root, "night-setup.json"), false);
+
+        var phd = CreatePhdEvidence(hash: string.Empty);
+        phd = phd with { Sha256 = EvidenceBuilders.ComputePhd2ProfileEvidenceSha256(phd) };
+        var phdArtifact = await ArtifactIO.WriteJsonAtomicallyAsync(Path.Combine(root, "phd2.json"), phd, false);
+        var slitEvidence = await ArtifactIO.WriteTextAtomicallyAsync(Path.Combine(root, "slit-measurement.txt"), "measured slit geometry", false);
+        var definition = CreateDefinition(slitEvidence, phd) with
+        {
+            FineMotionAuthority = 1,
+            MountTransform = null,
+        };
+        var definitionArtifact = await ArtifactIO.WriteJsonAtomicallyAsync(Path.Combine(root, "commissioning-definition.json"), definition, false);
+        var inputs = new CommissioningInputFiles(
+            definitionArtifact.AbsolutePath, definitionArtifact.Sha256,
+            locked.Artifact.AbsolutePath, locked.Artifact.Sha256,
+            phdArtifact.AbsolutePath, phdArtifact.Sha256, phd.Sha256);
+
+        var created = await EvidenceBuilders.CreateCommissioningPresetAsync(
+            inputs,
+            Path.Combine(root, "preset.json"),
+            false,
+            verifyCurrentPhd2Registry: false);
+
+        Assert.Equal(1, created.Preset.FineMotionAuthority);
+        Assert.Null(created.Preset.MountTransform);
     }
 
     [Fact]
@@ -189,7 +244,7 @@ public sealed class EvidenceBuildersTests : IDisposable
     }
 
     [Fact]
-    public async Task ExpiredFocusEvidenceCannotBeLockedByTheTool()
+    public async Task LegacyFocusDeadlineDoesNotInvalidateOtherwiseUnchangedState()
     {
         Directory.CreateDirectory(root);
         var setup = CreateNightSetup();
@@ -205,8 +260,8 @@ public sealed class EvidenceBuildersTests : IDisposable
 
         var validation = await EvidenceBuilders.ValidateNightSetupAsync(artifact.AbsolutePath, artifact.Sha256);
 
-        Assert.False(validation.Valid);
-        Assert.Contains(validation.Issues, issue => issue.Contains("Gs350WideField", StringComparison.Ordinal) && issue.Contains("expired", StringComparison.OrdinalIgnoreCase));
+        Assert.True(validation.Valid, string.Join(Environment.NewLine, validation.Issues));
+        Assert.DoesNotContain(validation.Issues, issue => issue.Contains("expired", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -691,7 +746,7 @@ public sealed class EvidenceBuildersTests : IDisposable
             500,
             2_000,
             definition.CreatedUtc.AddHours(-1),
-            definition.ValidUntilUtc.AddDays(1),
+            definition.ValidUntilUtc!.Value.AddDays(1),
             1,
             2,
             new GhostCovariance2D(1, 0, 1),

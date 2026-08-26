@@ -88,7 +88,7 @@
 - PHD2 `get_pixel_scale` 的精确读回为 `0.383749 arcsec/px`，不是界面四舍五入后的 `0.4`。按精确比例发现仍有约 `5.62 px` 法向残差，随后只作一次法向微调：`phd2-mirfak-dark-slit-normal-correction-20260823T192354Z`，最终 lock `(1539.22,273.90)`，几何读回残差约 `0.00485 px`，仍为 `Guiding`。
 - 修正后新鲜 G3 帧 `g3-mirfak-dark-slit-normal-correction-20260823T192408Z.fits` 的 PlateSolve3 中心为 RA `51.1069981484°`、Dec `49.8473508514°`，N.I.N.A. PA `108.5203336°`。黑缝重新检出于约 `(817.665,428.861)`、角度 `-3°`、对比度 `3.96σ`；目录目标沿缝约偏 `32 px`，仍在约 `205 px` 半长内；法向残差按精确 PHD2 比例约 `0.03 px`，按独立解算比例约 `0.46 px`，均小于约 `1.75 px` 半缝宽和既有标定不确定度。
 - 操作员提供的“不精准”截图属于这次法向微调之前的证据；微调后的上述新鲜帧才是最终验收帧。不得再根据旧截图重复纠偏。
-- 同一运行 `mirfak-closed-loop-20260823T192822Z` 中，QHYminiCam8M 在 R 轮位完成 `4×5 s` 测光，4/4 帧接受、每帧检测 `167–173` 星、后三帧透明度约 `0.992–0.995`、无质量标志；manifest SHA-256 为 `B66946ADFCFC2E4FBB3907339A5BF95CCE685E6F3BC120C9DD276BD6FD956112`。
+- 同一运行 `mirfak-closed-loop-20260823T192822Z` 中，QHYminiCam8M 在当时标为 R、实际为 Sloan i′ 的轮位完成 `4×5 s` 测光，4/4 帧接受、每帧检测 `167–173` 星、后三帧透明度约 `0.992–0.995`、无质量标志；manifest SHA-256 为 `B66946ADFCFC2E4FBB3907339A5BF95CCE685E6F3BC120C9DD276BD6FD956112`。
 - N.I.N.A. 唯一所有者路径同时完成 ATR585M `10 s` LIGHT：`2026-08-24_03-28-23__0.00_10.00s_0000.fits`，SHA-256 `6C761C153183B32818FCDC59D138A551A16165A369F37B717A88F3D0842C5189`。连续谱贯穿全幅，迹线检测 24/24 分箱有效、中位中心约 `y=760.58 px`、中位 FWHM 约 `29.13 px`。QHY 与 ATR 曝光重叠约 10 秒。
 - 拍摄后 fresh PHD2 帧 `post-capture-guiding-20260823T192850Z.fit` 保留，lock 前后均为 `(1539.22,273.90)`，PHD2 未中断。由此完成“最新精确入缝 → 持续导星 → ATR 光谱与 QHY 光度并行拍摄”的一次真实设备技术闭环。
 
@@ -175,7 +175,7 @@
 - Gemini 主镜盖在赤道仪停放前收到关闭命令并独立回读 `CoverState=Closed`、灯关闭；到位后才执行 Park。断开平场板后 API 只能显示 `Unknown`，不得用断开后的未知覆盖掉断开前的 `Closed` 证据。
 - OnStep 由 N.I.N.A. 正常 Park；驱动最终在断开前明确回读 `AtPark=true`、`Slewing=false`、`TrackingEnabled=false`，高度约 `33.376°`、方位约 `0.192°`。断开后的通用 API 不再能证明 `AtPark`，以断开前原子回读为终态证据。
 - ATR585M 无曝光。N.I.N.A. 的 5 分钟 Warm 阶梯把内部 set point 从 `10°C` 提升到 `20°C`，但公开字段仍冲突为实际温度 `0°C`、Target `-10°C`、制冷功率约 `63.9%`，且未自动关闭 Cooler。按既有 SOP 正常断开相机；最终 `Connected=false`、`IsExposing=false`、`CoolerOn=false`，没有伪称真实传感器已经达到 20°C。
-- QHYminiCam8M 无活动 job，由 QHY service 正常断开；最终 `connected=false`、无 last error。断开后滤轮实体位置不再可实报，不能把先前 R/位置 5 当作断开终态。
+- QHYminiCam8M 无活动 job，由 QHY service 正常断开；最终 `connected=false`、无 last error。断开后滤轮实体位置不再可实报，不能把先前旧标 R/位置 5（实际 i′）当作断开终态。
 - UVEX4 只读终态为 COM5 `Ready`、轮位 2、位置可信、狭缝照明 `Off`、无 last error；收口没有移动狭缝轮、光栅或 M2。
 - N.I.N.A.、PHD2、UVEX/QHY 服务进程均正常保留，没有强制杀进程或重启。
 - N.I.N.A. Dome/Roof、Safety Monitor 和 Weather 均未连接；软件不能关闭或验证屋顶。上述状态表示设备已达到可关顶条件，屋顶仍需操作员人工关闭并确认。
@@ -187,7 +187,7 @@
 ### 10.1 成熟路径恢复与两级 WCS
 
 - N.I.N.A. 连接 exact OnStep、Gemini cover 和 ATR585M 后，使用其目录坐标动作指向 Mirfak。赤道仪 J2000 回读距目录约 `2.7 arcsec`，但该数值没有被当作光轴居中证明。
-- QHYminiCam8M 由自己的 service 在 R/位置 5 拍摄 4 张 `5 s` 帧。首张 QHY WCS 距目标 `1544.62 arcsec`，再次证明“赤道仪坐标很准”不能替代广角镜实测 WCS；N.I.N.A. 完成 3 次有界修正，累计实际约 `1505.831 arcsec`，最终 QHY WCS 残差 `8.196 arcsec`。4 帧分别检测 `166/179/184/183` 星，均无质量标志。
+- QHYminiCam8M 由自己的 service 在旧标 R/位置 5、实际 Sloan i′ 拍摄 4 张 `5 s` 帧。首张 QHY WCS 距目标 `1544.62 arcsec`，再次证明“赤道仪坐标很准”不能替代广角镜实测 WCS；N.I.N.A. 完成 3 次有界修正，累计实际约 `1505.831 arcsec`，最终 QHY WCS 残差 `8.196 arcsec`。4 帧分别检测 `166/179/184/183` 星，均无质量标志。
 - 紧接着的 G3 `2 s` fresh WCS 把 Mirfak 投影到 `(601.939,1084.085)`，目标刚在 1080 高度画面下缘之外。由该 fresh G3 解算生成约东 `156.521 arcsec`、北 `194.874 arcsec`、总量 `249.949 arcsec` 的一次 N.I.N.A. 目录坐标动作；动作后 fresh G3 WCS 把目标投影到 `(990.172,508.977)`。
 - 同一 G3 帧中约 `86.3%` 的普通候选被判饱和，因此该帧明确不是主镜或导星镜对焦证据；程序没有借机重新进入对焦扫描。
 

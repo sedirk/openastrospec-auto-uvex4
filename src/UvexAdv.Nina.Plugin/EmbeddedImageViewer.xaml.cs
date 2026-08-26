@@ -82,6 +82,24 @@ public partial class EmbeddedImageViewer : UserControl
         typeof(EmbeddedImageViewer),
         new FrameworkPropertyMetadata(true));
 
+    public static readonly DependencyProperty PopoutCommandProperty = DependencyProperty.Register(
+        nameof(PopoutCommand),
+        typeof(ICommand),
+        typeof(EmbeddedImageViewer),
+        new FrameworkPropertyMetadata(null));
+
+    public static readonly DependencyProperty PopoutLabelProperty = DependencyProperty.Register(
+        nameof(PopoutLabel),
+        typeof(string),
+        typeof(EmbeddedImageViewer),
+        new FrameworkPropertyMetadata("弹出大图"));
+
+    public static readonly DependencyProperty ShowPopoutButtonProperty = DependencyProperty.Register(
+        nameof(ShowPopoutButton),
+        typeof(bool),
+        typeof(EmbeddedImageViewer),
+        new FrameworkPropertyMetadata(false));
+
     private static readonly DependencyPropertyKey ZoomPropertyKey = DependencyProperty.RegisterReadOnly(
         nameof(Zoom),
         typeof(double),
@@ -145,6 +163,24 @@ public partial class EmbeddedImageViewer : UserControl
     {
         get => (bool)GetValue(FitOnImageChangedProperty);
         set => SetValue(FitOnImageChangedProperty, value);
+    }
+
+    public ICommand? PopoutCommand
+    {
+        get => (ICommand?)GetValue(PopoutCommandProperty);
+        set => SetValue(PopoutCommandProperty, value);
+    }
+
+    public string PopoutLabel
+    {
+        get => (string)GetValue(PopoutLabelProperty);
+        set => SetValue(PopoutLabelProperty, value);
+    }
+
+    public bool ShowPopoutButton
+    {
+        get => (bool)GetValue(ShowPopoutButtonProperty);
+        set => SetValue(ShowPopoutButtonProperty, value);
     }
 
     public double Zoom => (double)GetValue(ZoomProperty);

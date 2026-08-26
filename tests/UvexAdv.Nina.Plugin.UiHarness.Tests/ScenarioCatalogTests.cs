@@ -23,7 +23,8 @@ public sealed class ScenarioCatalogTests
         var startup = scenarios.Single(item => item.Name == "startup-requirements").ViewModel;
         Assert.Equal(3, startup.SelectedWorkspaceTabIndex);
         Assert.Contains("准备尚未完成", startup.RealModeStatusSummary, StringComparison.Ordinal);
-        Assert.Contains("commissioning preset", startup.RealModeStatus, StringComparison.Ordinal);
+        Assert.Contains("设备标定证据", startup.RealModeStatus, StringComparison.Ordinal);
+        Assert.False(startup.IsDevicePreparationMissing);
         Assert.True(startup.IsCommissioningPreparationMissing);
         Assert.True(startup.IsNightSetupPreparationMissing);
         var manual = scenarios.Single(item => item.Name == "uvex-manual").ViewModel;

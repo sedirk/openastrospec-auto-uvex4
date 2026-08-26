@@ -10,7 +10,7 @@
 
 ### QHY / GS350 广域链
 
-- QHY 服务保持 QHYminiCam8M 唯一所有权，实体滤轮读回 R/slot 5。
+- QHY 服务保持 QHYminiCam8M 唯一所有权，实体滤轮当时读回 `R/slot 5`；2026-08-26 身份校正后应解释为**实际 Sloan i′/槽 5**。该帧的 WCS/居中见证仍有效，不得称为 r′ 测光。
 - Markab 的 QHY 粗解算和闭环居中成功；最后一轮 WCS 到目录目标约 11.3 arcsec。
 - 广域粗居中使用独立粗运动门，不复用 G3/狭缝精修门，也没有写入或使用固定两镜光轴差。
 - 后续源码已加入可选的快速同指向双解算：G3 WCS 一成功便优先复用新鲜 QHY WCS，否则只补一张短 QHY 帧；输出为带五点 mount bracket 和完整 SHA-256 的 Candidate，零赤道仪命令且不能直接授权预置运动。今晚原始观测发生在该功能安装前，不能追认成正式 paired-WCS evidence。

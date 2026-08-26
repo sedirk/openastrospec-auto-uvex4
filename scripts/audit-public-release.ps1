@@ -23,7 +23,11 @@ $patterns = [ordered]@{
     # strings such as 10.0.40219.1 cannot be mistaken for an RFC1918 address.
     'private IPv4 address' = '(?<![0-9])(?:10\.(?:[0-9]{1,3}\.){2}[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})(?![0-9])'
     'RTSP URL' = 'rtsp://'
-    'possible secret assignment' = '(?i)(api[_-]?key|password|secret|token)\s*[:=]\s*["''][^"'']{8,}'
+    # N.I.N.A. file-pattern placeholders are deliberately written as
+    # $$TOKENNAME$$.  They are public template syntax, not assigned secrets.
+    # Keep scanning ordinary quoted assignments while excluding only that
+    # exact placeholder prefix.
+    'possible secret assignment' = '(?i)(api[_-]?key|password|secret|token)\s*[:=]\s*["''](?!\$\$)[^"'']{8,}'
 }
 
 $findings = [Collections.Generic.List[object]]::new()

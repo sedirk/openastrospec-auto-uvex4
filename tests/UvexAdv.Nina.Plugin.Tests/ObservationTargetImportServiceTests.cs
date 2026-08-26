@@ -205,7 +205,7 @@ public sealed class ObservationTargetImportServiceTests
         var result = await service.ImportFromPlanetariumAsync();
 
         Assert.Equal(1, planetarium.CaptureCount);
-        Assert.Equal("新星 金牛座 2026", result.TargetName);
+        Assert.Equal("J052107.00+233819.3", result.TargetName);
         Assert.Equal(string.Empty, result.CatalogId);
         Assert.Equal(80.27918002, result.RightAscensionDegrees, 8);
         Assert.Equal(23.63868315, result.DeclinationDegrees, 8);
@@ -214,7 +214,27 @@ public sealed class ObservationTargetImportServiceTests
         Assert.Equal("J2000", result.Epoch);
         Assert.Null(result.FramingCenterCoordinates);
         Assert.False(result.UsedFramingCenter);
+        Assert.Contains("星图显示名为“新星 金牛座 2026”", result.Details, StringComparison.Ordinal);
+        Assert.Contains("FITS OBJECT 与文件名", result.Details, StringComparison.Ordinal);
         Assert.Contains("不会连接设备、移动赤道仪或启动观测", result.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PlanetariumEnglishNameAndAsciiDesignationArePreservedForOutput()
+    {
+        var planetarium = new FakePlanetariumSource(new ObservationPlanetariumTargetSnapshot(
+            "Nova Sagitta 2026",
+            "Gaia DR3 1824166210904571136",
+            new ObservationTargetCoordinates(296.28155945, 18.38125749),
+            null,
+            "N.I.N.A. 第三方星图 / Stellarium"));
+        var service = CreateService(planetarium: planetarium);
+
+        var result = await service.ImportFromPlanetariumAsync();
+
+        Assert.Equal("Nova Sagitta 2026", result.TargetName);
+        Assert.Equal("Gaia DR3 1824166210904571136", result.CatalogId);
+        Assert.Contains("目标/文件名采用“Nova Sagitta 2026”", result.Details, StringComparison.Ordinal);
     }
 
     [Fact]

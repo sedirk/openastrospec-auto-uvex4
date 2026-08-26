@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest real-sky closeout](docs/commissioning-night-2026-08-25.md) ·
+[latest software/real-sky closeout](docs/commissioning-night-2026-08-26.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [contributing](CONTRIBUTING.md)
@@ -85,12 +85,13 @@ These are normative:
 The repository now includes the QHY service, the PHD2 event-server client, the target-acquisition state machine, and the N.I.N.A. real/simulator runners. Healthy stages advance automatically without confirmation dialogs. Failed or indeterminate gates enter `PausedNeedsAttention`; the operator can always pause, resume, cancel, or request manual takeover. Simulator-first commissioning remains mandatory. The authoritative design hashes are checked by the build and versioned Git hook so accidental architectural edits fail visibly.
 
 The current GS350/QHY-to-C11/G3 optical-axis difference is never a compiled
-constant. A future optional pre-positioning stage consumes an explicitly selected,
-versioned record with provenance, hardware/installation fingerprint, pier-side and
-environment applicability, expiry, uncertainty, and motion limits. Its default
-policy is `AutoIfValidElseSkip`, and the operator can visibly select `Skip`. Missing
-or stale evidence falls back to QHY coarse centering followed by a direct G3 solve
-and bounded local G3 search; it does not silently reuse a remembered offset.
+constant. A future optional pre-positioning stage may consume an explicitly
+selected, versioned record with provenance, hardware/installation fingerprint,
+environment applicability, uncertainty, and motion limits. Production currently
+keeps the QHY WCS as an immutable no-motion witness, obtains a fresh G3 WCS, lets
+that G3 solution own any large N.I.N.A. correction, and requires another fresh G3
+solve to prove arrival. Missing or invalid transfer evidence therefore causes no
+intermediate QHY-derived motion and never silently reuses a remembered offset.
 
 The ordinary stellar core loop has completed two real-sky, single-start runs
 without manual or model correction after launch. This is evidence for target
@@ -244,10 +245,12 @@ accepted science. See [ADR-0007](docs/adr/0007-nina-native-target-and-image-prov
    positions, and the versioned PHD2 calibration-quality policy. The currently active
    PHD2 calibration is graded rather than reduced to one orthogonality cutoff;
    degraded operation and direct-target guiding are explicitly supervised-only.
-2. Slew to catalog coordinates, acquire/solve QHY wide-field FITS, and apply bounded
-   signed corrections with a fresh solve after each move. Optionally apply a
-   separately commissioned wide-to-slit-field pre-positioning record; invalid or
-   explicitly skipped records cause no intermediate move.
+2. Slew to catalog coordinates and acquire/solve an immutable QHY wide-field FITS as
+   a no-motion witness. Acquire a fresh G3 WCS; when a large correction is required,
+   that G3 solution alone authorizes the bounded N.I.N.A. move, and another fresh G3
+   solve proves arrival. A separately commissioned wide-to-slit-field record remains
+   optional; invalid, missing, or explicitly skipped evidence causes no intermediate
+   QHY-derived move.
 3. Acquire a fresh G3 slit field through PHD2 using a commissioned long-exposure
    ladder. A successful WCS that leaves the target outside the detector drives
    bounded N.I.N.A. centering and a fresh solve; a structured sparse field with at

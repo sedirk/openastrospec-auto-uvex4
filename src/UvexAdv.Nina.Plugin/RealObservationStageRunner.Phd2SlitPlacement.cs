@@ -82,11 +82,10 @@ internal sealed partial class RealObservationStageRunner
             var profileGate = ValidatePhdProfileBindingEvidence();
             if (profileGate.Disposition != GateDisposition.Passed) return new StageResult(profileGate);
             var pierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
-            if (!IsKnownPierSide(pierSide) || !string.Equals(pierSide, preset.PierSide, StringComparison.Ordinal))
-                return Attention(ObservationStage.StartGuiding, "PHD2_GRADED_GUIDING_PIER_MISMATCH", $"Current pier '{pierSide}' does not match commissioned '{preset.PierSide}'.");
-            var topology = BuildPhd2SensorTopology(preset, pierSide);
-            if (!SameHash(topology.ComputeFingerprintSha256(), preset.LockedTopologyFingerprintSha256))
-                return Attention(ObservationStage.StartGuiding, "PHD2_GRADED_GUIDING_TOPOLOGY_MISMATCH", "PHD2 camera/profile/ROI/binning/rotation/install-epoch/mount/pier topology changed.");
+            var topologyResolution = ResolvePhd2RuntimeTopology(preset, pierSide);
+            if (!topologyResolution.IsAllowed || topologyResolution.RuntimeTopology is null)
+                return Attention(ObservationStage.StartGuiding, topologyResolution.Code, topologyResolution.Message);
+            var topology = topologyResolution.RuntimeTopology;
 
             var policy = preset.CalibrationQualityPolicy;
             var calibrationBefore = await phd2.ValidateCalibrationAsync(
@@ -403,13 +402,13 @@ internal sealed partial class RealObservationStageRunner
         if (profileGate.Disposition != GateDisposition.Passed) return new StageResult(profileGate, item.Path);
 
         var pierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
-        if (!IsKnownPierSide(pierSide) || !string.Equals(pierSide, preset.PierSide, StringComparison.Ordinal))
-            return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RECOVERY_PIER_MISMATCH", $"Fresh pier side '{pierSide}' does not match commissioned '{preset.PierSide}'.");
-        var topology = BuildPhd2SensorTopology(preset, pierSide);
+        var topologyResolution = ResolvePhd2RuntimeTopology(preset, pierSide);
+        if (!topologyResolution.IsAllowed || topologyResolution.RuntimeTopology is null)
+            return Attention(ObservationStage.PlaceTargetOnSlit, topologyResolution.Code, topologyResolution.Message);
+        var topology = topologyResolution.RuntimeTopology;
         var topologySha256 = topology.ComputeFingerprintSha256();
-        if (!SameHash(topologySha256, state.TopologyFingerprintSha256) ||
-            !SameHash(topologySha256, preset.LockedTopologyFingerprintSha256))
-            return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RECOVERY_TOPOLOGY_MISMATCH", "Fresh PHD2 profile/camera/ROI/binning/rotation/install/mount/pier topology does not match the durable ledger and preset.");
+        if (!SameHash(topologySha256, state.TopologyFingerprintSha256))
+            return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RECOVERY_TOPOLOGY_MISMATCH", "Fresh PHD2 profile/camera/ROI/binning/rotation/install/mount/pier topology does not match the durable ledger. A meridian flip cannot reinterpret an outstanding lock-shift vector.");
 
         // A PHD2 client epoch is process-local. After cancellation cleanup or
         // process restart, a numerically equal epoch is not continuity proof.
@@ -830,21 +829,10 @@ internal sealed partial class RealObservationStageRunner
         if (profileGate.Disposition != GateDisposition.Passed) return new StageResult(profileGate);
 
         var pierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
-        if (!IsKnownPierSide(pierSide) || !string.Equals(pierSide, preset.PierSide, StringComparison.Ordinal))
-        {
-            return Attention(
-                ObservationStage.PlaceTargetOnSlit,
-                "PHD2_LOCK_PIER_MISMATCH",
-                $"Current pier side '{pierSide}' does not exactly match commissioned PHD2 topology side '{preset.PierSide}'.");
-        }
-        var topology = BuildPhd2SensorTopology(preset, pierSide);
-        if (!string.Equals(topology.ComputeFingerprintSha256(), preset.LockedTopologyFingerprintSha256, StringComparison.OrdinalIgnoreCase))
-        {
-            return Attention(
-                ObservationStage.PlaceTargetOnSlit,
-                "PHD2_LOCK_TOPOLOGY_FINGERPRINT_MISMATCH",
-                "The current profile/camera/ROI/binning/rotation/install-epoch/mount/pier topology does not match the commissioned PHD2 fingerprint.");
-        }
+        var topologyResolution = ResolvePhd2RuntimeTopology(preset, pierSide);
+        if (!topologyResolution.IsAllowed || topologyResolution.RuntimeTopology is null)
+            return Attention(ObservationStage.PlaceTargetOnSlit, topologyResolution.Code, topologyResolution.Message);
+        var topology = topologyResolution.RuntimeTopology;
 
         var policy = preset.CalibrationQualityPolicy;
         if (preset.GuideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
@@ -2221,6 +2209,18 @@ internal sealed partial class RealObservationStageRunner
         preset.RotationAuthority,
         pierSide);
 
+    private Phd2PierAdaptiveTopologyResolution ResolvePhd2RuntimeTopology(
+        Phd2SlitPlacementCommissioningPreset preset,
+        string currentPierSide)
+    {
+        var commissionedSource = BuildPhd2SensorTopology(preset, preset.PierSide);
+        return Phd2PierAdaptiveTopologyPolicy.Resolve(
+            commissionedSource,
+            preset.LockedTopologyFingerprintSha256,
+            currentPierSide,
+            preset.CalibrationPierSideEvidenceComplete);
+    }
+
     private Phd2CalibrationCandidateSelection SelectPhd2CalibrationQuality(
         Phd2CalibrationValidation calibration,
         Phd2SlitPlacementCommissioningPreset preset,
@@ -2260,7 +2260,7 @@ internal sealed partial class RealObservationStageRunner
             identity,
             calibration,
             topology,
-            preset.LockedTopologyFingerprintSha256,
+            topology.ComputeFingerprintSha256(),
             pierSide,
             DateTimeOffset.UtcNow,
             PlateSolveRotationSeedDegrees: null,
@@ -2567,7 +2567,12 @@ internal sealed partial class RealObservationStageRunner
         if (!SameHash(state.RecoveryContextSha256, ComputeSlitRecoveryContextSha256(context))) failures.Add("target/site/horizon/Night-Setup/telescope context changed");
         if (!string.Equals(state.CalibrationQualityPolicyId, preset.CalibrationQualityPolicy.PolicyId, StringComparison.Ordinal) ||
             !SameHash(state.CalibrationQualityPolicySha256, preset.CalibrationQualityPolicySha256)) failures.Add("calibration-quality policy changed");
-        if (!SameHash(state.TopologyFingerprintSha256, preset.LockedTopologyFingerprintSha256)) failures.Add("sensor topology fingerprint changed");
+        var currentPierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
+        var topologyResolution = ResolvePhd2RuntimeTopology(preset, currentPierSide);
+        if (!topologyResolution.IsAllowed || topologyResolution.RuntimeTopology is null)
+            failures.Add($"runtime topology unavailable: {topologyResolution.Message}");
+        else if (!SameHash(state.TopologyFingerprintSha256, topologyResolution.RuntimeTopology.ComputeFingerprintSha256()))
+            failures.Add("sensor topology or operation pier side changed");
         if (Math.Abs(state.MaximumStagePixels - preset.MaximumStagePixels) > 1e-9 ||
             Math.Abs(state.MaximumCumulativePixels - preset.MaximumCumulativePixels) > 1e-9 ||
             state.MaximumAttempts != preset.MaximumAttempts ||

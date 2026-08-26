@@ -16,14 +16,14 @@
     "NativeSdkSha256": "5F0957E29FF510F19FA5DE8688162FB4B9F4562B0B79B693DCBB9377BF281D14",
     "NativeReadoutMode": 1,
     "NativeFilterPositions": {
-      "S": 0,
-      "H": 1,
-      "O": 2,
-      "U": 3,
-      "G": 4,
-      "R": 5,
-      "I": 6,
-      "Z": 7
+      "U": 0,
+      "O": 1,
+      "H": 2,
+      "S": 3,
+      "Z": 4,
+      "I": 5,
+      "R": 6,
+      "G": 7
     }
   }
 }

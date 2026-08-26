@@ -43,7 +43,8 @@ public static class ObservationAutomationPolicy
         bool requireSafetyMonitor,
         bool requireOpenDomeOrRoof,
         bool requireWeatherData,
-        bool requireOpenOpticalCover)
+        bool requireOpenOpticalCover,
+        bool allowWeakSupervision = false)
     {
         var disabled = new List<string>();
         if (!requireSafetyMonitor) disabled.Add("safety monitor");
@@ -51,10 +52,18 @@ public static class ObservationAutomationPolicy
         if (!requireWeatherData) disabled.Add("weather data");
         if (!requireOpenOpticalCover) disabled.Add("open optical-cover state");
 
-        return disabled.Count == 0
-            ? GateResult.Pass(
+        if (disabled.Count == 0)
+        {
+            return GateResult.Pass(
                 "FULL_AUTOMATION_CAPABILITIES_REQUIRED",
-                "The immutable run requires safety-monitor, roof, weather and optical-cover evidence.")
+                "The immutable run requires safety-monitor, roof, weather and optical-cover evidence.");
+        }
+
+        return allowWeakSupervision
+            ? GateResult.Pass(
+                "WEAK_SUPERVISION_CAPABILITIES_DECLARED",
+                $"Weak operator supervision explicitly permits missing {string.Join(", ", disabled)}. " +
+                "This is not unattended authority; connected adapters that explicitly report an unsafe or closed state still block actions.")
             : GateResult.Unknown(
                 "FULL_AUTOMATION_CAPABILITY_DISABLED",
                 $"A full unattended REAL run cannot disable {string.Join(", ", disabled)}. Use a separately supervised manual commissioning procedure instead.");

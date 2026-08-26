@@ -25,6 +25,11 @@
 同时记录来源、版本和 commissioning 证据；不得把经验习惯当作本机默认。本文恢复脚本的
 `0 min` 直接制冷正是该策略，15 分钟只是等待真实温度稳定的上限，不是降温斜坡。
 
+正常真实观测不应调用本恢复脚本。插件会在锁定 N.I.N.A. Profile 中 ATR585M 的精确
+`DeviceId` 后，自动用 `0 min` 直接设定 Night Setup 目标温度，并让预冷与指向、解析、
+入缝、导星和 QHY 准备并行。只有 ATR 第一张试曝光需要等待连续三次达到目标容差；
+恢复脚本仅保留给正常自动制冷命令无法产生一致遥测的异常会话。
+
 ## 为什么不能相信 `AtTargetTemp`
 
 Advanced API 2.2.15.2 的 `AtTargetTemp` 是用当前 `Temperature == TemperatureSetPoint` 计算的。当两个失效读数同时为 `0` 时，它会返回 `true`；Profile 中缓存的 `TargetTemp=-10` 也不能证明相机实际收到了这个设定值。

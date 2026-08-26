@@ -43,6 +43,18 @@ map explicitly leaves `ObservationUseRealMode`, `RealModeCommissioned`, and
 bindings and runtime identity expectations but does not itself authorize
 hardware actions.
 
+The environment booleans also produce a portable safety-mode binding. When
+`RequireSafetyMonitor`, `RequireOpenDomeOrRoof` and `RequireWeatherData` are all
+`false`, the generated map selects `OperatorWeakSupervision`, sets
+`WeakSupervisionEnabled=true`, and makes the N.I.N.A. optical-cover adapter
+optional. Missing Safety Monitor, roof, weather and optical-cover adapters then
+remain warning-only; a connected adapter that explicitly reports unsafe, rain,
+closed or error still blocks the run. When the three environment requirements
+are all `true`, the generated map selects the complete N.I.N.A. safety stack and
+requires optical-cover evidence. Neither case sets `RealModeCommissioned=true`;
+the plugin may mark a complete package statically verified only after checking
+all hashes, internal references and identities.
+
 ## 1. Export and verify the current PHD2 profile
 
 All expected values are mandatory. A mismatch, ambiguous USB binding, missing
@@ -82,7 +94,7 @@ USB topology path.
 
 Each focus-domain entry explicitly contains `Role`, `Owner`,
 `LogicalDeviceId`, `PhysicalBinding`, `StartPositionSteps`, bounded `Limits`,
-`Metric`, `VerifiedUtc`, `ValidUntilUtc`, and `Confidence`. The metric also
+`Metric`, `VerifiedUtc`, optional legacy `ValidUntilUtc`, and `Confidence`. The metric also
 binds its source camera identity and immutable evidence SHA-256. The role
 contract is:
 
@@ -139,13 +151,17 @@ For example, the required shape of one entry is:
     "EvidenceSha256": "<64 hexadecimal characters>"
   },
   "VerifiedUtc": "<UTC measurement time>",
-  "ValidUntilUtc": "<explicit UTC expiry>",
+  "ValidUntilUtc": null,
   "Confidence": 1.0
 }
 ```
 
 The numeric values above illustrate JSON shape only and are not commissioned
-defaults. Copying them without measurements is invalid evidence.
+defaults. Copying them without measurements is invalid evidence. A legacy
+non-null `ValidUntilUtc` must follow `VerifiedUtc`, but crossing that date does
+not invalidate otherwise unchanged installation/focus evidence. Runtime owner,
+stable identity, topology, exact position and fresh live-metric checks are the
+state-based invalidators.
 
 Compute the definition hash, then create the locked record:
 
@@ -185,7 +201,7 @@ The measurement definition is schema 3 input evidence, not a commissioned
 preset. It must explicitly contain:
 
 - exact G3 exposure, gain, binning, effective saturation ADU and WCS parity;
-- an expiry (`ValidUntilUtc`) and a UTC PHD2 calibration timestamp;
+- an optional legacy `ValidUntilUtc` (normally `null`) and a UTC PHD2 calibration timestamp;
 - measured slit geometry plus an existing evidence file and its SHA-256;
 - `SlitWheelIdentity` with measurement model
   `UVEX-DARK-APERTURE-TWO-EDGE-HDR-V1`, locked short/long exposure times and
@@ -314,13 +330,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\new-commissioning-
 
 `scripts/test-commissioning-evidence.ps1 -Commissioning ...` verifies the
 preset file hash, all referenced files and hashes, PHD2 evidence self-hash,
-Night Setup semantics, fitted transform, expiry, and canonical hardware
+Night Setup semantics, fitted transform, state bindings, and canonical hardware
 fingerprint. It rebuilds the expected preset from the locked measurement inputs
 and requires an exact structural match. The commissioning preset is schema 4:
 its exact `NightSetupSha256` and hardware fingerprint commit the complete Night
 Setup schema-2 focus bindings, while the PHD2 and optional ghost blocks bind
-their own complete policies, identities and limits. Preset validity may not
-extend beyond any focus-domain `ValidUntilUtc`.
+their own complete policies, identities and limits. A preset does not expire
+solely because wall-clock time advanced: equipment-owner identity, installation
+epoch, topology, ROI/binning, positions, hashes and current quality evidence are
+re-read before authority is granted. Frame/WCS/settle/safety freshness windows
+remain strict runtime limits.
 
 Generating these bindings still does not authorize real mode. The emitted
 N.I.N.A. values keep `ObservationUseRealMode`, `RealModeCommissioned`, and

@@ -27,6 +27,7 @@ public sealed class NativeQhyCameraAdapter : IQhyCameraAdapter
     private readonly SemaphoreSlim captureGate = new(1, 1);
     private readonly object statusGate = new();
     private readonly object disposalGate = new();
+    private readonly Dictionary<int, QhyControlCapability> requiredControlCapabilities = new();
     private QhyCameraStatus status = new(false, null, null, null, null, DateTimeOffset.UtcNow);
     private QhyCameraIdentity? identity;
     private IntPtr handle;
@@ -116,6 +117,9 @@ public sealed class NativeQhyCameraAdapter : IQhyCameraAdapter
             Check(
                 NativeMethods.GetQHYCCDChipInfo(handle, out _, out _, out chipWidth, out chipHeight, out _, out _, out _),
                 "read QHY chip dimensions");
+            CacheRequiredControlCapability(handle, ControlGain, "gain");
+            CacheRequiredControlCapability(handle, ControlOffset, "offset");
+            CacheRequiredControlCapability(handle, ControlExposure, "exposure");
 
             NativeMethods.GetQHYCCDSDKVersion(out var year, out var month, out var day, out var subday);
             identity = new QhyCameraIdentity(exactId, model, AdapterName, $"{year}-{month}-{day}-{subday}");
@@ -413,6 +417,7 @@ public sealed class NativeQhyCameraAdapter : IQhyCameraAdapter
         }
 
         targetTemperatureC = null;
+        requiredControlCapabilities.Clear();
         lock (statusGate)
         {
             status = new QhyCameraStatus(
@@ -612,14 +617,39 @@ public sealed class NativeQhyCameraAdapter : IQhyCameraAdapter
         return double.IsFinite(value) ? value : null;
     }
 
-    private static void SetRequiredParam(IntPtr cameraHandle, int control, double value, string name)
+    private void CacheRequiredControlCapability(IntPtr cameraHandle, int control, string name)
     {
         if (NativeMethods.IsQHYCCDControlAvailable(cameraHandle, control) != Success)
         {
             throw new QhyAdapterException($"QHY camera does not report required control '{name}'.");
         }
 
-        ValidateControlRange(cameraHandle, control, value, name);
+        Check(
+            NativeMethods.GetQHYCCDParamMinMaxStep(
+                cameraHandle,
+                control,
+                out var minimum,
+                out var maximum,
+                out var step),
+            $"query QHY {name} range");
+        requiredControlCapabilities[control] = QhyControlCapability.Create(
+            control,
+            name,
+            minimum,
+            maximum,
+            step);
+    }
+
+    private void SetRequiredParam(IntPtr cameraHandle, int control, double value, string name)
+    {
+        if (!requiredControlCapabilities.TryGetValue(control, out var capability) ||
+            !string.Equals(capability.Name, name, StringComparison.Ordinal))
+        {
+            throw new QhyAdapterException(
+                $"QHY required control '{name}' was not proven when the exact camera handle was initialized.");
+        }
+
+        capability.ValidateRequestedValue(value);
         Check(NativeMethods.SetQHYCCDParam(cameraHandle, control, value), $"set QHY {name}");
     }
 

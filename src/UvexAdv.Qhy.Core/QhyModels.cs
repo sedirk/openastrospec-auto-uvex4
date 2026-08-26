@@ -227,6 +227,7 @@ public sealed record QhyOwnerControlRequest(string OwnerToken, string Actor = "a
 
 public sealed record QhyResumeRequest(string OwnerToken, int? LeaseSeconds = null, string Actor = "automation");
 
+[method: JsonConstructor]
 public sealed record QhyLeaseRenewalRequest(string OwnerToken, int? LeaseSeconds = null, string Actor = "automation")
 {
     // Source-compatibility only. A legacy GUID obtained from an old public

@@ -69,7 +69,7 @@ public sealed record FocusDomainBinding(
     FocusMotionLimits Limits,
     FocusMetricEvidence Metric,
     DateTimeOffset VerifiedUtc,
-    DateTimeOffset ValidUntilUtc,
+    DateTimeOffset? ValidUntilUtc,
     double Confidence);
 
 /// <summary>
@@ -189,8 +189,13 @@ public static class FocusDomainConventions
 
         if (binding.VerifiedUtc == default) issues.Add($"{label} verification timestamp is required.");
         if (binding.VerifiedUtc > setup.LockedUtc.AddMinutes(5)) issues.Add($"{label} was verified after the Night Setup lock time.");
-        if (binding.ValidUntilUtc <= binding.VerifiedUtc) issues.Add($"{label} validity deadline must be after its verification timestamp.");
-        if (binding.ValidUntilUtc < setup.LockedUtc) issues.Add($"{label} evidence was already expired when the Night Setup was locked.");
+        // Installation/focus bindings are state-bound, not calendar-bound.
+        // ValidUntilUtc remains readable for schema-2 backward compatibility,
+        // but a supplied legacy value is only checked for internal ordering.
+        // Runtime compatibility below re-reads the exact owner, physical
+        // identity/topology, position and (where required) a fresh live metric.
+        if (binding.ValidUntilUtc is { } validUntil && validUntil <= binding.VerifiedUtc)
+            issues.Add($"{label} legacy validity deadline must be after its verification timestamp when supplied.");
         if (!double.IsFinite(binding.Confidence) || binding.Confidence <= 0 || binding.Confidence > 1)
         {
             issues.Add($"{label} confidence must be finite and in (0, 1].");

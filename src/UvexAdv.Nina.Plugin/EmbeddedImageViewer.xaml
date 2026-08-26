@@ -60,6 +60,25 @@
       <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="5">
         <DockPanel LastChildFill="True">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <Button Content="{Binding PopoutLabel, ElementName=ViewerRoot}"
+                    Command="{Binding PopoutCommand, ElementName=ViewerRoot}"
+                    ToolTip="在独立可缩放窗口中打开当前图像"
+                    AutomationProperties.Name="弹出当前大图">
+              <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource ViewerToolbarButton}">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                  <Style.Triggers>
+                    <MultiDataTrigger>
+                      <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding HasImage, ElementName=ViewerRoot}" Value="True" />
+                        <Condition Binding="{Binding ShowPopoutButton, ElementName=ViewerRoot}" Value="True" />
+                      </MultiDataTrigger.Conditions>
+                      <Setter Property="Visibility" Value="Visible" />
+                    </MultiDataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Button.Style>
+            </Button>
             <Button Style="{StaticResource ViewerToolbarButton}"
                     Content="−"
                     ToolTip="缩小"
