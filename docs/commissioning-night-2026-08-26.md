@@ -3,10 +3,11 @@
 ## Outcome
 
 This night did not produce a new accepted end-to-end observation. The run was
-ended after the QHYminiCam8M physically disconnected from USB; the operator
-subsequently confirmed from observatory monitoring that its cable had fallen
-out. Hardware closeout and the physical reconnection are operator/maintenance
-work and were deliberately not attempted by the software closeout.
+ended after the QHYminiCam8M disappeared from Windows USB enumeration during an
+abnormally long, all-zero acquisition. Later maintenance found no obvious QHY
+cable or connector defect, so the evidence does **not** establish that a cable
+physically fell out. Hardware closeout remained operator/maintenance work and
+was deliberately not attempted by the software closeout.
 
 The night was nevertheless a substantial software commissioning pass. It
 aligned the installed N.I.N.A. front end with the G3-first acquisition route
@@ -102,16 +103,47 @@ were actually O III. UVEX/ATR spectra are unaffected. Full evidence and the
 scientific retraction boundary are in the
 [filter-identity incident report](incidents/2026-08-26-qhy-filter-identity-correction.md).
 
-## QHY gain/USB incident
+## QHY USB transport/enumeration incident
 
-The last QHY acquisition requested `gain=20`, `offset=20`, 1×1 binning and a
-0.5-second R exposure. Its first immutable frame was created successfully,
-which proves that the exact opened camera handle supported and accepted gain.
-The next frame reported that gain was unavailable. Seconds later Windows
-registered a USB descriptor-request failure on the same physical port, and the
-camera disappeared from the present-device list. A device-only software restart
-could not restore enumeration. Observatory monitoring then confirmed that the
-USB cable had physically fallen out.
+The affected QHY acquisition requested `gain=20`, `offset=20`, 1×1 binning and
+a 0.5-second R exposure. It started at `04:08:37.934`, but the immutable frame
+did not finish until `04:09:01.842`: about 23.9 seconds elapsed for a nominal
+0.5-second exposure. Its minimum, maximum, mean and median were all zero,
+`zeroFraction=1`, and the frame carried `ZERO_CLIPPING`. Windows recorded QHY
+removal at `04:09:01.153`, before that frame was recorded as complete, and later
+configured a device-descriptor failure on the same host port. A device-only
+software restart could not restore enumeration.
+
+The later message that the camera did not report `gain` is therefore a
+downstream symptom of an invalid or lost camera handle, not evidence that the
+requested gain caused the failure. The first lease-renewal HTTP 500 was logged
+at `04:09:08`, after the USB removal, so it was an independent service defect
+and not the cause of the transport loss. Logs also show no duplicate-owner
+event: N.I.N.A. owned ATR585M, the QHY service owned QHYminiCam8M, and N.I.N.A.
+only enumerated the QHY device during startup.
+
+The most specific supported classification is `QHY_USB_TRANSPORT_LOSS`: a USB
+transport/enumeration failure during an abnormal acquisition. The physical root
+cause remains unconfirmed. A host-port transient, power or signal-integrity
+fault, intermittent contact, or a camera firmware/FPGA/SDK/driver stall remain
+possible. Re-enumeration on another host USB socket restored communication, but
+that recovery does not distinguish among those causes.
+
+### Maintenance follow-up and serial re-enumeration
+
+The serial-port changes observed during maintenance were intentional and do not
+indicate a second unexplained device loss. The same flat-panel CH340 controller
+that had previously enumerated as `COM15` appeared briefly as `COM3` and finally
+as `COM7` after it was unplugged and tried in two sockets. The flat-panel driver
+auto-search subsequently connected successfully, confirming `COM15 -> COM7` as
+one physical controller. A saved `COM1` registry value is stale/default state,
+not authoritative device identity.
+
+After the QHY was moved to a different host USB socket, Windows kept it present
+and healthy in repeated read-only samples. N.I.N.A. then opened the
+QHYminiCam8M and its integrated eight-position filter wheel and released both
+normally. This proves current basic communication and recovery, not the root
+cause of the earlier loss or readiness of the updated acquisition service.
 
 Two software defects were corrected around this incident:
 
@@ -119,13 +151,18 @@ Two software defects were corrected around this incident:
    when the exact QHY handle is initialized, together with finite range data.
    A transient availability query can no longer misclassify an established
    control after a frame. Every real parameter write is still executed and any
-   native I/O failure remains a hard stop; the change does not conceal a cable
-   loss.
+   native I/O failure remains a hard stop; the cache does not convert transport
+   failure into success.
 2. The lease-renewal request had both a modern string-token constructor and a
    legacy GUID compatibility constructor. System.Text.Json therefore rejected
    HTTP renewals as ambiguous and the service logged repeated 500 errors. The
    modern constructor is now the explicit JSON constructor, and the loopback
    HTTP test renews a live job lease before cancellation.
+
+One diagnostic improvement remains open: an acquisition with grossly excessive
+elapsed time, an all-zero immutable frame and contemporaneous Windows PnP loss
+should be reported primarily as USB transport/enumeration loss, rather than as
+an unsupported-gain error from a handle that is no longer valid.
 
 No raw frame, manifest or service diagnostic was placed in Git.
 
@@ -140,8 +177,9 @@ quoted token/key/password/secret detection. The current source snapshot has zero
 text findings and zero binary/data candidates.
 
 The workflow actions were also moved from deprecated Node.js-20 generations to
-their current Node.js-24-compatible major releases. The CI fix is not considered
-closed until the pushed workflow itself reports success.
+their current Node.js-24-compatible major releases. The pushed closeout commit
+`e4d6dcc` subsequently passed both hosted jobs, including the strict public
+source audit and the Spectral Studio test suite, so this CI incident is closed.
 
 ## Verification boundary
 
@@ -154,17 +192,22 @@ The local release checks cover:
 - N.I.N.A. plugin tests and all 12 deterministic UI render scenes;
 - pinned reduction Ruff and pytest suites.
 
-The gain change cannot receive a second real-frame replay until maintenance
-reconnects the physical QHY cable. After reconnection, the shortest sufficient
-commissioning check is:
+Maintenance has restored Windows enumeration and proved a normal N.I.N.A.
+open/release cycle for the QHY camera and integrated filter wheel. The fixed QHY
+service was not installed during that check because the elevation prompt was
+cancelled, so the corrected acquisition path still requires a real-frame replay.
+The shortest sufficient commissioning check is:
 
-1. verify that Windows enumerates the QHY device normally;
-2. let the QHY service bind the exact commissioned stable identity;
+1. install and start the built QHY service revision;
+2. verify that Windows enumerates the QHY device normally and let the service
+   bind the exact commissioned stable identity;
 3. read back the expected filter position;
 4. acquire two consecutive short frames with the same non-zero gain/offset;
-5. verify a lease renewal across the interval and inspect both immutable frame
+5. confirm that both frames finish near their requested exposure duration, are
+   not all zero, and have plausible image statistics;
+6. verify a lease renewal across the interval and inspect both immutable frame
    records;
-6. only then resume an automatic observation.
+7. only then resume an automatic observation.
 
-Hardware shutdown, roof state and the physical cable are outside this software
-closeout and remain under the operator's control.
+Hardware shutdown and roof state are outside this software closeout and remain
+under the operator's control.

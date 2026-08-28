@@ -46,6 +46,25 @@ public sealed class XamlBindingSafetyTests
     }
 
     [Fact]
+    public void ExpanderVisibilityDoesNotMutateBrightTargetAuthorization()
+    {
+        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
+
+        Assert.Contains(
+            "Header=\"超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）\" IsExpanded=\"False\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IsExpanded=\"{Binding BrightTargetWingCentroidEnabled",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsChecked=\"{Binding BrightTargetWingCentroidEnabled}\"",
+            xaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PluginOptionsSeparateScopeExtractionM2AndGratingSemantics()
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));

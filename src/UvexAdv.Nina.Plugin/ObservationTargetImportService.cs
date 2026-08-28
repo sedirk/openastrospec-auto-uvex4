@@ -261,15 +261,17 @@ public sealed class ObservationTargetImportService
             "PLANETARIUM_COORDINATES_MISSING",
             "第三方星图所选目标没有有效坐标。请重新选择一个命名目标后重试。");
         var catalogId = NormalizeAsciiIdentifier(snapshot.CatalogId);
-        var targetName = SelectAsciiTargetName(importedDisplayName, catalogId, targetBody);
+        // The adapter has already separated Stellarium's selected-object
+        // display name from its catalogue identity. Preserve that human name
+        // verbatim here; converting a bilingual name such as "奎宿九 Mirach"
+        // back to "HIP 5447" would collapse the two UI/FITS fields again.
+        var targetName = importedDisplayName;
         var sourceName = NormalizeSourceName(snapshot.SourceName, "N.I.N.A. 第三方星图");
         var details = $"已从 {sourceName} 复制一次当前选择；目标 J2000 {FormatCoordinates(targetBody)}。"
-            + (string.Equals(targetName, importedDisplayName, StringComparison.Ordinal)
-                ? $"目标/文件名采用“{targetName}”。"
-                : $"星图显示名为“{importedDisplayName}”；为避免 FITS OBJECT 与文件名使用本地化字符，目标/文件名采用“{targetName}”。")
+            + $"目标名称保留星图显示名“{targetName}”，不会再由目录号或坐标名称覆盖。"
             + (string.IsNullOrWhiteSpace(catalogId)
                 ? "没有取得可复用的 ASCII 目录标识，本次已清空旧目录 ID。"
-                : $"目录标识为 {catalogId}。")
+                : $"独立目录标识为 {catalogId}。")
             + "导入仅修改目标草稿，不会连接设备、移动赤道仪或启动观测。"
             + AppendSourceDetails(snapshot.SourceDetails);
 
@@ -289,17 +291,6 @@ public sealed class ObservationTargetImportService
             false);
     }
 
-    private static string SelectAsciiTargetName(
-        string importedDisplayName,
-        string catalogId,
-        ObservationTargetCoordinates coordinates)
-    {
-        var normalizedName = NormalizeAsciiIdentifier(importedDisplayName);
-        if (!string.IsNullOrWhiteSpace(normalizedName)) return normalizedName;
-        if (!string.IsNullOrWhiteSpace(catalogId)) return catalogId;
-        return CoordinateDesignation(coordinates);
-    }
-
     private static string NormalizeAsciiIdentifier(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
@@ -312,26 +303,6 @@ public sealed class ObservationTargetImportService
             .Trim()
             .TrimEnd('.', ' ');
         return sanitized;
-    }
-
-    private static string CoordinateDesignation(ObservationTargetCoordinates coordinates)
-    {
-        var totalHours = coordinates.RightAscensionDegrees / 15d;
-        var hours = (int)Math.Floor(totalHours);
-        var totalMinutes = (totalHours - hours) * 60d;
-        var minutes = (int)Math.Floor(totalMinutes);
-        var seconds = (totalMinutes - minutes) * 60d;
-
-        var absoluteDeclination = Math.Abs(coordinates.DeclinationDegrees);
-        var degrees = (int)Math.Floor(absoluteDeclination);
-        var totalArcMinutes = (absoluteDeclination - degrees) * 60d;
-        var arcMinutes = (int)Math.Floor(totalArcMinutes);
-        var arcSeconds = (totalArcMinutes - arcMinutes) * 60d;
-        var sign = coordinates.DeclinationDegrees < 0 ? '-' : '+';
-
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"J{hours:00}{minutes:00}{seconds:00.00}{sign}{degrees:00}{arcMinutes:00}{arcSeconds:00.0}");
     }
 
     private static string BuildFramingDetails(

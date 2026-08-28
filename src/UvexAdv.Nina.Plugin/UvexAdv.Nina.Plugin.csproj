@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <AssemblyName>UvexAdv.Nina.Plugin</AssemblyName>
@@ -12,6 +13,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- UseWindowsForms is needed only for the shell NotifyIcon. Do not let
+         its SDK-level implicit imports shadow WPF Point/Size/Brush types. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
     <ProjectReference Include="..\UvexAdv.Core\UvexAdv.Core.csproj" />
     <ProjectReference Include="..\UvexAdv.Observatory\UvexAdv.Observatory.csproj" />
     <ProjectReference Include="..\UvexAdv.Phd2\UvexAdv.Phd2.csproj" />

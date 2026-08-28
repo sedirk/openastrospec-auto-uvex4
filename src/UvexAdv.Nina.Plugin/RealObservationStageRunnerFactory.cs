@@ -104,6 +104,17 @@ public sealed class RealObservationStageRunnerFactory
         return RealRunConfiguration.Capture(
             settings,
             PlateSolverRunConfiguration.Capture(plateSettings, primarySolver, blindSolver),
-            profileService.ActiveProfile.ImageFileSettings.FilePattern);
+            profileService.ActiveProfile.ImageFileSettings.FilePattern,
+            CaptureEnvironmentDeviceSelection());
+    }
+
+    private NinaEnvironmentDeviceSelection CaptureEnvironmentDeviceSelection()
+    {
+        var profile = profileService.ActiveProfile;
+        return new NinaEnvironmentDeviceSelection(
+            profile.SafetyMonitorSettings.Id ?? NinaEnvironmentDeviceSelection.NoDeviceId,
+            profile.DomeSettings.Id ?? NinaEnvironmentDeviceSelection.NoDeviceId,
+            profile.WeatherDataSettings.Id ?? NinaEnvironmentDeviceSelection.NoDeviceId,
+            profile.FlatDeviceSettings.Id ?? NinaEnvironmentDeviceSelection.NoDeviceId);
     }
 }

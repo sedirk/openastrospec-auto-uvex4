@@ -29,6 +29,14 @@ public partial class EmbeddedImageViewer : UserControl
     private double verticalOffsetAtDragStart;
     private bool isDragging;
     private bool fitUpdateScheduled;
+    private bool displayUpdateScheduled;
+    private bool displayControlsReady;
+    private bool syncingDisplayControls;
+    private bool automaticStretch;
+    private double displayBlackPoint;
+    private double displayWhitePoint = 255;
+    private double displayGamma = 1;
+    private EmbeddedImageDisplayLevels displayedLevels = new(0, 255, 1, false);
     private double zoom = 1.0;
     private ViewMode viewMode = ViewMode.Fit;
 
@@ -119,6 +127,7 @@ public partial class EmbeddedImageViewer : UserControl
     public EmbeddedImageViewer()
     {
         InitializeComponent();
+        displayControlsReady = true;
 
         CommandBindings.Add(new CommandBinding(FitCommand, (_, _) => FitToViewport(), CanExecuteImageCommand));
         CommandBindings.Add(new CommandBinding(ActualSizeCommand, (_, _) => ShowActualSize(), CanExecuteImageCommand));
@@ -187,6 +196,22 @@ public partial class EmbeddedImageViewer : UserControl
 
     public bool HasImage => (bool)GetValue(HasImageProperty);
 
+    public bool AutomaticStretchEnabled => automaticStretch;
+
+    internal EmbeddedImageDisplayLevels DisplayedLevels => displayedLevels;
+
+    internal ImageSource? DisplayedImage => PreviewImageElement.Source;
+
+    public void SetDisplayStretch(bool automatic, double blackPoint, double whitePoint, double gamma)
+    {
+        automaticStretch = automatic;
+        displayBlackPoint = Math.Clamp(blackPoint, 0, 254);
+        displayWhitePoint = Math.Clamp(whitePoint, displayBlackPoint + 1, 255);
+        displayGamma = double.IsFinite(gamma) ? Math.Clamp(gamma, 0.2, 5) : 1;
+        SyncDisplayControls();
+        RefreshDisplayedImage();
+    }
+
     /// <summary>Shows the complete image within the current embedded viewport.</summary>
     public void FitToViewport()
     {
@@ -231,6 +256,7 @@ public partial class EmbeddedImageViewer : UserControl
     private static void OnPreviewImageChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args)
     {
         var viewer = (EmbeddedImageViewer)dependencyObject;
+        viewer.RefreshDisplayedImage();
         viewer.RefreshImageState();
 
         if (viewer.HasImage && viewer.FitOnImageChanged)
@@ -269,6 +295,76 @@ public partial class EmbeddedImageViewer : UserControl
 
         RefreshCaptionVisibility();
         CommandManager.InvalidateRequerySuggested();
+    }
+
+    private void RefreshDisplayedImage()
+    {
+        if (!displayControlsReady) return;
+        if (PreviewImage is not BitmapSource bitmapSource)
+        {
+            PreviewImageElement.Source = PreviewImage;
+            displayedLevels = new EmbeddedImageDisplayLevels(0, 255, 1, false);
+            DisplayLevelsText.Text = PreviewImage is null ? "显示：无图像" : "显示：此图像不支持拉伸";
+            return;
+        }
+
+        try
+        {
+            PreviewImageElement.Source = EmbeddedImageDisplayTransform.Apply(
+                bitmapSource,
+                automaticStretch,
+                displayBlackPoint,
+                displayWhitePoint,
+                displayGamma,
+                out displayedLevels);
+            DisplayLevelsText.Text = displayedLevels.Automatic
+                ? $"显示：自动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}"
+                : displayedLevels.BlackPoint == 0 && displayedLevels.WhitePoint == 255 && Math.Abs(displayedLevels.Gamma - 1) < 1e-9
+                    ? "显示：原图"
+                    : $"显示：手动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}";
+        }
+        catch
+        {
+            // A display transform must never block acquisition or hide a valid
+            // source preview. Fall back to the immutable source bitmap.
+            PreviewImageElement.Source = bitmapSource;
+            displayedLevels = new EmbeddedImageDisplayLevels(0, 255, 1, false);
+            DisplayLevelsText.Text = "显示：原图（拉伸不可用）";
+        }
+    }
+
+    private void ScheduleDisplayRefresh()
+    {
+        if (!displayControlsReady || displayUpdateScheduled) return;
+        displayUpdateScheduled = true;
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            () =>
+            {
+                displayUpdateScheduled = false;
+                RefreshDisplayedImage();
+            });
+    }
+
+    private void SyncDisplayControls()
+    {
+        if (!displayControlsReady) return;
+        syncingDisplayControls = true;
+        try
+        {
+            BlackPointSlider.Value = displayBlackPoint;
+            WhitePointSlider.Value = displayWhitePoint;
+            GammaSlider.Value = displayGamma;
+            BlackPointText.Text = $"{displayBlackPoint:0}";
+            WhitePointText.Text = $"{displayWhitePoint:0}";
+            GammaText.Text = $"{displayGamma:0.00}";
+            AutoStretchButton.Content = automaticStretch ? "自动拉伸：开" : "自动拉伸：关";
+            AutoStretchButton.BorderBrush = automaticStretch ? Brushes.DeepSkyBlue : new SolidColorBrush(Color.FromRgb(82, 100, 122));
+        }
+        finally
+        {
+            syncingDisplayControls = false;
+        }
     }
 
     private bool TryGetImageDimensions(out double width, out double height)
@@ -404,6 +500,30 @@ public partial class EmbeddedImageViewer : UserControl
     private void OnFitClick(object sender, RoutedEventArgs args) => FitToViewport();
 
     private void OnActualSizeClick(object sender, RoutedEventArgs args) => ShowActualSize();
+
+    private void OnAutoStretchClick(object sender, RoutedEventArgs args)
+    {
+        automaticStretch = !automaticStretch;
+        SyncDisplayControls();
+        RefreshDisplayedImage();
+    }
+
+    private void OnResetDisplayClick(object sender, RoutedEventArgs args) =>
+        SetDisplayStretch(false, 0, 255, 1);
+
+    private void OnManualDisplayValueChanged(object sender, RoutedPropertyChangedEventArgs<double> args)
+    {
+        if (!displayControlsReady || syncingDisplayControls) return;
+        automaticStretch = false;
+        displayBlackPoint = Math.Min(BlackPointSlider.Value, WhitePointSlider.Value - 1);
+        displayWhitePoint = Math.Max(WhitePointSlider.Value, displayBlackPoint + 1);
+        displayGamma = GammaSlider.Value;
+        BlackPointText.Text = $"{displayBlackPoint:0}";
+        WhitePointText.Text = $"{displayWhitePoint:0}";
+        GammaText.Text = $"{displayGamma:0.00}";
+        AutoStretchButton.Content = "自动拉伸：关";
+        ScheduleDisplayRefresh();
+    }
 
     private void OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs args)
     {

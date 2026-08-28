@@ -44,6 +44,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private readonly Dictionary<ObservationPreviewChannel, ObservationPreview> previews = new();
     private readonly List<ObservationDashboardEvidence> evidence = new();
     private readonly SemaphoreSlim runGate = new(1, 1);
+    private readonly ObservationAttentionNotificationTracker attentionNotificationTracker = new();
+    private readonly IObservationAttentionNotifier attentionNotifier;
     private ObservationRunPersistenceSession? persistence;
     private ObservationRunCounters counters = ObservationRunCounters.Empty;
     private string? manifestPath;
@@ -53,7 +55,13 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private bool disposed;
 
     public ObservationCoordinatorHost()
+        : this(new NinaAndWindowsObservationAttentionNotifier())
     {
+    }
+
+    internal ObservationCoordinatorHost(IObservationAttentionNotifier attentionNotifier)
+    {
+        this.attentionNotifier = attentionNotifier ?? throw new ArgumentNullException(nameof(attentionNotifier));
         coordinator.SnapshotChanged += OnCoordinatorSnapshotChanged;
         previews[ObservationPreviewChannel.QhyWideField] = EmptyPreview(
             ObservationPreviewChannel.QhyWideField,
@@ -310,6 +318,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         disposed = true;
         coordinator.SnapshotChanged -= OnCoordinatorSnapshotChanged;
         coordinator.Dispose();
+        attentionNotifier.Dispose();
     }
 
     internal GateResult PersistenceHealthGate()
@@ -427,15 +436,26 @@ public sealed class ObservationCoordinatorHost : IDisposable
         ObservationDashboardSnapshot dashboard;
         ObservationRunPersistenceSession? current;
         ObservationRunCounters currentCounters;
+        ObservationAttentionNotificationEvaluation notificationEvaluation;
         lock (sync)
         {
             current = persistence;
             currentCounters = counters;
             current?.PublishSnapshot(snapshot, currentCounters);
+            gates.TryGetValue(snapshot.CurrentStage ?? ObservationStage.ValidateNightSetup, out var currentGate);
+            notificationEvaluation = attentionNotificationTracker.Evaluate(snapshot, currentGate);
             dashboard = CreateDashboardLocked(snapshot);
             handler = DashboardChanged;
         }
         handler?.Invoke(this, dashboard);
+        if (notificationEvaluation.ClearActiveIndicator)
+        {
+            attentionNotifier.ClearActiveIndicator();
+        }
+        if (notificationEvaluation.Notification is { } notification)
+        {
+            attentionNotifier.Notify(notification);
+        }
     }
 
     private void OnPersistenceFailure(object reservation, Exception exception)

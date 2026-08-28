@@ -52,9 +52,40 @@ extraction policy、三者哈希、runtime installation/optical/orientation fing
 `AllowDegradedSupervisedScience` 仍为 false；鬼影模式只按已验证 definition 导入，
 必须由操作员另行核对并显式授权真实运行。
 
-## 4. N.I.N.A. 影子模式
+## 4. N.I.N.A. 生产路径与影子模式
 
-### 4.0 台站配置方案与设备候选
+### 4.0 后端实测结果并入前端的强制门
+
+完整规则见 [ADR-0009：单一生产观测路径与实测结果晋级](adr/0009-single-production-observation-route.md)。
+从本节起，“后端测试成功”不再自动等于“自动观测可用”：
+
+- N.I.N.A. Dockable 的“启动真实设备自动观测”和 Advanced Sequencer 的
+  `OpenAstroSpec · UVEX4 目标观测`必须捕获同一 `RealRunConfiguration`、生成同一
+  `ObservationPlan`、由同一 `RealObservationStageRunnerFactory` 创建 runner，并通过
+  同一 `ObservationCoordinatorHost` 执行。前端只能是薄入口，不能再实现自己的目标移动、
+  曝光阶梯、超时、失败恢复或清理顺序。
+- 独立 PowerShell/.NET field harness 只可用于组件 commissioning、证据采集或紧急算法
+  探索。即使它在真实天空从头跑到尾，其结论也只能写“commissioning 路线通过”；在对应
+  分支移入生产 runner、回放同一不可变证据，并从正式前端重跑之前，不得写“前端已通过”
+  或“一键自动观测已完成”。
+- 每次后端成功必须立刻生成/更新一张 route-parity 表，至少逐项覆盖：入口与配置快照、
+  目录指向、QHY 见证、G3 曝光阶梯/PL3、邻场恢复、N.I.N.A. 大步修正、PHD2 校准/选星/
+  exact-lock、实时黑缝目的点、ATR 自适应曝光、QHY 并行采集、暂停/恢复、取消、异常清理和
+  `FinalizeObservation`。每项必须标明共享实现、生产差异、测试和待验状态。
+- field harness 发现的成功逻辑必须移入共享生产组件，不能只复制参数或在面板命令中再写
+  一份。测试要断言 canonical stage、自动分支、恢复和最终终态；只断言 helper 返回值不算
+  完整路线回归。
+- 每次交付先用 replay/simulator 验证 Dockable 与 Advanced Sequencer 两个入口的配置和
+  阶段同源，再按 [N.I.N.A. 插件 UI 发布检查](nina-plugin-ui-release-checks.md) 安装精确
+  artifact。真实采集/运动/导星/恢复行为发生变化后，还必须在单独获得硬件授权时，从正式
+  前端单次启动至少一次并运行到 `FinalizeObservation`。启动后若临时脚本、人工或大模型
+  决定方向、目标点、曝光档或恢复分支，该 run 仍只算 commissioning。
+
+没有天气窗口或硬件授权时允许交付源码修复，但状态必须准确写成“共享生产源已实现，前端
+实机重放待完成”。禁止用后端成功掩盖尚未验证的前端路径，也禁止让用户到观测时才逐个
+发现两条路线之间的差异。
+
+### 4.1 台站配置方案与设备候选
 
 日常观测不应逐项抄写工程字段，也不应为了“让插件看见设备”而把三台相机依次接入
 N.I.N.A.。“自动准备”页提供与 N.I.N.A. Profile 类似的台站方案选择器：插件启动时
@@ -109,7 +140,7 @@ UVEX M2 允许选择“保持当前位置（默认，不移动 M2）”。该模
 选择“已标定的七点谱线自动对焦”时，才允许进入会产生 M2 机械运动的路径。C11/Gemini、
 GS350/AAF 与 UVEX/M2 仍是三个独立焦域，任何一个焦域的好结果都不能替另一个放行。
 
-#### 4.0.1 “自动准备”向导与草稿边界
+#### 4.1.1 “自动准备”向导与草稿边界
 
 “自动准备”页把日常操作收敛为六组：观测目标、设备身份、一次性安装标定、本次观测
 配置、目标狭缝和自动检查结果。这里必须区分三种文件，不能把它们都当成普通配置：
@@ -147,6 +178,48 @@ environment 要求和 schema-2 Night Setup 的 `SafetyCapability`：Safety Monit
 全程可介入，绝不能标记为正式无人值守。切换到“N.I.N.A. 安全链”后四类实时回读重新全部
 成为硬要求。
 
+#### 4.1.2 AIWeather / RRCI 环境链与平移顶 commissioning
+
+完整策略见 [ADR-0010](adr/0010-nina-environment-supervision-and-rolloff-roof.md)。当前台站只读
+盘点得到的 N.I.N.A. Profile 选择为：
+
+| 能力 | 锁定的 N.I.N.A. DeviceId | 实际职责 |
+| --- | --- | --- |
+| Safety Monitor | `AIWeatherSafetyMonitor` | 从 AI Weather Advanced 主节点取得安全判定 |
+| Dome / Roof | `RRCIAdvanced.Dome` | 把实际平移顶映射为 N.I.N.A. shutter/roof |
+| Weather Data | `NINA.OpenMeteo.Client` | 提供雨、云、风和湿度等可用指标 |
+| Flat Device / Cover | `ASCOM.GeminiAutoCover.CoverCalibrator` | 主光路镜盖；不代表 QHY/GS350 镜头盖 |
+
+生产 runner 在连接 ATR、赤道仪和 PHD2 owner 之前，先按运行快照自动连接上述已选择适配器；
+这个连接阶段只读，不发开顶、关顶或镜盖运动命令。全无人监管随后按以下顺序工作：
+
+1. 重新核验 action SHA-256、Profile 选择、commissioning、AIWeather safe、天气指标、目标
+   全程地平线和赤道仪时钟；
+2. 若平移顶关闭，先由 N.I.N.A. 停放赤道仪并回读 `AtPark && !Slewing`，再通过
+   `IDomeMediator.OpenShutter` 委托 RRCI 开顶，并在有界时间内等待 `ShutterOpen`；
+3. AIWeather 在运行中从 safe 变 unsafe 时，中止当前 ATR 曝光，并触发同一条故障收尾；
+4. 正常结束或已开顶后的终端失败均按“停 QHY/PHD2/狭缝灯 → 关主光路镜盖 → 停放赤道仪
+   → 关平移顶”执行并回读终态；同一 run 中屋顶开过后又关闭，不会自动重开。
+
+RRCI 的 Replica 模式默认只是只读状态代理。要允许本机全无人路线发动作，必须在**唯一持有
+旧 RRCI 驱动的 Primary 节点**显式启用“允许从节点控制屋顶”；远程开顶还必须另行启用
+“允许从节点开顶”。Primary 与 Replica 必须共享有效凭据，状态必须新鲜，且 Primary 配置的
+所有必需从节点都要提交新鲜的赤道仪已停放心跳。任一条件不满足时 runner 保留明确错误并
+停止，不直连屋顶硬件、不猜测成功。首次启用按以下顺序验收，禁止一步跳到整夜无人运行：
+
+1. 保持远程动作关闭，只连接并比对主/从节点屋顶状态；模拟断网，确认 Replica 在失效阈值
+   后 `Connected=false`；
+2. 只授权关顶，在屋顶本来关闭且赤道仪已停放时验证拒绝/幂等/终态回读；
+3. 单独授权一次有界开顶，再验证 AIWeather unsafe 故障注入能执行镜盖→停放→关顶；
+4. 最后从正式 Dockable 或 Advanced Sequencer 启动一条短观测并运行到
+   `FinalizeObservation`。测试脚本或人工补动作不能替代这一步。
+
+有人弱监管不发任何开关顶命令。四类设备分别按当前 Profile 选择降级：未选择、连接失败或
+某项天气指标缺失只 warning，其他已连接能力继续使用；已连接设备明确报告 unsafe、雨、
+超限云/风或屋顶关闭/错误仍阻断。若已选择可控镜盖，弱监管仍按需打开并在收尾关闭且必须
+核验终态；未选择镜盖才 warning 降级，打不开或明确错误仍阻断。大丰近海台址的高湿度仅为
+advisory，包括 100% 湿度本身也不等价于下雨或不安全。
+
 任何插件 XAML、Dockable ViewModel 或打包产物改变后，先执行
 [N.I.N.A. 插件 UI 发布检查](nina-plugin-ui-release-checks.md)：完整构建、全部 UI
 harness 场景、安装精确 artifact、真实启动 N.I.N.A. 并依次打开自动观测与校准库两个面板，
@@ -177,7 +250,7 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 孔径，最终残差为目标到该有限中心线的垂直/端点距离，不是到历史中点的欧氏距离。
 完整现场结论见 [2026-08-23 实机调试收口](commissioning-night-2026-08-23.md)。
 
-### 4.1 N.I.N.A. 原生目标、文件名与 FITS 溯源
+### 4.2 N.I.N.A. 原生目标、文件名与 FITS 溯源
 
 自动观测第一次安装或切换 ATR Profile 后，必须在不连接设备的状态下完成以下检查：
 
@@ -190,7 +263,7 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 
 旧文件不会被追溯重排。若旧文件名没有目标，优先用当次 run manifest 建立跨相机关联；缺少 manifest 时只能读取 FITS `OBJECT` 和坐标。`OBJECT` 只保存稳定科学目标名，不得再拼入 run、probe/science、重试或帧号。完整约束见 [ADR-0007](adr/0007-nina-native-target-and-image-provenance.md)。
 
-### 4.2 ATR585M 温控与收口
+### 4.3 ATR585M 温控与收口
 
 图谱 [ATR585M 官方手册](https://www.touptek-astro.com/dl_manual/ATR585M_en.pdf)
 说明该机使用双级 TEC、风扇和 PID 直接调节到目标温度，没有规定必须按时间斜坡升降温。

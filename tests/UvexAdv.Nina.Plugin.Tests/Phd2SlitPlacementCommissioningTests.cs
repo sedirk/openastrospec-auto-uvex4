@@ -363,6 +363,17 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
+    public void OperatorWeakSupervisionIsTheExplicitSupervisedScienceOptIn()
+    {
+        Assert.Contains("HasSupervisedScienceOptIn()", RunnerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("!configuration.AllowDegradedSupervisedScience", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "configuration.AllowDegradedSupervisedScience ||\n        configuration.Environment.WeakSupervisionEnabled",
+            LegacyRunnerSource.Replace("\r\n", "\n", StringComparison.Ordinal),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ForeignTerminalSettledLedgerIsNeverRevivedAsReturnDebt()
     {
         var discovery = Section(

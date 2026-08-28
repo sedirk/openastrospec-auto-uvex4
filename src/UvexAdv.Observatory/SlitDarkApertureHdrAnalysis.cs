@@ -9,6 +9,14 @@ public enum SlitDarkApertureResolution
     Unresolved = 0,
     DirectTwoEdge = 1,
     SharedPsfModel = 2,
+    /// <summary>
+    /// A fresh, detector-fixed reflective edge was measured, while the
+    /// sub-resolution physical aperture width and signed edge-to-midpoint
+    /// transfer came from an immutable, star-validated commissioning record.
+    /// This is deliberately distinct from claiming that both edges were
+    /// resolved in the current frame.
+    /// </summary>
+    CommissionedMidpointTransfer = 3,
 }
 
 /// <summary>
@@ -33,7 +41,11 @@ public sealed record SlitDarkApertureHdrOptions(
     double MinimumLongExposureValidFraction = 0.01,
     double MinimumLongExposureDynamicRangeAdu = 20,
     double MinimumProfileSignalToNoise = 3.5,
-    bool SharedPsfIsCommissioned = false);
+    bool SharedPsfIsCommissioned = false,
+    double ExpectedReflectiveEdgeToApertureCenterPixels = double.NaN,
+    bool AllowCommissionedMidpointTransfer = false,
+    double CommissionedApertureWidthPixels = double.NaN,
+    double CommissionedWidthUncertaintyPixels = double.NaN);
 
 public sealed record SlitDarkApertureHdrAnalysis(
     GateResult Gate,
@@ -95,11 +107,27 @@ public static class SlitDarkApertureHdrAnalyzer
         // dark aperture.  A successful locator may refine translation, but we
         // retain the commissioned angle: a few degrees of angle drift smears
         // the far edge of the 300 um aperture into the reflective wing.
+        var seedAngleRadians = seed.AngleDegrees * Math.PI / 180;
+        var seedAcrossX = -Math.Sin(seedAngleRadians);
+        var seedAcrossY = Math.Cos(seedAngleRadians);
+        var freshNormalOffset = reflective.Gate.Disposition == GateDisposition.Passed
+            ? (reflective.Geometry.AcquisitionPoint.X - seed.AcquisitionPoint.X) * seedAcrossX +
+              (reflective.Geometry.AcquisitionPoint.Y - seed.AcquisitionPoint.Y) * seedAcrossY
+            : 0;
+        // A line's origin is arbitrary along its own direction. The paired
+        // locator estimates fresh endpoints and therefore an along-slit
+        // midpoint, but importing that midpoint would move the science target
+        // away from the star-validated low-aberration anchor. Register only the
+        // detector-normal displacement and preserve the commissioned along-slit
+        // coordinate.
         var reference = reflective.Gate.Disposition == GateDisposition.Passed
             ? seed with
             {
-                AcquisitionPoint = reflective.Geometry.AcquisitionPoint,
+                AcquisitionPoint = new PixelPoint(
+                    seed.AcquisitionPoint.X + seedAcrossX * freshNormalOffset,
+                    seed.AcquisitionPoint.Y + seedAcrossY * freshNormalOffset),
                 LengthPixels = Math.Max(seed.LengthPixels, reflective.Geometry.LengthPixels),
+                UncertaintyPixels = Math.Max(seed.UncertaintyPixels, reflective.Geometry.UncertaintyPixels),
             }
             : seed;
 
@@ -128,6 +156,16 @@ public static class SlitDarkApertureHdrAnalyzer
         metrics["secondaryEdgeAmplitudeRatio"] = fit.SecondaryAmplitudeRatio;
         metrics["deltaBic"] = fit.DeltaBic;
         metrics["fitSignalToNoise"] = fit.SignalToNoise;
+        metrics["expectedReflectiveEdgeToApertureCenterPixels"] =
+            options.ExpectedReflectiveEdgeToApertureCenterPixels;
+        metrics["freshReflectiveRegistrationPassed"] =
+            reflective.Gate.Disposition == GateDisposition.Passed ? 1 : 0;
+        metrics["commissionedMidpointTransferAllowed"] =
+            options.AllowCommissionedMidpointTransfer ? 1 : 0;
+        metrics["commissionedApertureWidthPixels"] = options.CommissionedApertureWidthPixels;
+        metrics["commissionedWidthUncertaintyPixels"] = options.CommissionedWidthUncertaintyPixels;
+        metrics["freshReflectiveNormalOffsetPixels"] = freshNormalOffset;
+        metrics["commissionedAlongSlitAnchorPreserved"] = 1;
         if (!fit.IsValid || fit.SignalToNoise < options.MinimumProfileSignalToNoise)
         {
             if (!longExposureUsable)
@@ -159,6 +197,20 @@ public static class SlitDarkApertureHdrAnalyzer
         if (fit.DeltaBic < options.MinimumModelResolvedDeltaBic ||
             fit.SeparationPixels < options.MinimumModelResolvedSeparationPsfAlpha * options.EdgePsfAlphaPixels)
         {
+            if (fit.DeltaBic >= options.MinimumModelResolvedDeltaBic &&
+                CanApplyCommissionedMidpointTransfer(reflective, longExposureUsable, options))
+            {
+                return ApplyCommissionedMidpointTransfer(
+                    seed,
+                    reference,
+                    reflective,
+                    fit,
+                    shortProfile,
+                    longProfile,
+                    longDynamicRange,
+                    metrics,
+                    options);
+            }
             return Failure(
                 GateResult.Unknown(
                     "SLIT_DARK_APERTURE_SECOND_EDGE_NOT_FOUND",
@@ -210,7 +262,35 @@ public static class SlitDarkApertureHdrAnalyzer
                 longDynamicRange);
         }
 
-        var centreShift = fit.Direction * fit.SeparationPixels / 2 + fit.PrimaryOffsetPixels;
+        var fittedCentreShift = fit.Direction * fit.SeparationPixels / 2 + fit.PrimaryOffsetPixels;
+        metrics["fittedReflectiveEdgeToApertureCenterPixels"] = fittedCentreShift;
+        if (double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels) &&
+            Math.Sign(fittedCentreShift) != Math.Sign(options.ExpectedReflectiveEdgeToApertureCenterPixels))
+        {
+            return Failure(
+                GateResult.Unknown(
+                    "SLIT_DARK_APERTURE_EDGE_DIRECTION_MISMATCH",
+                    $"The fitted aperture midpoint is {fittedCentreShift:+0.00;-0.00;0.00}px from the reflective ridge, but the commissioned physical slit is on the " +
+                    $"{(options.ExpectedReflectiveEdgeToApertureCenterPixels > 0 ? "positive" : "negative")} detector-normal side. A reflection shoulder cannot authorize slit geometry.",
+                    metrics),
+                seed,
+                reference,
+                shortProfile,
+                longProfile,
+                longDynamicRange);
+        }
+        // A shared-PSF result proves the narrow family and edge direction, but
+        // its blended two-edge midpoint is noisier than the independently
+        // commissioned reflective-edge-to-centre transfer. Apply that transfer
+        // to the freshly located reflective edge. Directly resolved apertures
+        // retain their measured midpoint.
+        var centreShift = resolution == SlitDarkApertureResolution.SharedPsfModel &&
+            double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels)
+                ? options.ExpectedReflectiveEdgeToApertureCenterPixels
+                : fittedCentreShift;
+        metrics["measuredReflectiveEdgeToApertureCenterPixels"] = centreShift;
+        metrics["commissionedMidpointTransferApplied"] =
+            centreShift == options.ExpectedReflectiveEdgeToApertureCenterPixels ? 1 : 0;
         var angleRadians = reference.AngleDegrees * Math.PI / 180;
         var acrossX = -Math.Sin(angleRadians);
         var acrossY = Math.Cos(angleRadians);
@@ -245,6 +325,77 @@ public static class SlitDarkApertureHdrAnalyzer
             resolution,
             fit.SeparationPixels,
             widthUncertainty,
+            centreShift,
+            fit.SecondaryAmplitudeRatio,
+            fit.DeltaBic,
+            shortProfile.SaturatedFraction,
+            longProfile.SaturatedFraction,
+            longProfile.ValidFraction,
+            longDynamicRange);
+    }
+
+    private static bool CanApplyCommissionedMidpointTransfer(
+        SlitIlluminationPairAnalysis reflective,
+        bool longExposureUsable,
+        SlitDarkApertureHdrOptions options) =>
+        options.AllowCommissionedMidpointTransfer &&
+        options.SharedPsfIsCommissioned &&
+        longExposureUsable &&
+        reflective.Gate.Disposition == GateDisposition.Passed &&
+        double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels) &&
+        options.ExpectedReflectiveEdgeToApertureCenterPixels != 0 &&
+        double.IsFinite(options.CommissionedApertureWidthPixels) &&
+        options.CommissionedApertureWidthPixels > 0 &&
+        double.IsFinite(options.CommissionedWidthUncertaintyPixels) &&
+        options.CommissionedWidthUncertaintyPixels > 0;
+
+    private static SlitDarkApertureHdrAnalysis ApplyCommissionedMidpointTransfer(
+        SlitGeometry seed,
+        SlitGeometry reference,
+        SlitIlluminationPairAnalysis reflective,
+        EdgeFit fit,
+        CrossProfile shortProfile,
+        CrossProfile longProfile,
+        double longDynamicRange,
+        Dictionary<string, double> metrics,
+        SlitDarkApertureHdrOptions options)
+    {
+        var centreShift = options.ExpectedReflectiveEdgeToApertureCenterPixels;
+        var angleRadians = reference.AngleDegrees * Math.PI / 180;
+        var acrossX = -Math.Sin(angleRadians);
+        var acrossY = Math.Cos(angleRadians);
+        var registrationUncertainty = Math.Max(
+            reference.UncertaintyPixels,
+            reflective.Geometry.UncertaintyPixels);
+        var totalUncertainty = Math.Sqrt(
+            registrationUncertainty * registrationUncertainty +
+            options.CommissionedWidthUncertaintyPixels * options.CommissionedWidthUncertaintyPixels);
+        var geometry = reference with
+        {
+            CalibrationId = $"{seed.CalibrationId}:fresh-edge-commissioned-midpoint",
+            AcquisitionPoint = new PixelPoint(
+                reference.AcquisitionPoint.X + acrossX * centreShift,
+                reference.AcquisitionPoint.Y + acrossY * centreShift),
+            WidthPixels = options.CommissionedApertureWidthPixels,
+            UncertaintyPixels = totalUncertainty,
+        };
+        metrics["fittedReflectiveEdgeToApertureCenterPixels"] =
+            fit.Direction * fit.SeparationPixels / 2 + fit.PrimaryOffsetPixels;
+        metrics["measuredReflectiveEdgeToApertureCenterPixels"] = centreShift;
+        metrics["commissionedMidpointTransferApplied"] = 1;
+        metrics["freshRegistrationUncertaintyPixels"] = registrationUncertainty;
+        metrics["transferredGeometryUncertaintyPixels"] = totalUncertainty;
+        return new SlitDarkApertureHdrAnalysis(
+            GateResult.Pass(
+                "SLIT_DARK_APERTURE_COMMISSIONED_TRANSFER_REGISTERED",
+                $"Fresh reflective-edge geometry was registered at {reflective.ContrastSigma:F1}σ, but the current frame did not independently resolve both edges of the sub-resolution aperture. " +
+                $"The immutable commissioned width {options.CommissionedApertureWidthPixels:F2}±{options.CommissionedWidthUncertaintyPixels:F2}px and signed edge-to-midpoint transfer {centreShift:+0.00;-0.00;0.00}px were applied; this result does not claim a fresh two-edge width measurement.",
+                metrics),
+            geometry,
+            reference,
+            SlitDarkApertureResolution.CommissionedMidpointTransfer,
+            options.CommissionedApertureWidthPixels,
+            options.CommissionedWidthUncertaintyPixels,
             centreShift,
             fit.SecondaryAmplitudeRatio,
             fit.DeltaBic,
@@ -351,7 +502,10 @@ public static class SlitDarkApertureHdrAnalyzer
         var bestOne = ModelScore.Invalid;
         var bestTwo = ModelScore.Invalid;
         var bestSeparationScores = new List<(double Separation, double Score)>();
-        foreach (var direction in new[] { -1, 1 })
+        var directions = double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels)
+            ? new[] { Math.Sign(options.ExpectedReflectiveEdgeToApertureCenterPixels) }
+            : new[] { -1, 1 };
+        foreach (var direction in directions)
         {
             for (var primary = -2d; primary <= 2.0001; primary += options.ProfileStepPixels)
             {
@@ -473,6 +627,7 @@ public static class SlitDarkApertureHdrAnalyzer
         var coefficients = SolveLeastSquares(rows, observations);
         if (coefficients is null || coefficients[2] <= 0) return ProfileFit.Invalid;
         double rss = 0;
+        var residuals = new List<double>(rows.Count);
         for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
         {
             var predicted = rows[rowIndex][0] * coefficients[0] +
@@ -480,14 +635,16 @@ public static class SlitDarkApertureHdrAnalyzer
                 rows[rowIndex][2] * coefficients[2];
             var residual = observations[rowIndex] - predicted;
             rss += residual * residual;
+            residuals.Add(residual);
         }
-        var noise = RobustSigma(profile.Values.Where(value => value.HasValue).Select(value => value!.Value).ToArray());
+        var profileNoise = RobustSigma(profile.Values.Where(value => value.HasValue).Select(value => value!.Value).ToArray());
+        var residualNoise = RobustSigma(residuals);
         return new ProfileFit(
             true,
-            rss / Math.Max(1, noise * noise),
+            rss / Math.Max(1, profileNoise * profileNoise),
             rows.Count,
             0,
-            coefficients[2] / Math.Max(1, noise));
+            coefficients[2] / Math.Max(1, residualNoise));
     }
 
     private static ProfileFit FitProfile(
@@ -524,16 +681,28 @@ public static class SlitDarkApertureHdrAnalyzer
         var ratio = includeSecond ? coefficients[3] / coefficients[2] : 0;
         if (includeSecond && coefficients[3] <= 0) return ProfileFit.Invalid;
         double rss = 0;
+        var residuals = new List<double>(rows.Count);
         for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
         {
             double predicted = 0;
             for (var column = 0; column < coefficients.Length; column++) predicted += rows[rowIndex][column] * coefficients[column];
             var residual = observations[rowIndex] - predicted;
             rss += residual * residual;
+            residuals.Add(residual);
         }
-        var noise = RobustSigma(profile.Values.Where(value => value.HasValue).Select(value => value!.Value).ToArray());
-        var normalized = rss / Math.Max(1, noise * noise);
-        var snr = includeSecond ? coefficients[3] / Math.Max(1, noise) : coefficients[2] / Math.Max(1, noise);
+        // The LED field has a real, smooth cross-slit illumination gradient.
+        // Using the dispersion of the entire profile as "noise" counts that
+        // deterministic gradient (and the primary reflected ridge itself) as
+        // random noise. The fitted model already contains an intercept and
+        // slope, so detection SNR must use its robust residual scatter. Keep
+        // the full-profile scale for model-score normalization so one- and
+        // two-edge BIC comparisons remain on the same data scale.
+        var profileNoise = RobustSigma(profile.Values.Where(value => value.HasValue).Select(value => value!.Value).ToArray());
+        var residualNoise = RobustSigma(residuals);
+        var normalized = rss / Math.Max(1, profileNoise * profileNoise);
+        var snr = includeSecond
+            ? coefficients[3] / Math.Max(1, residualNoise)
+            : coefficients[2] / Math.Max(1, residualNoise);
         return new ProfileFit(true, normalized, rows.Count, ratio, snr);
     }
 
@@ -648,8 +817,20 @@ public static class SlitDarkApertureHdrAnalyzer
             !double.IsFinite(options.EdgePsfBeta) || options.EdgePsfBeta <= 0 ||
             !double.IsFinite(options.ProfileStepPixels) || options.ProfileStepPixels is <= 0 or > 1 ||
             !double.IsFinite(options.MinimumApertureWidthPixels) || options.MinimumApertureWidthPixels <= 0 ||
-            !double.IsFinite(options.MaximumApertureWidthPixels) || options.MaximumApertureWidthPixels <= options.MinimumApertureWidthPixels)
+            !double.IsFinite(options.MaximumApertureWidthPixels) || options.MaximumApertureWidthPixels <= options.MinimumApertureWidthPixels ||
+            (double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels) &&
+             options.ExpectedReflectiveEdgeToApertureCenterPixels == 0))
             throw new ArgumentOutOfRangeException(nameof(options), "HDR dark-aperture options are invalid.");
+        if (options.AllowCommissionedMidpointTransfer &&
+            (!options.SharedPsfIsCommissioned ||
+             !double.IsFinite(options.ExpectedReflectiveEdgeToApertureCenterPixels) ||
+             !double.IsFinite(options.CommissionedApertureWidthPixels) ||
+             options.CommissionedApertureWidthPixels <= 0 ||
+             !double.IsFinite(options.CommissionedWidthUncertaintyPixels) ||
+             options.CommissionedWidthUncertaintyPixels <= 0))
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "A commissioned midpoint transfer requires an explicit shared-PSF authority, signed edge offset, width, and positive uncertainty.");
     }
 
     private sealed record CrossProfile(

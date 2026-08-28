@@ -215,6 +215,21 @@ public sealed class G3SlitIlluminationPolicyTests
         Assert.Contains("detector-fixed per-pixel median", source, StringComparison.Ordinal);
         Assert.Contains("G3_MAIN_FOCUS_UNVERIFIED", source, StringComparison.Ordinal);
 
+        // Only the optically commissioned SharedPsf family may register a fresh
+        // single-ridge LED pair onto its immutable aperture width. Directly
+        // resolved slit families must continue to prove both physical edges.
+        var normalizedSource = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains(
+            "SharedPsfIsCommissioned:\n                            fingerprint.Resolution == SlitDarkApertureResolution.SharedPsfModel",
+            normalizedSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AllowCommissionedMidpointTransfer:\n                            fingerprint.Resolution == SlitDarkApertureResolution.SharedPsfModel",
+            normalizedSource,
+            StringComparison.Ordinal);
+        Assert.Contains("CommissionedApertureWidthPixels: fingerprint.MeasuredWidthPixels", source, StringComparison.Ordinal);
+        Assert.Contains("CommissionedWidthUncertaintyPixels: fingerprint.WidthUncertaintyPixels", source, StringComparison.Ordinal);
+
         var g3AnalysisBody = Slice(
             source,
             "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
@@ -275,7 +290,7 @@ public sealed class G3SlitIlluminationPolicyTests
     }
 
     [Fact]
-    public void EverySlitIlluminationFrameIsPublishedImmediatelyAfterCapture()
+    public void AcceptedLedOnFramesArePublishedButOffEvidenceDoesNotReplaceTheSlitPreview()
     {
         var source = File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory,
@@ -286,17 +301,21 @@ public sealed class G3SlitIlluminationPolicyTests
             "private async Task CaptureG3IlluminationFrameAsync(",
             "private GateResult ValidateG3SequenceImage(");
 
-        var capture = body.IndexOf("phd2.CaptureFullFrameAsync", StringComparison.Ordinal);
+        var capture = body.IndexOf("phd2.CaptureSingleFrameWithParametersAsync", StringComparison.Ordinal);
         var load = body.IndexOf("imageDataFactory.CreateFromFile", capture, StringComparison.Ordinal);
         var preview = body.IndexOf("PublishG3Preview", load, StringComparison.Ordinal);
-        var recoveryDelay = body.IndexOf("Task.Delay", preview, StringComparison.Ordinal);
 
-        Assert.True(capture >= 0 && load > capture && preview > load && recoveryDelay > preview);
-        Assert.Contains("· 已保存。", body, StringComparison.Ordinal);
+        Assert.True(capture >= 0 && load > capture && preview > load);
+        Assert.Contains("if (phase == G3SlitIlluminationPhase.On)", body, StringComparison.Ordinal);
+        Assert.Contains("暗证据帧已保存（不替换实时狭缝图）", body, StringComparison.Ordinal);
+        Assert.Contains("TransitionCandidate: false", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CaptureFullFrameAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Delay", body, StringComparison.Ordinal);
+        Assert.Contains("G3SlitIlluminationPolicy.CaptureGainPercent", body, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RealRunnerPacesRepeatedToupTekFullFrameCapturesWithHashBoundSetting()
+    public void RealRunnerUsesNativeMinimumGainSingleFramesWithoutProfileMutation()
     {
         var source = File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory,
@@ -306,12 +325,23 @@ public sealed class G3SlitIlluminationPolicyTests
             source,
             "private async Task CaptureG3IlluminationFrameAsync(",
             "private GateResult ValidateG3SequenceImage(");
+        var prepareBody = Slice(
+            source,
+            "private async Task PrepareG3IlluminationSingleFramePhaseAsync(",
+            "private async Task CaptureG3IlluminationFrameAsync(");
+        var sequenceBody = Slice(
+            source,
+            "private async Task<G3SlitIlluminationSequence> CaptureG3SlitIlluminationSequenceAsync(",
+            "private async Task CaptureG3IlluminationPhaseAsync(");
 
-        var capture = captureBody.IndexOf("CaptureFullFrameAsync", StringComparison.Ordinal);
-        var delay = captureBody.IndexOf("configuration.G3.CameraRecoveryDelayMilliseconds", StringComparison.Ordinal);
-        Assert.True(capture >= 0 && delay > capture);
-        Assert.Contains("index < G3SlitIlluminationPolicy.FramesPerPhase", captureBody, StringComparison.Ordinal);
-        Assert.Contains("cameraRecoveryDelayMilliseconds = configuration.G3.CameraRecoveryDelayMilliseconds", source, StringComparison.Ordinal);
+        Assert.Contains("Task.Delay", prepareBody, StringComparison.Ordinal);
+        Assert.Contains("CaptureSingleFrameWithParametersAsync", captureBody, StringComparison.Ordinal);
+        Assert.Contains("CaptureGainPercent", captureBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("CaptureFullFrameAsync", captureBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("StartLoopingAndWaitForFreshFrameAsync", prepareBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetExposureAndVerifyAsync", prepareBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("StopG3IlluminationPhaseLoopAsync", sequenceBody, StringComparison.Ordinal);
+        Assert.Contains("PHD2 capture_single_frame applies exposure, binning and minimum gain atomically", source, StringComparison.Ordinal);
     }
 
     private static MonochromeFrame Frame(params ushort[] pixels) => new(3, 3, new ReadOnlyMemory<ushort>(pixels), ushort.MaxValue);

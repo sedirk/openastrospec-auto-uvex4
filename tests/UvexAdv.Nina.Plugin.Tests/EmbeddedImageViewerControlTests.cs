@@ -42,7 +42,7 @@ public sealed class EmbeddedImageViewerControlTests
                 viewer.UpdateLayout();
                 Assert.True(viewer.HasImage);
                 var toolbarButtons = Descendants<Button>(viewer).ToArray();
-                Assert.Equal(5, toolbarButtons.Length);
+                Assert.Equal(7, toolbarButtons.Length);
                 var popoutButton = Assert.Single(toolbarButtons, button => Equals(button.Content, "弹出测试大图"));
                 Assert.Equal(Visibility.Visible, popoutButton.Visibility);
                 Assert.All(toolbarButtons.Where(button => !ReferenceEquals(button, popoutButton)), button => Assert.True(button.IsEnabled));
@@ -52,6 +52,17 @@ public sealed class EmbeddedImageViewerControlTests
 
                 viewer.ShowActualSize();
                 Assert.Equal(1.0, viewer.Zoom, precision: 10);
+
+                viewer.SetDisplayStretch(false, 32, 220, 1.4);
+                Assert.False(viewer.AutomaticStretchEnabled);
+                Assert.Equal((byte)32, viewer.DisplayedLevels.BlackPoint);
+                Assert.Equal((byte)220, viewer.DisplayedLevels.WhitePoint);
+                Assert.Equal(1.4, viewer.DisplayedLevels.Gamma, precision: 10);
+                Assert.NotSame(viewer.PreviewImage, viewer.DisplayedImage);
+
+                viewer.SetDisplayStretch(true, 0, 255, 1);
+                Assert.True(viewer.AutomaticStretchEnabled);
+                Assert.True(viewer.DisplayedLevels.WhitePoint > viewer.DisplayedLevels.BlackPoint);
 
                 viewer.PreviewImage = null;
                 Assert.False(viewer.HasImage);

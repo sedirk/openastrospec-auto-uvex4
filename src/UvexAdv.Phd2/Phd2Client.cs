@@ -497,6 +497,112 @@ public sealed class Phd2Client : IPhd2Client
         }
     }
 
+    public async Task<Phd2SingleFrameResult> CaptureSingleFrameWithParametersAsync(
+        Phd2SingleFrameRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateSingleFrameRequest(request);
+
+        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfAutomationPaused();
+            var destinationPath = Path.GetFullPath(request.DestinationPath);
+            if (File.Exists(destinationPath))
+            {
+                throw new Phd2CaptureException(
+                    $"PHD2 native single-frame destination already exists: '{destinationPath}'.");
+            }
+
+            var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+            if (appState is not Phd2AppState.Stopped and not Phd2AppState.Selected)
+            {
+                throw new Phd2CaptureException(
+                    $"PHD2 native single-frame acquisition requires an idle Stopped or Selected state; current state is {appState}. " +
+                    "The existing capture, calibration, or guiding session was left untouched.");
+            }
+
+            var baseline = Snapshot;
+            using var completedWaiter = RegisterEventWaiter(message =>
+                message.Name == "SingleFrameComplete" &&
+                message.Sequence > baseline.EventSequence);
+
+            try
+            {
+                await InvokeAsync(
+                        "capture_single_frame",
+                        new
+                        {
+                            exposure = request.ExposureMs,
+                            binning = request.Binning,
+                            gain = request.GainPercent,
+                            path = destinationPath,
+                            save = true,
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Phd2RpcException ex) when (ex.Code == -32601)
+            {
+                throw new Phd2CaptureException(
+                    "This PHD2 build does not expose capture_single_frame; exact per-frame gain/binning cannot be applied and no profile-gain fallback was attempted.");
+            }
+
+            var completed = await WaitForEventAsync(
+                    completedWaiter,
+                    "native single-frame capture",
+                    ExposureBoundLoopingFrameTimeout(request.ExposureMs),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!GetRequiredBoolean(completed.Payload, "Success"))
+            {
+                var error = GetOptionalString(completed.Payload, "Error") ?? "PHD2 reported an unspecified capture failure.";
+                throw new Phd2CaptureException($"PHD2 native single-frame capture failed: {error}");
+            }
+
+            var reportedPath = GetRequiredString(completed.Payload, "Path");
+            if (!Path.GetFullPath(reportedPath).Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new Phd2CaptureException(
+                    $"PHD2 native single-frame event reported '{reportedPath}', expected '{destinationPath}'.");
+            }
+
+            await WaitForFileReadyAsync(destinationPath, cancellationToken).ConfigureAwait(false);
+            var stateAfter = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+            if (stateAfter is not Phd2AppState.Stopped and not Phd2AppState.Selected ||
+                !Snapshot.IsConnected || Snapshot.ConnectionEpoch != baseline.ConnectionEpoch)
+            {
+                throw new Phd2CaptureException(
+                    $"PHD2 did not remain in the original idle connection epoch after native single-frame capture (state {stateAfter}).");
+            }
+
+            var result = new Phd2SingleFrameResult(
+                destinationPath,
+                UsedLoopSaveFallback: false,
+                RequestedParametersApplied: true,
+                completed.ReceivedUtc,
+                VerifiedExposureMilliseconds: request.ExposureMs,
+                AutomaticRetryAllowed: false);
+            UpdateSnapshot(current => current with { LastSingleFrame = result });
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            await BestEffortStopCaptureAsync().ConfigureAwait(false);
+            throw;
+        }
+        catch (Phd2CommandTimeoutException)
+        {
+            await BestEffortStopCaptureAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     public async Task<Phd2SingleFrameResult> SaveNextLoopingFrameAsync(
         Phd2SingleFrameRequest request,
         CancellationToken cancellationToken)
@@ -535,7 +641,7 @@ public sealed class Phd2Client : IPhd2Client
             using var frameWaiter = RegisterEventWaiter(message =>
                 message.Name == "LoopingExposures" &&
                 message.Sequence > baseline.EventSequence);
-            var frameTimeout = TimeSpan.FromMilliseconds(request.ExposureMs) + options.EventTimeoutMargin;
+            var frameTimeout = ExposureBoundLoopingFrameTimeout(request.ExposureMs);
             var frameEvent = await WaitForEventAsync(
                     frameWaiter,
                     "fresh continuous-loop frame",
@@ -1473,14 +1579,13 @@ public sealed class Phd2Client : IPhd2Client
         {
             await InvokeAsync("loop", parameters: null, cancellationToken).ConfigureAwait(false);
             loopingStarted = true;
-            var frameTimeout = TimeSpan.FromMilliseconds(request.ExposureMs) + options.EventTimeoutMargin;
-            var pipelineFlushAllowance = priorExposureMilliseconds == request.ExposureMs
-                ? TimeSpan.Zero
-                : TimeSpan.FromMilliseconds(request.ExposureMs) + options.EventTimeoutMargin;
+            var frameTimeout = ExposureBoundLoopingFrameTimeout(
+                request.ExposureMs,
+                requiredLoopFrames);
             await WaitForEventAsync(
                     frameWaiter,
                     "exposure-bound looping-frame capture",
-                    frameTimeout + pipelineFlushAllowance,
+                    frameTimeout,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1526,6 +1631,16 @@ public sealed class Phd2Client : IPhd2Client
             : Phd2AppState.Unknown;
         UpdateSnapshot(current => ApplyObservedAppState(current, appState));
         return appState;
+    }
+
+    private TimeSpan ExposureBoundLoopingFrameTimeout(int exposureMilliseconds, int frameCount = 1)
+    {
+        if (frameCount < 1) throw new ArgumentOutOfRangeException(nameof(frameCount));
+        var exposureBound = TimeSpan.FromMilliseconds(exposureMilliseconds) + options.EventTimeoutMargin;
+        var perFrame = exposureBound >= options.MinimumLoopingFrameEventTimeout
+            ? exposureBound
+            : options.MinimumLoopingFrameEventTimeout;
+        return TimeSpan.FromTicks(checked(perFrame.Ticks * frameCount));
     }
 
     private void EnsureSameGuidingEpoch(Phd2StateSnapshot baseline, string phase)

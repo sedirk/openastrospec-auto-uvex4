@@ -1,4 +1,5 @@
 using System.Reflection;
+using NINA.PlateSolving.Interfaces;
 using NINA.Profile.Interfaces;
 using UvexAdv.Observatory;
 using Xunit;
@@ -79,6 +80,69 @@ public sealed class G3EffectiveSaturationTests
     }
 
     [Fact]
+    public void LeftAlignedTwelveBitSdkSamplesUseTheTransportPlateau()
+    {
+        const int width = 96;
+        const int height = 96;
+        var pixels = Enumerable.Range(0, width * height)
+            .Select(index => checked((ushort)((index % 4096) * 16)))
+            .ToArray();
+        pixels[^1] = 65520;
+        var configuration = ConfigurationWithSaturation(4095);
+
+        var frame = G3FrameInputPolicy.Create(width, height, pixels, configuration);
+
+        Assert.Equal((ushort)65520, frame.SaturationLevel);
+    }
+
+    [Fact]
+    public void DarkLeftAlignedSdkFrameStillUsesTheTransportPlateau()
+    {
+        const int width = 96;
+        const int height = 96;
+        var pixels = Enumerable.Range(0, width * height)
+            .Select(index => checked((ushort)(((index % 128) + 1) * 16)))
+            .ToArray();
+        Assert.True(pixels.Max() < 4095);
+        var configuration = ConfigurationWithSaturation(4095);
+
+        var frame = G3FrameInputPolicy.Create(width, height, pixels, configuration);
+
+        Assert.Equal((ushort)65520, frame.SaturationLevel);
+    }
+
+    [Fact]
+    public void NativeTwelveBitSdkSamplesKeepTheNativePlateau()
+    {
+        const int width = 96;
+        const int height = 96;
+        var pixels = Enumerable.Range(0, width * height)
+            .Select(index => checked((ushort)(index % 4096)))
+            .ToArray();
+        var configuration = ConfigurationWithSaturation(4095);
+
+        var frame = G3FrameInputPolicy.Create(width, height, pixels, configuration);
+
+        Assert.Equal((ushort)4095, frame.SaturationLevel);
+    }
+
+    [Fact]
+    public void OneOutOfRangePixelDoesNotReinterpretNativeTwelveBitFrame()
+    {
+        const int width = 96;
+        const int height = 96;
+        var pixels = Enumerable.Range(0, width * height)
+            .Select(index => checked((ushort)((index % 4095) + 1)))
+            .ToArray();
+        pixels[^1] = 65520;
+        var configuration = ConfigurationWithSaturation(4095);
+
+        var frame = G3FrameInputPolicy.Create(width, height, pixels, configuration);
+
+        Assert.Equal((ushort)4095, frame.SaturationLevel);
+    }
+
+    [Fact]
     public void ChangingG3SaturationAfterCaptureIsProfileDrift()
     {
         var values = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -124,8 +188,14 @@ public sealed class G3EffectiveSaturationTests
 
         settings.G3SaturationAdu = ushort.MaxValue;
 
-        Assert.False(locked.MatchesCurrentProfile(settings, solver, out var driftedHash));
+        Assert.False(locked.MatchesCurrentProfile(
+            settings,
+            solver,
+            string.Empty,
+            out var driftedHash,
+            out var differenceSummary));
         Assert.NotEqual(locked.ActionConfigurationSha256, driftedHash);
+        Assert.Contains("G3.SaturationAdu", differenceSummary, StringComparison.Ordinal);
 
         settings.G3SaturationAdu = UvexPluginSettings.G3M2210mDefaultSaturationAdu;
         settings.QhyCoarseMaximumSingleCorrectionArcseconds = 600;
@@ -171,9 +241,50 @@ public sealed class G3EffectiveSaturationTests
     }
 
     [Fact]
+    public void RuntimePlateSolveDownsampleReflectionDoesNotInvalidateLockedRun()
+    {
+        var locked = new PlateSolverRunConfiguration(
+            "PLATESOLVE3", "PLATESOLVE3", "primary-type", "blind-type",
+            30, 5000, 0, 500, true, 0.1, 1, 10,
+            string.Empty, "C:\\PlateSolve3\\PlateSolve3.exe", string.Empty, string.Empty,
+            "http://nova.astrometry.net", string.Empty, "nova.astrometry.net", string.Empty);
+        var live = CreateProxy<IPlateSolveSettings>((method, _) => method.Name switch
+        {
+            "get_PlateSolverType" => Enum.Parse(method.ReturnType, "PLATESOLVE3"),
+            "get_BlindSolverType" => Enum.Parse(method.ReturnType, "PLATESOLVE3"),
+            "get_SearchRadius" => 30d,
+            "get_Regions" => 5000,
+            // This is the transient value reflected by N.I.N.A. while the
+            // current run has explicitly requested G3 software downsampling.
+            "get_DownSampleFactor" => 2,
+            "get_MaxObjects" => 500,
+            "get_BlindFailoverEnabled" => true,
+            "get_Threshold" => 0.1d,
+            "get_RotationTolerance" => 1d,
+            "get_NumberOfAttempts" => 10,
+            "get_PS2Location" => string.Empty,
+            "get_PS3Location" => "C:\\PlateSolve3\\PlateSolve3.exe",
+            "get_ASTAPLocation" => string.Empty,
+            "get_AspsLocation" => string.Empty,
+            "get_AstrometryURL" => "http://nova.astrometry.net",
+            "get_AstrometryAPIKey" => string.Empty,
+            "get_PinPointAllSkyApiHost" => "nova.astrometry.net",
+            "get_PinPointAllSkyApiKey" => string.Empty,
+            _ when method.Name.StartsWith("set_", StringComparison.Ordinal) => null,
+            _ => Default(method.ReturnType),
+        });
+
+        var captured = PlateSolverRunConfiguration.CaptureCurrent(live, locked);
+
+        Assert.Equal(locked.DownSampleFactor, captured.DownSampleFactor);
+        Assert.Equal(locked, captured);
+    }
+
+    [Fact]
     public void HardwareG3DefaultsFreezeTenSecondsFullGainAndSeparateRuntimeNames()
     {
         var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+        values[nameof(UvexPluginSettings.G3PlateSolveExposureMillisecondsCsv)] = "2000,5000,10000,15000,30000";
         var accessor = CreateProxy<IPluginOptionsAccessor>((method, arguments) =>
         {
             var name = (string)arguments[0]!;
@@ -206,6 +317,7 @@ public sealed class G3EffectiveSaturationTests
 
         Assert.Equal(60, settings.ObservationDurationMinutes);
         Assert.Equal(10_000, settings.G3ExposureMilliseconds);
+        Assert.Equal(new[] { 2_000, 5_000, 10_000, 15_000 }, settings.ParseG3PlateSolveExposureLadder());
         Assert.Equal(100, settings.G3GainPercent);
         Assert.Equal(60, settings.G3WcsFreshSolveAuthorizationResidualArcseconds);
         Assert.Equal("G3M2210M", settings.Phd2RuntimeCameraName);
@@ -242,6 +354,16 @@ public sealed class G3EffectiveSaturationTests
         120,
         4,
         TimeSpan.FromMinutes(5));
+
+    private static G3RunConfiguration ConfigurationWithSaturation(int saturationAdu) => new(
+        1000, 50, 1, saturationAdu, 1000, 2.4, false, 5,
+        SolveExposurePreset(),
+        WcsCenteringLimits(),
+        60,
+        120,
+        3,
+        WideToSlitTransferMode.Skip,
+        SearchLimits());
 
     private static G3PlateSolveExposurePreset SolveExposurePreset() => new(
         G3PlateSolveExposurePreset.CurrentSchemaVersion,

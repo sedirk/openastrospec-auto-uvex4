@@ -75,12 +75,29 @@ The per-device ownership decision is recorded in
 [`ADR-0001`](docs/adr/0001-single-owner-device-orchestration.md). The optional,
 versioned hand-off between the two optical fields is specified by
 [`ADR-0004`](docs/adr/0004-optional-versioned-wide-to-slit-field-transfer.md).
+The rule that backend/field-test successes must be promoted into the same
+Dockable and Advanced Sequencer production runner before they can be called a
+product success is recorded in
+[`ADR-0009`](docs/adr/0009-single-production-observation-route.md).
+The N.I.N.A.-owned Safety Monitor, weather, optical-cover and RRCI roll-off-roof
+lifecycle is recorded in
+[`ADR-0010`](docs/adr/0010-nina-environment-supervision-and-rolloff-roof.md).
 These are normative:
 
 - N.I.N.A. owns ATR585M for spectra;
 - PHD2 owns G3M2210M for the slit field and guiding;
 - the isolated `UvexAdv.Qhy.Service` owns QHYminiCam8M for GS350 coarse acquisition and simultaneous photometry;
 - `UvexAdv.Service` alone owns UVEX4 COM5.
+
+The shared production runner now implements the ADR-0010 source path. Full
+unattended mode hash-locks and connects all four N.I.N.A. environment adapters,
+opens the roof only after fresh safety/weather/identity/horizon and parked-mount
+checks, and closes the cover, parks the mount, then closes the roof on normal or
+terminal-failure cleanup. Weak supervision degrades each absent adapter to a
+warning, never opens or closes the roof, and still stops on explicit danger from
+an adapter that is present. This is source- and replay-verified, but it is not a
+claim that the installed station has passed its first bounded live roof cycle;
+that commissioning step remains mandatory.
 
 The repository now includes the QHY service, the PHD2 event-server client, the target-acquisition state machine, and the N.I.N.A. real/simulator runners. Healthy stages advance automatically without confirmation dialogs. Failed or indeterminate gates enter `PausedNeedsAttention`; the operator can always pause, resume, cancel, or request manual takeover. Simulator-first commissioning remains mandatory. The authoritative design hashes are checked by the build and versioned Git hook so accidental architectural edits fail visibly.
 

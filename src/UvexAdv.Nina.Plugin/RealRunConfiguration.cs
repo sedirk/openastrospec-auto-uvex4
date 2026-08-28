@@ -43,8 +43,10 @@ internal sealed record RealRunConfiguration(
     public static RealRunConfiguration Capture(
         UvexPluginSettings settings,
         PlateSolverRunConfiguration plateSolver,
-        string ninaImageFilePattern = "")
+        string ninaImageFilePattern = "",
+        NinaEnvironmentDeviceSelection? environmentDevices = null)
     {
+        environmentDevices ??= NinaEnvironmentDeviceSelection.None;
         var payload = new ActionPayload(
             settings.ObservationUseRealMode,
             settings.ServiceUrl,
@@ -205,6 +207,11 @@ internal sealed record RealRunConfiguration(
                 settings.RequireWeatherData,
                 settings.RequireOpenOpticalCover,
                 settings.WeakSupervisionEnabled,
+                environmentDevices,
+                settings.OpenDomeOrRoofOnStart,
+                settings.CloseDomeOrRoofOnFinalize,
+                settings.CloseDomeOrRoofOnFailure,
+                settings.DomeOrRoofTransitionTimeoutSeconds,
                 settings.CloseOpticalCoverOnFinalize,
                 settings.CloseOpticalCoverOnFailure,
                 settings.OpticalCoverTransitionTimeoutSeconds,
@@ -294,6 +301,133 @@ internal sealed record RealRunConfiguration(
         return string.Equals(ActionConfigurationSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
     }
 
+    public bool MatchesCurrentProfile(
+        UvexPluginSettings settings,
+        PlateSolverRunConfiguration currentPlateSolver,
+        string currentNinaImageFilePattern,
+        out string actualSha256,
+        out string differenceSummary) => MatchesCurrentProfile(
+            settings,
+            currentPlateSolver,
+            currentNinaImageFilePattern,
+            Environment.Devices,
+            out actualSha256,
+            out differenceSummary);
+
+    public bool MatchesCurrentProfile(
+        UvexPluginSettings settings,
+        PlateSolverRunConfiguration currentPlateSolver,
+        string currentNinaImageFilePattern,
+        NinaEnvironmentDeviceSelection currentEnvironmentDevices,
+        out string actualSha256,
+        out string differenceSummary)
+    {
+        try
+        {
+            var current = Capture(
+                settings,
+                currentPlateSolver,
+                currentNinaImageFilePattern,
+                currentEnvironmentDevices);
+            actualSha256 = current.ActionConfigurationSha256;
+            differenceSummary = DescribeActionDifferences(current);
+            return string.Equals(ActionConfigurationSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            actualSha256 = string.Empty;
+            differenceSummary = $"profile recapture failed: {ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private string DescribeActionDifferences(RealRunConfiguration current)
+    {
+        var lockedJson = JsonSerializer.SerializeToElement(ToActionPayload());
+        var currentJson = JsonSerializer.SerializeToElement(current.ToActionPayload());
+        var differences = new List<string>();
+        CollectDifferences(lockedJson, currentJson, string.Empty, differences, 8);
+        return differences.Count == 0
+            ? "hash changed without a differing serialized action field"
+            : string.Join(", ", differences);
+    }
+
+    private ActionPayload ToActionPayload() => new(
+        RealModeAuthorized,
+        UvexServiceUrl,
+        QhyServiceUrl,
+        Phd2Host,
+        Phd2Port,
+        AllowDegradedSupervisedScience,
+        NinaImageFilePattern,
+        ExpectedTelescopeId,
+        ExpectedUvexSlitPosition,
+        ExpectedUvexGratingPositionSteps,
+        ExpectedUvexM2PositionSteps,
+        UvexPositionToleranceSteps,
+        Atr,
+        Qhy,
+        G3,
+        Phd2,
+        Environment,
+        Slit,
+        PlateSolver,
+        Commissioning,
+        NightSetup);
+
+    private static void CollectDifferences(
+        JsonElement locked,
+        JsonElement current,
+        string path,
+        List<string> differences,
+        int limit)
+    {
+        if (differences.Count >= limit) return;
+        if (locked.ValueKind != current.ValueKind)
+        {
+            differences.Add($"{path}: {locked.ValueKind} -> {current.ValueKind}");
+            return;
+        }
+        if (locked.ValueKind == JsonValueKind.Object)
+        {
+            var currentProperties = current.EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
+            foreach (var property in locked.EnumerateObject())
+            {
+                var childPath = string.IsNullOrEmpty(path) ? property.Name : $"{path}.{property.Name}";
+                if (!currentProperties.TryGetValue(property.Name, out var currentValue))
+                {
+                    differences.Add($"{childPath}: missing");
+                    if (differences.Count >= limit) return;
+                    continue;
+                }
+                CollectDifferences(property.Value, currentValue, childPath, differences, limit);
+                if (differences.Count >= limit) return;
+            }
+            return;
+        }
+        if (locked.ValueKind == JsonValueKind.Array)
+        {
+            var lockedItems = locked.EnumerateArray().ToArray();
+            var currentItems = current.EnumerateArray().ToArray();
+            if (lockedItems.Length != currentItems.Length)
+            {
+                differences.Add($"{path}.length: {lockedItems.Length} -> {currentItems.Length}");
+                return;
+            }
+            for (var index = 0; index < lockedItems.Length; index++)
+            {
+                CollectDifferences(lockedItems[index], currentItems[index], $"{path}[{index}]", differences, limit);
+                if (differences.Count >= limit) return;
+            }
+            return;
+        }
+        if (!string.Equals(locked.GetRawText(), current.GetRawText(), StringComparison.Ordinal))
+        {
+            differences.Add($"{path}: {locked.GetRawText()} -> {current.GetRawText()}");
+        }
+    }
+
     private sealed record ActionPayload(
         bool RealModeAuthorized,
         string UvexServiceUrl,
@@ -379,7 +513,15 @@ internal sealed record PlateSolverRunConfiguration(
             locked.BlindSolverImplementation,
             settings.SearchRadius,
             settings.Regions,
-            settings.DownSampleFactor,
+            // N.I.N.A.'s ImageSolver/PlateSolve3 path can transiently reflect
+            // the per-call PlateSolveParameter downsample back into the live
+            // profile object. The production runner never consumes that live
+            // value: every solve uses this run's immutable locked value (with
+            // the role-specific G3 policy applied separately). Normalizing it
+            // here prevents our own G3 solve from being misclassified as an
+            // operator profile edit. A deliberate UI change applies to the
+            // next run and cannot change this run's already locked actions.
+            locked.DownSampleFactor,
             settings.MaxObjects,
             settings.BlindFailoverEnabled,
             settings.Threshold,
@@ -559,6 +701,11 @@ internal sealed record EnvironmentRunConfiguration(
     bool RequireWeatherData,
     bool RequireOpenOpticalCover,
     bool WeakSupervisionEnabled,
+    NinaEnvironmentDeviceSelection Devices,
+    bool OpenDomeOrRoofOnStart,
+    bool CloseDomeOrRoofOnFinalize,
+    bool CloseDomeOrRoofOnFailure,
+    int DomeOrRoofTransitionTimeoutSeconds,
     bool CloseOpticalCoverOnFinalize,
     bool CloseOpticalCoverOnFailure,
     int OpticalCoverTransitionTimeoutSeconds,

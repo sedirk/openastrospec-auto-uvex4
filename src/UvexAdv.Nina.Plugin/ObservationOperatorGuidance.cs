@@ -13,6 +13,16 @@ public static class ObservationOperatorGuidance
         ArgumentNullException.ThrowIfNull(gate);
         var code = gate.Code.ToUpperInvariant();
 
+        if (code.StartsWith("GS350_FOCUS", StringComparison.Ordinal) ||
+            (stage == ObservationStage.AcquireQhyWideField &&
+             code.Contains("FOCUS", StringComparison.Ordinal)))
+        {
+            return new ObservationFailureGuidance(
+                ObservationPreviewChannel.QhyWideField,
+                "GS350 / QHY 广域星形图",
+                "放大 QHY 图检查当前 R 滤镜、曝光、真实星数、FWHM、饱和与云层。这些星点属于 GS350 广域光路；若曝光阶梯用尽后仍无法测量星形，只能检查或手动调整 GS350 的 ToupTek AAF，不要用 C11/Star Focuser Pro 或 UVEX M2 代偿。");
+        }
+
         if (code.Contains("FOCUS", StringComparison.Ordinal) ||
             code.Contains("STELLAR", StringComparison.Ordinal))
         {

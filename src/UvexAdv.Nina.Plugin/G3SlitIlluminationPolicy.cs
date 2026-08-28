@@ -11,6 +11,11 @@ namespace UvexAdv.Nina.Plugin;
 internal static class G3SlitIlluminationPolicy
 {
     public const int FramesPerPhase = 3;
+    // PHD2 expresses camera gain as 0..100 percent. For the commissioned
+    // G3M2210M, 0% maps to the native minimum (100), while the guiding profile
+    // remains at 100% (native 15000). LED geometry needs dynamic range, not
+    // guide-star sensitivity, so every native single frame uses the minimum.
+    public const int CaptureGainPercent = 0;
     public const double MinimumAcceptedConfidence = 0.50;
 
     /// <summary>

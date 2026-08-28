@@ -813,6 +813,55 @@ public static class G3AcquisitionMotionPlanner
 
 public sealed record G3AcquisitionMotionLoadResult(G3AcquisitionMotionState? State, string? Error);
 public sealed record G3AcquisitionMotionFileResult(string Path, G3AcquisitionMotionState? State, string? Error);
+public sealed record G3AcquisitionMotionOperatorReconciliationResult(
+    string StatePath,
+    string PriorStateBackupPath,
+    string AuditPath,
+    G3AcquisitionMotionState PriorState,
+    G3AcquisitionMotionState SettledState);
+
+public sealed record G3AcquisitionMotionOperatorRetirementResult(
+    string RetiredCanonicalPath,
+    string PriorStateBackupPath,
+    string AuditPath,
+    G3AcquisitionMotionState PriorState,
+    G3AcquisitionMotionState RetiredState);
+
+/// <summary>
+/// Explicit operator-only escape hatch for an obsolete crash-recovery intent.
+/// It does not claim that the mount returned to the old origin and it never
+/// grants fresh motion budget. The original canonical file is retained beside
+/// the ledger before the outstanding intent is closed.
+/// </summary>
+public static class G3AcquisitionMotionOperatorReconciliation
+{
+    public static G3AcquisitionMotionState CloseOutstandingWithoutMotion(
+        G3AcquisitionMotionState state,
+        DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var issues = state.Validate();
+        if (issues.Count > 0) throw new InvalidOperationException(string.Join(" ", issues));
+        if (state.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger)
+        {
+            throw new InvalidOperationException("The durable G3 motion ledger is already settled.");
+        }
+        if (nowUtc < state.UpdatedUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nowUtc), "Operator reconciliation time cannot precede the durable ledger update.");
+        }
+
+        return state with
+        {
+            Phase = G3AcquisitionMotionPhase.SettledBudgetLedger,
+            CommandMagnitudeArcseconds = 0,
+            UpdatedUtc = nowUtc,
+            LastReason =
+                "Operator explicitly relinquished the obsolete automatic G3 return after manual takeover. " +
+                "No mount command was sent; the prior origin, geometry, consumed motion, attempts and clock remain in the retained audit copy.",
+        };
+    }
+}
 
 public static class G3AcquisitionMotionStore
 {
@@ -932,6 +981,227 @@ public static class G3AcquisitionMotionStore
             results.Add(new G3AcquisitionMotionFileResult(Path.GetFullPath(path), loaded.State, loaded.Error));
         }
         return results.AsReadOnly();
+    }
+
+    public static async Task<G3AcquisitionMotionOperatorReconciliationResult> ReconcileOutstandingByOperatorAsync(
+        string path,
+        DateTimeOffset nowUtc,
+        double? reportedRaDegrees,
+        double? reportedDeclinationDegrees,
+        string? reportedCoordinateEpoch,
+        string? telescopeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (reportedRaDegrees.HasValue != reportedDeclinationDegrees.HasValue)
+        {
+            throw new ArgumentException("Reported RA and declination must either both be present or both be absent.");
+        }
+        if (reportedRaDegrees is { } ra && (!double.IsFinite(ra) || ra is < 0 or >= 360))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reportedRaDegrees), "Reported RA must be finite in [0,360).");
+        }
+        if (reportedDeclinationDegrees is { } dec && (!double.IsFinite(dec) || dec is < -90 or > 90))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reportedDeclinationDegrees), "Reported declination must be finite in [-90,90].");
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        var loaded = await LoadAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        if (loaded.State is null)
+        {
+            throw new InvalidOperationException(loaded.Error ?? "The durable G3 motion ledger does not exist.");
+        }
+
+        var prior = loaded.State;
+        var settled = G3AcquisitionMotionOperatorReconciliation.CloseOutstandingWithoutMotion(prior, nowUtc);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        var suffix = $"{nowUtc.UtcDateTime:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}";
+        var priorStateBackupPath = Path.Combine(directory, $"g3-acquisition-motion.operator-cleared.{suffix}.json");
+        var auditPath = Path.Combine(directory, $"g3-acquisition-motion.operator-cleared.{suffix}.audit.json");
+
+        // Preserve the exact, already authenticated pre-clear envelope before
+        // changing the canonical state. This is intentionally a copy rather
+        // than a rename: recovery discovery continues to inspect only the
+        // canonical g3-acquisition-motion.json path.
+        File.Copy(fullPath, priorStateBackupPath, overwrite: false);
+        await WriteAtomicAsync(fullPath, settled, cancellationToken).ConfigureAwait(false);
+
+        var audit = new
+        {
+            schemaVersion = 1,
+            action = "OperatorRelinquishedObsoleteG3AutomaticReturn",
+            completedUtc = nowUtc,
+            noMountCommandWasSent = true,
+            statePath = fullPath,
+            priorStateBackupPath,
+            priorPhase = prior.Phase.ToString(),
+            settledPhase = settled.Phase.ToString(),
+            prior.ObservationRunId,
+            prior.BudgetLineageId,
+            reportedMount = reportedRaDegrees.HasValue
+                ? new
+                {
+                    available = true,
+                    raDegrees = reportedRaDegrees,
+                    declinationDegrees = reportedDeclinationDegrees,
+                    coordinateEpoch = reportedCoordinateEpoch,
+                    telescopeId,
+                }
+                : new
+                {
+                    available = false,
+                    raDegrees = (double?)null,
+                    declinationDegrees = (double?)null,
+                    coordinateEpoch = reportedCoordinateEpoch,
+                    telescopeId,
+                },
+            reason = settled.LastReason,
+        };
+        await WriteJsonAtomicAsync(auditPath, audit, cancellationToken).ConfigureAwait(false);
+        return new G3AcquisitionMotionOperatorReconciliationResult(
+            fullPath,
+            priorStateBackupPath,
+            auditPath,
+            prior,
+            settled);
+    }
+
+    /// <summary>
+    /// Explicitly retires a canonical recovery ledger after operator takeover.
+    /// Unlike reconciliation, this also accepts an already-settled ledger:
+    /// a settled ledger from a non-terminal old run must not keep blocking a
+    /// new target merely because its immutable context is different. The
+    /// authenticated original and an audit record are retained, while the
+    /// canonical discovery name is removed. No mount command is issued.
+    /// </summary>
+    public static async Task<G3AcquisitionMotionOperatorRetirementResult> RetireByOperatorAsync(
+        string path,
+        DateTimeOffset nowUtc,
+        double? reportedRaDegrees,
+        double? reportedDeclinationDegrees,
+        string? reportedCoordinateEpoch,
+        string? telescopeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (reportedRaDegrees.HasValue != reportedDeclinationDegrees.HasValue)
+        {
+            throw new ArgumentException("Reported RA and declination must either both be present or both be absent.");
+        }
+        if (reportedRaDegrees is { } ra && (!double.IsFinite(ra) || ra is < 0 or >= 360))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reportedRaDegrees), "Reported RA must be finite in [0,360).");
+        }
+        if (reportedDeclinationDegrees is { } dec && (!double.IsFinite(dec) || dec is < -90 or > 90))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reportedDeclinationDegrees), "Reported declination must be finite in [-90,90].");
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        var loaded = await LoadAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        if (loaded.State is null)
+        {
+            throw new InvalidOperationException(loaded.Error ?? "The durable G3 motion ledger does not exist.");
+        }
+
+        var prior = loaded.State;
+        if (nowUtc < prior.UpdatedUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nowUtc), "Operator retirement time cannot precede the durable ledger update.");
+        }
+        var retired = prior.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger
+            ? prior with
+            {
+                CommandMagnitudeArcseconds = 0,
+                UpdatedUtc = nowUtc,
+                LastReason =
+                    "Operator explicitly retired an already-settled G3 budget ledger from canonical recovery discovery. " +
+                    "No mount command was sent; the authenticated prior envelope and audit remain beside the run.",
+            }
+            : G3AcquisitionMotionOperatorReconciliation.CloseOutstandingWithoutMotion(prior, nowUtc);
+
+        var directory = Path.GetDirectoryName(fullPath)!;
+        var suffix = $"{nowUtc.UtcDateTime:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}";
+        var priorStateBackupPath = Path.Combine(directory, $"g3-acquisition-motion.operator-cleared.{suffix}.json");
+        var auditPath = Path.Combine(directory, $"g3-acquisition-motion.operator-cleared.{suffix}.audit.json");
+
+        File.Copy(fullPath, priorStateBackupPath, overwrite: false);
+        var audit = new
+        {
+            schemaVersion = 2,
+            action = "OperatorRetiredObsoleteG3RecoveryLedger",
+            completedUtc = nowUtc,
+            noMountCommandWasSent = true,
+            retiredCanonicalPath = fullPath,
+            priorStateBackupPath,
+            priorPhase = prior.Phase.ToString(),
+            retiredPhase = retired.Phase.ToString(),
+            prior.ObservationRunId,
+            prior.BudgetLineageId,
+            reportedMount = reportedRaDegrees.HasValue
+                ? new
+                {
+                    available = true,
+                    raDegrees = reportedRaDegrees,
+                    declinationDegrees = reportedDeclinationDegrees,
+                    coordinateEpoch = reportedCoordinateEpoch,
+                    telescopeId,
+                }
+                : new
+                {
+                    available = false,
+                    raDegrees = (double?)null,
+                    declinationDegrees = (double?)null,
+                    coordinateEpoch = reportedCoordinateEpoch,
+                    telescopeId,
+                },
+            reason = retired.LastReason,
+        };
+        await WriteJsonAtomicAsync(auditPath, audit, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        File.Delete(fullPath);
+        if (File.Exists(fullPath))
+        {
+            throw new IOException($"Canonical G3 recovery ledger '{fullPath}' could not be retired.");
+        }
+
+        return new G3AcquisitionMotionOperatorRetirementResult(
+            fullPath,
+            priorStateBackupPath,
+            auditPath,
+            prior,
+            retired);
+    }
+
+    private static async Task WriteJsonAtomicAsync(
+        string path,
+        object value,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporaryPath = fullPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                1 << 14,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, value, JsonOptions, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, fullPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
     }
 
     private static bool IsSha256(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length == 64 && value.All(Uri.IsHexDigit);

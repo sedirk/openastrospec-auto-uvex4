@@ -105,6 +105,66 @@ public sealed class SlitDarkApertureHdrAnalysisTests
     }
 
     [Fact]
+    public void ExplicitCommissionedNarrowTransferRegistersFreshRidgeWithoutInventingFreshWidth()
+    {
+        var shortPair = Pair(8, 1_500, 0, 1);
+        var longPair = Pair(8, 4_000, 0, 2);
+        var options = Options(sharedPsf: true) with
+        {
+            ExpectedReflectiveEdgeToApertureCenterPixels = 1.5,
+            AllowCommissionedMidpointTransfer = true,
+            CommissionedApertureWidthPixels = 3.5,
+            CommissionedWidthUncertaintyPixels = 0.5,
+        };
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            longPair.Off,
+            longPair.On,
+            Seed,
+            options);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("SLIT_DARK_APERTURE_COMMISSIONED_TRANSFER_REGISTERED", result.Gate.Code);
+        Assert.Equal(SlitDarkApertureResolution.CommissionedMidpointTransfer, result.Resolution);
+        Assert.Equal(3.5, result.ApertureWidthPixels, precision: 12);
+        Assert.Equal(0.5, result.WidthUncertaintyPixels, precision: 12);
+        Assert.Equal(1.5, result.ReflectiveEdgeToApertureCenterPixels, precision: 12);
+        Assert.Equal(Seed.AcquisitionPoint.X, result.Geometry.AcquisitionPoint.X, precision: 9);
+        Assert.Equal(1, result.Gate.Metrics!["freshReflectiveRegistrationPassed"]);
+        Assert.Equal(1, result.Gate.Metrics!["commissionedMidpointTransferApplied"]);
+        Assert.Equal(1, result.Gate.Metrics!["commissionedAlongSlitAnchorPreserved"]);
+        Assert.Contains("does not claim a fresh two-edge", result.Gate.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CommissionedTransferIsRejectedWhenLongFrameHasNoDynamicRange()
+    {
+        var shortPair = Pair(8, 1_500, 0, 1);
+        var pixels = Enumerable.Repeat((ushort)4_095, 200 * 180).ToArray();
+        var clipped = new MonochromeFrame(200, 180, pixels, 4_095);
+        var options = Options(sharedPsf: true) with
+        {
+            ExpectedReflectiveEdgeToApertureCenterPixels = 1.5,
+            AllowCommissionedMidpointTransfer = true,
+            CommissionedApertureWidthPixels = 3.5,
+            CommissionedWidthUncertaintyPixels = 0.5,
+        };
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            clipped,
+            clipped,
+            Seed,
+            options);
+
+        Assert.NotEqual(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("SLIT_DARK_APERTURE_SECOND_EDGE_NOT_FOUND", result.Gate.Code);
+    }
+
+    [Fact]
     public void BlendedNarrowApertureNeedsExplicitSharedPsfAuthority()
     {
         var shortPair = Pair(3.5, 1_500, 150, 1);
@@ -127,6 +187,72 @@ public sealed class SlitDarkApertureHdrAnalysisTests
         Assert.InRange(commissioned.ApertureWidthPixels, 2.75, 4.25);
     }
 
+    [Fact]
+    public void CommissionedNarrowApertureDoesNotTreatLedGradientAsRandomNoise()
+    {
+        var shortPair = Pair(3.5, 1_500, 150, 1, ledGradientPerPixel: 2.0);
+        var longPair = Pair(3.5, 5_000, 500, 2, ledGradientPerPixel: 4.0);
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            longPair.Off,
+            longPair.On,
+            Seed,
+            Options(sharedPsf: true) with { MinimumProfileSignalToNoise = 3.5 });
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(SlitDarkApertureResolution.SharedPsfModel, result.Resolution);
+        Assert.InRange(result.ApertureWidthPixels, 2.75, 4.25);
+        Assert.True(result.Gate.Metrics!["fitSignalToNoise"] >= 3.5);
+    }
+
+    [Fact]
+    public void CommissionedDirectionRejectsReflectionShoulderOnOppositeSide()
+    {
+        var shortPair = Pair(3.5, 1_500, 150, 1, secondaryDirection: -1);
+        var longPair = Pair(3.5, 5_000, 500, 2, secondaryDirection: -1);
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            longPair.Off,
+            longPair.On,
+            Seed,
+            Options(sharedPsf: true) with
+            {
+                ExpectedReflectiveEdgeToApertureCenterPixels = 1.5,
+            });
+
+        Assert.NotEqual(GateDisposition.Passed, result.Gate.Disposition);
+    }
+
+    [Fact]
+    public void SharedPsfMeasurementUsesCommissionedOffsetFromFreshReflectiveEdge()
+    {
+        var shortPair = Pair(3.5, 1_500, 150, 1);
+        var longPair = Pair(3.5, 5_000, 500, 2);
+        var options = Options(sharedPsf: true) with
+        {
+            MinimumTwoEdgeDeltaBic = 1_000_000,
+            ExpectedReflectiveEdgeToApertureCenterPixels = 4,
+        };
+
+        var result = SlitDarkApertureHdrAnalyzer.Analyze(
+            shortPair.Off,
+            shortPair.On,
+            longPair.Off,
+            longPair.On,
+            Seed,
+            options);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(SlitDarkApertureResolution.SharedPsfModel, result.Resolution);
+        Assert.Equal(4, result.ReflectiveEdgeToApertureCenterPixels, precision: 12);
+        Assert.InRange(result.Geometry.AcquisitionPoint.Y, 93.99, 94.01);
+        Assert.Equal(1, result.Gate.Metrics!["commissionedMidpointTransferApplied"]);
+    }
+
     private static SlitDarkApertureHdrOptions Options(bool sharedPsf) => new(
         MaximumPerpendicularSearchPixels: 40,
         MaximumAngleSearchDegrees: 2,
@@ -147,7 +273,9 @@ public sealed class SlitDarkApertureHdrAnalysisTests
         double separation,
         double primaryAmplitude,
         double secondaryAmplitude,
-        double exposureScale)
+        double exposureScale,
+        double ledGradientPerPixel = 0,
+        int secondaryDirection = 1)
     {
         const int width = 200;
         const int height = 180;
@@ -161,9 +289,9 @@ public sealed class SlitDarkApertureHdrAnalysisTests
             off[y * width + x] = (ushort)Math.Round(baseline);
             var within = x is >= 25 and <= 175;
             var signal = within
-                ? primaryAmplitude * Moffat(y - 90) + secondaryAmplitude * Moffat(y - (90 + separation))
+                ? primaryAmplitude * Moffat(y - 90) + secondaryAmplitude * Moffat(y - (90 + secondaryDirection * separation))
                 : 0;
-            var raw = baseline + exposureScale * 3 + signal;
+            var raw = baseline + exposureScale * 3 + ledGradientPerPixel * y + signal;
             on[y * width + x] = (ushort)Math.Clamp(Math.Round(raw), 0, saturation);
         }
         return (

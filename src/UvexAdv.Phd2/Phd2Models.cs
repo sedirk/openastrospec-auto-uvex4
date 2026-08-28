@@ -108,17 +108,18 @@ public sealed record Phd2CalibrationValidation(
     public bool IsValid => Status == Phd2ValidationStatus.Valid;
 }
 
-// Binning and GainPercent are retained for caller/manifest compatibility. The
-// PHD2 event-server API cannot apply either setting; only ExposureMs is sent.
+// CaptureFullFrameAsync retains these settings for caller/manifest
+// compatibility when it uses the legacy loop/save route. The explicit native
+// single-frame route applies all three through PHD2 capture_single_frame.
 public sealed record Phd2SingleFrameRequest(
     int ExposureMs,
     int Binning,
     int GainPercent,
     string DestinationPath);
 
-// UsedLoopSaveFallback remains part of the public DTO for compatibility and is
-// true for the supported loop/stop/save_image capture route.
-// RequestedParametersApplied is false because binning and gain are not applied.
+// UsedLoopSaveFallback distinguishes the legacy loop/stop/save_image route
+// from native capture_single_frame. RequestedParametersApplied is true only
+// when PHD2 accepted exposure, binning and gain in the atomic request.
 public sealed record Phd2SingleFrameResult(
     string Path,
     bool UsedLoopSaveFallback,
@@ -130,8 +131,8 @@ public sealed record Phd2SingleFrameResult(
     /// <summary>The supported capture path applies ExposureMs through set_exposure before loop.</summary>
     public bool ExposureApplied => true;
 
-    /// <summary>PHD2's event-server API cannot set or attest the requested gain/binning.</summary>
-    public bool GainAndBinningApplied => false;
+    /// <summary>True only for a successful native single-frame request carrying gain/binning.</summary>
+    public bool GainAndBinningApplied => RequestedParametersApplied;
 }
 
 public sealed record Phd2SettleCriteria(double Pixels, int StableTimeSeconds, int TimeoutSeconds);

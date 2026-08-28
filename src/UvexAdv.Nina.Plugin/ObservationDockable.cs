@@ -63,8 +63,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private static readonly IReadOnlyList<PreparationOptionChoice> SafetyCapabilityChoices =
     [
-        new("NinaSafetyStack", "N.I.N.A. 安全链（无人值守）", "启动时必须回读安全监视器、天气、屋顶和光路盖状态。"),
-        new("OperatorWeakSupervision", "有人弱监督（默认）", "四项适配器缺失或未连接时只警告并继续；已连接设备明确报告危险或关闭时仍阻断。绝不授予无人值守权限。"),
+        new("NinaSafetyStack", "N.I.N.A. 安全链（全无人监管）", "自动连接安全监视器、天气、平移顶和镜盖；安全门通过后可开顶，结束/终端故障时先收镜盖和停放赤道仪再关顶。"),
+        new("OperatorWeakSupervision", "有人弱监督（默认）", "按当前 N.I.N.A. 选择逐项自动连接；未选择、连不上或缺指标的单项只警告降级，已连接设备明确报告危险或关闭时仍阻断。绝不授予无人值守权限。"),
     ];
 
     private static readonly IReadOnlyList<string> ManualUvexDevices = ["UVEX4 / COM5"];
@@ -94,6 +94,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand resumeCommand;
     private readonly SimpleCommand cancelCommand;
     private readonly SimpleCommand takeoverCommand;
+    private readonly SimpleAsyncCommand clearG3RecoveryStateCommand;
     private readonly SimpleCommand openQhyPreviewCommand;
     private readonly SimpleCommand openG3PreviewCommand;
     private readonly SimpleCommand openAtrPreviewCommand;
@@ -264,6 +265,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         takeoverCommand = new SimpleCommand(
             () => host.RequestTakeover("操作员从实时面板请求人工接管。"),
             () => IsControllable && RunState is not ObservationRunState.ManualTakeover);
+        clearG3RecoveryStateCommand = new SimpleAsyncCommand(ClearG3RecoveryStateAsync);
         openQhyPreviewCommand = new SimpleCommand(
             () => OpenPreview("GS350 / QHY 广域取景与测光", QhyPreviewImage, QhyPreviewCaption),
             () => QhyPreviewImage is not null);
@@ -374,6 +376,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ResumeCommand => resumeCommand;
     public ICommand CancelCommand => cancelCommand;
     public ICommand TakeoverCommand => takeoverCommand;
+    public ICommand ClearG3RecoveryStateCommand => clearG3RecoveryStateCommand;
     public ICommand OpenQhyPreviewCommand => openQhyPreviewCommand;
     public ICommand OpenG3PreviewCommand => openG3PreviewCommand;
     public ICommand OpenAtrPreviewCommand => openAtrPreviewCommand;
@@ -1252,7 +1255,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string ModeDescription => UseRealMode
         ? settings.WeakSupervisionEnabled
             ? "有人弱监督：Safety Monitor、屋顶、天气和镜盖适配器缺失时记录警告并继续；已连接适配器明确报告危险或关闭时仍阻断。本模式不是无人值守。"
-            : "完整安全链：Safety Monitor、屋顶、天气和镜盖必须实时通过。UVEX 切缝、狭缝灯和 M2 小步进仍可使用“设备手控”。"
+            : "全无人监管：锁定并自动连接 N.I.N.A. 当前选择的 Safety Monitor、天气、RRCI 平移顶和镜盖；安全门通过后自动开顶，异常/结束时停数据源、关镜盖、停放赤道仪并关顶。"
         : "模拟演练不会连接相机、赤道仪、PHD2 或 UVEX，可用于熟悉自动推进、暂停、恢复、取消、诊断和证据界面。";
     public string StartButtonText => UseRealMode
         ? "启动真实设备自动观测"
@@ -1265,7 +1268,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             return issues.Count == 0
                 ? settings.WeakSupervisionEnabled
                     ? "⚠ 真实模式静态条件完整；当前为有人弱监督，缺失的四类环境适配器只警告，不能称为无人值守。"
-                    : "✓ 真实模式启动条件已填写完整。点击启动后仍会重新读取并核验全部实时状态。"
+                    : "✓ 全无人监管静态条件完整。启动后将锁定并连接环境适配器，逐次核验 AIWeather/RRCI/天气/镜盖实时状态及安全收尾能力。"
                 : $"真实模式当前有 {issues.Count} 个启动阻断项：{Environment.NewLine}• {string.Join($"{Environment.NewLine}• ", issues)}";
         }
     }
@@ -1277,7 +1280,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             return issueCount == 0
                 ? settings.WeakSupervisionEnabled
                     ? "⚠ 已就绪：有人弱监督；环境适配器缺失只警告，明确危险仍阻断。"
-                    : "✓ 真实模式启动资料已填写；启动时仍会重新核验实时状态。"
+                    : "✓ 全无人监管资料已填写；启动时将核验环境设备并管理开顶与安全收尾。"
                 : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
         }
     }
@@ -2421,6 +2424,117 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         Error = host.Resume() ? string.Empty : "当前状态不能恢复；请检查暂停原因或先取消。";
     }
 
+    private async Task ClearG3RecoveryStateAsync()
+    {
+        Error = string.Empty;
+        OperatorNotice = "正在取消当前失败运行并关闭旧 G3 恢复状态；不会发送赤道仪命令。";
+        try
+        {
+            if (IsControllable)
+            {
+                host.Cancel();
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+                while (IsControllable && DateTimeOffset.UtcNow < deadline)
+                {
+                    await Task.Delay(100, lifetime.Token).ConfigureAwait(true);
+                }
+                if (IsControllable)
+                {
+                    throw new InvalidOperationException("当前自动运行尚未结束；请先点“取消并安全收尾”，待状态变为已取消后再清除旧 G3 状态。");
+                }
+            }
+
+            var observationsRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "UVEX-ADV",
+                "observations");
+            var discovered = await G3AcquisitionMotionStore.DiscoverAsync(
+                observationsRoot,
+                lifetime.Token).ConfigureAwait(true);
+            var unreadable = discovered.Where(item => item.Error is not null || item.State is null).ToArray();
+            if (unreadable.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"发现无法读取的 G3 恢复账本：{string.Join("；", unreadable.Select(item => $"{item.Path}: {item.Error ?? "状态缺失"}"))}");
+            }
+
+            var outstanding = discovered
+                .Where(item => item.State!.Phase != G3AcquisitionMotionPhase.SettledBudgetLedger)
+                .OrderByDescending(item => item.State!.UpdatedUtc)
+                .ToArray();
+            if (discovered.Count == 0)
+            {
+                OperatorNotice = "没有需要清除的旧 G3 恢复状态；可以直接重新启动自动观测。";
+                HasFailure = false;
+                SelectedWorkspaceTabIndex = 0;
+                return;
+            }
+            if (outstanding.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"发现 {outstanding.Length} 条未关闭的 G3 恢复状态，不能用单次人工接管含糊地合并；请保留现场并检查证据目录。");
+            }
+
+            double? reportedRaDegrees = null;
+            double? reportedDeclinationDegrees = null;
+            string? reportedEpoch = null;
+            string? telescopeId = null;
+            try
+            {
+                var telescope = telescopeMediator.GetInfo();
+                telescopeId = telescope.DeviceId;
+                if (telescope.Connected)
+                {
+                    var reported = telescopeMediator.GetCurrentPosition();
+                    if (double.IsFinite(reported.RADegrees) && double.IsFinite(reported.Dec))
+                    {
+                        reportedRaDegrees = ((reported.RADegrees % 360) + 360) % 360;
+                        reportedDeclinationDegrees = reported.Dec;
+                        reportedEpoch = reported.Epoch.ToString();
+                    }
+                }
+            }
+            catch
+            {
+                // A stale software ledger must remain operator-clearable even
+                // if the optional mount readback is unavailable. The audit
+                // explicitly records that no current coordinate was captured.
+            }
+
+            var results = new List<G3AcquisitionMotionOperatorRetirementResult>();
+            foreach (var item in discovered.OrderBy(candidate => candidate.State!.UpdatedUtc))
+            {
+                results.Add(await G3AcquisitionMotionStore.RetireByOperatorAsync(
+                    item.Path,
+                    DateTimeOffset.UtcNow,
+                    reportedRaDegrees,
+                    reportedDeclinationDegrees,
+                    reportedEpoch,
+                    telescopeId,
+                    lifetime.Token).ConfigureAwait(true));
+            }
+
+            HasFailure = false;
+            PauseReason = string.Empty;
+            SelectedWorkspaceTabIndex = 0;
+            OperatorNotice =
+                $"已退役 {results.Count} 条旧 G3 恢复状态（包含 settled 账本；运行 {string.Join("、", results.Select(result => result.PriorState.ObservationRunId).Distinct(StringComparer.Ordinal))}）。" +
+                "没有移动赤道仪；原账本和人工接管记录已保留，canonical 恢复名已移除。现在可直接重新点击“启动真实设备自动观测”。";
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Error = $"清除旧 G3 恢复状态失败：{ex.Message}";
+            OperatorNotice = string.Empty;
+        }
+        finally
+        {
+            RaiseCommandStates();
+        }
+    }
+
     private bool CanStart() => !IsTargetImportBusy && CanEditTargetPlan();
 
     private bool CanImportTarget() => !IsTargetImportBusy && CanEditTargetPlan();
@@ -2922,6 +3036,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         resumeCommand.RaiseCanExecuteChanged();
         cancelCommand.RaiseCanExecuteChanged();
         takeoverCommand.RaiseCanExecuteChanged();
+        clearG3RecoveryStateCommand.RaiseCanExecuteChanged();
         openQhyPreviewCommand.RaiseCanExecuteChanged();
         openG3PreviewCommand.RaiseCanExecuteChanged();
         openAtrPreviewCommand.RaiseCanExecuteChanged();

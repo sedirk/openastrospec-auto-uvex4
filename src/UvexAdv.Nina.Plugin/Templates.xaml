@@ -337,6 +337,9 @@
             <Button Content="暂停" Command="{Binding PauseCommand}" ToolTip="当前有界动作结束后阻止下一项动作或曝光。" />
             <Button Content="恢复并复核" Command="{Binding ResumeCommand}" ToolTip="恢复前重新检查全部可能过期的门。" />
             <Button Content="人工接管" Command="{Binding TakeoverCommand}" />
+            <Button Content="清除旧 G3 状态" Command="{Binding ClearG3RecoveryStateCommand}"
+                    Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
+                    ToolTip="取消当前失败运行，接受人工接管后的当前状态并关闭过时的 G3 自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
             <Button Content="取消并安全收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" />
           </WrapPanel>
         </StackPanel>
@@ -1139,7 +1142,7 @@
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="G3 驱动恢复 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                 <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Text="连续全幅之间；本机实测 3000 ms" Foreground="#94A3B8" VerticalAlignment="Center" Margin="5,2"/>
               </Grid>
-              <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" IsExpanded="{Binding BrightTargetWingCentroidEnabled}" Margin="0,0,0,8">
+              <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" IsExpanded="False" Margin="0,0,0,8">
                 <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
                   <StackPanel>
                     <TextBlock Text="只适用于目标身份已由本轮新鲜 QHY WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光 G3 帧即使能用翼部求质心，也永远不能参与对焦；G3 解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />

@@ -34,7 +34,7 @@ internal sealed partial class RealObservationStageRunner
         var unattendedAuthority = IsUnattendedPhd2ScienceAuthority(session.Quality, session.GuideMode);
         metrics["phd2RequiresOperatorSupervision"] = requiresSupervision ? 1 : 0;
         metrics["phd2IsUnattendedScienceAuthority"] = unattendedAuthority ? 1 : 0;
-        var supervisedOptIn = configuration.AllowDegradedSupervisedScience &&
+        var supervisedOptIn = HasSupervisedScienceOptIn() &&
             session.Quality.IsLockShiftAuthority;
         if ((requiresSupervision || !unattendedAuthority) &&
             !supervisedOptIn)
@@ -103,7 +103,7 @@ internal sealed partial class RealObservationStageRunner
                     Phd2CalibrationSelectionPurpose.ValidationGuide);
                 if (preGuide.Selected?.CanAttemptValidationGuide != true)
                     return Attention(ObservationStage.StartGuiding, "PHD2_CALIBRATION_PRE_GUIDE_REJECTED", CalibrationSelectionMessage(preGuide));
-                if (preGuide.Selected.RequiresOperatorSupervision && !configuration.AllowDegradedSupervisedScience)
+                if (preGuide.Selected.RequiresOperatorSupervision && !HasSupervisedScienceOptIn())
                     return Attention(ObservationStage.StartGuiding, "PHD2_DEGRADED_SUPERVISION_OPT_IN_REQUIRED", $"Calibration grade {preGuide.Selected.Grade} requires this run's explicit supervised opt-in; no selection/guide command was sent.", Phd2QualityMetrics(preGuide.Selected, new Phd2Point(0, 0), new Phd2SettleResult(false, null, 0, 0, DateTimeOffset.MinValue), double.NaN));
             }
 
@@ -117,7 +117,7 @@ internal sealed partial class RealObservationStageRunner
                 return new StageResult(choice.Selection.Gate, choice.Field.FramePath);
             lastG3Field = choice.Field;
             if (choice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
-                !configuration.AllowDegradedSupervisedScience)
+                !HasSupervisedScienceOptIn())
             {
                 return Attention(
                     ObservationStage.StartGuiding,
@@ -210,7 +210,7 @@ internal sealed partial class RealObservationStageRunner
             var quality = post.Selected;
             if (quality?.IsLockShiftAuthority != true)
                 throw new InvalidOperationException($"Post-settle graded guide authority failed: {CalibrationSelectionMessage(post)}");
-            if (RequiresSupervisedPhd2Science(quality, choice.Mode) && !configuration.AllowDegradedSupervisedScience)
+            if (RequiresSupervisedPhd2Science(quality, choice.Mode) && !HasSupervisedScienceOptIn())
             {
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
                 return Attention(ObservationStage.StartGuiding, "PHD2_DEGRADED_SUPERVISION_OPT_IN_REQUIRED", $"Post-settle grade {quality.Grade} is supervised-only. Guiding was stopped; no science exposure is authorized.", Phd2EffectiveQualityMetrics(quality, choice.Mode, selected, settle, PointDistance(measurement.Measurement.TargetCentroid, measurement.Measurement.RecognizedSlitAcquisitionPoint)));
@@ -456,7 +456,7 @@ internal sealed partial class RealObservationStageRunner
                 CalibrationSelectionMessage(recoveryPreGuide));
         }
         if (RequiresSupervisedPhd2Science(recoveryPreGuide.Selected, guideChoice.Mode) &&
-            !configuration.AllowDegradedSupervisedScience)
+            !HasSupervisedScienceOptIn())
         {
             return Attention(
                 ObservationStage.PlaceTargetOnSlit,
@@ -549,7 +549,7 @@ internal sealed partial class RealObservationStageRunner
         if (qualitySelection.Selected?.IsLockShiftAuthority != true)
             return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RECOVERY_ACTIVE_CALIBRATION_REJECTED", CalibrationSelectionMessage(qualitySelection));
         if (RequiresSupervisedPhd2Science(qualitySelection.Selected, guideChoice.Mode) &&
-            !configuration.AllowDegradedSupervisedScience)
+            !HasSupervisedScienceOptIn())
         {
             await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
             return Attention(
@@ -672,7 +672,8 @@ internal sealed partial class RealObservationStageRunner
 
     private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(
         ObservationContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int postCalibrationReacquisitionDepth = 0)
     {
         var loaded = commissioning
             ?? throw new InvalidOperationException("Commissioning preset is not loaded.");
@@ -836,7 +837,7 @@ internal sealed partial class RealObservationStageRunner
 
         var policy = preset.CalibrationQualityPolicy;
         if (preset.GuideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
-            !configuration.AllowDegradedSupervisedScience)
+            !HasSupervisedScienceOptIn())
         {
             return Attention(
                 ObservationStage.PlaceTargetOnSlit,
@@ -846,6 +847,13 @@ internal sealed partial class RealObservationStageRunner
         var hardRequirement = policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement());
         var calibrationBefore = await phd2.ValidateCalibrationAsync(hardRequirement, cancellationToken).ConfigureAwait(false);
         var forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid;
+        if (forceRecalibration && postCalibrationReacquisitionDepth > 0)
+        {
+            return Attention(
+                ObservationStage.PlaceTargetOnSlit,
+                "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE",
+                "PHD2 still reports an invalid active calibration after the one allowed calibration/reacquisition cycle; no further guide, exposure or lock command is sent.");
+        }
         if (!forceRecalibration)
         {
             var preGuide = SelectPhd2CalibrationQuality(
@@ -863,7 +871,7 @@ internal sealed partial class RealObservationStageRunner
                     CalibrationSelectionMessage(preGuide));
             }
             if (preGuide.Selected.RequiresOperatorSupervision &&
-                !configuration.AllowDegradedSupervisedScience)
+                !HasSupervisedScienceOptIn())
             {
                 return Attention(
                     ObservationStage.PlaceTargetOnSlit,
@@ -883,7 +891,7 @@ internal sealed partial class RealObservationStageRunner
             (guideChoice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding && guideSelection.Star is null))
             return new StageResult(guideSelection.Gate, guideChoice.Field.FramePath);
         if (guideChoice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
-            !configuration.AllowDegradedSupervisedScience)
+            !HasSupervisedScienceOptIn())
         {
             return Attention(
                 ObservationStage.PlaceTargetOnSlit,
@@ -966,6 +974,51 @@ internal sealed partial class RealObservationStageRunner
                     $"PHD2 calibration failed the policy hard rejection ceilings: {string.Join(" ", calibration.Failures.Concat(calibration.IndeterminateReasons))}");
             }
 
+            if (forceRecalibration)
+            {
+                // Calibration pulses invalidate every pre-calibration target,
+                // slit and mount binding even when PHD2 normally returns very
+                // close to its origin. This is the ordering used by both
+                // unattended on-sky successes: stop the calibration guide,
+                // reacquire fresh immutable G3/PL3 evidence, allow the normal
+                // bounded WCS/overlapping-neighbour route to restore the field
+                // if necessary, then enter placement again with the now-active
+                // calibration. No exact-lock command has been issued yet.
+                await PublishRunJsonEvidenceAsync(
+                    "phd2-post-calibration-g3-reacquisition",
+                    "PHD2 recalibration completed; pre-calibration G3 geometry was invalidated",
+                    new
+                    {
+                        calibrationBefore.Status,
+                        calibration.EvaluatedUtc,
+                        calibration.OrthogonalityErrorDegrees,
+                        calibration.Calibration.RaRatePixelsPerSecond,
+                        calibration.Calibration.DecRatePixelsPerSecond,
+                        preCalibrationFrame = lastG3Field?.FramePath,
+                        exactLockCommandIssued = false,
+                        nextAuthority = "fresh immutable G3 FITS + formal PL3 + runtime slit midpoint",
+                    },
+                    lastG3Field?.FramePath,
+                    cancellationToken).ConfigureAwait(false);
+                await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+                await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
+                lastG3Field = null;
+                var reacquired = await AcquireG3SlitFieldAsync(context, cancellationToken).ConfigureAwait(false);
+                if (!reacquired.CanAdvance)
+                {
+                    return new StageResult(
+                        GateResult.Unknown(
+                            "POST_CALIBRATION_G3_REACQUISITION_BLOCKED",
+                            $"PHD2 recalibration passed, but the mandatory fresh G3 acquisition route did not: {reacquired.Gate.Code}: {reacquired.Gate.Message}"),
+                        reacquired.EvidencePath,
+                        reacquired.Metadata);
+                }
+                return await PlaceTargetOnSlitWithPhd2Async(
+                    context,
+                    cancellationToken,
+                    postCalibrationReacquisitionDepth + 1).ConfigureAwait(false);
+            }
+
             var lockOrigin = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("PHD2 did not report a runtime lock position after settle.");
             var initialTargetDomain = ToPhd2Domain(initialTarget.Centroid, preset);
@@ -998,7 +1051,7 @@ internal sealed partial class RealObservationStageRunner
                 throw new InvalidOperationException(
                     $"Post-settle calibration quality does not authorize a lock shift: {CalibrationSelectionMessage(postGuide)}");
             }
-            if (RequiresSupervisedPhd2Science(quality, guideChoice.Mode) && !configuration.AllowDegradedSupervisedScience)
+            if (RequiresSupervisedPhd2Science(quality, guideChoice.Mode) && !HasSupervisedScienceOptIn())
             {
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
                 return Attention(

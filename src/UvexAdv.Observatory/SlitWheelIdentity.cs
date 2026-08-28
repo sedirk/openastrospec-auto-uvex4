@@ -378,6 +378,7 @@ public static class SlitWheelIdentityMatcher
             ["bestNormalizedResidual"] = best.NormalizedResidual,
             ["runnerUpNormalizedResidual"] = runnerUp.NormalizedResidual,
             ["runnerUpSeparationSigma"] = runnerUp.NormalizedResidual - best.NormalizedResidual,
+            ["measuredReflectiveEdgeToApertureCenterPixels"] = measurement.ReflectiveEdgeToApertureCenterPixels,
         };
 
         if (best.NormalizedResidual > calibration.MaximumNormalizedResidual)
@@ -417,6 +418,20 @@ public static class SlitWheelIdentityMatcher
                 "SLIT_LED_IDENTITY_POSITION_MISMATCH",
                 $"UVEX reports wheel position {reportedWheelPosition} ({reportedNominalWidthMicrometers:F1}µm), but the fresh LED width optically matches " +
                 $"position {best.WheelPosition} ({best.SlitLabel}, {best.NominalWidthMicrometers:F1}µm). Suspect a wheel installation, label or ordinal mapping error; no automatic remapping is permitted.",
+                metrics), best, candidates);
+        }
+
+        metrics["commissionedReflectiveEdgeToApertureCenterPixels"] =
+            reported.ReflectiveEdgeToApertureCenterPixels;
+        if (!double.IsFinite(measurement.ReflectiveEdgeToApertureCenterPixels) ||
+            measurement.ReflectiveEdgeToApertureCenterPixels == 0 ||
+            Math.Sign(measurement.ReflectiveEdgeToApertureCenterPixels) !=
+            Math.Sign(reported.ReflectiveEdgeToApertureCenterPixels))
+        {
+            return Result(GateResult.Unknown(
+                "SLIT_LED_IDENTITY_EDGE_DIRECTION_MISMATCH",
+                $"Fresh LED width matches {best.SlitLabel}, but its aperture midpoint lies on the opposite side of the reflective ridge from the commissioned physical slit. " +
+                "A reflection shoulder cannot confirm optical slit identity.",
                 metrics), best, candidates);
         }
 

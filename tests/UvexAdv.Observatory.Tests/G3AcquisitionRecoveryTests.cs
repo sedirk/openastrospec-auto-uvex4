@@ -241,6 +241,108 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Fact]
+    public async Task ExplicitOperatorClearRetainsPriorLedgerAndNeverResetsConsumedBudget()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "uvex-g3-operator-clear-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, "run-a", "control", "g3-acquisition-motion.json");
+        try
+        {
+            var started = DateTimeOffset.Parse("2026-08-27T00:00:00Z");
+            var outstanding = State(started) with
+            {
+                Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve,
+                CurrentRaTangentOffsetArcseconds = 300,
+                CommandMagnitudeArcseconds = 300,
+                MaximumSingleCorrectionArcseconds = 600,
+                MaximumRadiusArcseconds = 900,
+                MaximumCumulativeMotionArcseconds = 2_400,
+                CumulativeMotionArcseconds = 302,
+                CorrectionAttempts = 1,
+                UpdatedUtc = started.AddSeconds(30),
+            };
+            await G3AcquisitionMotionStore.WriteAtomicAsync(path, outstanding);
+
+            var result = await G3AcquisitionMotionStore.ReconcileOutstandingByOperatorAsync(
+                path,
+                started.AddMinutes(1),
+                11,
+                21,
+                "J2000",
+                "mount-a");
+            var loaded = await G3AcquisitionMotionStore.LoadAsync(path);
+
+            Assert.Null(loaded.Error);
+            Assert.NotNull(loaded.State);
+            Assert.Equal(G3AcquisitionMotionPhase.SettledBudgetLedger, loaded.State!.Phase);
+            Assert.Equal(0, loaded.State.CommandMagnitudeArcseconds);
+            Assert.Equal(outstanding.BudgetLineageId, loaded.State.BudgetLineageId);
+            Assert.Equal(outstanding.OriginRaDegrees, loaded.State.OriginRaDegrees);
+            Assert.Equal(outstanding.CumulativeMotionArcseconds, loaded.State.CumulativeMotionArcseconds);
+            Assert.Equal(outstanding.CorrectionAttempts, loaded.State.CorrectionAttempts);
+            Assert.Equal(outstanding.StartedUtc, loaded.State.StartedUtc);
+            Assert.Contains("No mount command was sent", loaded.State.LastReason, StringComparison.Ordinal);
+            Assert.True(File.Exists(result.PriorStateBackupPath));
+            Assert.True(File.Exists(result.AuditPath));
+            var retained = await G3AcquisitionMotionStore.LoadAsync(result.PriorStateBackupPath);
+            Assert.Equal(outstanding, retained.State);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(G3AcquisitionMotionPhase.SettledBudgetLedger)]
+    [InlineData(G3AcquisitionMotionPhase.AwaitingFreshSolve)]
+    public async Task OperatorRetirementRemovesCanonicalDiscoveryForSettledAndOutstandingLedgers(
+        G3AcquisitionMotionPhase phase)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "uvex-g3-operator-retire-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, "run-a", "control", "g3-acquisition-motion.json");
+        try
+        {
+            var started = DateTimeOffset.Parse("2026-08-27T00:00:00Z");
+            var prior = State(started) with
+            {
+                Phase = phase,
+                CurrentRaTangentOffsetArcseconds = phase == G3AcquisitionMotionPhase.SettledBudgetLedger ? 0 : 300,
+                CommandMagnitudeArcseconds = phase == G3AcquisitionMotionPhase.SettledBudgetLedger ? 0 : 300,
+                CumulativeMotionArcseconds = phase == G3AcquisitionMotionPhase.SettledBudgetLedger ? 0 : 300,
+                CorrectionAttempts = phase == G3AcquisitionMotionPhase.SettledBudgetLedger ? 0 : 1,
+                MaximumSingleCorrectionArcseconds = 600,
+                MaximumRadiusArcseconds = 900,
+                MaximumCumulativeMotionArcseconds = 2_400,
+                UpdatedUtc = started.AddSeconds(30),
+            };
+            await G3AcquisitionMotionStore.WriteAtomicAsync(path, prior);
+
+            var result = await G3AcquisitionMotionStore.RetireByOperatorAsync(
+                path,
+                started.AddMinutes(1),
+                11,
+                21,
+                "J2000",
+                "mount-a");
+            var discovered = await G3AcquisitionMotionStore.DiscoverAsync(root);
+            var retained = await G3AcquisitionMotionStore.LoadAsync(result.PriorStateBackupPath);
+
+            Assert.False(File.Exists(path));
+            Assert.Empty(discovered);
+            Assert.True(File.Exists(result.PriorStateBackupPath));
+            Assert.True(File.Exists(result.AuditPath));
+            Assert.Equal(prior, retained.State);
+            Assert.Equal(G3AcquisitionMotionPhase.SettledBudgetLedger, result.RetiredState.Phase);
+            Assert.Equal(0, result.RetiredState.CommandMagnitudeArcseconds);
+            Assert.Contains("No mount command was sent", result.RetiredState.LastReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void OutstandingIntentMustBePrecharged()
     {
         var state = State(DateTimeOffset.Parse("2026-08-19T00:00:00Z")) with

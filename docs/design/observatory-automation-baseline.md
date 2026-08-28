@@ -170,7 +170,11 @@ The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Targ
 7. Start QHY photometry job.
 8. Capture ATR probe spectra and select an exposure tier.
 9. Run the ATR science block while QHY photometry and health monitoring continue asynchronously.
-10. Stop/finalize QHY photometry and emit an observation summary.
+10. Stop/finalize QHY photometry, close the selected main-optical-path cover,
+    park the mount and close the selected N.I.N.A./RRCI roll-off roof when the
+    run is in the commissioned full-unattended mode; emit an observation
+    summary containing every checked terminal state. Weak supervision leaves
+    roof motion to the operator.
 
 Conditions and triggers include UVEX readiness, device identity, camera temperature, Night Setup match, local horizon, safety state, plate-solve confidence, target/slit residual, PHD2 settle, guide loss, transparency change, spectral saturation/SNR, target drift, meridian flip and cancellation.
 
@@ -196,7 +200,23 @@ The QHY job must be startable and stoppable by sequence items while continuing i
 - The sequence must evaluate a configurable azimuth/altitude obstruction model. Until it exists, use a conservative 40° minimum altitude plus explicit start/continue margins.
 - It must predict target altitude through the whole requested block rather than check only at start.
 - A clear sky, camera image, or CCTV image is observational context, not a substitute for a connected safety monitor or explicit roof state.
-- Roof automation and weather-based opening are outside the initial scope. Their absence must be represented as an unmet automation capability, not guessed state.
+- Under ADR-0010, commissioned full-unattended execution may open and close the
+  roll-off roof only through the exact hash-locked N.I.N.A. Safety Monitor,
+  Weather, Dome and Cover selections. Opening requires fresh safe/weather,
+  horizon, identity and parked-mount evidence; normal completion or a terminal
+  safety failure closes the cover, parks the mount and then closes the roof,
+  with every transition bounded and attested. An unsafe event during a run
+  starts the same fail-safe closure and permanently invalidates automatic
+  resume for that run.
+- Weak supervision is capability-by-capability: an unselected, disconnected or
+  metric-incomplete Safety Monitor, Weather, Dome or Cover produces a warning
+  and degrades only that capability. It never grants unattended authority and
+  never auto-opens/closes the roof. A connected adapter's explicit unsafe,
+  rain, cloud/wind limit or closed/error roof remains a hard stop. A selected
+  command-capable cover may still be opened on demand and closed at cleanup,
+  but every transition must be attested; a missing cover is warning-only while
+  a failed/error cover remains a hard stop. High humidity alone is advisory at
+  this near-coastal site.
 - Mount corrections, search patterns and slit-placement motions have configurable per-step, cumulative and time limits.
 - Meridian-flip recovery repeats the required acquisition and slit validation rather than assuming the old transformation remains valid.
 

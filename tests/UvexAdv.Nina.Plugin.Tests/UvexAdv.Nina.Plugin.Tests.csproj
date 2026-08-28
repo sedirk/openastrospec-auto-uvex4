@@ -32,6 +32,9 @@
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.cs"
           Link="Sources\RealObservationStageRunner.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.G3FieldMountBinding.cs"
+          Link="Sources\RealObservationStageRunner.G3FieldMountBinding.cs"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.Phd2SlitPlacement.cs"
           Link="Sources\RealObservationStageRunner.Phd2SlitPlacement.cs"
           CopyToOutputDirectory="PreserveNewest" />

@@ -19,3 +19,5 @@ Current accepted decisions:
 - [ADR-0006: Runtime-measured slit midpoint as the science destination](0006-runtime-slit-midpoint-as-science-destination.md)
 - [ADR-0007: N.I.N.A.-native target identity and image provenance](0007-nina-native-target-and-image-provenance.md)
 - [ADR-0008: Fresh-G3 authority for large acquisition corrections](0008-g3-first-large-acquisition-corrections.md)
+- [ADR-0009: Single production observation route and field-test promotion](0009-single-production-observation-route.md)
+- [ADR-0010: N.I.N.A. environment supervision and roll-off-roof lifecycle](0010-nina-environment-supervision-and-rolloff-roof.md)

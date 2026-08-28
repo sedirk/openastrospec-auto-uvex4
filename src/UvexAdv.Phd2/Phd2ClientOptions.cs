@@ -12,6 +12,18 @@ public sealed class Phd2ClientOptions
 
     public TimeSpan EventTimeoutMargin { get; init; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Minimum wall-clock allowance for each full-frame LoopingExposures event.
+    /// Short exposures are still dominated by camera readout, USB transfer and
+    /// PHD2 event dispatch; exposure duration plus a small generic margin is not
+    /// a sufficient timeout for those frames.
+    /// </summary>
+    // The commissioned G3 normally publishes a full-frame event in roughly
+    // 1-5 seconds even for a 10/20 ms exposure, but the PHD2/camera pipeline
+    // has demonstrated occasional 10+ second USB/readout stalls.  Keep a
+    // finite bound while allowing one such transient to finish normally.
+    public TimeSpan MinimumLoopingFrameEventTimeout { get; init; } = TimeSpan.FromSeconds(20);
+
     public TimeSpan FileReadyTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public double GuideStarSelectionTolerancePixels { get; init; } = 64;
@@ -38,6 +50,7 @@ public sealed class Phd2ClientOptions
 
         ValidatePositiveTimeout(CommandTimeout, nameof(CommandTimeout));
         ValidatePositiveTimeout(EventTimeoutMargin, nameof(EventTimeoutMargin));
+        ValidatePositiveTimeout(MinimumLoopingFrameEventTimeout, nameof(MinimumLoopingFrameEventTimeout));
         ValidatePositiveTimeout(FileReadyTimeout, nameof(FileReadyTimeout));
         ValidatePositiveTimeout(CalibrationValidationTtl, nameof(CalibrationValidationTtl));
         ValidatePositiveTimeout(StopConfirmationTimeout, nameof(StopConfirmationTimeout));

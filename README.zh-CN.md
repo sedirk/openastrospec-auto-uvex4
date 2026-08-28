@@ -48,12 +48,19 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 
 ## 权威采集设计
 
-下一阶段采集自动化的冻结设计基线位于 [`docs/design/observatory-automation-baseline.md`](docs/design/observatory-automation-baseline.md)。各设备的单一所有权决策记录在 [`ADR-0001`](docs/adr/0001-single-owner-device-orchestration.md)，两个光学视场之间可选且版本化的交接规则记录在 [`ADR-0004`](docs/adr/0004-optional-versioned-wide-to-slit-field-transfer.md)。以下规则具有规范性：
+下一阶段采集自动化的冻结设计基线位于 [`docs/design/observatory-automation-baseline.md`](docs/design/observatory-automation-baseline.md)。各设备的单一所有权决策记录在 [`ADR-0001`](docs/adr/0001-single-owner-device-orchestration.md)，两个光学视场之间可选且版本化的交接规则记录在 [`ADR-0004`](docs/adr/0004-optional-versioned-wide-to-slit-field-transfer.md)。后端/field harness 的成功必须先并入 Dockable 与 Advanced Sequencer 共同使用的生产 runner，并从正式前端重新验收，才能称为产品成功；该规则记录在 [`ADR-0009`](docs/adr/0009-single-production-observation-route.md)。N.I.N.A. Safety Monitor、天气、主光路镜盖和 RRCI 平移顶的两种监督模式及开关顶生命周期记录在 [`ADR-0010`](docs/adr/0010-nina-environment-supervision-and-rolloff-roof.md)。以下规则具有规范性：
 
 - N.I.N.A. 独占 ATR585M，用于光谱采集；
 - PHD2 独占 G3M2210M，用于狭缝视场与导星；
 - 隔离的 `UvexAdv.Qhy.Service` 独占 QHYminiCam8M，用于 GS350 粗采集和同步测光；
 - 只有 `UvexAdv.Service` 可以独占 UVEX4 COM5。
+
+共享生产 runner 已实现 ADR-0010 的源码路线：全无人监管会锁定并自动连接四类 N.I.N.A.
+环境适配器，只在新鲜安全/天气/身份/地平线门和赤道仪停放均通过后开顶，并在正常结束或
+终端故障时依次关闭镜盖、停放赤道仪、关闭平移顶；有人弱监管按缺失能力逐项 warning
+降级，绝不自动开关顶，但已连接适配器明确报告危险仍会阻断。该结论是源码与回归验证，
+不代表本机已经完成首次有界真实开关顶验收；实机 commissioning 仍是启用全无人监管前的
+必做步骤。
 
 仓库已包含 QHY 服务、PHD2 事件服务器客户端、目标采集状态机以及 N.I.N.A. 真实/模拟运行器。健康阶段无需确认对话框即可自动推进；失败或不确定的安全门进入 `PausedNeedsAttention`。操作员始终可以暂停、恢复、取消或人工接管。必须先完成模拟 commissioning。构建和版本化 Git hook 会校验权威设计哈希，使意外架构修改明确失败。
 

@@ -3,6 +3,27 @@
 本规则适用于每一次 N.I.N.A. 插件 XAML、Dockable ViewModel 或打包产物变更。
 DLL 能被插件加载器读取不等于界面模板能安全实例化；发布前必须完成以下全部检查：
 
+## 0. 先证明前端使用同一条生产观测路径
+
+本节也适用于“只改后端 runner、没有改 XAML”的自动观测变更。完整决定见
+[ADR-0009](adr/0009-single-production-observation-route.md)。发布检查必须先证明：
+
+1. Dockable 的启动命令和 Advanced Sequencer 的目标容器都从同一设置状态捕获不可变
+   `RealRunConfiguration`，使用 `ObservationPlanFactory` 生成 canonical plan，通过
+   `RealObservationStageRunnerFactory` 创建 `RealObservationStageRunner`，最后由
+   `ObservationCoordinatorHost` 执行；不得存在 UI 命令专属的阶段跳过、超时、恢复或清理。
+2. 本次引用的任何成功 field harness 都附带 route-parity 矩阵。矩阵中的可复用行为已经
+   移入共享生产组件，而不是复制到 XAML code-behind、Dockable、SequenceItem 或另一个脚本。
+3. replay/simulator 测试从两个前端入口开始，断言相同配置哈希、相同 canonical stages、
+   相同关键分支和相同终态；只直接 new 某个 helper/runner 的测试不能替代入口测试。
+4. 实机行为改变时，安装后的最终天空验收必须从一个正式前端入口单次启动并运行到
+   `FinalizeObservation`。后端工具成功但前端尚未重放时，版本说明必须明确写“待前端实机
+   验收”，不得写“一键自动流程通过”。
+5. manifest/发布证据保存入口类型、构建版本、配置哈希和 `NoManualOrModelCorrectionAfterSingleStart`
+   等干预边界。不同入口只允许展示和 N.I.N.A. 生命周期差异，不允许科学或运动语义差异。
+
+以下 UI 检查在上述生产路径一致性门通过后执行：
+
 1. 运行 `scripts/build.ps1`。`XamlBindingSafetyTests` 必须通过；任何位于
    `IsReadOnly=True` `TextBox` 中的 Binding 都必须显式使用 `Mode=OneWay`
    或 `Mode=OneTime`，不得依赖 `TextBox.Text` 默认的 TwoWay 模式。自动观测
@@ -24,6 +45,11 @@ DLL 能被插件加载器读取不等于界面模板能安全实例化；发布�
    `Successfully loaded plugin` 也不得判为通过。
 5. 保存安装 DLL/artifact SHA-256、N.I.N.A. 版本、进程 ID、日志路径与三面板
    实际打开结果。不得用离线截图替代真实 AvalonDock 模板实例化检查。
+6. 用模拟或 replay 使流程各进入一次 `PausedNeedsAttention` 和 `Faulted`，确认 N.I.N.A.
+   应用内提示与 Windows 系统通知都出现，并且标题、阶段、错误代码和原因可读。同一阻断的
+   重复快照不得重复通知；恢复/重新验证后若同一阻断再次发生，应重新通知。人工暂停、人工
+   接管、正常完成和取消不得弹出故障通知。Windows 专注助手或系统通知权限可以隐藏系统层
+   提示，因此验收时应确认 Windows 允许 N.I.N.A. 通知；通知通道失败绝不能改变观测状态。
 
 `UvexAdv.Nina.Plugin.Tests/XamlBindingSafetyTests.cs` 是上述第一条的自动门；
 第三、四条是安装后的真实 smoke test，必须在每次交付前执行。

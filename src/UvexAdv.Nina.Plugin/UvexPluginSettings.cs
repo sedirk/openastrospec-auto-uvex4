@@ -11,6 +11,9 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed class UvexPluginSettings
 {
     private const int WeakSupervisionSelectionSemanticsVersion = 1;
+    private const int G3PlateSolveEfficiencySemanticsVersion = 1;
+    private const string LegacyG3PlateSolveExposureLadder = "2000,5000,10000,15000,30000";
+    private const string CurrentG3PlateSolveExposureLadder = "2000,5000,10000,15000";
     public static readonly Guid PluginGuid = Guid.Parse("A4183531-55BD-4FD0-B04A-97ED7EDC15DA");
     public const int Atr585mDefaultOffset = 256;
     public const int G3M2210mDefaultSaturationAdu = 4095;
@@ -29,6 +32,7 @@ internal sealed class UvexPluginSettings
         this.values = values;
         MigrateObservationPlanningDuration();
         MigrateWeakSupervisionSelection();
+        MigrateG3PlateSolveEfficiency();
     }
 
     public string ServiceUrl { get => GetString(nameof(ServiceUrl), "http://127.0.0.1:47844"); set => values.SetValueString(nameof(ServiceUrl), value); }
@@ -281,6 +285,10 @@ internal sealed class UvexPluginSettings
     public bool RequireWeatherData { get => values.GetValueBoolean(nameof(RequireWeatherData), true); set => values.SetValueBoolean(nameof(RequireWeatherData), value); }
     public bool RequireOpenOpticalCover { get => values.GetValueBoolean(nameof(RequireOpenOpticalCover), true); set => values.SetValueBoolean(nameof(RequireOpenOpticalCover), value); }
     public bool WeakSupervisionEnabled { get => values.GetValueBoolean(nameof(WeakSupervisionEnabled), true); set => values.SetValueBoolean(nameof(WeakSupervisionEnabled), value); }
+    public bool OpenDomeOrRoofOnStart { get => values.GetValueBoolean(nameof(OpenDomeOrRoofOnStart), true); set => values.SetValueBoolean(nameof(OpenDomeOrRoofOnStart), value); }
+    public bool CloseDomeOrRoofOnFinalize { get => values.GetValueBoolean(nameof(CloseDomeOrRoofOnFinalize), true); set => values.SetValueBoolean(nameof(CloseDomeOrRoofOnFinalize), value); }
+    public bool CloseDomeOrRoofOnFailure { get => values.GetValueBoolean(nameof(CloseDomeOrRoofOnFailure), true); set => values.SetValueBoolean(nameof(CloseDomeOrRoofOnFailure), value); }
+    public int DomeOrRoofTransitionTimeoutSeconds { get => values.GetValueInt32(nameof(DomeOrRoofTransitionTimeoutSeconds), 180); set => values.SetValueInt32(nameof(DomeOrRoofTransitionTimeoutSeconds), value); }
     public bool CloseOpticalCoverOnFinalize { get => values.GetValueBoolean(nameof(CloseOpticalCoverOnFinalize), true); set => values.SetValueBoolean(nameof(CloseOpticalCoverOnFinalize), value); }
     public bool CloseOpticalCoverOnFailure { get => values.GetValueBoolean(nameof(CloseOpticalCoverOnFailure), true); set => values.SetValueBoolean(nameof(CloseOpticalCoverOnFailure), value); }
     public int OpticalCoverTransitionTimeoutSeconds { get => values.GetValueInt32(nameof(OpticalCoverTransitionTimeoutSeconds), 45); set => values.SetValueInt32(nameof(OpticalCoverTransitionTimeoutSeconds), value); }
@@ -359,6 +367,24 @@ internal sealed class UvexPluginSettings
         {
             values.SetValueString(nameof(PreparationSafetyCapabilityPreset), "OperatorWeakSupervision");
         }
+    }
+
+    private void MigrateG3PlateSolveEfficiency()
+    {
+        var versionKey = nameof(G3PlateSolveEfficiencySemanticsVersion);
+        if (values.GetValueInt32(versionKey, 0) >= G3PlateSolveEfficiencySemanticsVersion) return;
+
+        // Only replace the exact site ladder shipped before the successful
+        // field route. Preserve every operator-authored or commissioning-
+        // specific ladder. Hardware binning remains 1x1; the G3 solver applies
+        // a display/solve-only 2x downsample so slit geometry and PHD2
+        // calibration remain in their commissioned detector coordinates.
+        var existing = GetString(nameof(G3PlateSolveExposureMillisecondsCsv), string.Empty);
+        if (string.Equals(existing, LegacyG3PlateSolveExposureLadder, StringComparison.Ordinal))
+        {
+            values.SetValueString(nameof(G3PlateSolveExposureMillisecondsCsv), CurrentG3PlateSolveExposureLadder);
+        }
+        values.SetValueInt32(versionKey, G3PlateSolveEfficiencySemanticsVersion);
     }
 
     private static IReadOnlyList<double> ParsePositiveDoubles(string value) => value

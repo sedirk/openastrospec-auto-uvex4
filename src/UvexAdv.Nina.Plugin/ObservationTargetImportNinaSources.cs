@@ -181,13 +181,16 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         if (targetCoordinates is not null &&
             planetarium.Name?.Contains("Stellarium", StringComparison.OrdinalIgnoreCase) == true)
         {
-            var identity = await TryReadStellariumIdentityAsync(targetCoordinates, cancellationToken).ConfigureAwait(false);
+            var identity = await TryReadStellariumIdentityAsync(
+                targetCoordinates,
+                target?.Name,
+                cancellationToken).ConfigureAwait(false);
             if (identity is not null)
             {
-                importedName = identity.EnglishName;
-                importedCatalogId = identity.Designation;
-                identityNote = $"已用同一时刻的 Stellarium 选择详情按坐标复核，并采用英文名称“{identity.EnglishName}”作为目标/文件名"
-                    + (string.IsNullOrWhiteSpace(identity.Designation) ? "。" : $"；目录标识为 {identity.Designation}。")
+                importedName = identity.TargetName;
+                importedCatalogId = identity.CatalogId ?? target?.Id;
+                identityNote = $"已用同一时刻的 Stellarium 选择详情按坐标复核，目标/文件名采用“{identity.TargetName}”"
+                    + (string.IsNullOrWhiteSpace(importedCatalogId) ? "。" : $"；目录标识为 {importedCatalogId}。")
                     + (string.IsNullOrWhiteSpace(target?.Name) ? string.Empty : $" 星图本地化显示名为“{target.Name.Trim()}”。");
             }
         }
@@ -238,6 +241,7 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
 
     private async Task<StellariumSelectedIdentity?> TryReadStellariumIdentityAsync(
         ObservationTargetCoordinates expectedCoordinates,
+        string? ninaDisplayName,
         CancellationToken cancellationToken)
     {
         try
@@ -252,8 +256,8 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             var root = document.RootElement;
             if (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False) return null;
 
-            var englishName = ReadNonBlankString(root, "name");
-            if (englishName is null) return null;
+            var canonicalName = ReadNonBlankString(root, "name");
+            if (canonicalName is null) return null;
             if (!TryReadFiniteDouble(root, "raJ2000", out var rightAscensionDegrees) ||
                 !TryReadFiniteDouble(root, "decJ2000", out var declinationDegrees))
             {
@@ -263,9 +267,12 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             var selectedCoordinates = new ObservationTargetCoordinates(rightAscensionDegrees, declinationDegrees);
             if (AngularSeparationArcSeconds(expectedCoordinates, selectedCoordinates) > 5d) return null;
 
-            return new StellariumSelectedIdentity(
-                englishName,
-                ReadNonBlankString(root, "designation"));
+            var resolved = ResolveStellariumIdentity(
+                canonicalName,
+                ReadNonBlankString(root, "localized-name"),
+                ReadNonBlankString(root, "designation"),
+                ninaDisplayName);
+            return new StellariumSelectedIdentity(resolved.TargetName, resolved.CatalogId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -274,10 +281,59 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         catch
         {
             // The N.I.N.A. IPlanetarium result remains authoritative for pointing.
-            // English-name enrichment is optional and must never make import fail.
+            // Name/catalog enrichment is optional and must never make import fail.
             return null;
         }
     }
+
+    /// <summary>
+    /// Splits Stellarium's selected-object identity into the human target name used
+    /// for OBJECT/file naming and a catalog identifier. Stellarium commonly returns
+    /// a catalog identifier (for example "HIP 5447") in <c>name</c>, places the
+    /// localized common name in <c>localized-name</c>, and omits <c>designation</c>.
+    /// </summary>
+    internal static (string TargetName, string? CatalogId) ResolveStellariumIdentity(
+        string canonicalName,
+        string? localizedName,
+        string? designation,
+        string? ninaDisplayName)
+    {
+        var canonical = canonicalName.Trim();
+        var catalogId = string.IsNullOrWhiteSpace(designation)
+            ? (LooksLikeCatalogIdentifier(canonical) ? canonical : null)
+            : designation.Trim();
+
+        if (!LooksLikeCatalogIdentifier(canonical) && ContainsAsciiLetter(canonical))
+        {
+            return (canonical, catalogId);
+        }
+
+        var localized = FirstNonBlank(localizedName, ninaDisplayName);
+        return (localized ?? canonical, catalogId);
+    }
+
+    private static bool LooksLikeCatalogIdentifier(string value)
+    {
+        var trimmed = value.Trim();
+        if (!trimmed.Any(char.IsDigit)) return false;
+
+        string[] prefixes =
+        [
+            "HIP", "HD", "HR", "SAO", "TYC", "GAIA", "2MASS", "UCAC", "GSC", "TIC",
+            "WDS", "BD", "CD", "CPD", "NGC", "IC", "UGC", "PGC", "MESSIER", "M",
+        ];
+        return prefixes.Any(prefix =>
+            trimmed.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase) ||
+            (prefix is "M" && trimmed.Length > 1 && char.IsDigit(trimmed[1])) ||
+            (prefix is "UCAC" && trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+
+    private static bool ContainsAsciiLetter(string value) =>
+        value.Any(character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z');
 
     private static string? ReadNonBlankString(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String &&
@@ -307,7 +363,7 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         return Math.Acos(Math.Clamp(cosine, -1d, 1d)) / degreesToRadians * 3600d;
     }
 
-    private sealed record StellariumSelectedIdentity(string EnglishName, string? Designation);
+    private sealed record StellariumSelectedIdentity(string TargetName, string? CatalogId);
 
     private static ObservationTargetCoordinates ToJ2000(Coordinates coordinates, string sourceName)
     {

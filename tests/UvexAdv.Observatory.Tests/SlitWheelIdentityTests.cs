@@ -17,6 +17,25 @@ public sealed class SlitWheelIdentityTests
     }
 
     [Fact]
+    public void Match_AcceptsFreshCommissionedMidpointTransferForReportedNarrowSlot()
+    {
+        var measurement = Measurement(9, 0.6) with
+        {
+            Gate = GateResult.Pass(
+                "SLIT_DARK_APERTURE_COMMISSIONED_TRANSFER_REGISTERED",
+                "Fresh reflector registered onto the commissioned narrow aperture."),
+            Resolution = SlitDarkApertureResolution.CommissionedMidpointTransfer,
+        };
+
+        var result = SlitWheelIdentityMatcher.Match(
+            Calibration(), measurement, 2, 15, "g3", 1, 1, 1920, 1080);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal("SLIT_LED_IDENTITY_MATCHED", result.Gate.Code);
+        Assert.Equal(2, result.MatchedCandidate?.WheelPosition);
+    }
+
+    [Fact]
     public void Match_BlocksWhenOpticalWidthIdentifiesDifferentSlot()
     {
         var result = SlitWheelIdentityMatcher.Match(

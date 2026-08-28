@@ -6,6 +6,14 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2ClientTests
 {
     [Fact]
+    public void DefaultLoopingFrameTimeoutAllowsCommissionedG3ReadoutJitter()
+    {
+        var options = new Phd2ClientOptions();
+
+        Assert.Equal(TimeSpan.FromSeconds(20), options.MinimumLoopingFrameEventTimeout);
+    }
+
+    [Fact]
     public async Task CorrelatesOutOfOrderResponsesWhileSerializingJsonLines()
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
@@ -179,6 +187,83 @@ public sealed class Phd2ClientTests
     }
 
     [Fact]
+    public async Task NativeSingleFrameAppliesExposureBinningAndGainWithoutProfileMutation()
+    {
+        using var directory = new TemporaryDirectory();
+        var destination = Path.Combine(directory.Path, "native-single.fit");
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var stateBefore = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", stateBefore.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stateBefore, "Stopped", cancellationToken);
+
+            var capture = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("capture_single_frame", capture.GetProperty("method").GetString());
+            var parameters = capture.GetProperty("params");
+            Assert.Equal(10, parameters.GetProperty("exposure").GetInt32());
+            Assert.Equal(1, parameters.GetProperty("binning").GetInt32());
+            Assert.Equal(0, parameters.GetProperty("gain").GetInt32());
+            Assert.Equal(destination, parameters.GetProperty("path").GetString());
+            Assert.True(parameters.GetProperty("save").GetBoolean());
+            await session.ReplyResultAsync(capture, 0, cancellationToken);
+            await File.WriteAllBytesAsync(destination, [0x47, 0x33], cancellationToken);
+            await session.SendEventAsync(
+                new { Event = "SingleFrameComplete", Success = true, Path = destination },
+                cancellationToken);
+
+            var stateAfter = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", stateAfter.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stateAfter, "Stopped", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var result = await client.CaptureSingleFrameWithParametersAsync(
+            new Phd2SingleFrameRequest(10, 1, 0, destination),
+            CancellationToken.None);
+
+        Assert.False(result.UsedLoopSaveFallback);
+        Assert.True(result.RequestedParametersApplied);
+        Assert.True(result.GainAndBinningApplied);
+        Assert.Equal(10, result.VerifiedExposureMilliseconds);
+        Assert.Equal(new byte[] { 0x47, 0x33 }, await File.ReadAllBytesAsync(destination));
+        Assert.Equal(
+            ["get_app_state", "capture_single_frame", "get_app_state"],
+            server.ReceivedMethods.ToArray());
+        Assert.DoesNotContain("set_exposure", server.ReceivedMethods);
+        Assert.DoesNotContain("loop", server.ReceivedMethods);
+        Assert.DoesNotContain("save_image", server.ReceivedMethods);
+    }
+
+    [Fact]
+    public async Task NativeSingleFrameNeverFallsBackWhenPHD2MethodIsUnavailable()
+    {
+        using var directory = new TemporaryDirectory();
+        var destination = Path.Combine(directory.Path, "unsupported.fit");
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var state = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(state, "Stopped", cancellationToken);
+
+            var capture = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("capture_single_frame", capture.GetProperty("method").GetString());
+            await session.ReplyErrorAsync(capture, -32601, "method not found", cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var error = await Assert.ThrowsAsync<Phd2CaptureException>(() =>
+            client.CaptureSingleFrameWithParametersAsync(
+                new Phd2SingleFrameRequest(10, 1, 0, destination),
+                CancellationToken.None));
+
+        Assert.Contains("no profile-gain fallback", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["get_app_state", "capture_single_frame"], server.ReceivedMethods.ToArray());
+        Assert.False(File.Exists(destination));
+    }
+
+    [Fact]
     public async Task CaptureFullFrameDiscardsFirstPipelineFrameAfterExposureChange()
     {
         using var directory = new TemporaryDirectory();
@@ -202,7 +287,9 @@ public sealed class Phd2ClientTests
 
             var loop = await session.ReadRequestAsync(cancellationToken);
             await session.ReplyResultAsync(loop, 0, cancellationToken);
+            await Task.Delay(80, cancellationToken);
             await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 1 }, cancellationToken);
+            await Task.Delay(80, cancellationToken);
             await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 2 }, cancellationToken);
 
             var stop = await session.ReadRequestAsync(cancellationToken);
@@ -214,7 +301,14 @@ public sealed class Phd2ClientTests
             await File.WriteAllBytesAsync(source, [0x31, 0x30], cancellationToken);
             await session.ReplyResultAsync(save, new { filename = source }, cancellationToken);
         });
-        await using var client = CreateClient(server);
+        // The old formula allowed only 2 * (10 ms + 20 ms) = 60 ms and
+        // timed out before these realistic short-exposure full-frame events.
+        // The per-frame readout/event floor allows both frames without adding
+        // delay when PHD2 publishes them earlier.
+        await using var client = CreateClient(
+            server,
+            eventTimeoutMargin: TimeSpan.FromMilliseconds(20),
+            minimumLoopingFrameEventTimeout: TimeSpan.FromMilliseconds(120));
         await client.ConnectAsync(CancellationToken.None);
 
         var result = await client.CaptureFullFrameAsync(
@@ -944,14 +1038,17 @@ public sealed class Phd2ClientTests
 
     private static Phd2Client CreateClient(
         FakePhd2Server server,
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        TimeSpan? eventTimeoutMargin = null,
+        TimeSpan? minimumLoopingFrameEventTimeout = null)
     {
         return new Phd2Client(new Phd2ClientOptions
         {
             Host = "127.0.0.1",
             Port = server.Port,
             CommandTimeout = commandTimeout ?? TimeSpan.FromSeconds(2),
-            EventTimeoutMargin = TimeSpan.FromSeconds(2),
+            EventTimeoutMargin = eventTimeoutMargin ?? TimeSpan.FromSeconds(2),
+            MinimumLoopingFrameEventTimeout = minimumLoopingFrameEventTimeout ?? TimeSpan.FromSeconds(2),
             FileReadyTimeout = TimeSpan.FromSeconds(2),
         });
     }

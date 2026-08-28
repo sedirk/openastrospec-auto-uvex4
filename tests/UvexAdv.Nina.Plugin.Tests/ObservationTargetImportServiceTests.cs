@@ -205,7 +205,7 @@ public sealed class ObservationTargetImportServiceTests
         var result = await service.ImportFromPlanetariumAsync();
 
         Assert.Equal(1, planetarium.CaptureCount);
-        Assert.Equal("J052107.00+233819.3", result.TargetName);
+        Assert.Equal("新星 金牛座 2026", result.TargetName);
         Assert.Equal(string.Empty, result.CatalogId);
         Assert.Equal(80.27918002, result.RightAscensionDegrees, 8);
         Assert.Equal(23.63868315, result.DeclinationDegrees, 8);
@@ -214,8 +214,8 @@ public sealed class ObservationTargetImportServiceTests
         Assert.Equal("J2000", result.Epoch);
         Assert.Null(result.FramingCenterCoordinates);
         Assert.False(result.UsedFramingCenter);
-        Assert.Contains("星图显示名为“新星 金牛座 2026”", result.Details, StringComparison.Ordinal);
-        Assert.Contains("FITS OBJECT 与文件名", result.Details, StringComparison.Ordinal);
+        Assert.Contains("目标名称保留星图显示名“新星 金牛座 2026”", result.Details, StringComparison.Ordinal);
+        Assert.Contains("不会再由目录号或坐标名称覆盖", result.Details, StringComparison.Ordinal);
         Assert.Contains("不会连接设备、移动赤道仪或启动观测", result.Details, StringComparison.Ordinal);
     }
 
@@ -234,7 +234,65 @@ public sealed class ObservationTargetImportServiceTests
 
         Assert.Equal("Nova Sagitta 2026", result.TargetName);
         Assert.Equal("Gaia DR3 1824166210904571136", result.CatalogId);
-        Assert.Contains("目标/文件名采用“Nova Sagitta 2026”", result.Details, StringComparison.Ordinal);
+        Assert.Contains("目标名称保留星图显示名“Nova Sagitta 2026”", result.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PlanetariumBilingualNameIsNotOverwrittenByItsHipCatalogId()
+    {
+        var planetarium = new FakePlanetariumSource(new ObservationPlanetariumTargetSnapshot(
+            "奎宿九 Mirach",
+            "HIP 5447",
+            new ObservationTargetCoordinates(17.43923540, 35.61923457),
+            null,
+            "N.I.N.A. 第三方星图 / Stellarium"));
+        var service = CreateService(planetarium: planetarium);
+
+        var result = await service.ImportFromPlanetariumAsync();
+
+        Assert.Equal("奎宿九 Mirach", result.TargetName);
+        Assert.Equal("HIP 5447", result.CatalogId);
+        Assert.Contains("目标名称保留星图显示名“奎宿九 Mirach”", result.Details, StringComparison.Ordinal);
+        Assert.Contains("独立目录标识为 HIP 5447", result.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StellariumCatalogNameAndLocalizedCommonNameAreSeparated()
+    {
+        var identity = NinaPlanetariumTargetSource.ResolveStellariumIdentity(
+            "HIP 5447",
+            "奎宿九 Mirach",
+            designation: null,
+            ninaDisplayName: "奎宿九 Mirach");
+
+        Assert.Equal("奎宿九 Mirach", identity.TargetName);
+        Assert.Equal("HIP 5447", identity.CatalogId);
+    }
+
+    [Fact]
+    public void StellariumCanonicalCommonNameKeepsExplicitDesignation()
+    {
+        var identity = NinaPlanetariumTargetSource.ResolveStellariumIdentity(
+            "Nova Sagitta 2026",
+            "新星 天箭座 2026",
+            "Gaia DR3 1824166210904571136",
+            ninaDisplayName: "新星 天箭座 2026");
+
+        Assert.Equal("Nova Sagitta 2026", identity.TargetName);
+        Assert.Equal("Gaia DR3 1824166210904571136", identity.CatalogId);
+    }
+
+    [Fact]
+    public void StellariumCatalogWithoutCommonAliasStillPopulatesBothFields()
+    {
+        var identity = NinaPlanetariumTargetSource.ResolveStellariumIdentity(
+            "HIP 5447",
+            "HIP 5447",
+            designation: null,
+            ninaDisplayName: "HIP 5447");
+
+        Assert.Equal("HIP 5447", identity.TargetName);
+        Assert.Equal("HIP 5447", identity.CatalogId);
     }
 
     [Fact]

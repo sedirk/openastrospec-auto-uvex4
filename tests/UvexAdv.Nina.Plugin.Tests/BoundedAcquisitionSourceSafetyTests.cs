@@ -9,6 +9,16 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         "Sources",
         "RealObservationStageRunner.cs"));
 
+    private static readonly string G3MountBindingSource = File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "Sources",
+        "RealObservationStageRunner.G3FieldMountBinding.cs"));
+
+    private static readonly string Phd2SlitPlacementSource = File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "Sources",
+        "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+
     [Fact]
     public void ProductionRouteKeepsQhyAsNoMotionWitnessAndHandsAcquisitionToFreshG3()
     {
@@ -156,19 +166,28 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
-    public void ValidSparseG3ExposureRequiresAtLeastOneDetectedSkySourceBeforeBoundedSearch()
+    public void LocalG3MorphologyIsDiagnosticWhenIndependentSparseRecoveryEvidenceExists()
     {
         var recoverable = MethodBody(
             "private static bool IsRecoverableG3SearchGate(",
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
+        var wrapper = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        var analysis = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
+            "private static bool FocusFailureMayBeSaturationDominated(");
 
         Assert.Contains("G3_STAR_FIELD_SPARSE_VALID_EXPOSURE", recoverable, StringComparison.Ordinal);
-        Assert.Contains("G3_FOCUS_STARS_INSUFFICIENT", recoverable, StringComparison.Ordinal);
-        Assert.Contains("focusMeasurement.DetectedStarCount > 0", recoverable, StringComparison.Ordinal);
-        Assert.DoesNotContain("G3_FOCUS_STARS_NOT_DETECTED", recoverable, StringComparison.Ordinal);
+        Assert.Contains("solveLadderHasStructuredContent || targetMayBeInvisible || fullEnvironmentSparseRecoveryAuthorized", recoverable, StringComparison.Ordinal);
+        Assert.Contains("focusMeasurement.Gate.Code.StartsWith(\"G3_FOCUS_\"", recoverable, StringComparison.Ordinal);
+        Assert.DoesNotContain("focusMeasurement.DetectedStarCount > 0", recoverable, StringComparison.Ordinal);
+        Assert.Contains("solveLadderProbe: probe", wrapper, StringComparison.Ordinal);
+        Assert.Contains("var solveLadderHasStructuredContent = solveLadderProbe?.Attempts.Any", analysis, StringComparison.Ordinal);
+        Assert.Contains("the local morphology heuristic accepted", analysis, StringComparison.Ordinal);
+        Assert.Contains("That heuristic is diagnostic only", analysis, StringComparison.Ordinal);
+        Assert.Contains("Preserve TARGET_NOT_FOUND/TARGET_AMBIGUOUS", analysis, StringComparison.Ordinal);
         Assert.Contains("pairAnalysis.Gate.Disposition == GateDisposition.Passed", recoverable, StringComparison.Ordinal);
-        Assert.DoesNotContain("G3_FOCUS_STARS_TOO_BROAD", recoverable, StringComparison.Ordinal);
-        Assert.DoesNotContain("G3_FOCUS_STARS_TOO_ELONGATED", recoverable, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -186,7 +205,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
-    public void FeaturelessSolveLadderPausesWithoutSearchMotion()
+    public void FeaturelessSolveLadderRequiresFullFreshEnvironmentAuthorityForSearchMotion()
     {
         var wrapper = MethodBody(
             "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
@@ -196,9 +215,131 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private string G3AcquisitionMotionPath(");
 
         Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD", wrapper, StringComparison.Ordinal);
+        Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", wrapper, StringComparison.Ordinal);
         Assert.Contains("G3_CLOUD_OR_TRANSPARENCY_INVALID", Source, StringComparison.Ordinal);
         Assert.DoesNotContain("G3_CLOUD_OR_TRANSPARENCY_INVALID", recoverable, StringComparison.Ordinal);
-        Assert.Contains("mountMotionAuthorized = false", Source, StringComparison.Ordinal);
+        Assert.Contains("mountMotionAuthorized = boundedSparseRecoveryAuthorized", Source, StringComparison.Ordinal);
+        Assert.Contains("var hasStructuredContent = attempts.Any", Source, StringComparison.Ordinal);
+        Assert.Contains("HasFullUnattendedSparseRecoveryAuthority(context)", Source, StringComparison.Ordinal);
+        Assert.Contains("configuration.Environment.WeakSupervisionEnabled", Source, StringComparison.Ordinal);
+        Assert.Contains("ValidateOpticalCoverOpen().Disposition == GateDisposition.Passed", Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AcceptedTargetInsidePl3SolveSurvivesNoMotionLedSlitSequence()
+    {
+        var wrapper = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        var analysis = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
+            "private static bool FocusFailureMayBeSaturationDominated(");
+
+        Assert.Contains("trustedSolveProbe: probe", wrapper, StringComparison.Ordinal);
+        Assert.Contains("solveLadderProbe: probe", wrapper, StringComparison.Ordinal);
+        Assert.Contains("ValidateTrustedG3SolveCarryForwardAsync", analysis, StringComparison.Ordinal);
+        Assert.Contains("G3_MAIN_FOCUS_LOCKED_TRUSTED_PL3", analysis, StringComparison.Ordinal);
+        Assert.Contains("? carriedSolve", analysis, StringComparison.Ordinal);
+        Assert.Contains("? carriedMeasurement.Stars", analysis, StringComparison.Ordinal);
+        Assert.Contains("no source-count veto", analysis, StringComparison.Ordinal);
+        Assert.Contains("G3_TRUSTED_PL3_CARRIED_FORWARD", G3MountBindingSource, StringComparison.Ordinal);
+        Assert.Contains("ValidateG3ProbeMountBindingForMotionAsync", G3MountBindingSource, StringComparison.Ordinal);
+        Assert.Contains("probe.Solve.EvidenceSha256", G3MountBindingSource, StringComparison.Ordinal);
+        Assert.Contains("MountCommandArrivalToleranceArcseconds", G3MountBindingSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailedStructuredSolveProbeRemainsDiagnosticAndCannotTriggerTrustedCarryForward()
+    {
+        var wrapper = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        var recoveryStart = wrapper.IndexOf(
+            "if (probe.Gate.Disposition != GateDisposition.Passed)",
+            StringComparison.Ordinal);
+        var recoveryEnd = wrapper.IndexOf(
+            "return G3FieldState.Failed(probe.Gate",
+            recoveryStart,
+            StringComparison.Ordinal);
+        Assert.True(recoveryStart >= 0 && recoveryEnd > recoveryStart);
+        var failedProbeRecovery = wrapper[recoveryStart..recoveryEnd];
+
+        Assert.Contains("solveLadderProbe: probe", failedProbeRecovery, StringComparison.Ordinal);
+        Assert.DoesNotContain("trustedSolveProbe: probe", failedProbeRecovery, StringComparison.Ordinal);
+
+        var acceptedProbePath = wrapper[recoveryEnd..];
+        Assert.Contains("trustedSolveProbe: probe", acceptedProbePath, StringComparison.Ordinal);
+        Assert.Contains("solveLadderProbe: probe", acceptedProbePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SmallMountReadbackHandoffCarriesOffsetWithoutRebasingDurableBudget()
+    {
+        var begin = MethodBody(
+            "private async Task<G3AcquisitionMotionState> BeginG3AcquisitionMotionAsync(",
+            "private async Task PersistG3AcquisitionMotionAsync(");
+
+        Assert.Contains("MountMotionFamilyHandoffToleranceArcseconds", begin, StringComparison.Ordinal);
+        Assert.Contains("CurrentRaTangentOffsetArcseconds = inheritedOriginOffset.RaArcseconds", begin, StringComparison.Ordinal);
+        Assert.Contains("CurrentDeclinationOffsetArcseconds = inheritedOriginOffset.DecArcseconds", begin, StringComparison.Ordinal);
+        Assert.Contains("the actual offset remains charged and no budget, origin or clock was reset", begin, StringComparison.Ordinal);
+        Assert.DoesNotContain("OriginRaDegrees = NormalizeDegrees(origin.RADegrees)", begin, StringComparison.Ordinal);
+        Assert.DoesNotContain("OriginDeclinationDegrees = origin.Dec", begin, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FormallySolvedNeighbourHandsItsChargedLineageDirectlyToWcsCentering()
+    {
+        var begin = MethodBody(
+            "private async Task<G3AcquisitionMotionState> BeginG3AcquisitionMotionAsync(",
+            "private async Task PersistG3AcquisitionMotionAsync(");
+        var search = MethodBody(
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(",
+            "private GateResult ValidateG3SearchMountState(");
+
+        Assert.Contains("allowChargedCurrentPositionHandoff", begin, StringComparison.Ordinal);
+        Assert.Contains("existing.PriorReportedRaDegrees", begin, StringComparison.Ordinal);
+        Assert.Contains("existing.CurrentRaTangentOffsetArcseconds", begin, StringComparison.Ordinal);
+        Assert.Contains("no budget, origin or clock was reset", begin, StringComparison.Ordinal);
+        Assert.Contains("NeighbourPl3HandedToWcsCentering", search, StringComparison.Ordinal);
+        Assert.Contains("Formal PL3 now owns the direct return toward the catalog target", search, StringComparison.Ordinal);
+        Assert.Contains("allowChargedCurrentPositionHandoff: true", search, StringComparison.Ordinal);
+
+        var formalNeighbour = search.IndexOf(
+            "lastG3Field.Gate.Code == \"G3_SOLVED_TARGET_OUTSIDE\"",
+            StringComparison.Ordinal);
+        var nextBlindWaypoint = search.IndexOf(
+            "if (!IsRecoverableG3SearchGate(lastG3Field.Gate))",
+            formalNeighbour,
+            StringComparison.Ordinal);
+        var directWcsHandoff = search.IndexOf(
+            "return await RunG3WcsCenteringAsync",
+            formalNeighbour,
+            StringComparison.Ordinal);
+        Assert.True(formalNeighbour >= 0 && directWcsHandoff > formalNeighbour && directWcsHandoff < nextBlindWaypoint);
+    }
+
+    [Fact]
+    public void ForcedPhd2CalibrationInvalidatesPreCalibrationFieldBeforeExactLock()
+    {
+        var body = MethodBody(
+            Phd2SlitPlacementSource,
+            "private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(",
+            "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
+
+        var guide = body.IndexOf("GuideAndSettleAsync", StringComparison.Ordinal);
+        var forceBranch = body.IndexOf("if (forceRecalibration)", guide, StringComparison.Ordinal);
+        var stop = body.IndexOf("StopPhdAndWaitAsync", forceBranch, StringComparison.Ordinal);
+        var invalidate = body.IndexOf("lastG3Field = null", stop, StringComparison.Ordinal);
+        var reacquire = body.IndexOf("AcquireG3SlitFieldAsync", invalidate, StringComparison.Ordinal);
+        var recurse = body.IndexOf("postCalibrationReacquisitionDepth + 1", reacquire, StringComparison.Ordinal);
+        var firstLockRead = body.IndexOf("GetLockPositionAsync", StringComparison.Ordinal);
+
+        Assert.True(guide >= 0 && forceBranch > guide && stop > forceBranch);
+        Assert.True(invalidate > stop && reacquire > invalidate && recurse > reacquire);
+        Assert.True(firstLockRead > recurse);
+        Assert.Contains("exactLockCommandIssued = false", body, StringComparison.Ordinal);
+        Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -215,8 +356,25 @@ public sealed class BoundedAcquisitionSourceSafetyTests
 
         Assert.True(load >= 0 && preview > load && content > preview && solve > content);
         Assert.Contains("已拍摄，正在检测星场并解算", body, StringComparison.Ordinal);
-        Assert.Contains("PublishG3Preview(image, content.Gate.Message)", body, StringComparison.Ordinal);
+        Assert.Contains("content.Gate.Message", body, StringComparison.Ordinal);
         Assert.Contains("PublishG3Preview(image, resultGate.Message)", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LocalSourceHeuristicNeverPreventsAFormalPl3Attempt()
+    {
+        var body = MethodBody(
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private GateResult ValidateG3SolveProbeImage(");
+
+        var content = body.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
+        var solve = body.IndexOf("SolveImageAsync", content, StringComparison.Ordinal);
+        var preSolveBranch = body[content..solve];
+
+        Assert.True(content >= 0 && solve > content);
+        Assert.DoesNotContain("continue;", preSolveBranch, StringComparison.Ordinal);
+        Assert.Contains("只有 PL3 也失败时才禁止邻场移动", preSolveBranch, StringComparison.Ordinal);
+        Assert.Contains("contentWasNotAPreSolverVeto = true", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -352,6 +510,35 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
+    public void QhySolvedFrameWithoutFocusMetricUsesNoMovePl3WitnessBeforeAnyExtraExposure()
+    {
+        var acquisition = MethodBody(
+            "private async Task<StageResult> AcquireQhyWideFieldAsync(",
+            "private async Task<QhyJobSnapshot> AcquireOrContinueQhyAcquisitionAsync(");
+
+        var focusBranch = acquisition[acquisition.IndexOf(
+            "if (currentQhyFocusMetric is null)",
+            StringComparison.Ordinal)..];
+        Assert.Contains("QHY_FRAME_PROVENANCE_OR_QUALITY_INVALID", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("IsGs350LockedNoMove(nightSetup.Value)", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("qhy-pl3-no-move-focus-deferred", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("gs350MovementAuthorized = false", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("qhyMountCorrectionAuthorized = false", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("candidate > accepted.Settings.ExposureSeconds", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("qhyAcquisitionMinimumExposureSeconds = nextExposure", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("qhyAcquisitionJobId = null", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("return await AcquireQhyWideFieldAsync", focusBranch, StringComparison.Ordinal);
+        Assert.Contains("configured exposure ladder was exhausted", focusBranch, StringComparison.Ordinal);
+        Assert.True(
+            focusBranch.IndexOf("IsGs350LockedNoMove(nightSetup.Value)", StringComparison.Ordinal) <
+            focusBranch.IndexOf("qhyAcquisitionMinimumExposureSeconds = nextExposure", StringComparison.Ordinal));
+        Assert.Contains("gs350FocusEvidenceMode", acquisition, StringComparison.Ordinal);
+        Assert.Contains("qhyMountMotionAuthority", acquisition, StringComparison.Ordinal);
+        Assert.DoesNotContain("MedianFwhmPixels!.Value", acquisition, StringComparison.Ordinal);
+        Assert.DoesNotContain("MinimumDetectedStars", focusBranch, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FailedG3SolveWritesNullResidualAndContinuesTheExposureLadder()
     {
         var ladder = MethodBody(
@@ -370,14 +557,14 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     public void WeakSupervisionStillConnectsAndOpensTrustedSelectedCover()
     {
         var connect = MethodBody(
-            "private async Task<GateResult> EnsureNinaEquipmentConnectedAsync(",
-            "private async Task<GateResult> StartAtrPreCoolingAsync(");
+            "private async Task<GateResult> EnsureNinaEnvironmentAdaptersConnectedAsync(",
+            "private async Task<GateResult> EnsureDomeOrRoofOpenForUnattendedAsync(");
         var open = MethodBody(
             "private async Task<GateResult> EnsureOpticalCoverOpenAsync(",
             "private async Task<GateResult> WaitForOpticalCoverStateAsync(");
 
-        Assert.Contains("trustedOptionalCoverSelected", connect, StringComparison.Ordinal);
-        Assert.Contains("NinaProfileOwnerPreflight.OpticalCoverDeviceId", connect, StringComparison.Ordinal);
+        Assert.Contains("devices.HasOpticalCover", connect, StringComparison.Ordinal);
+        Assert.Contains("configuration.Environment.RequireOpenOpticalCover", connect, StringComparison.Ordinal);
         Assert.Contains("flatDeviceMediator.Connect", connect, StringComparison.Ordinal);
         Assert.DoesNotContain("!configuration.Environment.RequireOpenOpticalCover", open, StringComparison.Ordinal);
         Assert.Contains("flatDeviceMediator.OpenCover", open, StringComparison.Ordinal);
@@ -404,7 +591,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("ApplyTangentOffsetArcseconds", wcs, StringComparison.Ordinal);
         Assert.Contains("ApplyTangentOffsetArcseconds", search, StringComparison.Ordinal);
 
-        var improvement = wcs.IndexOf("Fresh G3 WCS improved", StringComparison.Ordinal);
+        var improvement = wcs.IndexOf("Fresh G3 WCS reduced the remaining direct-to-slit motion", StringComparison.Ordinal);
         Assert.True(improvement > 0);
         Assert.Contains(
             "Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve",
@@ -513,9 +700,15 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var slew = source.IndexOf("telescopeMediator.SlewToCoordinatesAsync", StringComparison.Ordinal);
 
         Assert.True(tracking >= 0 && tracking < slew);
-        Assert.Contains("telescopeMediator.SetTrackingEnabled(true)", source, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(source, "telescopeMediator.SetTrackingEnabled(true)"));
         Assert.Contains("verified.TrackingEnabled", source, StringComparison.Ordinal);
-        Assert.Contains("TELESCOPE_TRACKING_ENABLE_FAILED", source, StringComparison.Ordinal);
+        Assert.Contains("MountTrackingEnableTimeout", source, StringComparison.Ordinal);
+        Assert.Contains("MountTrackingEnablePollInterval", source, StringComparison.Ordinal);
+        Assert.Contains("await Task.Delay(", source, StringComparison.Ordinal);
+        Assert.Contains("commandCount = 1", source, StringComparison.Ordinal);
+        Assert.Contains("TELESCOPE_TRACKING_ENABLE_REJECTED", source, StringComparison.Ordinal);
+        Assert.Contains("TELESCOPE_TRACKING_ENABLE_TIMEOUT", source, StringComparison.Ordinal);
+        Assert.Contains("meridian/limit refusal", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -590,7 +783,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
-    public void CancellationAndDisposeAreStopOnlyWhileLiveFaultCleanupMayCloseCoverOnce()
+    public void WeakPauseCancellationAndDisposeAreStopOnlyWhileFullUnattendedStopsCloseSafely()
     {
         var execute = MethodBody(
             "public override async Task<StageResult> ExecuteStageAsync(",
@@ -603,7 +796,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "public async ValueTask DisposeAsync()");
         var dispose = MethodBody(
             "public async ValueTask DisposeAsync()",
-            "private async Task<StageResult> ValidateNightSetupAsync(");
+            "private void OnSafetyMonitorSafeChanged(");
         var cleanup = MethodBody(
             "private async Task<IReadOnlyList<string>> CleanupAfterFailureAsync(",
             "private async Task StopPhdAndWaitAsync(");
@@ -626,7 +819,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var ordinaryFault = execute.IndexOf("catch (Exception ex)", cancelledNonOce + 1, StringComparison.Ordinal);
         Assert.True(cancelledNonOce >= 0 && ordinaryFault > cancelledNonOce);
         Assert.Contains("throw new OperationCanceledException", execute[cancelledNonOce..ordinaryFault], StringComparison.Ordinal);
-        Assert.Contains("allowMechanicalActions: true", execute[ordinaryFault..], StringComparison.Ordinal);
+        Assert.Contains("!configuration.Environment.WeakSupervisionEnabled", execute[ordinaryFault..], StringComparison.Ordinal);
+        Assert.Contains("Volatile.Read(ref domeOrRoofOpenEstablished) != 0", execute[ordinaryFault..], StringComparison.Ordinal);
         Assert.DoesNotContain("CancellationToken.None", execute[ordinaryFault..], StringComparison.Ordinal);
 
         Assert.Contains("if (allowMechanicalActions && configuration.Environment.CloseOpticalCoverOnFailure)", cleanup, StringComparison.Ordinal);
@@ -635,6 +829,21 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Equal(1, CountOccurrences(cleanup, "CloseOpticalCoverAsync(reason"));
         Assert.Contains("catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)", closeCover, StringComparison.Ordinal);
         Assert.Contains("throw;", closeCover, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FaintAtrProbeAdvancesOneSafeTierWithoutManualResume()
+    {
+        var select = MethodBody(
+            "private async Task<StageResult> SelectAtrExposureAsync(",
+            "private async Task<StageResult> RunScienceBlockAsync(");
+
+        Assert.Contains("decision.Code is \"TARGET_SKY_CONTRAST_LOW\" or \"NO_POSITIVE_SPECTRAL_SIGNAL\"", select, StringComparison.Ordinal);
+        Assert.Contains("IsSafeSignalLimitedAtrProbe(probe.Metrics, exposureOptions)", select, StringComparison.Ordinal);
+        Assert.Contains("Where(value => value > probeExposure)", select, StringComparison.Ordinal);
+        Assert.Contains("probeExposure = nextExposure", select, StringComparison.Ordinal);
+        Assert.Contains("continue;", select, StringComparison.Ordinal);
+        Assert.Contains("advance-one-configured-tier-and-remeasure", select, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -713,12 +922,57 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.DoesNotContain("?? true", atrSave, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ProductionG3CoarseMotionTargetsTheSlitAndNotMerelyTheFrameCentre()
+    {
+        var acquire = MethodBody(
+            "private async Task<StageResult> AcquireG3SlitFieldAsync(",
+            "private StageResult G3FieldPassed(");
+        var wcs = MethodBody(
+            "private async Task<StageResult> RunG3WcsCenteringAsync(",
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
+
+        Assert.Contains("coarseResidualPixels > placementPreset.MaximumAcquisitionResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
+        Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
+        Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
+        Assert.Contains("placementPreset.MaximumAcquisitionResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolvedNeighbourReturnCanUseFreshRuntimeSlitWithoutRequiringTargetFieldWcs()
+    {
+        var wrapper = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        var analysis = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
+            "private async Task<G3FieldState?> TryAcquireBrightTargetFromWingsAsync(");
+        var wcs = MethodBody(
+            "private async Task<StageResult> RunG3WcsCenteringAsync(",
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
+
+        Assert.Contains("G3WcsMotionPrediction? motionPrediction", wrapper, StringComparison.Ordinal);
+        Assert.Contains("G3_CLOUD_OR_TRANSPARENCY_INVALID", wrapper, StringComparison.Ordinal);
+        Assert.Contains("G3_FIELD_ANALYZED_MOTION_PREDICTED", analysis, StringComparison.Ordinal);
+        Assert.Contains("freshTargetFieldSolveRequired", analysis, StringComparison.Ordinal);
+        Assert.Contains("slitDetection.Geometry.AcquisitionPoint", analysis, StringComparison.Ordinal);
+        Assert.Contains("motionPrediction", wcs, StringComparison.Ordinal);
+        Assert.Contains("CaptureAndAnalyzeG3WithSolveLadderAsync", wcs, StringComparison.Ordinal);
+    }
+
     private static string MethodBody(string startMarker, string endMarker)
     {
-        var start = Source.IndexOf(startMarker, StringComparison.Ordinal);
-        var end = Source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        return MethodBody(Source, startMarker, endMarker);
+    }
+
+    private static string MethodBody(string source, string startMarker, string endMarker)
+    {
+        var start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start, $"Could not locate source section {startMarker} -> {endMarker}.");
-        return Source[start..end];
+        return source[start..end];
     }
 
     private static int CountOccurrences(string text, string value)

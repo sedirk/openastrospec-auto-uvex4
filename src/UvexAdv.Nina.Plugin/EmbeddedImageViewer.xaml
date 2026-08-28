@@ -58,6 +58,7 @@
       </Grid.RowDefinitions>
 
       <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="5">
+        <StackPanel>
         <DockPanel LastChildFill="True">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
             <Button Content="{Binding PopoutLabel, ElementName=ViewerRoot}"
@@ -119,6 +120,43 @@
                      TextTrimming="CharacterEllipsis"
                      Margin="5,0,8,0" />
         </DockPanel>
+        <WrapPanel Margin="3,5,0,0" VerticalAlignment="Center">
+          <Button x:Name="AutoStretchButton"
+                  Style="{StaticResource ViewerToolbarButton}"
+                  Content="自动拉伸：关"
+                  ToolTip="按当前预览直方图自动设置显示黑白点；只影响屏幕显示，不修改 FITS、解算或质量数据"
+                  AutomationProperties.Name="切换自动拉伸"
+                  IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                  Click="OnAutoStretchClick" />
+          <Button Style="{StaticResource ViewerToolbarButton}"
+                  Content="原图"
+                  ToolTip="恢复 N.I.N.A. 或采集服务提供的原始预览显示"
+                  AutomationProperties.Name="恢复原始预览显示"
+                  IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                  Click="OnResetDisplayClick" />
+          <TextBlock Text="黑" Margin="10,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="BlackPointSlider" Minimum="0" Maximum="254" Value="0" Width="86"
+                  VerticalAlignment="Center" IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                  ValueChanged="OnManualDisplayValueChanged" />
+          <TextBlock x:Name="BlackPointText" Text="0" Width="30" Margin="3,0,2,0"
+                     FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
+          <TextBlock Text="白" Margin="5,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="WhitePointSlider" Minimum="1" Maximum="255" Value="255" Width="86"
+                  VerticalAlignment="Center" IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                  ValueChanged="OnManualDisplayValueChanged" />
+          <TextBlock x:Name="WhitePointText" Text="255" Width="34" Margin="3,0,2,0"
+                     FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
+          <TextBlock Text="γ" Margin="5,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="GammaSlider" Minimum="0.2" Maximum="5" Value="1" Width="94"
+                  TickFrequency="0.1" VerticalAlignment="Center"
+                  IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
+                  ValueChanged="OnManualDisplayValueChanged" />
+          <TextBlock x:Name="GammaText" Text="1.00" Width="42" Margin="3,0,2,0"
+                     FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
+          <TextBlock x:Name="DisplayLevelsText" Text="显示：原图" Margin="9,0,0,0"
+                     VerticalAlignment="Center" Foreground="#94A3B8" />
+        </WrapPanel>
+        </StackPanel>
       </Border>
 
       <Grid Grid.Row="1" Background="#02060C">
@@ -137,7 +175,6 @@
                       LostMouseCapture="OnLostMouseCapture"
                       SizeChanged="OnViewportSizeChanged">
           <Image x:Name="PreviewImageElement"
-                 Source="{Binding PreviewImage, ElementName=ViewerRoot}"
                  Stretch="Fill"
                  SnapsToDevicePixels="True"
                  RenderOptions.BitmapScalingMode="HighQuality">

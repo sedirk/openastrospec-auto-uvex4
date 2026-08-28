@@ -45,6 +45,16 @@ public interface IPhd2Client : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Uses PHD2's native <c>capture_single_frame</c> operation so exposure,
+    /// binning and gain are applied atomically to this frame without changing
+    /// the connected profile. This strict path never falls back to the
+    /// profile-owned looping gain.
+    /// </summary>
+    Task<Phd2SingleFrameResult> CaptureSingleFrameWithParametersAsync(
+        Phd2SingleFrameRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// While an existing PHD2 full-frame loop is already running, waits for
     /// the next fresh LoopingExposures event and saves that completed frame.
     /// It never changes exposure, starts a loop, stops capture, or retries.
