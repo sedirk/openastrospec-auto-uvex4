@@ -52,7 +52,8 @@ Both jobs used:
 - binning `1 x 1` and full-frame ROI `3856 x 2180`;
 - readout mode `1`, `16 bit`, USB traffic `0`;
 - filter `R` and target temperature `-10 C`;
-- stable camera identity `QHYminiCam8M-d7c6d6846aac482ca`.
+- the exact stable camera identity recorded in the machine-local incident bundle
+  and deliberately omitted from this public document.
 
 Both retained frames have minimum, maximum, mean and median ADU equal to zero,
 `zeroFraction=1`, `detectedStars=0` and `ZERO_CLIPPING`. The first service version
@@ -203,13 +204,13 @@ hardware or firmware.
 ## Immutable evidence
 
 - N.I.N.A. log, first occurrence:
-  `C:/Users/26713/AppData/Local/NINA/Logs/20260827-040705-3.2.0.9001.14624-202608.log`
+  `%LOCALAPPDATA%/NINA/Logs/<first-occurrence-log>.log`
 - QHY manifest, first occurrence:
-  `C:/ProgramData/UVEX-ADV/qhy/data/runs/UVEX-20260826T200822Z-d006311f311a45a/qhy-484b9512f1dc497fbc65efa05052b8ce/manifest.json`
+  `%ProgramData%/UVEX-ADV/qhy/data/runs/<first-run>/<first-job>/manifest.json`
 - N.I.N.A. log, second occurrence:
-  `C:/Users/26713/AppData/Local/NINA/Logs/20260829-044119-3.2.0.9001.18532-202608.log`
+  `%LOCALAPPDATA%/NINA/Logs/<second-occurrence-log>.log`
 - QHY manifest, second occurrence:
-  `C:/ProgramData/UVEX-ADV/qhy/data/runs/UVEX-20260828T204132Z-49e0eeaf0aba4f3/qhy-233c538736c440ec88386b9710263058/manifest.json`
+  `%ProgramData%/UVEX-ADV/qhy/data/runs/<second-run>/<second-job>/manifest.json`
 
 These machine-local files remain outside Git and immutable. This incident record only
 references them; it does not move, rename or rewrite any acquired frame.
