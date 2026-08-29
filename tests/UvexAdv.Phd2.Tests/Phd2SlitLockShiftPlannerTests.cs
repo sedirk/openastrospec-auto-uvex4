@@ -193,6 +193,34 @@ public sealed class Phd2SlitLockShiftPlannerTests
     }
 
     [Fact]
+    public void WindDisplacedDirectTargetStillCommandsThePhysicalSlitMidpoint()
+    {
+        var fixture = CreateFixture(currentLock: new Phd2Point(200, 200), originLock: new Phd2Point(200, 200));
+        var measurement = Measurement(
+            guide: new Phd2Point(208, 203),
+            target: new Phd2Point(208, 203),
+            slit: new Phd2Point(215, 200),
+            guideDistanceFromSlit: 0,
+            minimumExposureApplied: true,
+            exposureMilliseconds: 10,
+            fluxLabel: "ULTRABRIGHT_WING_FLUX_PASS");
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.DegradedDirectTargetGuiding,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal(new Phd2Point(215, 200), result.Stage!.FullDesiredLockPosition);
+        Assert.True(result.Stage.Degraded);
+    }
+
+    [Fact]
     public void DegradedDirectTargetGuidingRejectsUncommissionedShortestExposure()
     {
         var fixture = CreateFixture(currentLock: new Phd2Point(200, 200), originLock: new Phd2Point(200, 200));

@@ -31,7 +31,7 @@ public sealed class CommissioningSchemaSourceSafetyTests
     public void UiHashesActualPresetBytesBeforeParsingOrDisplayingPolicy()
     {
         var start = DockableSource.IndexOf("private (string Policy, string Route) ReadPhd2CommissioningSummary()", StringComparison.Ordinal);
-        var end = DockableSource.IndexOf("private static string Permission(", start, StringComparison.Ordinal);
+        var end = DockableSource.IndexOf("private string Permission(", start, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start);
         var body = DockableSource[start..end];
         var read = body.IndexOf("File.ReadAllBytes", StringComparison.Ordinal);

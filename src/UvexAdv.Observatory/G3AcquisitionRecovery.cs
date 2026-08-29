@@ -330,6 +330,31 @@ public sealed record G3AcquisitionReturnStep(
 
 public static class G3AcquisitionMotionPlanner
 {
+    private const double StableNearOriginToleranceMultiplier = 5d;
+
+    /// <summary>
+    /// Returns the wider tolerance that may be used only after a commanded
+    /// return has completed and the mount has remained stable for the
+    /// commissioned post-slew interval. This is deliberately separate from
+    /// the strict arrival tolerance used for frame/mount binding and small
+    /// outbound moves.
+    /// </summary>
+    public static double ComputeStableNearOriginToleranceArcseconds(
+        G3AcquisitionMotionState state,
+        double freshSolveAuthorizationResidualArcseconds)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!double.IsFinite(state.ArrivalToleranceArcseconds) || state.ArrivalToleranceArcseconds <= 0 ||
+            !double.IsFinite(freshSolveAuthorizationResidualArcseconds) || freshSolveAuthorizationResidualArcseconds <= 0)
+        {
+            return double.NaN;
+        }
+
+        return Math.Min(
+            freshSolveAuthorizationResidualArcseconds,
+            state.ArrivalToleranceArcseconds * StableNearOriginToleranceMultiplier);
+    }
+
     public static G3AcquisitionMotionState ContinueSettledLedger(
         G3AcquisitionMotionState state,
         string observationRunId,
@@ -340,7 +365,10 @@ public static class G3AcquisitionMotionPlanner
         double? familyMaximumRadiusArcseconds = null,
         double? familyAdditionalCumulativeMotionArcseconds = null,
         int? familyAdditionalCorrectionAttempts = null,
-        TimeSpan? familyAdditionalElapsedTime = null)
+        TimeSpan? familyAdditionalElapsedTime = null,
+        double? attestedLineageMaximumCumulativeMotionArcseconds = null,
+        int? attestedLineageMaximumCorrectionAttempts = null,
+        TimeSpan? attestedLineageMaximumElapsedTime = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         var issues = state.Validate();
@@ -359,32 +387,53 @@ public static class G3AcquisitionMotionPlanner
         var maximumRadius = familyMaximumRadiusArcseconds is { } requestedRadius
             ? Math.Min(state.MaximumRadiusArcseconds, requestedRadius)
             : state.MaximumRadiusArcseconds;
-        var maximumCumulative = state.MaximumCumulativeMotionArcseconds;
+        var cumulativeCeiling = state.MaximumCumulativeMotionArcseconds;
+        if (attestedLineageMaximumCumulativeMotionArcseconds is { } attestedCumulative)
+        {
+            if (!double.IsFinite(attestedCumulative) || attestedCumulative < state.CumulativeMotionArcseconds)
+                throw new InvalidOperationException("The attested lineage cumulative-motion ceiling must be finite and no lower than the already consumed motion.");
+            cumulativeCeiling = attestedCumulative;
+        }
+        var maximumCumulative = cumulativeCeiling;
         if (familyAdditionalCumulativeMotionArcseconds is { } additionalCumulative)
         {
             if (!double.IsFinite(additionalCumulative) || additionalCumulative <= 0)
                 throw new InvalidOperationException("The current-family cumulative-motion increment must be finite and positive.");
             maximumCumulative = Math.Min(
-                maximumCumulative,
+                cumulativeCeiling,
                 checked(state.CumulativeMotionArcseconds + additionalCumulative));
         }
-        var maximumAttempts = state.MaximumCorrectionAttempts;
+        var attemptCeiling = state.MaximumCorrectionAttempts;
+        if (attestedLineageMaximumCorrectionAttempts is { } attestedAttempts)
+        {
+            if (attestedAttempts < state.CorrectionAttempts)
+                throw new InvalidOperationException("The attested lineage action-count ceiling cannot be lower than the already consumed action count.");
+            attemptCeiling = attestedAttempts;
+        }
+        var maximumAttempts = attemptCeiling;
         if (familyAdditionalCorrectionAttempts is { } additionalAttempts)
         {
             if (additionalAttempts <= 0)
                 throw new InvalidOperationException("The current-family correction-attempt increment must be positive.");
             maximumAttempts = Math.Min(
-                maximumAttempts,
+                attemptCeiling,
                 checked(state.CorrectionAttempts + additionalAttempts));
         }
-        var maximumElapsedSeconds = state.MaximumElapsedSeconds;
+        var elapsedCeilingSeconds = state.MaximumElapsedSeconds;
+        if (attestedLineageMaximumElapsedTime is { } attestedElapsed)
+        {
+            if (attestedElapsed <= TimeSpan.Zero || !double.IsFinite(attestedElapsed.TotalSeconds))
+                throw new InvalidOperationException("The attested lineage elapsed-time ceiling must be finite and positive.");
+            elapsedCeilingSeconds = attestedElapsed.TotalSeconds;
+        }
+        var maximumElapsedSeconds = elapsedCeilingSeconds;
         if (familyAdditionalElapsedTime is { } additionalElapsed)
         {
             if (additionalElapsed <= TimeSpan.Zero || !double.IsFinite(additionalElapsed.TotalSeconds))
                 throw new InvalidOperationException("The current-family elapsed-time increment must be finite and positive.");
             var consumedElapsedSeconds = Math.Max(0, (nowUtc - state.StartedUtc).TotalSeconds);
             maximumElapsedSeconds = Math.Min(
-                maximumElapsedSeconds,
+                elapsedCeilingSeconds,
                 checked(consumedElapsedSeconds + additionalElapsed.TotalSeconds));
         }
         if (!double.IsFinite(maximumSingle) || !double.IsFinite(maximumRadius) ||
@@ -398,9 +447,12 @@ public static class G3AcquisitionMotionPlanner
             throw new InvalidOperationException("The continued G3 motion-family limits are invalid, already consumed, or incompatible with the inherited arrival tolerance.");
         }
 
-        // Deliberately preserve lineage, origin, limits, consumed motion,
-        // attempts and the earliest start. A process/run handoff can never mint
-        // fresh budget merely because the prior intent is settled.
+        // Deliberately preserve lineage, origin, consumed motion, attempts and
+        // the earliest start. By default the inherited ceilings cannot widen.
+        // A caller that has already re-attested the immutable commissioning
+        // identity may supply the global lineage ceilings; the current family
+        // then receives only its declared increment and can never exceed those
+        // commissioning ceilings.
         return state with
         {
             ObservationRunId = observationRunId,
@@ -414,7 +466,7 @@ public static class G3AcquisitionMotionPlanner
             MaximumElapsedSeconds = maximumElapsedSeconds,
             DeclaredEvidencePath = declaredEvidencePath,
             UpdatedUtc = nowUtc,
-            LastReason = $"Settled G3 budget lineage continued for {kind} with current-family limits no wider than the prior family and without resetting motion, action or elapsed-time consumption.",
+            LastReason = $"Settled G3 budget lineage continued for {kind} within the re-attested commissioning ceilings and without resetting motion, action or elapsed-time consumption.",
         };
     }
 

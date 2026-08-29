@@ -96,6 +96,22 @@ public sealed class Phd2CaptureException : Phd2Exception
 }
 
 /// <summary>
+/// PHD2 completed a native <c>find_star</c> JSON-RPC request successfully but
+/// returned no candidate point. This is deliberately distinct from transport,
+/// protocol and JSON-RPC failures so that a caller may apply its own bounded
+/// fresh-frame reselection policy without retrying an uncertain command.
+/// </summary>
+public sealed class Phd2NoGuideStarException : Phd2Exception
+{
+    public const string FailureCode = "PHD2_FIND_STAR_NO_CANDIDATE";
+
+    public Phd2NoGuideStarException()
+        : base($"{FailureCode}: PHD2 native automatic selection completed but returned no guide-star candidate point.")
+    {
+    }
+}
+
+/// <summary>
 /// The one allowed exact lock-position mutation may have taken effect, so the
 /// caller must reconcile with a fresh get_lock_position and its durable ledger.
 /// Automatic resend is explicitly forbidden.

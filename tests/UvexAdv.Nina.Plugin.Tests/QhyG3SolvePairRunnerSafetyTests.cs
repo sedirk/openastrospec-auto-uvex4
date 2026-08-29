@@ -61,12 +61,88 @@ public sealed class QhyG3SolvePairRunnerSafetyTests
     [Fact]
     public void PairingNeverCommandsMountAndCandidateCannotAuthorizeMotion()
     {
-        Assert.DoesNotContain("SlewToCoordinatesAsync", PairSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("SetExactLockPositionAsync", PairSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pulse", PairSource, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("mountMotionCommandCount = 0", PairSource, StringComparison.Ordinal);
-        Assert.Contains("motionAuthority = false", PairSource, StringComparison.Ordinal);
-        Assert.Contains("cannot authorize", PairSource, StringComparison.OrdinalIgnoreCase);
+        var collector = Slice(
+            PairSource,
+            "private async Task TryCollectQhyG3FastSolvePairAsync(",
+            "private static async Task<string> PersistQhyG3CandidateCalibrationAsync(");
+
+        Assert.DoesNotContain("SlewToCoordinatesAsync", collector, StringComparison.Ordinal);
+        Assert.DoesNotContain("telescopeMediator.Sync", collector, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetExactLockPositionAsync", collector, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pulse", collector, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("mountMotionCommandCount = 0", collector, StringComparison.Ordinal);
+        Assert.Contains("motionAuthority = false", collector, StringComparison.Ordinal);
+        Assert.Contains("cannot authorize", collector, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GrossNoHomeCoordinateRecoveryIsOneSyncThenOneCatalogSlewWithFreshG3Required()
+    {
+        var recovery = Slice(
+            PairSource,
+            "private async Task<QhyMountCoordinateRecoveryResult> RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(",
+            "private async Task TryCollectQhyG3FastSolvePairAsync(");
+
+        var intent = recovery.IndexOf("qhy-mount-coordinate-sync-intent", StringComparison.Ordinal);
+        var oneShot = recovery.IndexOf("Interlocked.CompareExchange(ref qhyMountCoordinateSyncPerformed, 1, 0)", StringComparison.Ordinal);
+        var epochConversion = recovery.IndexOf("qhyTruthJ2000.Transform(syncCommandReadback.Epoch)", StringComparison.Ordinal);
+        var sync = recovery.IndexOf("telescopeMediator.Sync(qhySyncCommandCoordinates)", StringComparison.Ordinal);
+        var catalogSlew = recovery.IndexOf("SlewToCoordinatesAsync(target", StringComparison.Ordinal);
+        Assert.True(epochConversion >= 0 && intent > epochConversion && oneShot > intent && sync > oneShot && catalogSlew > sync);
+        Assert.Contains("Interlocked.CompareExchange(ref qhyMountCoordinateSyncPerformed, 1, 0)", recovery, StringComparison.Ordinal);
+        Assert.Contains("telescopeMediator.Sync(qhySyncCommandCoordinates)", recovery, StringComparison.Ordinal);
+        Assert.DoesNotContain("telescopeMediator.Sync(qhyCoordinates)", recovery, StringComparison.Ordinal);
+        Assert.Equal(sync, recovery.LastIndexOf("telescopeMediator.Sync(", StringComparison.Ordinal));
+        Assert.Contains("qhyTruthJ2000 = new", recovery, StringComparison.Ordinal);
+        Assert.Contains("qhySyncCommand = new", recovery, StringComparison.Ordinal);
+        Assert.Contains("residualAfter > 5d", recovery, StringComparison.Ordinal);
+        Assert.Contains("QHY_MOUNT_COORDINATE_SYNC_REPEAT_BLOCKED", recovery, StringComparison.Ordinal);
+        Assert.Contains("SlewToCoordinatesAsync(target", recovery, StringComparison.Ordinal);
+        Assert.Contains("opticalArrivalAuthority = \"next fresh G3 WCS\"", recovery, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnverifiedStationarySyncDegradesToFreshQhyHintWithoutRetryOrCatalogSlew()
+    {
+        var selection = Slice(
+            PairSource,
+            "private async Task<G3PlateSolveHintSelection> SelectG3PlateSolveHintAsync(",
+            "private async Task<QhyMountCoordinateRecoveryResult> RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(");
+        var recovery = Slice(
+            PairSource,
+            "private async Task<QhyMountCoordinateRecoveryResult> RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(",
+            "private async Task TryCollectQhyG3FastSolvePairAsync(");
+        var degraded = Slice(
+            PairSource,
+            "private async Task<QhyMountCoordinateRecoveryResult> ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(",
+            "private async Task<QhyPostSyncCatalogSlewResult> SlewToCatalogTargetAfterQhyCoordinateSyncAsync(");
+
+        Assert.Contains("coordinateRecovery.SyncVerified", selection, StringComparison.Ordinal);
+        Assert.Contains("FreshQhyPl3WcsAfterUnverifiedMountSync", selection, StringComparison.Ordinal);
+        Assert.Contains("QHY_MOUNT_COORDINATE_SYNC_EXCEPTION", recovery, StringComparison.Ordinal);
+        Assert.Contains("QHY_MOUNT_COORDINATE_SYNC_REJECTED", recovery, StringComparison.Ordinal);
+        Assert.Contains("QHY_MOUNT_COORDINATE_SYNC_READBACK_FAILED", recovery, StringComparison.Ordinal);
+        Assert.Contains("QHY_MOUNT_COORDINATE_SYNC_REPEAT_BLOCKED", recovery, StringComparison.Ordinal);
+        Assert.Contains("ContinueWithFreshQhyHintAfterUnverifiedSyncAsync", recovery, StringComparison.Ordinal);
+        Assert.Contains("additionalSyncAuthorized = false", degraded, StringComparison.Ordinal);
+        Assert.Contains("catalogueSlewAuthorized = false", degraded, StringComparison.Ordinal);
+        Assert.Contains("mountMotionAuthority = false", degraded, StringComparison.Ordinal);
+        Assert.DoesNotContain("telescopeMediator.Sync", degraded, StringComparison.Ordinal);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", degraded, StringComparison.Ordinal);
+        Assert.Contains("syncVerified = false", degraded, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MachineLocalCandidateIndexFailureIsOnlyAWarning()
+    {
+        var collector = Slice(
+            PairSource,
+            "private async Task TryCollectQhyG3FastSolvePairAsync(",
+            "private static async Task<string> PersistQhyG3CandidateCalibrationAsync(");
+
+        Assert.Contains("qhy-g3-automatic-calibration-index-warning", collector, StringComparison.Ordinal);
+        Assert.Contains("qhyG3AutomaticCalibrationWarning", collector, StringComparison.Ordinal);
+        Assert.Contains("CandidateCreated", collector, StringComparison.Ordinal);
     }
 
     [Fact]

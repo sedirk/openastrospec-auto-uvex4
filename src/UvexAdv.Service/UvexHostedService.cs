@@ -30,7 +30,16 @@ internal sealed class UvexHostedService(
                     // operator/API connect request.  A normal disconnect must remain
                     // disconnected; otherwise the old five-second retry loop races
                     // the vendor application and makes the Disconnect button a lie.
-                    if (controller.Status.ConnectionState == DeviceConnectionState.Ready)
+                    if (controller.UnexpectedTransportRecoveryPending)
+                    {
+                        if (await controller.TryRecoverUnexpectedTransportLossAsync(stoppingToken).ConfigureAwait(false))
+                        {
+                            logger.LogInformation(
+                                "UVEX unexpected transport loss recovered on {PortName}; identity, slit configuration and live positions were re-read",
+                                controller.Status.PortName);
+                        }
+                    }
+                    else if (controller.Status.ConnectionState == DeviceConnectionState.Ready)
                     {
                         await controller.RefreshAsync(stoppingToken).ConfigureAwait(false);
                     }
@@ -41,7 +50,17 @@ internal sealed class UvexHostedService(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "UVEX background status refresh failed; the service will not reconnect COM5 automatically");
+                    if (!controller.UnexpectedTransportRecoveryPending &&
+                        controller.Status.ConnectionState == DeviceConnectionState.Ready)
+                    {
+                        controller.MarkUnexpectedTransportLoss(ex);
+                    }
+
+                    logger.LogWarning(
+                        ex,
+                        controller.UnexpectedTransportRecoveryPending
+                            ? "UVEX unexpected transport loss is pending; the next bounded background cycle will reopen only the configured port"
+                            : "UVEX background status refresh failed without authorizing automatic reconnect");
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);

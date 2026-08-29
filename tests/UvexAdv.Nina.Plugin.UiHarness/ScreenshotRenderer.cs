@@ -13,10 +13,14 @@ namespace UvexAdv.Nina.Plugin.UiHarness;
 
 public sealed record ScreenshotRenderResult(
     string ScenarioName,
+    string CultureName,
     int Width,
     int Height,
     string AbsolutePath,
-    string Sha256);
+    string Sha256)
+{
+    public IReadOnlyList<string> VisibleTexts { get; init; } = [];
+}
 
 public static class ScreenshotRenderer
 {
@@ -39,7 +43,14 @@ public static class ScreenshotRenderer
                 $"Production template '{ProductionTemplateKey}' was not found in Templates.xaml.");
         }
 
-        return scenarios.Select(scenario => Render(productionTemplate, scenario, outputDirectory)).ToArray();
+        try
+        {
+            return scenarios.Select(scenario => Render(productionTemplate, scenario, outputDirectory)).ToArray();
+        }
+        finally
+        {
+            ObservationStaticTextLocalization.SetCulture(null);
+        }
     }
 
     private static ScreenshotRenderResult Render(
@@ -47,6 +58,7 @@ public static class ScreenshotRenderer
         ScreenshotScenario scenario,
         string outputDirectory)
     {
+        ObservationStaticTextLocalization.SetCulture(scenario.Culture);
         var host = new Border
         {
             Width = scenario.Width,
@@ -66,6 +78,7 @@ public static class ScreenshotRenderer
         host.Resources.MergedDictionaries.Add(OfflineNightTheme.Create());
 
         BitmapSource bitmap;
+        IReadOnlyList<string> visibleTexts = [];
         var window = new Window
         {
             Width = scenario.Width,
@@ -91,6 +104,14 @@ public static class ScreenshotRenderer
             PumpLoadedAndRender(window.Dispatcher);
             if (string.Equals(scenario.Name, "advanced", StringComparison.OrdinalIgnoreCase))
             {
+                var algorithms = Descendants<Expander>(host).FirstOrDefault(expander =>
+                    expander.Header?.ToString()?.StartsWith("目标获取算法", StringComparison.Ordinal) == true);
+                if (algorithms is not null)
+                {
+                    algorithms.IsExpanded = true;
+                    algorithms.UpdateLayout();
+                    PumpLoadedAndRender(window.Dispatcher);
+                }
                 var brightTarget = Descendants<Expander>(host).FirstOrDefault(expander =>
                     expander.Header?.ToString()?.StartsWith("超亮目标", StringComparison.Ordinal) == true);
                 if (brightTarget is not null)
@@ -122,6 +143,11 @@ public static class ScreenshotRenderer
             target.Render(host);
             target.Freeze();
             bitmap = target;
+            visibleTexts = Descendants<TextBlock>(host)
+                .Where(text => text.IsVisible && !string.IsNullOrWhiteSpace(text.Text))
+                .Select(text => text.Text.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
         }
         finally
         {
@@ -137,7 +163,10 @@ public static class ScreenshotRenderer
         }
 
         var sha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
-        return new(scenario.Name, scenario.Width, scenario.Height, Path.GetFullPath(path), sha);
+        return new(scenario.Name, scenario.Culture.Name, scenario.Width, scenario.Height, Path.GetFullPath(path), sha)
+        {
+            VisibleTexts = visibleTexts,
+        };
     }
 
     private static void PumpLoadedAndRender(Dispatcher dispatcher)

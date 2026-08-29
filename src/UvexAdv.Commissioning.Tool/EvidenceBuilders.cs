@@ -855,9 +855,9 @@ public static class EvidenceBuilders
             ["GhostAssistanceMode"] = definition.GhostAssistanceMode,
             // Fast paired WCS collection is an optional, zero-mount-motion
             // commissioning aid.  The generated Profile exposes a complete,
-            // deterministic policy but leaves it disabled until an operator
-            // deliberately enables it for a hash-bound run configuration.
-            ["QhyG3FastPairEnabled"] = false,
+            // deterministic policy and enables evidence collection by default;
+            // the resulting single sample never carries motion authority.
+            ["QhyG3FastPairEnabled"] = true,
             ["QhyG3FastPairSchemaVersion"] = QhyG3FastPairPolicy.CurrentSchemaVersion,
             ["QhyG3FastPairPolicyId"] = "qhy-g3-fast-pair-v1",
             ["QhyG3FastPairExposureSeconds"] = 2d,

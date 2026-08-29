@@ -6,16 +6,17 @@
              Background="#070D16"
              Foreground="#E5E7EB"
              Focusable="True"
-             SnapsToDevicePixels="True">
+             SnapsToDevicePixels="True"
+             local:ObservationStaticTextLocalization.IsEnabled="True">
   <UserControl.Resources>
     <Style x:Key="ViewerToolbarButton" TargetType="Button">
       <Setter Property="Foreground" Value="#F1F5F9" />
       <Setter Property="Background" Value="#172334" />
       <Setter Property="BorderBrush" Value="#52647A" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="Padding" Value="9,4" />
-      <Setter Property="Margin" Value="2,0" />
-      <Setter Property="MinHeight" Value="29" />
+      <Setter Property="Padding" Value="7,3" />
+      <Setter Property="Margin" Value="1,0" />
+      <Setter Property="MinHeight" Value="26" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Template">
         <Setter.Value>
@@ -57,9 +58,8 @@
         <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
-      <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="5">
-        <StackPanel>
-        <DockPanel LastChildFill="True">
+      <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="4">
+        <DockPanel LastChildFill="True" ToolTip="滚轮缩放 · 左键拖动 · 双击适配">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
             <Button Content="{Binding PopoutLabel, ElementName=ViewerRoot}"
                     Command="{Binding PopoutCommand, ElementName=ViewerRoot}"
@@ -87,7 +87,7 @@
                     IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                     Click="OnZoomOutClick" />
             <TextBlock x:Name="ZoomTextBlock"
-                       Width="58"
+                       Width="50"
                        Text="100%"
                        FontFamily="Consolas"
                        FontWeight="SemiBold"
@@ -114,13 +114,7 @@
                     IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                     Click="OnActualSizeClick" />
           </StackPanel>
-          <TextBlock Text="滚轮缩放 · 左键拖动 · 双击适配"
-                     Foreground="#CBD5E1"
-                     VerticalAlignment="Center"
-                     TextTrimming="CharacterEllipsis"
-                     Margin="5,0,8,0" />
-        </DockPanel>
-        <WrapPanel Margin="3,5,0,0" VerticalAlignment="Center">
+          <WrapPanel Margin="0" VerticalAlignment="Center">
           <Button x:Name="AutoStretchButton"
                   Style="{StaticResource ViewerToolbarButton}"
                   Content="自动拉伸：关"
@@ -134,29 +128,29 @@
                   AutomationProperties.Name="恢复原始预览显示"
                   IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                   Click="OnResetDisplayClick" />
-          <TextBlock Text="黑" Margin="10,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
-          <Slider x:Name="BlackPointSlider" Minimum="0" Maximum="254" Value="0" Width="86"
+          <TextBlock Text="黑" Margin="7,0,2,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="BlackPointSlider" Minimum="0" Maximum="254" Value="0" Width="72"
                   VerticalAlignment="Center" IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                   ValueChanged="OnManualDisplayValueChanged" />
           <TextBlock x:Name="BlackPointText" Text="0" Width="30" Margin="3,0,2,0"
                      FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
-          <TextBlock Text="白" Margin="5,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
-          <Slider x:Name="WhitePointSlider" Minimum="1" Maximum="255" Value="255" Width="86"
+          <TextBlock Text="白" Margin="4,0,2,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="WhitePointSlider" Minimum="1" Maximum="255" Value="255" Width="72"
                   VerticalAlignment="Center" IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                   ValueChanged="OnManualDisplayValueChanged" />
           <TextBlock x:Name="WhitePointText" Text="255" Width="34" Margin="3,0,2,0"
                      FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
-          <TextBlock Text="γ" Margin="5,0,3,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
-          <Slider x:Name="GammaSlider" Minimum="0.2" Maximum="5" Value="1" Width="94"
+          <TextBlock Text="γ" Margin="4,0,2,0" VerticalAlignment="Center" Foreground="#CBD5E1" />
+          <Slider x:Name="GammaSlider" Minimum="0.2" Maximum="5" Value="1" Width="76"
                   TickFrequency="0.1" VerticalAlignment="Center"
                   IsEnabled="{Binding HasImage, ElementName=ViewerRoot}"
                   ValueChanged="OnManualDisplayValueChanged" />
           <TextBlock x:Name="GammaText" Text="1.00" Width="42" Margin="3,0,2,0"
                      FontFamily="Consolas" VerticalAlignment="Center" Foreground="#BAE6FD" />
-          <TextBlock x:Name="DisplayLevelsText" Text="显示：原图" Margin="9,0,0,0"
+          <TextBlock x:Name="DisplayLevelsText" Text="显示：原图" Margin="6,0,0,0"
                      VerticalAlignment="Center" Foreground="#94A3B8" />
         </WrapPanel>
-        </StackPanel>
+        </DockPanel>
       </Border>
 
       <Grid Grid.Row="1" Background="#02060C">
@@ -221,7 +215,7 @@
               Background="#0C1522"
               BorderBrush="#334155"
               BorderThickness="0,1,0,0"
-              Padding="8,5">
+              Padding="6,3">
         <TextBlock Text="{Binding Caption, ElementName=ViewerRoot}"
                    Foreground="#CBD5E1"
                    TextWrapping="Wrap" />

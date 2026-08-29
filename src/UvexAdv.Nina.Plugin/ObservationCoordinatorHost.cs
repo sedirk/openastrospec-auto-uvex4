@@ -688,6 +688,7 @@ internal sealed class SimulatedObservationStageRunner(
         ObservationContext context,
         CancellationToken cancellationToken)
     {
+        var culture = ObservationStaticTextLocalization.EffectiveCulture;
         const int ticks = 6;
         for (var tick = 1; tick <= ticks; tick++)
         {
@@ -696,8 +697,8 @@ internal sealed class SimulatedObservationStageRunner(
             var fraction = tick / (double)ticks;
             progress?.Report(new ApplicationStatus
             {
-                Source = "OpenAstroSpec Auto（模拟）",
-                Status = $"{StageDisplayName(stage)} · {fraction:P0}",
+                Source = ObservationUiPresentation.Text("OpenAstroSpec Auto（模拟）", "OpenAstroSpec Auto (simulation)", culture),
+                Status = $"{ObservationUiPresentation.StageName(stage, culture)} · {fraction:P0}",
                 Progress = fraction,
             });
             PublishSimulatedPreview(stage, fraction);
@@ -706,7 +707,10 @@ internal sealed class SimulatedObservationStageRunner(
 
         var gate = GateResult.Pass(
             $"SIM_{stage.ToString().ToUpperInvariant()}",
-            $"{StageDisplayName(stage)}：模拟质量门通过。",
+            ObservationUiPresentation.Text(
+                $"{ObservationUiPresentation.StageName(stage, culture)}：模拟质量门通过。",
+                $"{ObservationUiPresentation.StageName(stage, culture)}: simulated quality gate passed.",
+                culture),
             new Dictionary<string, double> { ["simulationConfidence"] = 1 });
         return new StageResult(gate, Metadata: new Dictionary<string, string>
         {
@@ -721,7 +725,10 @@ internal sealed class SimulatedObservationStageRunner(
     {
         var gate = GateResult.Pass(
             "SIM_REVALIDATED",
-            "模拟设备身份、安全、目标高度、解算、入缝和导星状态已重新验证。",
+            ObservationUiPresentation.Text(
+                "模拟设备身份、安全、目标高度、解算、入缝和导星状态已重新验证。",
+                "Simulated device identity, safety, target altitude, solve, slit placement and guiding state were revalidated.",
+                ObservationStaticTextLocalization.EffectiveCulture),
             new Dictionary<string, double> { ["simulationConfidence"] = 1 });
         return Task.FromResult(gate);
     }
@@ -730,8 +737,8 @@ internal sealed class SimulatedObservationStageRunner(
     {
         progress?.Report(new ApplicationStatus
         {
-            Source = "OpenAstroSpec Auto（模拟）",
-            Status = "已在有界动作边界暂停；不会开始下一动作。",
+            Source = ObservationUiPresentation.Text("OpenAstroSpec Auto（模拟）", "OpenAstroSpec Auto (simulation)", ObservationStaticTextLocalization.EffectiveCulture),
+            Status = ObservationUiPresentation.Text("已在有界动作边界暂停；不会开始下一动作。", "Paused at a bounded action boundary; no next action will start.", ObservationStaticTextLocalization.EffectiveCulture),
         });
         return Task.CompletedTask;
     }
@@ -740,8 +747,8 @@ internal sealed class SimulatedObservationStageRunner(
     {
         progress?.Report(new ApplicationStatus
         {
-            Source = "OpenAstroSpec Auto（模拟）",
-            Status = "已进入人工接管；模拟器未持有任何实体设备。",
+            Source = ObservationUiPresentation.Text("OpenAstroSpec Auto（模拟）", "OpenAstroSpec Auto (simulation)", ObservationStaticTextLocalization.EffectiveCulture),
+            Status = ObservationUiPresentation.Text("已进入人工接管；模拟器未持有任何实体设备。", "Manual takeover is active; the simulator owns no physical equipment.", ObservationStaticTextLocalization.EffectiveCulture),
         });
         return Task.CompletedTask;
     }
@@ -750,8 +757,8 @@ internal sealed class SimulatedObservationStageRunner(
     {
         progress?.Report(new ApplicationStatus
         {
-            Source = "OpenAstroSpec Auto（模拟）",
-            Status = "模拟观测已取消。",
+            Source = ObservationUiPresentation.Text("OpenAstroSpec Auto（模拟）", "OpenAstroSpec Auto (simulation)", ObservationStaticTextLocalization.EffectiveCulture),
+            Status = ObservationUiPresentation.Text("模拟观测已取消。", "The simulated observation was cancelled.", ObservationStaticTextLocalization.EffectiveCulture),
         });
         return Task.CompletedTask;
     }
@@ -772,24 +779,14 @@ internal sealed class SimulatedObservationStageRunner(
         host.PublishPreview(
             channel,
             SimulatedPreviewFactory.Create(channel, fraction),
-            $"{StageDisplayName(stage)} · 模拟实时帧 {fraction:P0}");
+            ObservationUiPresentation.Text(
+                $"{ObservationUiPresentation.StageName(stage, ObservationStaticTextLocalization.EffectiveCulture)} · 模拟实时帧 {fraction:P0}",
+                $"{ObservationUiPresentation.StageName(stage, ObservationStaticTextLocalization.EffectiveCulture)} · simulated live frame {fraction:P0}",
+                ObservationStaticTextLocalization.EffectiveCulture));
     }
 
-    internal static string StageDisplayName(ObservationStage stage) => stage switch
-    {
-        ObservationStage.ValidateNightSetup => "验证并锁定 Night Setup",
-        ObservationStage.SlewToCatalogTarget => "按目录坐标初始转向目标",
-        ObservationStage.AcquireQhyWideField => "QHY/GS350 广域解算见证",
-        ObservationStage.CoarseCenter => "确认 QHY 见证并交棒 G3（不移动）",
-        ObservationStage.AcquireG3SlitField => "G3 fresh 解算、WCS 大步修正或邻场搜索",
-        ObservationStage.PlaceTargetOnSlit => "PHD2 精确送入 fresh 狭缝中点",
-        ObservationStage.StartGuiding => "PHD2 原生选星、导星与稳定判定",
-        ObservationStage.StartQhyPhotometry => "启动 QHY 同步测光",
-        ObservationStage.SelectAtrExposure => "ATR 探测曝光与档位选择",
-        ObservationStage.RunScienceBlock => "ATR 科学曝光与健康监测",
-        ObservationStage.FinalizeObservation => "结束测光并生成摘要",
-        _ => stage.ToString(),
-    };
+    internal static string StageDisplayName(ObservationStage stage) =>
+        ObservationUiPresentation.StageName(stage, ObservationStaticTextLocalization.EffectiveCulture);
 }
 
 internal static class SimulatedPreviewFactory

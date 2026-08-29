@@ -11,9 +11,10 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed class UvexPluginSettings
 {
     private const int WeakSupervisionSelectionSemanticsVersion = 1;
-    private const int G3PlateSolveEfficiencySemanticsVersion = 1;
+    private const int G3PlateSolveEfficiencySemanticsVersion = 2;
     private const string LegacyG3PlateSolveExposureLadder = "2000,5000,10000,15000,30000";
-    private const string CurrentG3PlateSolveExposureLadder = "2000,5000,10000,15000";
+    private const string RetiredG3PlateSolveExposureLadder = "2000,5000,10000,15000";
+    private const string CurrentG3PlateSolveExposureLadder = "5000,10000,15000";
     public static readonly Guid PluginGuid = Guid.Parse("A4183531-55BD-4FD0-B04A-97ED7EDC15DA");
     public const int Atr585mDefaultOffset = 256;
     public const int G3M2210mDefaultSaturationAdu = 4095;
@@ -221,7 +222,7 @@ internal sealed class UvexPluginSettings
     public double BrightTargetMaximumSecondaryPeakRatio { get => values.GetValueDouble(nameof(BrightTargetMaximumSecondaryPeakRatio), 0.35); set => values.SetValueDouble(nameof(BrightTargetMaximumSecondaryPeakRatio), value); }
     public GhostAssistanceMode GhostAssistanceMode { get => values.GetValueEnum(nameof(GhostAssistanceMode), GhostAssistanceMode.Skip); set => values.SetValueEnum(nameof(GhostAssistanceMode), value); }
     public WideToSlitTransferMode WideToSlitTransferMode { get => values.GetValueEnum(nameof(WideToSlitTransferMode), WideToSlitTransferMode.Skip); set => values.SetValueEnum(nameof(WideToSlitTransferMode), value); }
-    public bool QhyG3FastPairEnabled { get => values.GetValueBoolean(nameof(QhyG3FastPairEnabled), false); set => values.SetValueBoolean(nameof(QhyG3FastPairEnabled), value); }
+    public bool QhyG3FastPairEnabled { get => values.GetValueBoolean(nameof(QhyG3FastPairEnabled), true); set => values.SetValueBoolean(nameof(QhyG3FastPairEnabled), value); }
     public int QhyG3FastPairSchemaVersion { get => values.GetValueInt32(nameof(QhyG3FastPairSchemaVersion), QhyG3FastPairPolicy.CurrentSchemaVersion); set => values.SetValueInt32(nameof(QhyG3FastPairSchemaVersion), value); }
     public string QhyG3FastPairPolicyId { get => GetString(nameof(QhyG3FastPairPolicyId), "qhy-g3-fast-pair-v1"); set => values.SetValueString(nameof(QhyG3FastPairPolicyId), value); }
     public double QhyG3FastPairExposureSeconds { get => values.GetValueDouble(nameof(QhyG3FastPairExposureSeconds), 2); set => values.SetValueDouble(nameof(QhyG3FastPairExposureSeconds), value); }
@@ -374,13 +375,14 @@ internal sealed class UvexPluginSettings
         var versionKey = nameof(G3PlateSolveEfficiencySemanticsVersion);
         if (values.GetValueInt32(versionKey, 0) >= G3PlateSolveEfficiencySemanticsVersion) return;
 
-        // Only replace the exact site ladder shipped before the successful
-        // field route. Preserve every operator-authored or commissioning-
-        // specific ladder. Hardware binning remains 1x1; the G3 solver applies
-        // a display/solve-only 2x downsample so slit geometry and PHD2
-        // calibration remain in their commissioned detector coordinates.
+        // Only replace exact retired site ladders. Preserve every operator-
+        // authored or commissioning-specific ladder. Hardware binning remains
+        // 1x1; the G3 solver applies a display/solve-only 2x downsample so slit
+        // geometry and PHD2 calibration remain in their commissioned detector
+        // coordinates.
         var existing = GetString(nameof(G3PlateSolveExposureMillisecondsCsv), string.Empty);
-        if (string.Equals(existing, LegacyG3PlateSolveExposureLadder, StringComparison.Ordinal))
+        if (string.Equals(existing, LegacyG3PlateSolveExposureLadder, StringComparison.Ordinal)
+            || string.Equals(existing, RetiredG3PlateSolveExposureLadder, StringComparison.Ordinal))
         {
             values.SetValueString(nameof(G3PlateSolveExposureMillisecondsCsv), CurrentG3PlateSolveExposureLadder);
         }

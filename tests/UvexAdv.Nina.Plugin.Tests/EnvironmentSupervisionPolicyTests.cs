@@ -38,6 +38,7 @@ public sealed class EnvironmentSupervisionPolicyTests
         var gate = missing.ValidateForMode(weakSupervisionEnabled: true);
 
         Assert.Equal(GateDisposition.Passed, gate.Disposition);
+        Assert.Equal(GateSeverity.Warning, gate.Severity);
         Assert.Equal("WEAK_SUPERVISION_ENVIRONMENT_ADAPTERS_DEGRADED", gate.Code);
         Assert.Contains("dome/roll-off-roof adapter", gate.Message, StringComparison.Ordinal);
         Assert.Contains("weather adapter", gate.Message, StringComparison.Ordinal);
@@ -114,6 +115,74 @@ public sealed class EnvironmentSupervisionPolicyTests
     }
 
     [Fact]
+    public void OptionalQhyReadbackCannotBypassRequiredFinalizationCleanup()
+    {
+        var finalize = MethodBody(
+            "private async Task<StageResult> FinalizeObservationAsync(",
+            "private async Task<(QhyJobSnapshot? Snapshot, string? Issue)> ReadQhyJobForFinalizationAsync(");
+        var read = finalize.IndexOf("ReadQhyJobForFinalizationAsync(", StringComparison.Ordinal);
+        var slitOff = finalize.IndexOf("EnsureSlitIlluminationOffAsync(", StringComparison.Ordinal);
+        var phdStop = finalize.IndexOf("StopPhdAndWaitAsync(", StringComparison.Ordinal);
+        var cover = finalize.IndexOf("CloseOpticalCoverAsync(", StringComparison.Ordinal);
+        var roof = finalize.IndexOf("ParkMountAndCloseDomeOrRoofAsync(", StringComparison.Ordinal);
+
+        Assert.True(read >= 0 && slitOff > read && phdStop > slitOff && cover > phdStop && roof > cover);
+        Assert.Contains("if (readbackIssue is not null)", finalize, StringComparison.Ordinal);
+        Assert.Contains("cleanupWarnings.Add(readbackIssue)", finalize, StringComparison.Ordinal);
+        var qhyStopBoundary = finalize.IndexOf(
+            "if (snapshot is not null && snapshot.State is not",
+            StringComparison.Ordinal);
+        var qhyCheckpoint = finalize.IndexOf(
+            "CheckpointAndRejectStaleStageStackAsync(context, cancellationToken)",
+            qhyStopBoundary,
+            StringComparison.Ordinal);
+        var cancellationCatch = finalize.IndexOf(
+            "catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }",
+            qhyCheckpoint,
+            StringComparison.Ordinal);
+        var pauseCatch = finalize.IndexOf(
+            "catch (ResumeStageRestartException) { throw; }",
+            cancellationCatch,
+            StringComparison.Ordinal);
+        var optionalWarning = finalize.IndexOf(
+            "cleanupWarnings.Add($\"QHY photometry stop failed:",
+            pauseCatch,
+            StringComparison.Ordinal);
+        Assert.True(qhyStopBoundary >= 0 && qhyCheckpoint > qhyStopBoundary && cancellationCatch > qhyCheckpoint && pauseCatch > cancellationCatch && optionalWarning > pauseCatch && slitOff > optionalWarning);
+
+        var retry = MethodBody(
+            "private async Task<(QhyJobSnapshot? Snapshot, string? Issue)> ReadQhyJobForFinalizationAsync(",
+            "private IReadOnlyList<string> ValidateStaticConfiguration(");
+        Assert.Contains("attempt <= 2", retry, StringComparison.Ordinal);
+        Assert.Contains("qhy.GetJobAsync(jobId", retry, StringComparison.Ordinal);
+        Assert.Contains("catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)", retry, StringComparison.Ordinal);
+        Assert.Contains("requiredCleanupContinues = true", retry, StringComparison.Ordinal);
+        Assert.DoesNotContain("EnsureCameraConnectedAsync", retry, StringComparison.Ordinal);
+        Assert.DoesNotContain("qhy.ResumeAsync", retry, StringComparison.Ordinal);
+        Assert.DoesNotContain("qhy.Start", retry, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FinalizeReconnectsOnlyTheLockedCoverAdapterBeforeAnyCloseCommand()
+    {
+        var close = MethodBody(
+            "private async Task<string?> CloseOpticalCoverAsync(",
+            "private async Task<string?> ParkMountAndCloseDomeOrRoofAsync(");
+        var selection = close.IndexOf("ValidateCurrentEnvironmentDeviceSelections()", StringComparison.Ordinal);
+        var reconnect = close.IndexOf("flatDeviceMediator.Connect()", StringComparison.Ordinal);
+        var reread = close.IndexOf("info = flatDeviceMediator.GetInfo()", reconnect, StringComparison.Ordinal);
+        var identity = close.IndexOf("EnvironmentAdapterIdentityMatches(info.DeviceId", reread, StringComparison.Ordinal);
+        var closeCommand = close.IndexOf("flatDeviceMediator.CloseCover", identity, StringComparison.Ordinal);
+
+        Assert.True(selection >= 0 && reconnect > selection && reread > reconnect && identity > reread && closeCommand > identity);
+        Assert.Contains("readOnlyReconnect = true", close, StringComparison.Ordinal);
+        Assert.Contains("coverCommandSent = false", close, StringComparison.Ordinal);
+        Assert.Contains("does not match locked selection", close, StringComparison.Ordinal);
+        Assert.DoesNotContain("拒绝向未知设备发命令并记录 warning", close, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(close, "flatDeviceMediator.Connect()"));
+    }
+
+    [Fact]
     public void UnsafeSafetyMonitorTripAbortsAtrAndStartsTerminalCleanupOnlyInFullMode()
     {
         var handler = MethodBody(
@@ -145,5 +214,17 @@ public sealed class EnvironmentSupervisionPolicyTests
         }
 
         throw new DirectoryNotFoundException("Repository root containing UVEX-ADV.sln was not found.");
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = source.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += value.Length;
+        }
+        return count;
     }
 }

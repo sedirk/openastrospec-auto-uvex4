@@ -24,7 +24,16 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
     public UvexPluginManifest(IProfileService profileService)
     {
         settings = new UvexPluginSettings(profileService);
-        profileService.ProfileChanged += (_, _) => RaiseAll();
+        void RefreshCultureAndBindings()
+        {
+            ObservationStaticTextLocalization.SetCulture(
+                profileService.ActiveProfile.ApplicationSettings.Language);
+            RaiseAll();
+        }
+        ObservationStaticTextLocalization.SetCulture(
+            profileService.ActiveProfile.ApplicationSettings.Language);
+        profileService.LocaleChanged += (_, _) => RefreshCultureAndBindings();
+        profileService.ProfileChanged += (_, _) => RefreshCultureAndBindings();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -168,12 +177,12 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
         {
             if (!settings.SpectralAutofocusCommissioned)
             {
-                return "保持当前位置：不会自动移动 UVEX M2；Night Setup 仍会核对当前步数和谱线质量。";
+                return T("保持当前位置：不会自动移动 UVEX M2；本夜配置仍会核对当前步数和谱线质量。", "Keep current position: UVEX M2 will not move automatically; Night Setup still verifies the current steps and line quality.");
             }
 
             if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
             {
-                return "配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。";
+                return T("配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。", "Incomplete configuration: first bind the ATR585M DeviceId in the automatic-observation ATR spectrum page or calibration-library panel.");
             }
 
             int focusLineCount;
@@ -183,16 +192,16 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentOutOfRangeException)
             {
-                return "配置不完整：谱线位置必须是以英文逗号分隔的有限像素数值。";
+                return T("配置不完整：谱线位置必须是以英文逗号分隔的有限像素数值。", "Incomplete configuration: line positions must be finite pixel values separated by ASCII commas.");
             }
 
             if (focusLineCount < 3 || settings.FocusStepSize <= 0 ||
                 settings.FocusMinimum >= settings.FocusMaximum || settings.FocusBacklash < 0)
             {
-                return "配置不完整：需要至少三条谱线、正步长、有效绝对行程和非负预压量。";
+                return T("配置不完整：需要至少三条谱线、正步长、有效绝对行程和非负预压量。", "Incomplete configuration: at least three lines, a positive step, valid absolute travel and non-negative preload are required.");
             }
 
-            return "已单独授权 UVEX M2 谱线对焦；运行时仍会复核 DeviceId、服务状态和软件行程。";
+            return T("已单独授权 UVEX M2 谱线对焦；运行时仍会复核 DeviceId、服务状态和软件行程。", "UVEX M2 spectral-line focus is separately authorized; runtime still verifies DeviceId, service state and software travel limits.");
         }
     }
 
@@ -202,12 +211,12 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
         {
             if (!settings.WavelengthLockCommissioned)
             {
-                return "未授权：不会自动移动 UVEX 光栅。";
+                return T("未授权：不会自动移动 UVEX 光栅。", "Not authorized: the UVEX grating will not move automatically.");
             }
 
             if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
             {
-                return "配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。";
+                return T("配置不完整：必须先在自动观测的 ATR 光谱页或校准库面板绑定 ATR585M DeviceId。", "Incomplete configuration: first bind the ATR585M DeviceId in the automatic-observation ATR spectrum page or calibration-library panel.");
             }
 
             if (!double.IsFinite(settings.WavelengthReferencePixel) ||
@@ -215,12 +224,15 @@ public sealed class UvexPluginManifest : PluginBase, INotifyPropertyChanged
                 !double.IsFinite(settings.GratingStepsPerPixel) ||
                 settings.GratingStepsPerPixel == 0)
             {
-                return "配置不完整：参考像素、目标像素和带符号的光栅步/像素均未就绪。";
+                return T("配置不完整：参考像素、目标像素和带符号的光栅步/像素均未就绪。", "Incomplete configuration: reference pixel, target pixel and signed grating steps per pixel are not ready.");
             }
 
-            return "已单独授权光栅波长锁定；运行时仍会复核 DeviceId、服务状态和闭环收敛。";
+            return T("已单独授权光栅波长锁定；运行时仍会复核 DeviceId、服务状态和闭环收敛。", "Grating wavelength lock is separately authorized; runtime still verifies DeviceId, service state and closed-loop convergence.");
         }
     }
+
+    private static string T(string chinese, string english) =>
+        ObservationUiPresentation.Text(chinese, english, ObservationStaticTextLocalization.EffectiveCulture);
 
     private void Raise([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 

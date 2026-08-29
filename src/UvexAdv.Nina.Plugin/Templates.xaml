@@ -6,7 +6,7 @@
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
   <DataTemplate x:Key="OpenAstroSpec Auto — UVEX4_Options">
-    <Grid Margin="8">
+    <Grid Margin="8" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" />
         <RowDefinition Height="*" />
@@ -166,7 +166,7 @@
   </DataTemplate>
 
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.ObservationDockable_Dockable">
-    <Grid Margin="4" Background="#0B1220">
+    <Grid Margin="4" Background="#0B1220" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.Resources>
         <BooleanToVisibilityConverter x:Key="ObservationBoolToVisibility" />
         <Style TargetType="TextBlock">
@@ -178,9 +178,9 @@
           <Setter Property="Background" Value="#155E75" />
           <Setter Property="BorderBrush" Value="#38BDF8" />
           <Setter Property="BorderThickness" Value="1" />
-          <Setter Property="Padding" Value="9,5" />
-          <Setter Property="Margin" Value="2" />
-          <Setter Property="MinHeight" Value="30" />
+          <Setter Property="Padding" Value="7,3" />
+          <Setter Property="Margin" Value="1" />
+          <Setter Property="MinHeight" Value="26" />
           <Setter Property="Cursor" Value="Hand" />
           <Setter Property="Template">
             <Setter.Value>
@@ -258,7 +258,7 @@
           <Setter Property="Foreground" Value="#CBD5E1" />
           <Setter Property="Background" Value="#172033" />
           <Setter Property="BorderBrush" Value="#475569" />
-          <Setter Property="Padding" Value="10,6" />
+          <Setter Property="Padding" Value="8,4" />
           <Setter Property="Template">
             <Setter.Value>
               <ControlTemplate TargetType="TabItem">
@@ -300,6 +300,66 @@
             <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#164E63" /></Trigger>
           </Style.Triggers>
         </Style>
+        <!-- Shared semantic presentation. Individual pages bind a tone rather
+             than inventing a new color for the same run state. -->
+        <Style x:Key="ObservationCard" TargetType="Border">
+          <Setter Property="Background" Value="#111827" />
+          <Setter Property="BorderBrush" Value="#334155" />
+          <Setter Property="BorderThickness" Value="1" />
+          <Setter Property="CornerRadius" Value="6" />
+          <Setter Property="Padding" Value="10" />
+          <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="ObservationStatusChip" TargetType="Border">
+          <Setter Property="Background" Value="#1E293B" />
+          <Setter Property="BorderBrush" Value="#475569" />
+          <Setter Property="BorderThickness" Value="1" />
+          <Setter Property="CornerRadius" Value="9" />
+          <Setter Property="Padding" Value="7,2" />
+          <Setter Property="Margin" Value="0,0,10,0" />
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Info}"><Setter Property="Background" Value="#0C4A6E" /><Setter Property="BorderBrush" Value="#38BDF8" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Success}"><Setter Property="Background" Value="#14532D" /><Setter Property="BorderBrush" Value="#4ADE80" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Warning}"><Setter Property="Background" Value="#713F12" /><Setter Property="BorderBrush" Value="#FBBF24" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Recovering}"><Setter Property="Background" Value="#78350F" /><Setter Property="BorderBrush" Value="#FB923C" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Attention}"><Setter Property="Background" Value="#7C2D12" /><Setter Property="BorderBrush" Value="#FDBA74" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="{x:Static local:ObservationUiTone.Fault}"><Setter Property="Background" Value="#7F1D1D" /><Setter Property="BorderBrush" Value="#FB7185" /></DataTrigger>
+          </Style.Triggers>
+        </Style>
+        <Style x:Key="ObservationGateCard" TargetType="Border" BasedOn="{StaticResource ObservationCard}">
+          <Setter Property="BorderThickness" Value="3,0,0,1" />
+          <Setter Property="CornerRadius" Value="0" />
+          <Setter Property="Margin" Value="0" />
+          <Setter Property="Padding" Value="9,7" />
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding Tone}" Value="{x:Static local:ObservationUiTone.Neutral}"><Setter Property="BorderBrush" Value="#475569" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="{x:Static local:ObservationUiTone.Success}"><Setter Property="BorderBrush" Value="#22C55E" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="{x:Static local:ObservationUiTone.Warning}"><Setter Property="BorderBrush" Value="#F59E0B" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="{x:Static local:ObservationUiTone.Attention}"><Setter Property="BorderBrush" Value="#FB923C" /></DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="{x:Static local:ObservationUiTone.Fault}"><Setter Property="BorderBrush" Value="#EF4444" /></DataTrigger>
+          </Style.Triggers>
+        </Style>
+        <Style x:Key="ObservationSectionLabel" TargetType="TextBlock">
+          <Setter Property="Foreground" Value="#94A3B8" />
+          <Setter Property="FontWeight" Value="SemiBold" />
+          <Setter Property="Margin" Value="0,9,0,2" />
+        </Style>
+        <Style x:Key="ObservationTechnicalText" TargetType="TextBlock">
+          <Setter Property="Foreground" Value="#94A3B8" />
+          <Setter Property="FontFamily" Value="Consolas" />
+          <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="ObservationProgressBar" TargetType="ProgressBar">
+          <Setter Property="Height" Value="8" />
+          <Setter Property="Background" Value="#0F172A" />
+          <Setter Property="Foreground" Value="#14B8A6" />
+        </Style>
+        <Style x:Key="ObservationSettingsExpander" TargetType="Expander">
+          <Setter Property="Margin" Value="0,0,0,8" />
+          <Setter Property="Padding" Value="2" />
+          <Setter Property="FontWeight" Value="SemiBold" />
+          <Setter Property="Foreground" Value="#E5E7EB" />
+        </Style>
       </Grid.Resources>
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" />
@@ -308,39 +368,58 @@
       </Grid.RowDefinitions>
 
       <!-- Fixed operational header: these controls never scroll out of view. -->
-      <Border Grid.Row="0" Background="#111827" BorderBrush="#475569" BorderThickness="1" CornerRadius="6" Padding="9" Margin="0,0,0,5">
+      <Border Grid.Row="0" Background="#111827" BorderBrush="#475569" BorderThickness="1" CornerRadius="6" Padding="6" Margin="0,0,0,3">
         <StackPanel>
           <WrapPanel>
-            <TextBlock Text="OpenAstroSpec Auto — UVEX4" FontSize="17" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,12,0" />
-            <Border Background="#713F12" CornerRadius="10" Padding="8,3" Margin="0,1,8,1">
+            <TextBlock Text="OpenAstroSpec Auto — UVEX4" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,9,0" />
+            <Border Background="#713F12" CornerRadius="9" Padding="6,2" Margin="0,0,6,0">
               <TextBlock Text="{Binding ModeText}" Foreground="#FDE68A" FontWeight="Bold" />
             </Border>
-            <Border Background="#0E2A1B" CornerRadius="10" Padding="8,3" Margin="0,1">
-              <TextBlock Text="{Binding StateText}" Foreground="#86EFAC" FontWeight="Bold" />
+            <Border Style="{StaticResource ObservationStatusChip}" Tag="{Binding RunTone}">
+              <TextBlock Text="{Binding StateText}" Foreground="#F8FAFC" FontWeight="Bold" />
             </Border>
+            <TextBlock Text="{Binding ProgressSummary}" Foreground="#94A3B8" FontWeight="SemiBold" VerticalAlignment="Center" />
           </WrapPanel>
-          <WrapPanel Margin="0,5,0,0">
+          <WrapPanel Margin="0,2,0,0">
             <TextBlock Text="当前：" FontWeight="Bold" Foreground="#7DD3FC" />
-            <TextBlock Text="{Binding CurrentStageText}" Margin="0,0,14,0" />
+            <TextBlock Text="{Binding CurrentStageText}" Margin="0,0,10,0" />
             <TextBlock Text="下一步：" FontWeight="Bold" Foreground="#7DD3FC" />
             <TextBlock Text="{Binding NextStageText}" />
           </WrapPanel>
-          <TextBlock Text="{Binding StatusMessage}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,3,0,0" />
-          <TextBlock Text="{Binding PauseReason, StringFormat=暂停原因：{0}}" Foreground="#FBBF24" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
+          <TextBlock Text="{Binding StatusMessage}" ToolTip="{Binding StatusMessage}" Foreground="#CBD5E1"
+                     TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
+                     Visibility="{Binding HasStatusMessage, Converter={StaticResource ObservationBoolToVisibility}}" />
+          <TextBlock Text="{Binding PauseReason, StringFormat=当前需要处理：{0}}" Foreground="#FDBA74" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
                      Visibility="{Binding HasPauseReason, Converter={StaticResource ObservationBoolToVisibility}}" />
-          <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}" Height="10" Margin="0,6,0,5" />
+          <ProgressBar Style="{StaticResource ObservationProgressBar}" Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}" Margin="0,4,0,2" />
+          <TextBlock Text="{Binding CurrentOperationText, StringFormat=当前操作：{0}}" Foreground="#BAE6FD"
+                     ToolTip="{Binding CurrentOperationText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                     Visibility="{Binding HasCurrentOperationText, Converter={StaticResource ObservationBoolToVisibility}}" />
+          <ProgressBar Minimum="0" Maximum="100" Value="{Binding CurrentOperationPercent, Mode=OneWay}" Margin="0,2,0,3"
+                       Visibility="{Binding HasCurrentOperationProgress, Converter={StaticResource ObservationBoolToVisibility}}">
+            <ProgressBar.Style>
+              <Style TargetType="ProgressBar" BasedOn="{StaticResource ObservationProgressBar}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsRecovering}" Value="True"><Setter Property="Foreground" Value="#F97316" /></DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ProgressBar.Style>
+          </ProgressBar>
           <WrapPanel>
-            <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsSimulationMode}" Content="模拟自动观测" Command="{Binding SelectSimulationModeCommand}" ToolTip="只切换自动观测模式；不会连接或移动设备。" />
-            <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsRealMode}" Content="真实自动观测" Command="{Binding SelectRealModeCommand}" ToolTip="只选择自动观测执行方式；不是设备连接按钮。" />
-            <Button Content="UVEX 设备手控" Command="{Binding ShowManualUvexControlCommand}" Background="#0F766E" BorderBrush="#5EEAD4" ToolTip="切缝、狭缝灯和 M2 小步进；不要求自动观测全套准入。" />
-            <Button Content="{Binding StartButtonText}" Command="{Binding StartSelectedModeCommand}" Background="#166534" BorderBrush="#4ADE80" FontWeight="Bold" />
+            <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsSimulationMode}" Content="模拟" Command="{Binding SelectSimulationModeCommand}" ToolTip="模拟自动观测；只切换模式，不会连接或移动设备。" />
+            <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsRealMode}" Content="真实" Command="{Binding SelectRealModeCommand}" ToolTip="真实自动观测；只选择执行方式，不是设备连接按钮。" />
+            <Button Content="设备手控" Command="{Binding ShowManualUvexControlCommand}" Background="#0F766E" BorderBrush="#5EEAD4" ToolTip="UVEX 设备手控：切缝、狭缝灯和 M2 小步进；不要求自动观测全套准入。" />
+            <Button Content="启动" Command="{Binding StartSelectedModeCommand}" Background="#166534" BorderBrush="#4ADE80" FontWeight="Bold" ToolTip="{Binding StartButtonText}" />
             <Button Content="暂停" Command="{Binding PauseCommand}" ToolTip="当前有界动作结束后阻止下一项动作或曝光。" />
-            <Button Content="恢复并复核" Command="{Binding ResumeCommand}" ToolTip="恢复前重新检查全部可能过期的门。" />
+            <Button Content="恢复复核" Command="{Binding ResumeCommand}" ToolTip="恢复前重新检查全部可能过期的门。" />
             <Button Content="人工接管" Command="{Binding TakeoverCommand}" />
-            <Button Content="清除旧 G3 状态" Command="{Binding ClearG3RecoveryStateCommand}"
+            <Button Content="新开一轮" Command="{Binding RestartWithCurrentConfigurationCommand}"
+                    Background="#1D4ED8" BorderBrush="#60A5FA" FontWeight="Bold"
+                    ToolTip="按当前设置新开一轮。用于切换超亮目标等会改变动作哈希的分支：先结束旧运行并审计退役旧 G3 恢复链，再按当前表单捕获新哈希并启动。不会把新设置热替换进旧运行，也不要求把设置改回去。" />
+            <Button Content="清除 G3 状态" Command="{Binding ClearG3RecoveryStateCommand}"
                     Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
-                    ToolTip="取消当前失败运行，接受人工接管后的当前状态并关闭过时的 G3 自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
-            <Button Content="取消并安全收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" />
+                    ToolTip="清除旧 G3 状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的 G3 自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
+            <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="取消当前运行并执行安全收尾。" />
           </WrapPanel>
         </StackPanel>
       </Border>
@@ -495,7 +574,13 @@
 
             <Border Grid.Row="4" Background="#3F1515" BorderBrush="#EF4444" BorderThickness="1" CornerRadius="5" Padding="8"
                     Visibility="{Binding HasManualUvexError, Converter={StaticResource ObservationBoolToVisibility}}">
-              <TextBlock Text="{Binding ManualUvexError}" Foreground="#FCA5A5" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <StackPanel>
+                <TextBlock Text="{Binding ManualUvexError}" Foreground="#FCA5A5" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                          Visibility="{Binding HasManualUvexErrorTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+                  <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding ManualUvexErrorTechnicalDetails}" Margin="0,4,0,0" />
+                </Expander>
+              </StackPanel>
             </Border>
           </Grid>
           </ScrollViewer>
@@ -757,9 +842,9 @@
         </TabItem>
 
         <TabItem Header="实时图像">
-          <TabControl Margin="6">
+          <TabControl Margin="3">
             <TabItem Header="QHY 广域 / 解算">
-              <Grid Margin="7">
+              <Grid Margin="3">
                 <local:EmbeddedImageViewer PreviewImage="{Binding QhyPreviewImage}"
                                            Caption="{Binding QhyPreviewCaption}"
                                            EmptyTitle="尚无 QHY 广域图像"
@@ -771,7 +856,7 @@
               </Grid>
             </TabItem>
             <TabItem Header="G3 对焦 / 狭缝 / 导星">
-              <Grid Margin="7">
+              <Grid Margin="3">
                 <local:EmbeddedImageViewer PreviewImage="{Binding G3PreviewImage}"
                                            Caption="{Binding G3PreviewCaption}"
                                            EmptyTitle="尚无 G3 狭缝场图像"
@@ -783,7 +868,7 @@
               </Grid>
             </TabItem>
             <TabItem Header="ATR 二维 / 一维光谱">
-              <Grid Margin="7">
+              <Grid Margin="3">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="3*" />
                   <ColumnDefinition Width="8" />
@@ -833,7 +918,13 @@
                     <TextBlock Grid.Row="4" Text="{Binding ManualSpectrumSummary}" TextWrapping="Wrap" Margin="0,5,0,0" />
                     <Border Grid.Row="5" Background="#3F1515" BorderBrush="#EF4444" BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,5,0,0"
                             Visibility="{Binding HasAtrManualCaptureError, Converter={StaticResource ObservationBoolToVisibility}}">
-                      <TextBlock Text="{Binding AtrManualCaptureError}" Foreground="#FCA5A5" TextWrapping="Wrap" />
+                      <StackPanel>
+                        <TextBlock Text="{Binding AtrManualCaptureError}" Foreground="#FCA5A5" TextWrapping="Wrap" />
+                        <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                                  Visibility="{Binding HasAtrManualCaptureErrorTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+                          <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding AtrManualCaptureErrorTechnicalDetails}" Margin="0,4,0,0" />
+                        </Expander>
+                      </StackPanel>
                     </Border>
                   </Grid>
                 </Border>
@@ -842,27 +933,41 @@
           </TabControl>
         </TabItem>
 
-        <TabItem Header="失败诊断">
-          <Grid Margin="9">
+        <TabItem Header="诊断与证据">
+          <TabControl Margin="6">
+            <TabItem Header="当前问题">
+          <Grid Margin="6">
             <Border Background="#0E2A1B" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="6" Padding="14"
                     VerticalAlignment="Top" Visibility="{Binding HasNoFailure, Converter={StaticResource ObservationBoolToVisibility}}">
               <StackPanel>
-                <TextBlock Text="✓ 当前没有失败或待处理质量门" Foreground="#86EFAC" FontSize="16" FontWeight="Bold" />
-                <TextBlock Text="运行中若质量门失败或不确定，本页会显示预期/实测指标、对应图像和不可变证据。" Foreground="#A7F3D0" TextWrapping="Wrap" Margin="0,5,0,0" />
+                <TextBlock Text="✓ 当前没有错误或待处理证据门" Foreground="#86EFAC" FontSize="16" FontWeight="Bold" />
+                <TextBlock Text="只有错误或动作所需证据不足才会暂停；警告会保留在“质量门与证据”中并继续自动流程。" Foreground="#A7F3D0" TextWrapping="Wrap" Margin="0,5,0,0" />
               </StackPanel>
             </Border>
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           VerticalContentAlignment="Top"
                           Visibility="{Binding HasFailure, Converter={StaticResource ObservationBoolToVisibility}}">
-              <Border Background="#321717" BorderBrush="#FB7185" BorderThickness="1" CornerRadius="6" Padding="13" VerticalAlignment="Top">
+              <Border Style="{StaticResource ObservationCard}" Background="#321717" BorderBrush="#FB7185" Padding="13" VerticalAlignment="Top">
                 <StackPanel>
                   <TextBlock Text="{Binding LastFailureHeadline}" Foreground="#FDA4AF" FontSize="17" FontWeight="Bold" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding LastFailureCode, StringFormat=错误代码：{0}}" FontFamily="Consolas" Foreground="#FDE68A" FontWeight="Bold" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <TextBlock Text="{Binding LastFailureMessage}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <Border Background="#1E293B" BorderBrush="#475569" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,8,0,0">
-                    <TextBlock Text="{Binding LastFailureMetrics, StringFormat=质量数值：{0}}" FontFamily="Consolas" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding LastFailureContext}" Foreground="#CBD5E1" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding LastFailureCode, StringFormat=错误代码：{0}}" FontFamily="Consolas" Foreground="#FDE68A" FontWeight="Bold" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Style="{StaticResource ObservationSectionLabel}" Text="当前影响" />
+                  <TextBlock Text="{Binding LastFailureImpact}" TextWrapping="Wrap" />
+                  <TextBlock Style="{StaticResource ObservationSectionLabel}" Text="自动处理" />
+                  <TextBlock Text="{Binding LastFailureRecovery}" Foreground="#FED7AA" TextWrapping="Wrap" />
+                  <TextBlock Style="{StaticResource ObservationSectionLabel}" Text="质量数值" />
+                  <Border Background="#1E293B" BorderBrush="#475569" BorderThickness="1" CornerRadius="4" Padding="8">
+                    <TextBlock Text="{Binding LastFailureMetrics}" FontFamily="Consolas" TextWrapping="Wrap" />
                   </Border>
-                  <TextBlock Text="{Binding LastFailureRecommendation, StringFormat=建议：{0}}" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,8,0,0" />
+                  <TextBlock Style="{StaticResource ObservationSectionLabel}" Text="建议操作" />
+                  <TextBlock Text="{Binding LastFailureRecommendation}" Foreground="#FED7AA" TextWrapping="Wrap" />
+                  <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}" Margin="0,9,0,0"
+                            Visibility="{Binding HasFailureTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+                    <Border Background="#0F172A" BorderBrush="#475569" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
+                      <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding LastFailureTechnicalDetails}" />
+                    </Border>
+                  </Expander>
                   <TextBlock Text="{Binding LastFailureEvidencePath, StringFormat=失败证据：{0}}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,7,0,0" Visibility="{Binding HasFailureEvidence, Converter={StaticResource ObservationBoolToVisibility}}" />
                   <WrapPanel Margin="0,8,0,0">
                     <Button Content="{Binding LastFailurePreviewLabel}" Command="{Binding OpenFailurePreviewCommand}" Visibility="{Binding HasFailurePreview, Converter={StaticResource ObservationBoolToVisibility}}" />
@@ -874,19 +979,20 @@
               </Border>
             </ScrollViewer>
           </Grid>
-        </TabItem>
-
-        <TabItem Header="质量门与证据">
-          <TabControl Margin="6">
+            </TabItem>
             <TabItem Header="质量门">
               <ListBox ItemsSource="{Binding GateRows}">
-                <ListBox.ItemTemplate><DataTemplate><Border BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="8,6">
+                <ListBox.ItemTemplate><DataTemplate><Border Style="{StaticResource ObservationGateCard}">
                   <StackPanel>
-                    <WrapPanel><TextBlock Text="{Binding Stage}" FontWeight="Bold"/><TextBlock Text="{Binding State, StringFormat=  ·  {0}}" Foreground="#FBBF24" FontWeight="Bold"/></WrapPanel>
+                    <WrapPanel><TextBlock Text="{Binding Stage}" FontWeight="Bold"/><TextBlock Text="{Binding State, StringFormat=  ·  {0}}" Foreground="#FDE68A" FontWeight="Bold"/></WrapPanel>
                     <StackPanel Visibility="{Binding HasDetails, Converter={StaticResource ObservationBoolToVisibility}}">
                       <TextBlock Text="{Binding Code, StringFormat=代码：{0}}" FontFamily="Consolas" Foreground="#CBD5E1" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding Message}" Foreground="#CBD5E1" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding Metrics, StringFormat=数值：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" />
+                      <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                                Visibility="{Binding HasTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+                        <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding TechnicalMessage}" Margin="0,4,0,0" />
+                      </Expander>
                     </StackPanel>
                   </StackPanel>
                 </Border></DataTemplate></ListBox.ItemTemplate>
@@ -899,6 +1005,10 @@
                     <WrapPanel><TextBlock Text="{Binding Time}" Foreground="#94A3B8"/><TextBlock Text="{Binding Stage, StringFormat=  ·  {0}}" FontWeight="Bold"/></WrapPanel>
                     <TextBlock Text="{Binding Code, StringFormat=代码：{0}}" FontFamily="Consolas" Foreground="#CBD5E1" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                    <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                              Visibility="{Binding HasTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+                      <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding TechnicalMessage}" Margin="0,4,0,0" />
+                    </Expander>
                     <TextBlock Text="{Binding EvidencePath, StringFormat=证据：{0}}" Foreground="#94A3B8" TextWrapping="Wrap"
                                Visibility="{Binding HasEvidence, Converter={StaticResource ObservationBoolToVisibility}}" />
                   </StackPanel>
@@ -922,6 +1032,21 @@
         <TabItem Header="高级设置">
           <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="10">
+              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+                <StackPanel>
+                  <TextBlock Text="高级设置保存" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
+                  <TextBlock Text="输入框、下拉框和复选框会立即更新当前 N.I.N.A. Profile 的内存设置；点击下方按钮可立即写盘，不必依赖关闭 N.I.N.A. 时保存。已经开始的运行仍使用其启动时锁定的快照。"
+                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
+                  <WrapPanel>
+                    <Button Content="保存当前高级设置"
+                            Command="{Binding SaveAdvancedSettingsCommand}"
+                            Margin="0,0,8,0"
+                            AutomationProperties.AutomationId="OpenAstroSpec.SaveAdvancedSettings" />
+                    <TextBlock Text="{Binding AdvancedSettingsSaveStatus}" Foreground="#FDE68A" TextWrapping="Wrap" VerticalAlignment="Center" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+              <TextBlock Text="运行准入与数据归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
               <Border x:Name="RealModeStartupDetails" Background="#172033" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="真实模式启动条件" FontSize="15" FontWeight="Bold" Foreground="#FDE68A" />
@@ -955,7 +1080,8 @@
                   </WrapPanel>
                 </StackPanel>
               </Border>
-              <Expander Header="PHD2 与目标定位策略详情" Margin="0,0,0,8">
+              <TextBlock Text="目标获取、入缝与导星" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
+              <Expander Header="PHD2 与目标定位策略详情" Style="{StaticResource ObservationSettingsExpander}">
                 <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
                   <StackPanel>
                     <WrapPanel>
@@ -967,16 +1093,11 @@
                     <TextBlock Text="{Binding Phd2CommissioningRouteText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
                     <TextBlock Text="{Binding Phd2CalibrationScaleText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
                     <TextBlock Text="{Binding Phd2CalibrationReasonText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <Separator Margin="0,8,0,7" />
-                    <TextBlock Text="确定性鬼影辅助" FontWeight="Bold" Foreground="#7DD3FC" />
-                    <TextBlock Text="仅提供辅助质心与协方差，不授予目标身份或运动权限。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
-                    <TextBlock Text="{Binding GhostCalibrationSummaryText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding GhostApplicabilityText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
-                    <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
                 </Border>
               </Expander>
-              <Expander Header="ATR 长曝光期间的 QHY 并行成像" Margin="0,0,0,8">
+              <TextBlock Text="并行观测与站点" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
+              <Expander Header="ATR 长曝光期间的 QHY 并行成像" Style="{StaticResource ObservationSettingsExpander}">
                 <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
                   <StackPanel>
                     <TextBlock Text="滤镜循环（Filter:秒，逗号分隔）" FontWeight="Bold" Foreground="#7DD3FC" />
@@ -995,7 +1116,7 @@
                   </StackPanel>
                 </Border>
               </Expander>
-              <Expander Header="站点、40° 围墙与模拟速度" Margin="0,0,0,8">
+              <Expander Header="站点、40° 围墙与模拟速度" Style="{StaticResource ObservationSettingsExpander}">
                 <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -1010,6 +1131,7 @@
                   </Grid>
                 </Border>
               </Expander>
+              <TextBlock Text="设备身份与标定证据" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
               <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="狭缝轮光学身份复核" FontWeight="Bold" Foreground="#7DD3FC" />
@@ -1027,6 +1149,8 @@
                   <Button Content="重新读取 N.I.N.A. 设备选择" Command="{Binding RefreshProfileOwnershipCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="9,3" />
                 </StackPanel>
               </Border>
+              <Expander Header="目标获取算法与恢复预算（工程参数）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
+                <StackPanel Margin="0,4,0,0">
               <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="广域→狭缝场转换" FontWeight="Bold" Foreground="#7DD3FC" />
@@ -1085,7 +1209,7 @@
               <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="G3 长曝光解算与 WCS 居中" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占 G3 拍一张新全帧。PlateSolve3 正式成功解在像元尺度合理、数值有限且位于独立的两镜光轴可达范围内时直接信任；源数和匹配数只作遥测，不再另设项目硬门。两镜光轴范围不是后续小范围运动上限。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新 G3 解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
+                  <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占 G3 拍一张新全帧。若同一指向已有本轮新鲜 QHY/PL3 正式解，G3 优先以它作为真实天空提示；当无机械零位赤道仪的自报坐标偏差超过此处可信范围时，每轮最多用该 QHY 真值 Sync 一次并验证读回，绝不反复同步或发 Slew。G3 正式解在像元尺度合理、数值有限且位于提示可达范围内时直接信任；源数和匹配数只作遥测。目标/赤道仪与 QHY 的大残差不再误写成两镜光轴差。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新 G3 解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
                   <TextBlock Text="判据分离：2″只约束静态 frame/mount 绑定和小步搜索稳定性；大步实报终点在完整运动预算内即可拍验证帧，光学到位必须由移动后的 fresh G3 WCS 证明。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="0,0,0,6" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
@@ -1104,8 +1228,8 @@
                     </StackPanel>
                     <TextBlock Grid.Row="5" Grid.Column="0" Text="单动作最坏时长 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding G3MotionWorstCaseActionSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                     <TextBlock Grid.Row="5" Grid.Column="3" Text="移动后稳定等待 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="4" Text="{Binding G3MotionPostSlewSettleSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="两镜解算可达范围 (deg)" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="3" Grid.ColumnSpan="2" Text="默认 5°；只检验解是否物理可达，不授权同等幅度运动" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="G3 相对天空提示可信范围 (deg)" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                    <TextBlock Grid.Row="6" Grid.Column="3" Grid.ColumnSpan="2" Text="默认 5°；优先相对新鲜 QHY/PL3 WCS 检验，并作为无机械零位赤道仪的一次性 Sync 触发阈值。不会自动扩大此值，也不授权同等幅度 Slew" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
                     <TextBlock Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Text="大步后允许拍 fresh 验证帧的最大实报终点残差 (arcsec)" TextWrapping="Wrap" VerticalAlignment="Center"/>
                     <TextBox Grid.Row="7" Grid.Column="4" Text="{Binding G3WcsFreshSolveAuthorizationResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                   </Grid>
@@ -1142,7 +1266,7 @@
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="G3 驱动恢复 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                 <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Text="连续全幅之间；本机实测 3000 ms" Foreground="#94A3B8" VerticalAlignment="Center" Margin="5,2"/>
               </Grid>
-              <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" IsExpanded="False" Margin="0,0,0,8">
+              <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
                 <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
                   <StackPanel>
                     <TextBlock Text="只适用于目标身份已由本轮新鲜 QHY WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光 G3 帧即使能用翼部求质心，也永远不能参与对焦；G3 解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />
@@ -1178,6 +1302,10 @@
                   </StackPanel>
                 </Border>
               </Expander>
+                </StackPanel>
+              </Expander>
+              <Expander Header="设备身份、哈希与路径（工程核对）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
+                <StackPanel Margin="0,4,0,0">
               <CheckBox Content="标定包静态校验已通过（最新完整包默认自动确认；不会绕过运行时硬门）" IsChecked="{Binding RealModeCommissioned}" Margin="0,0,0,6" />
               <TextBlock Text="设备标定文件"/><TextBox Text="{Binding CommissioningPresetPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="设备标定方案 ID"/><TextBox Text="{Binding CommissioningPresetId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
@@ -1190,21 +1318,33 @@
               <TextBlock Text="PHD2 / G3 Profile"/><TextBox Text="{Binding ExpectedG3ProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="PHD2 registry evidence SHA-256"/><TextBox Text="{Binding Phd2ProfileEvidenceSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="QHY service CameraId"/><TextBox Text="{Binding ExpectedQhyCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                </StackPanel>
+              </Expander>
             </StackPanel>
           </ScrollViewer>
         </TabItem>
       </TabControl>
 
       <StackPanel Grid.Row="2" Margin="0,5,0,0">
-        <Border Background="#0E2A1B" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="4" Padding="7"
+        <Border Background="#0C3045" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="7"
                 Visibility="{Binding HasOperatorNotice, Converter={StaticResource ObservationBoolToVisibility}}">
-          <TextBlock Text="{Binding OperatorNotice}" Foreground="#86EFAC" TextWrapping="Wrap" />
+          <StackPanel>
+            <TextBlock Text="{Binding OperatorNotice}" Foreground="#BAE6FD" TextWrapping="Wrap" />
+            <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                      Visibility="{Binding HasOperatorNoticeTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+              <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding OperatorNoticeTechnicalDetails}" Margin="0,4,0,0" />
+            </Expander>
+          </StackPanel>
         </Border>
-        <Border Background="#3F1515" BorderBrush="#EF4444" BorderThickness="1" CornerRadius="4" Padding="7" Margin="0,4,0,0"
+        <Border Background="#3B2610" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="4" Padding="7" Margin="0,4,0,0"
                 Visibility="{Binding HasError, Converter={StaticResource ObservationBoolToVisibility}}">
           <StackPanel>
-            <TextBlock Text="错误 / 阻断" FontWeight="Bold" Foreground="#FCA5A5" />
-            <TextBlock Text="{Binding Error}" Foreground="#FCA5A5" TextWrapping="Wrap" />
+            <TextBlock Text="本次界面操作未完成" FontWeight="Bold" Foreground="#FDE68A" />
+            <TextBlock Text="{Binding Error}" Foreground="#FED7AA" TextWrapping="Wrap" />
+            <Expander Header="技术详情（原始消息）" Style="{StaticResource ObservationSettingsExpander}"
+                      Visibility="{Binding HasErrorTechnicalDetails, Converter={StaticResource ObservationBoolToVisibility}}">
+              <TextBlock Style="{StaticResource ObservationTechnicalText}" Text="{Binding ErrorTechnicalDetails}" Margin="0,4,0,0" />
+            </Expander>
           </StackPanel>
         </Border>
       </StackPanel>
@@ -1212,7 +1352,8 @@
   </DataTemplate>
 
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.UvexCalibrationLibraryDockable_Dockable">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid Margin="8">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto" />
@@ -1299,7 +1440,8 @@
         </Border>
 
         <StackPanel Grid.Row="5">
-          <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}" Height="15" />
+          <TextBlock Text="{Binding ProgressPercent, StringFormat=总体进度：{0:0}%}" Foreground="#94A3B8" FontWeight="SemiBold" />
+          <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}" Height="8" Background="#0F172A" Foreground="#14B8A6" Margin="0,3,0,0" />
           <TextBlock Text="{Binding RunStatus}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,5,0,0" />
           <TextBlock Text="{Binding LastSavedPath}" TextWrapping="Wrap" Opacity="0.75" />
           <TextBlock Text="{Binding Error}" Foreground="OrangeRed" TextWrapping="Wrap" Margin="0,4,0,0" />
@@ -1308,14 +1450,14 @@
     </ScrollViewer>
   </DataTemplate>
 
-  <DataTemplate DataType="{x:Type seq:WaitUvexReadyItem}"><StackPanel Orientation="Horizontal"><TextBlock Text="超时(s)"/><TextBox Width="70" Text="{Binding TimeoutSeconds}"/></StackPanel></DataTemplate>
-  <DataTemplate DataType="{x:Type seq:GotoWavelengthItem}"><StackPanel Orientation="Horizontal"><TextBlock Text="波长(nm)"/><TextBox Width="80" Text="{Binding WavelengthNm}"/></StackPanel></DataTemplate>
-  <DataTemplate DataType="{x:Type seq:SelectSlitItem}"><StackPanel Orientation="Horizontal"><TextBlock Text="狭缝"/><TextBox Width="50" Text="{Binding Position}"/></StackPanel></DataTemplate>
-  <DataTemplate DataType="{x:Type seq:MoveFocusItem}"><StackPanel Orientation="Horizontal"><TextBlock Text="相对步数"/><TextBox Width="80" Text="{Binding DeltaSteps}"/></StackPanel></DataTemplate>
-  <DataTemplate DataType="{x:Type seq:MaintenanceModeItem}"><CheckBox Content="进入维护模式（取消为退出）" IsChecked="{Binding EnterMaintenance}"/></DataTemplate>
+  <DataTemplate DataType="{x:Type seq:WaitUvexReadyItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="超时(s)"/><TextBox Width="70" Text="{Binding TimeoutSeconds}"/></StackPanel></DataTemplate>
+  <DataTemplate DataType="{x:Type seq:GotoWavelengthItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="波长(nm)"/><TextBox Width="80" Text="{Binding WavelengthNm}"/></StackPanel></DataTemplate>
+  <DataTemplate DataType="{x:Type seq:SelectSlitItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="狭缝"/><TextBox Width="50" Text="{Binding Position}"/></StackPanel></DataTemplate>
+  <DataTemplate DataType="{x:Type seq:MoveFocusItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="相对步数"/><TextBox Width="80" Text="{Binding DeltaSteps}"/></StackPanel></DataTemplate>
+  <DataTemplate DataType="{x:Type seq:MaintenanceModeItem}"><CheckBox local:ObservationStaticTextLocalization.IsEnabled="True" Content="进入维护模式（取消为退出）" IsChecked="{Binding EnterMaintenance}"/></DataTemplate>
 
   <HierarchicalDataTemplate DataType="{x:Type seq:UvexTargetObservationContainer}" ItemsSource="{Binding Items}">
-    <ninaSeq:HierarchicalSequenceContainerView>
+    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
       <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
         <StackPanel Margin="5">
           <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
@@ -1354,7 +1496,7 @@
   </HierarchicalDataTemplate>
 
   <DataTemplate DataType="{x:Type seq:ObservationStageMarkerItem}">
-    <ninaSeq:SequenceBlockView>
+    <ninaSeq:SequenceBlockView local:ObservationStaticTextLocalization.IsEnabled="True">
       <ninaSeq:SequenceBlockView.SequenceItemContent>
         <TextBlock Text="{Binding DisplayName}" FontStyle="Italic" Opacity="0.8" />
       </ninaSeq:SequenceBlockView.SequenceItemContent>

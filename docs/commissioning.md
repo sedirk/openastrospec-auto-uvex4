@@ -85,6 +85,16 @@ extraction policy、三者哈希、runtime installation/optical/orientation fing
 实机重放待完成”。禁止用后端成功掩盖尚未验证的前端路径，也禁止让用户到观测时才逐个
 发现两条路线之间的差异。
 
+动作配置 SHA-256 只冻结一次运行，不冻结后续测试。运行中修改超亮目标等动作分支不能
+热替换进旧 runner；操作员可以结束旧运行后点击“按当前设置新开一轮”，由插件先审计退役
+旧 G3 canonical 恢复链，再重新捕获当前设置的新哈希和新 run ID。这个操作不改写旧哈希，
+也不要求把设置恢复成旧值；若存在多条含糊的未结运动 intent，仍保持阻断并要求单独检查。
+
+当前高级序列容器只是共享生产 runner 的固定阶段外壳。中天翻转、同步测光/光谱拍摄规划
+以及可编辑高级序列的未来职责拆分见
+[N.I.N.A. Advanced Sequencer 真正耦合路线规划](nina-advanced-sequencer-coupling-roadmap.md)。
+该文档是规划，不表示这些能力已经实现或验收。
+
 ### 4.1 台站配置方案与设备候选
 
 日常观测不应逐项抄写工程字段，也不应为了“让插件看见设备”而把三台相机依次接入
@@ -220,6 +230,12 @@ RRCI 的 Replica 模式默认只是只读状态代理。要允许本机全无人
 核验终态；未选择镜盖才 warning 降级，打不开或明确错误仍阻断。大丰近海台址的高湿度仅为
 advisory，包括 100% 湿度本身也不等价于下雨或不安全。
 
+质量门的统一语义见
+[Gate severity and observation-continuity policy](design/gate-severity-and-continuity-policy.md)。
+现场界面中的 `警告/继续` 必须自动推进并保留证据；只有 `错误/已暂停` 或
+`错误/证据不足/已暂停` 才需要人工处理。QHY/GS350 并行测光链失败只降级为纯光谱观测，
+ATR 单帧低 SNR/低对比度但未削顶时继续叠加。不要通过增加人工 Resume 来模拟 warning。
+
 任何插件 XAML、Dockable ViewModel 或打包产物改变后，先执行
 [N.I.N.A. 插件 UI 发布检查](nina-plugin-ui-release-checks.md)：完整构建、全部 UI
 harness 场景、安装精确 artifact、真实启动 N.I.N.A. 并依次打开自动观测与校准库两个面板，
@@ -299,7 +315,7 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 两套光路的当前光轴差不是设备常数，禁止写进源码、机器无关默认配置或无 provenance 的 seed。热胀冷缩、非同步形变、赤道仪误差、相机旋转、拆装和重新同轴都可能改变它；迁移到另一套设备时必须从空记录开始。这里的 `QhyToG3Transfer` 只用于 QHY 无运动见证后的可选预置移动，不能与最终入缝所需的 `G3PixelToMount` 像素→赤道仪矩阵共用字段或证据。
 
 1. 先验收不依赖两镜转换的 `Skip` 路径：选择高空亮星，保留 QHY 无运动正式 WCS 见证后直接取得 G3 全帧并精解析。目标在画外时走 N.I.N.A. 有界大步修正和 fresh G3 复核；G3 无正式解时使用预先锁定的有重叠邻场搜索，每步重拍、重解，并受单步、半径、累计位移、次数、耗时、地平线和安全返回限制。成功后再用 PHD2 exact-lock 或独立 G3 像素→赤道仪模型闭环入缝。
-2. 只有在上述回退路径可重复工作后，才从同一时段、同一安装纪元的 QHY 与 G3 解算对拟合预置模型。可启用 `QhyG3FastPairEnabled`：每次 G3 WCS 成功后、任何后续移动前，优先复用同一 mount binding 下的新鲜 QHY WCS；缓存无效时只拍一张显式短曝光并只解算一次。五个 mount readback 必须证明两幅 WCS 属于同一指向。该步骤只生成 `MotionAuthority=false` 的单样本 Candidate，完整时序与证据见 [QHY / G3 快速同指向双解算](qhy-g3-fast-solve-pair.md)。至少记录两相机和两光学系统标识、赤道仪、ROI/binning/方向、pier side、参考天区、时角/赤纬/高度范围、温度、UTC、样本数、系数单位、残差/协方差和原始证据哈希。
+2. 只有在上述回退路径可重复工作后，才从同一时段、同一安装纪元的 QHY 与 G3 解算对拟合预置模型。`QhyG3FastPairEnabled` 根据 2026-08-28 大丰实机结果默认启用：每次 G3 WCS 成功后、任何后续移动前，优先复用同一 mount binding 下的新鲜 QHY WCS；缓存无效时只拍一张显式短曝光并只解算一次。五个 mount readback 必须证明两幅 WCS 属于同一指向。该步骤只生成 `MotionAuthority=false` 的单样本 Candidate，不授权跨镜移动；Candidate 除随 run evidence 保存外，还会自动写入 `%LocalAppData%\UVEX-ADV\calibration\qhy-g3\<hardware-fingerprint>\` 的不可变候选档案并原子更新 `latest-candidate.json` 索引，因此不再要求把东/北偏移人工抄进 Profile。索引仍不是 Active 运动权限。操作员可以在高级设置中关闭快速配对并点击“保存当前高级设置”立即写入当前 N.I.N.A. Profile。完整时序与证据见 [QHY / G3 快速同指向双解算](qhy-g3-fast-solve-pair.md)。至少记录两相机和两光学系统标识、赤道仪、ROI/binning/方向、pier side、参考天区、时角/赤纬/高度范围、温度、UTC、样本数、系数单位、残差/协方差和原始证据哈希。
 3. 为每次安装建立显式 `InstallationEpochId`。拆卸、重装、重新同轴、准直或相机旋转后换新 ID，旧记录立即不适用，不能仅靠相同 USB DeviceId 继续使用。
 4. 设置 `ValidFromUtc`、`ValidUntilUtc`、最大预测不确定度和最大预置移动。分别在适用范围边缘、不同温度/姿态和两个 pier side 验证；不能把一侧或一次测量外推成全局常数。
 5. 在工作流界面验证三种模式：默认 `AutoIfValidElseSkip`、显式 `Skip` 和专家用 `RequireValid`。界面必须显示有效记录、系数/单位、年龄、适用范围、fingerprint、不确定度、预测移动和使用/跳过理由；编辑或人工覆盖生成带作者、时间、原因的新版本，不改写旧记录。
@@ -308,6 +324,16 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 8. 子午线翻转后重新判定 pier side；没有匹配记录就跳过预置移动。完整验证 manifest 同时保留预置模式、记录 ID/哈希、适用性结论、预测/实发移动、后验残差，以及 G3 搜索的原点、全部步次和最终位置。
 
 当前 schema 4 commissioning preset 中的 `MountTransform` 是 **G3 像素→赤道仪** 的入缝模型，不是 QHY→G3 光轴关系。runner 已能生成版本化 `QhyToG3TransferCandidate` 并在 UI 中配置快速配对，但尚未提供经多样本独立验证的 Active 记录导入/激活路径；因此实机运行仍必须将可选中间预置阶段保持为 `Skip`。不得把 Candidate、现有 `MountTransform` 或人工记忆的偏移挪作代用。
+
+### 无机械零位/人工设零后的解算提示语义
+
+ST25 非 Pro 没有可靠机械零位时，重新上电后人工设置的赤道仪绝对坐标可能与真实天空相差很多度。只要本轮 QHY 接受帧、正式 PL3 解、文件/解算 SHA-256、前后 mount binding、pier side 和当前未移动状态仍全部新鲜，G3 长曝光解算会直接采用该 **QHY 正式 WCS 作为天空提示**；不再拿错误的目标/赤道仪提示去否定一个与 QHY 相符的 G3 正式解。这里必须区分三种量：
+
+- `QHY WCS ↔ 目标坐标` 的大残差表示当前实际指向/赤道仪绝对坐标问题；
+- 同一未移动指向的 `G3 WCS ↔ QHY WCS` 才是两镜光轴测量；
+- `G3 像素 ↔ 狭缝` 及 `G3PixelToMount` 属于最终入缝闭环，不能与前两者共用。
+
+采用 QHY WCS 时，若它与赤道仪自报坐标的差异不超过 `G3MaximumPlateSolveHintOffsetDegrees`，只改变 PL3 提示，不 Sync；若超过，则把这个大差异解释成无机械零位赤道仪的绝对坐标失配，在静止、未停放、非 pulse guiding、pier side 未变且所有文件/解算/mount binding 证据均新鲜时，每轮最多通过 N.I.N.A. telescope mediator 执行一次 `Sync`，并要求 5 arcsec 内的新读回。Sync 本身发出零 Slew；读回通过后，程序在地平线和即时设备门通过时重新执行一次原计划目录转向，等待稳定实报，并只让下一张 fresh G3 WCS 证明光学到位。不给予 QHY 后续精修/搜索运动权限，也不会在 QHY/G3 之间反复切换坐标。若 QHY 证据不新鲜、文件哈希改变、赤道仪在两帧间移动或 pier side/历元改变，则自动退回目录目标提示并在审计日志中写明原因。`G3MaximumPlateSolveHintOffsetDegrees` 因而是“G3 相对所选天空提示的可信范围”和“一次性绝对坐标恢复触发阈值”，不是可以用一次 19° 目标/赤道仪残差自动扩大的光轴配置。
 
 ## 回滚
 

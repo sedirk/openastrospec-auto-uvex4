@@ -1,3 +1,4 @@
+using System.Globalization;
 using UvexAdv.Observatory;
 using Xunit;
 
@@ -16,14 +17,17 @@ public sealed class ObservationAttentionNotificationTests
             "G3_FOCUS_STARS_NOT_DETECTED");
         var gate = GateResult.Unknown("G3_MAIN_FOCUS_UNVERIFIED", "没有可靠的星核证据");
 
-        var first = tracker.Evaluate(snapshot, gate);
-        var duplicate = tracker.Evaluate(snapshot, gate);
+        var culture = CultureInfo.GetCultureInfo("zh-CN");
+        var first = tracker.Evaluate(snapshot, gate, culture);
+        var duplicate = tracker.Evaluate(snapshot, gate, culture);
 
         Assert.NotNull(first.Notification);
         Assert.Equal(ObservationAttentionSeverity.Warning, first.Notification!.Severity);
-        Assert.Contains("G3 fresh", first.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("G3 解算", first.Notification.Body, StringComparison.Ordinal);
         Assert.Contains("G3_MAIN_FOCUS_UNVERIFIED", first.Notification.Body, StringComparison.Ordinal);
-        Assert.Contains("没有可靠的星核证据", first.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("G3/WCS 证据不足", first.Notification.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("没有可靠的星核证据", first.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("打开“诊断与证据”", first.Notification.Body, StringComparison.Ordinal);
         Assert.Null(duplicate.Notification);
         Assert.False(duplicate.ClearActiveIndicator);
     }
@@ -49,12 +53,35 @@ public sealed class ObservationAttentionNotificationTests
                 new ObservationEvent(now, ObservationRunState.Faulted, ObservationStage.RunScienceBlock, "FAULT_CLEANUP_COMPLETED", "cleanup complete"),
             });
 
-        var result = tracker.Evaluate(snapshot, null);
+        var result = tracker.Evaluate(snapshot, null, CultureInfo.GetCultureInfo("zh-CN"));
 
         Assert.NotNull(result.Notification);
         Assert.Equal(ObservationAttentionSeverity.Error, result.Notification!.Severity);
         Assert.Contains("RUN_FAULTED", result.Notification.Body, StringComparison.Ordinal);
-        Assert.Contains("camera transport failed", result.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("当前质量门未通过", result.Notification.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("camera transport failed", result.Notification.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnglishNotificationUsesEnglishPresentationAndKeepsCodeStable()
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var snapshot = Snapshot(
+            ObservationRunState.PausedNeedsAttention,
+            ObservationStage.StartGuiding,
+            "raw adapter detail",
+            "PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED");
+        var gate = GateResult.Fail(
+            "PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED",
+            "PHD2 selected a star outside the detector-edge safety envelope.");
+
+        var result = tracker.Evaluate(snapshot, gate, CultureInfo.GetCultureInfo("en-US"));
+
+        Assert.NotNull(result.Notification);
+        Assert.Equal("OpenAstroSpec automation needs attention", result.Notification!.Title);
+        Assert.Contains("Stage: Select guide star", result.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("Code: PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED", result.Notification.Body, StringComparison.Ordinal);
+        Assert.False(ObservationUiPresentation.ContainsCjk(result.Notification.Body));
     }
 
     [Theory]

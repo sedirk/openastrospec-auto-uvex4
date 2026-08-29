@@ -12,8 +12,8 @@
     "SyntheticHeight": 576,
     "SyntheticStars": 80,
     "SimulationDelayMilliseconds": 80,
-    "NativeSdkPath": "C:\\Program Files\\UVEX-ADV\\QhyService\\native\\qhyccd.dll",
-    "NativeSdkSha256": "5F0957E29FF510F19FA5DE8688162FB4B9F4562B0B79B693DCBB9377BF281D14",
+    "NativeSdkPath": "C:\\Program Files\\QHYCCD\\AllInOne\\sdk\\x64\\qhyccd.dll",
+    "NativeSdkSha256": "<commissioned-64-character-sha256>",
     "NativeReadoutMode": 1,
     "NativeFilterPositions": {
       "U": 0,

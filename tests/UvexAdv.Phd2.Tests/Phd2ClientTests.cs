@@ -10,7 +10,7 @@ public sealed class Phd2ClientTests
     {
         var options = new Phd2ClientOptions();
 
-        Assert.Equal(TimeSpan.FromSeconds(20), options.MinimumLoopingFrameEventTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(60), options.MinimumLoopingFrameEventTimeout);
     }
 
     [Fact]
@@ -607,6 +607,63 @@ public sealed class Phd2ClientTests
     }
 
     [Fact]
+    public async Task SupervisedSettleTimeoutKeepsSameLiveOperationWithoutGuideOrStopRetry()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            await ReplyValidCalibrationPreambleAsync(session, cancellationToken);
+
+            var profileRecheck = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_profile", profileRecheck.GetProperty("method").GetString());
+            await session.ReplyResultAsync(
+                profileRecheck,
+                new { id = 2, name = "c11+ccdt67+slit+2210" },
+                cancellationToken);
+
+            var guide = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("guide", guide.GetProperty("method").GetString());
+            await session.ReplyResultAsync(guide, 0, cancellationToken);
+            await session.SendEventAsync(new { Event = "StartGuiding" }, cancellationToken);
+            await session.SendEventAsync(new { Event = "SettleBegin" }, cancellationToken);
+            await session.SendEventAsync(new
+            {
+                Event = "Settling",
+                Distance = 2.5,
+                Time = 1.0,
+                SettleTime = 0.0,
+                StarLocked = true,
+            }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(
+            server,
+            commandTimeout: TimeSpan.FromSeconds(2),
+            eventTimeoutMargin: TimeSpan.FromMilliseconds(100));
+        await client.ConnectAsync(CancellationToken.None);
+        var validation = await client.ValidateCalibrationAsync(
+            ValidCalibrationRequirement(),
+            CancellationToken.None);
+        Assert.True(validation.IsValid);
+
+        var result = await client.GuideAndSettleAsync(
+            new Phd2SettleCriteria(1.5, 1, 1),
+            forceRecalibration: false,
+            selectionRoi: null,
+            preserveSameEpochGuidingOnSettleTimeout: true,
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("settle", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Phd2AppState.Guiding, client.Snapshot.AppState);
+        Assert.Same(result, client.Snapshot.LastSettle);
+        Assert.Equal(client.Snapshot.ConnectionEpoch, client.Snapshot.LastSettleConnectionEpoch);
+        Assert.Equal(client.Snapshot.GuideEpoch, client.Snapshot.LastSettleGuideEpoch);
+        Assert.Equal(1, server.ReceivedMethods.Count(method => method == "guide"));
+        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+    }
+
+    [Fact]
     public async Task OrdinaryGuideWithoutApprovedCalibrationSendsNoGuideRpc()
     {
         await using var server = new FakePhd2Server(
@@ -1013,6 +1070,90 @@ public sealed class Phd2ClientTests
         Assert.Equal(found, selected);
         Assert.Equal(found, client.Snapshot.LockPosition);
         Assert.Equal(found, client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task FindGuideStarClassifiesSuccessfulNullResultAsNoCandidateOnly()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, null, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2NoGuideStarException>(
+            () => client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.Contains(Phd2NoGuideStarException.FailureCode, exception.Message, StringComparison.Ordinal);
+        Assert.Null(client.Snapshot.LockPosition);
+        Assert.Null(client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task FindGuideStarDoesNotClassifyRpcFailureAsNoCandidate()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            await session.ReplyErrorAsync(request, -32001, "camera unavailable", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2RpcException>(
+            () => client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.Equal(-32001, exception.Code);
+        Assert.IsNotType<Phd2NoGuideStarException>(exception);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task FindGuideStarDoesNotClassifyConnectionLossAsNoCandidate()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            session.CloseConnection();
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2DisconnectedException>(
+            () => client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.IsNotType<Phd2NoGuideStarException>(exception);
+        Assert.False(client.IsConnected);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task FindGuideStarDoesNotClassifyMalformedPointAsNoCandidate()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, new[] { 42.0 }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2Exception>(
+            () => client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.IsNotType<Phd2NoGuideStarException>(exception);
+        Assert.Contains("numeric two-element array", exception.Message, StringComparison.Ordinal);
         Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
     }
 

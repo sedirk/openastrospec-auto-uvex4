@@ -11,9 +11,9 @@ Rendering is refused unless the caller supplies the explicit `--render` switch:
 .\.dotnet\dotnet.exe run --project .\tests\UvexAdv.Nina.Plugin.UiHarness\UvexAdv.Nina.Plugin.UiHarness.csproj --configuration Release -- --render
 ```
 
-The default output is the ignored `tmp/ui-screenshots/` directory. Eleven PNG files
+The default output is the ignored `tmp/ui-screenshots/` directory. Fourteen PNG files
 cover idle, startup requirements, running, the integrated ATR single-frame check,
-failed/paused, PHD2 degraded,
+Chinese and English failed/paused presentation, bounded recovery in progress, PHD2 degraded,
 direct-target supervised guiding, calibrated ghost-assistance, QHY/G3 fast pairing,
 narrow-dock, and advanced bright-target settings states. The wide idle and narrow
 scenarios also exercise target-import status, full button labels, responsive wrapping,
@@ -24,7 +24,12 @@ and run-time command disabling. To render one scenario:
 ```
 
 The `advanced` scenario selects the production Advanced Settings tab, expands the
-bright-target wing-centroid section, and scrolls it into view for label/layout QA.
+engineering acquisition-algorithm group and bright-target wing-centroid section,
+then scrolls it into view for label/layout QA.
+
+The `failure-en` scenario sets the presentation culture to `en-US` before the
+production template is materialized. Its tests inspect the actual visible text and
+reject any CJK leakage. Other scenarios use `zh-CN`.
 
 The `atr-manual` scenario selects `Live Images > ATR 2D / 1D Spectrum` and verifies
 that camera identity binding and one-frame extraction diagnostics are integrated

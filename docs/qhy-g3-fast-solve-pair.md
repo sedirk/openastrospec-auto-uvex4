@@ -33,9 +33,12 @@ GS350/QHY WCS，并比较两个解算中心。这样可以把现场真实的两�
 默认 Profile 值为：缓存 15 s、曝光中点差 20 s、从最早曝光开始到 Candidate
 落盘前建模时刻的整组 30 s、mount span
 2 arcsec，以及缓存未命中时的一张 2 s QHY 曝光。它们是可见、可修改并被
-action-configuration SHA 锁定的 commissioning 参数，不是隐藏常量。生成的
-commissioning bindings 会写入完整默认值，但 `QhyG3FastPairEnabled=false`；
-操作员必须在准备好真实运行证据后显式启用。
+action-configuration SHA 锁定的 commissioning 参数，不是隐藏常量。根据
+2026-08-28 大丰实机路线验证，项目与新生成 commissioning bindings 的默认值为
+`QhyG3FastPairEnabled=true`。它只建立 `MotionAuthority=false` 的单样本候选，
+不会授予跨镜移动权限；操作员仍可在高级设置中关闭，并显式保存到当前
+N.I.N.A. Profile。旧 bindings 中的保守 `false` 由当前默认运行偏好覆盖，避免
+重新导入旧包时静默关闭该机会式采集。
 
 ## 映射定义
 
@@ -70,6 +73,23 @@ position angle、parity 以及相对比例/旋转；传感器发生旋转时，�
 改变关系。候选必须按 ADR-0004 聚合代表性样本，验证适用范围、残差、协方差、
 安装纪元和过期策略，再生成新的 `Verified/Active` 版本。当前 runner 尚未提供
 Active 记录的导入/激活路径，所以 `WideToSlitTransferMode` 仍必须是 `Skip`。
+
+每个通过完整性检查的 Candidate 会同时自动进入本机安装指纹隔离的候选档案：
+`%LocalAppData%\UVEX-ADV\calibration\qhy-g3\<hardware-fingerprint>\`。程序保留带
+时间戳和 Candidate SHA-256 的不可变 JSON，并原子更新 `latest-candidate.json`
+索引；操作员不再需要把测得的东/北偏移手抄到 N.I.N.A. Profile。该索引仍为
+`MotionAuthority=false`，不会静默把单样本升级成 Active 运动模型。
+
+当赤道仪因无机械零位、断电或人工设零而自报错误绝对坐标时，本轮新鲜且与
+当前未移动指向绑定的 QHY/PL3 正式 WCS 还会直接成为 G3 PL3 的天空提示。
+这样目标/赤道仪相差十几度不会被误叫作“两镜光轴差”，也不需要人为扩大
+G3 提示可信范围。若 QHY WCS 与赤道仪自报坐标的差异超过该可信范围，runner
+在无 park/slew/pulse-guide、pier side 未变且全部哈希有效时，每轮最多通过
+N.I.N.A. telescope mediator 执行一次 `Sync`，随后要求 5 arcsec 内的新读回；
+Sync 本身不产生 Slew。读回通过后，程序重新执行一次原计划的目录转向，并由
+下一张 fresh G3 WCS 验证光学到位；这不是 QHY 精修或搜索循环。小于阈值时
+只用作 G3 提示，避免两镜约数角分的正常光轴差造成反复同步。只有同一未移动
+指向的 QHY/G3 WCS 差才会进入上面的自动候选档案。
 
 候选也绝不能替代：
 

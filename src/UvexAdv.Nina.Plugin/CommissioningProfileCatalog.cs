@@ -146,7 +146,21 @@ internal static class CommissioningProfileCatalog
         nameof(UvexPluginSettings.HorizonStartMarginDegrees) or
         nameof(UvexPluginSettings.HorizonContinueMarginDegrees) or
         nameof(UvexPluginSettings.WideToSlitTransferMode) or
-        nameof(UvexPluginSettings.GhostAssistanceMode) => true,
+        nameof(UvexPluginSettings.GhostAssistanceMode) or
+        nameof(UvexPluginSettings.QhyG3FastPairEnabled) => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Operator/site preferences are applied again after the immutable
+    /// commissioning bundle.  They must not grant motion authority or replace
+    /// evidence-bound optical values.  This very small allow-list prevents a
+    /// generated bundle's conservative cross-site default from erasing an
+    /// explicitly selected local, non-motion observing preference.
+    /// </summary>
+    internal static bool IsPostBindingsOperationalPreference(string name) => name switch
+    {
+        nameof(UvexPluginSettings.QhyG3FastPairEnabled) => true,
         _ => false,
     };
 

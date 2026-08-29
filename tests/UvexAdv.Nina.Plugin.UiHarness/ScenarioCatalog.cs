@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -8,7 +9,10 @@ public sealed record ScreenshotScenario(
     string Name,
     int Width,
     int Height,
-    ObservationDockMockViewModel ViewModel);
+    ObservationDockMockViewModel ViewModel)
+{
+    public CultureInfo Culture { get; init; } = CultureInfo.GetCultureInfo("zh-CN");
+}
 
 public static class ScenarioCatalog
 {
@@ -18,8 +22,13 @@ public static class ScenarioCatalog
         new("uvex-manual", 1180, 800, ObservationDockMockViewModel.UvexManual()),
         new("startup-requirements", 1180, 900, ObservationDockMockViewModel.StartupRequirements()),
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
+        new("recovering", 1180, 800, ObservationDockMockViewModel.Recovering()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
+        new("failure-en", 1180, 800, ObservationDockMockViewModel.EnglishFailure())
+        {
+            Culture = CultureInfo.GetCultureInfo("en-US")
+        },
         new("phd2-degraded", 1180, 850, ObservationDockMockViewModel.Phd2Degraded()),
         new("phd2-direct-target", 1180, 880, ObservationDockMockViewModel.Phd2DirectTarget()),
         new("ghost-assistance", 1180, 900, ObservationDockMockViewModel.GhostAssistance()),
@@ -61,9 +70,24 @@ public sealed class ObservationDockMockViewModel
     public string CurrentStageText { get; init; } = "尚未开始";
     public string NextStageText { get; init; } = "锁定 Night Setup";
     public double ProgressPercent { get; init; }
+    public string ProgressSummary { get; init; } = "总体阶段 0/11 · 0%";
+    public string CurrentOperationText { get; init; } = string.Empty;
+    public double CurrentOperationPercent { get; init; }
+    public bool HasCurrentOperationText => !string.IsNullOrWhiteSpace(CurrentOperationText);
+    public bool HasCurrentOperationProgress { get; init; }
+    public bool IsRecovering { get; init; }
+    public ObservationUiTone RunTone => HasFailure
+        ? ObservationUiTone.Attention
+        : IsRecovering
+            ? ObservationUiTone.Recovering
+            : IsRunActive ? ObservationUiTone.Info : ObservationUiTone.Neutral;
     public string RunManifestPath { get; init; } = string.Empty;
     public string OperatorNotice { get; init; } = "离线截图数据；没有加载任何设备控制对象。";
+    public string OperatorNoticeTechnicalDetails { get; init; } = string.Empty;
+    public bool HasOperatorNoticeTechnicalDetails => !string.IsNullOrWhiteSpace(OperatorNoticeTechnicalDetails);
     public string Error { get; init; } = string.Empty;
+    public string ErrorTechnicalDetails { get; init; } = string.Empty;
+    public bool HasErrorTechnicalDetails => !string.IsNullOrWhiteSpace(ErrorTechnicalDetails);
     public string Phd2CalibrationGradeText { get; init; } = "尚未评估";
     public string Phd2CalibrationPolicyText { get; init; } = "phd2-calibration-quality-v1";
     public string Phd2CommissioningRouteText { get; init; } = "路线：Phd2CalibrationLockShift · guide AutoPreferOffSlitThenDirectTarget · 普通星 2000 ms · 亮目标降级 10 ms";
@@ -118,9 +142,14 @@ public sealed class ObservationDockMockViewModel
     public double HorizonContinueMarginDegrees { get; init; } = 3;
     public int SimulationStageMilliseconds { get; init; } = 500;
 
-    public string LastFailureHeadline { get; init; } = "当前没有失败或待处理质量门";
+    public string LastFailureHeadline { get; init; } = "当前没有错误或待处理证据门";
     public string LastFailureCode { get; init; } = string.Empty;
     public string LastFailureMessage { get; init; } = string.Empty;
+    public string LastFailureContext { get; init; } = "—";
+    public string LastFailureImpact { get; init; } = "自动流程当前没有因错误停止。";
+    public string LastFailureRecovery { get; init; } = "尚无需要说明的自动恢复。";
+    public string LastFailureTechnicalDetails { get; init; } = string.Empty;
+    public bool HasFailureTechnicalDetails => !string.IsNullOrWhiteSpace(LastFailureTechnicalDetails);
     public string LastFailureMetrics { get; init; } = string.Empty;
     public string LastFailureRecommendation { get; init; } = string.Empty;
     public string LastFailureEvidencePath { get; init; } = string.Empty;
@@ -157,7 +186,9 @@ public sealed class ObservationDockMockViewModel
     public string AtrManualCapturePresetText { get; init; } = "2 s · Gain 100 · Offset 256 · 1×1";
     public string AtrManualCaptureStatus { get; init; } = "尚未采集单帧检查光谱。";
     public string AtrManualCaptureError { get; init; } = string.Empty;
+    public string AtrManualCaptureErrorTechnicalDetails { get; init; } = string.Empty;
     public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
+    public bool HasAtrManualCaptureErrorTechnicalDetails => !string.IsNullOrWhiteSpace(AtrManualCaptureErrorTechnicalDetails);
     public string ManualSpectrumSummary { get; init; } = "尚未采集光谱";
     public PointCollection ManualSpectrumPoints { get; init; } = CreateEmptyManualSpectrumPoints();
     public string ManualUvexServiceUrl { get; init; } = "http://127.0.0.1:47844";
@@ -167,7 +198,9 @@ public sealed class ObservationDockMockViewModel
     public string ManualUvexPositionStatus { get; init; } = "狭缝：槽位 2（15um） · M2：12500 步 · 光栅：-1923 步 · 照明灯：Off";
     public string ManualUvexLastAction { get; init; } = "状态已刷新；没有执行任何机械运动。";
     public string ManualUvexError { get; init; } = string.Empty;
+    public string ManualUvexErrorTechnicalDetails { get; init; } = string.Empty;
     public bool HasManualUvexError => !string.IsNullOrWhiteSpace(ManualUvexError);
+    public bool HasManualUvexErrorTechnicalDetails => !string.IsNullOrWhiteSpace(ManualUvexErrorTechnicalDetails);
     public bool IsManualUvexBusy { get; init; }
     public bool IsManualUvexConnected { get; init; } = true;
     public int ManualM2StepSize { get; init; } = 50;
@@ -416,6 +449,10 @@ public sealed class ObservationDockMockViewModel
         CurrentStageText = "目标入缝",
         NextStageText = "选择导星星并等待稳定",
         ProgressPercent = 47,
+        ProgressSummary = "总体阶段 5/11 · 47%",
+        CurrentOperationText = "PHD2 有界锁点位移 2/3；等待新采 G3 残差",
+        CurrentOperationPercent = 67,
+        HasCurrentOperationProgress = true,
         RunManifestPath = @"C:\UVEX-ADV\runs\simulated-running\manifest.json",
         IsSimulationMode = false,
         IsRunActive = true,
@@ -437,6 +474,29 @@ public sealed class ObservationDockMockViewModel
         LatestEvidencePath = @"C:\UVEX-ADV\runs\simulated-running\g3-solve-overlay.png"
     };
 
+    public static ObservationDockMockViewModel Recovering() => new()
+    {
+        ModeText = "自动观测：真实设备",
+        ModeDescription = "全部启动硬门已经通过；正在执行同一账本下的有界自动恢复。",
+        RealModeStatus = "✓ 真实模式启动条件已通过",
+        RealModeStatusSummary = "真实模式：启动条件已通过。",
+        StartButtonText = "自动恢复进行中",
+        StateText = "正在自动恢复",
+        StatusMessage = "G3 新帧受云层影响，保持原位并重新采集不可变证据。",
+        CurrentStageText = "G3 解算、大步修正或邻场搜索",
+        NextStageText = "PHD2 精确送入狭缝中点",
+        ProgressPercent = 36,
+        ProgressSummary = "总体阶段 4/11 · 36%",
+        CurrentOperationText = "原位重拍 G3 新鲜证据 2/3；本轮总恢复 3/8",
+        CurrentOperationPercent = 67,
+        HasCurrentOperationProgress = true,
+        IsRecovering = true,
+        IsSimulationMode = false,
+        IsRunActive = true,
+        SelectedWorkspaceTabIndex = 0,
+        OperatorNotice = "恢复不会重置运动、动作、时间或回程预算。",
+    };
+
     public static ObservationDockMockViewModel Failure() => new()
     {
         ModeText = "自动观测：真实设备",
@@ -450,6 +510,7 @@ public sealed class ObservationDockMockViewModel
         CurrentStageText = "C11 主焦点",
         NextStageText = "重新拍摄 G3 验证帧",
         ProgressPercent = 31,
+        ProgressSummary = "总体阶段 4/11 · 31%",
         RunManifestPath = @"C:\UVEX-ADV\runs\simulated-failure\manifest.json",
         IsSimulationMode = false,
         HasFailure = true,
@@ -458,6 +519,10 @@ public sealed class ObservationDockMockViewModel
         LastFailureHeadline = "C11 主焦点质量门未通过",
         LastFailureCode = "G3_FOCUS_STARS_TOO_BROAD",
         LastFailureMessage = "拟合没有找到可信最小值；系统没有开始导星或科学曝光。",
+        LastFailureContext = "G3 解算、大步修正或邻场搜索 · 未通过，已暂停",
+        LastFailureImpact = "目标入缝和导星链已停止，新的 ATR 科学曝光不会开始；现有 FITS 已保留。",
+        LastFailureRecovery = "程序已重拍一张新鲜 G3 验证帧；焦点质量仍未通过，因此没有继续发送动作。",
+        LastFailureTechnicalDetails = "G3_FOCUS_STARS_TOO_BROAD: fitted FWHM 14.8 px exceeds commissioned 8.0 px limit.",
         LastFailureMetrics = "FWHM 14.8 px（要求 ≤ 8.0 px） · 星数 11 · SNR 28.4 · 饱和 0.1%",
         LastFailureRecommendation = "查看 G3 失败帧；扩大 Star Focuser Pro 搜索跨度并确认已越过 C11 内调焦空程。不得使用 UVEX M2 或 GS350 AAF 代偿。",
         LastFailureEvidencePath = @"C:\UVEX-ADV\runs\simulated-failure\g3-focus-failed.png",
@@ -472,6 +537,42 @@ public sealed class ObservationDockMockViewModel
         GateRows = FailureGates(),
         TimelineRows = FailureTimeline(),
         EvidenceRows = FailureEvidence()
+    };
+
+    public static ObservationDockMockViewModel EnglishFailure() => new()
+    {
+        OperatorNotice = "Offline screenshot data; no equipment-control object was loaded.",
+        ModeText = "Automation: real equipment · supervised",
+        ModeDescription = "The run stopped at a bounded action boundary and awaits review.",
+        RealModeStatus = "✓ Night Setup and device identities were locked for this run.",
+        RealModeStatusSummary = "Real-mode startup requirements passed for this run.",
+        StartButtonText = "Current run is paused",
+        StateText = "Safely paused; attention required",
+        StatusMessage = string.Empty,
+        PauseReason = "PHD2 exhausted bounded guide-star reselection without finding a safe off-slit star.",
+        CurrentStageText = "Select guide star, guide and settle in PHD2",
+        NextStageText = "Await operator decision",
+        ProgressPercent = 55,
+        ProgressSummary = "Overall stages 6/11 · 55%",
+        RunManifestPath = @"C:\UVEX-ADV\runs\simulated-failure-en\manifest.json",
+        IsSimulationMode = false,
+        HasFailure = true,
+        SelectedWorkspaceTabIndex = 5,
+        SelectedPreviewTabIndex = 1,
+        LastFailureHeadline = "PHD2 exhausted bounded off-slit guide-star reselection.",
+        LastFailureCode = "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED",
+        LastFailureMessage = "PHD2 exhausted bounded off-slit guide-star reselection.",
+        LastFailureContext = "Select guide star, guide and settle in PHD2 · Failed; paused",
+        LastFailureImpact = "Slit placement/guiding stopped and no new ATR science exposure can start; FITS evidence is retained.",
+        LastFailureRecovery = "Four native reselection attempts were consumed without sending guide, lock or mount commands.",
+        LastFailureTechnicalDetails = "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED: attempts=4; last candidate violated detector-edge guard.",
+        LastFailureMetrics = "selection attempts=4 · edge distance=7.2 px",
+        LastFailureRecommendation = "Inspect the G3 guide-selection frame and candidate safety distances; use only an explicitly enabled supervised fallback or adjust framing manually.",
+        LastFailurePreviewLabel = "Open PHD2 / G3 guide-selection frame",
+        LatestEvidenceSummary = "22:17:05 · PHD2/G3 guide-selection frame",
+        G3PreviewImage = PreviewImageFactory.CreateG3SlitField(true),
+        G3PreviewCaption = "Rejected guide candidates and detector/slit safety envelopes.",
+        G3PreviewMetadata = "22:17:05 UTC · 2 s · four bounded selections",
     };
 
     public static ObservationDockMockViewModel AtrManual() => new()
@@ -609,7 +710,7 @@ public sealed class ObservationDockMockViewModel
         ProgressPercent = 44,
         IsSimulationMode = false,
         IsRunActive = true,
-        SelectedWorkspaceTabIndex = 7,
+        SelectedWorkspaceTabIndex = 6,
         QhyG3FastPairEnabled = true,
         QhyG3FastPairStatus = "已启用候选学习：优先复用 ≤15s 的同位置 QHY WCS；否则只拍 1 张 2s QHY 帧。全过程 0 次赤道仪命令，候选不能直接授权运动。",
         WideToSlitTransferStatus = "自动预定位仍为 Skip；本轮 paired-WCS 只生成 Candidate，需多样本独立验证后才能激活。",
@@ -663,7 +764,7 @@ public sealed class ObservationDockMockViewModel
         RealModeStatus = "超亮目标例外分支已显示；本截图不授权设备动作。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
-        SelectedWorkspaceTabIndex = 7,
+        SelectedWorkspaceTabIndex = 6,
         BrightTargetWingCentroidEnabled = true,
         BrightTargetMinimumG3ExposureMilliseconds = 125,
         BrightTargetMaximumQhyWcsAgeMinutes = 5,
@@ -758,6 +859,11 @@ public sealed record MockGateRow(
     bool IsCurrent,
     bool IsFailed)
 {
+    public string TechnicalMessage => string.Empty;
+    public bool HasTechnicalDetails => false;
+    public ObservationUiTone Tone => IsFailed
+        ? ObservationUiTone.Fault
+        : State == "通过" ? ObservationUiTone.Success : IsCurrent ? ObservationUiTone.Info : ObservationUiTone.Neutral;
     public string StateGlyph => IsFailed ? "✕" : State == "通过" ? "✓" : IsCurrent ? "▶" : "○";
     public string Summary => $"{StateGlyph} {Stage}  {State}";
     public bool HasDetails => IsCurrent || IsFailed || !string.IsNullOrWhiteSpace(Code);
@@ -772,6 +878,8 @@ public sealed record MockTimelineRow(
     string EvidencePath)
 {
     public bool HasEvidence => !string.IsNullOrWhiteSpace(EvidencePath);
+    public string TechnicalMessage => string.Empty;
+    public bool HasTechnicalDetails => false;
 }
 
 public sealed record MockEvidenceRow(

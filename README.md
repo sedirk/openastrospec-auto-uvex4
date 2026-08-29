@@ -28,6 +28,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [latest software/real-sky closeout](docs/commissioning-night-2026-08-26.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
+[0.4.0.80 UI/localization/recovery closeout](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [contributing](CONTRIBUTING.md)
 
 The repository contains two user-facing GPL-3.0-only software products:
@@ -100,6 +101,16 @@ claim that the installed station has passed its first bounded live roof cycle;
 that commissioning step remains mandatory.
 
 The repository now includes the QHY service, the PHD2 event-server client, the target-acquisition state machine, and the N.I.N.A. real/simulator runners. Healthy stages advance automatically without confirmation dialogs. Failed or indeterminate gates enter `PausedNeedsAttention`; the operator can always pause, resume, cancel, or request manual takeover. Simulator-first commissioning remains mandatory. The authoritative design hashes are checked by the build and versioned Git hook so accidental architectural edits fail visibly.
+
+Plugin `0.4.0.80` consolidates the run header, two-level progress, current issue,
+quality gates, timeline and evidence into one semantic presentation system. Static
+and dynamic operator text follows N.I.N.A.'s selected UI language (`zh-*` or
+neutral English); stable codes and raw adapter messages remain unchanged under a
+collapsed technical-details boundary. Reviewed transient failures use exact,
+bounded recovery with a run-wide fuse, while safety, identity, hashes, ambiguous
+physical state and exhausted budgets remain hard stops. See the
+[`UI, localization and bounded-recovery closeout`](docs/ui-presentation-localization-and-recovery-2026-08-30.md)
+and the [`automatic-recovery matrix`](docs/automatic-recovery-matrix-2026-08-29.md).
 
 The current GS350/QHY-to-C11/G3 optical-axis difference is never a compiled
 constant. A future optional pre-positioning stage may consume an explicitly
@@ -190,8 +201,9 @@ The QHY service is installed separately and defaults to the synthetic simulator:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-qhy-service.ps1
 ```
 
-`-EnableHardware -HardwareConfigurationPath <machine-local-qhy-json>` pins and copies
-the locally installed x64 QHY SDK, verifies its versioned SHA-256, requires an exact
+`-EnableHardware -HardwareConfigurationPath <machine-local-qhy-json>` loads the x64
+QHY SDK directly from the complete official QHYCCD AllInOne installation, verifies
+its versioned absolute path and SHA-256 without making a private service copy, requires an exact
 commissioned QHY stable identity from that explicit machine-local file, and still
 exposes only `http://127.0.0.1:47845`. The tracked `config/qhy.production.json` is an
 intentionally non-runnable example. Do not enable hardware until the simulator,

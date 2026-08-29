@@ -83,7 +83,7 @@ implementation outcome rather than waiting for it to recur:
 | `NINA_PROFILE_OWNER_MISMATCH` | ATR/QHY selection crossed the single-owner binding | Front-end profile import and exact owner preflight identify the mismatch before physical connect; no relaxation of ownership |
 | `GS350_FOCUS_METRIC_UNAVAILABLE` | QHY fixed-axis witness was incorrectly required to supply a stellar FWHM | A formal immutable QHY WCS can be accepted as a no-motion witness while GS350 focus remains at its locked position |
 | non-finite JSON `STAGE_EXCEPTION` | Diagnostic metrics contained `NaN`/infinity | Diagnostic evidence serializes non-finite doubles as JSON `null`; canonical motion ledgers remain strict |
-| repeated `G3_MOTION_RECOVERY_CONTEXT_CHANGED` / elapsed lineage | An old durable action context was intentionally changed by a new target/form | Audited **清除旧 G3 状态** closes only the obsolete recovery phase after operator takeover; it does not move the mount or erase consumed budget |
+| repeated `G3_MOTION_RECOVERY_CONTEXT_CHANGED` / elapsed lineage | An old durable action context was intentionally changed by a new target/form | Audited **清除旧 G3 状态** remains available without starting hardware. **按当前设置新开一轮** now performs that explicit retirement first and only then captures a new action hash/run from the current form. It never mutates the old hash or hot-swaps a running route. |
 | 2.24-arcsec G3 family handoff failure | Normal settled readback variation was treated as an attempted rebase | Same-origin charged handoff accepts only bounded current-position continuity and preserves origin, cumulative motion, attempts, and original clock |
 | PHD2 two-frame 10.04-second timeout | Millisecond exposure was confused with multi-second full-frame delivery and stale-frame discard | Per-required-event full-frame timeout floor is 10 seconds; two events receive two event budgets and still return immediately when frames arrive |
 | target formally solved but driven only toward frame centre | Production WCS goal differed from the successful slit-centred inverse solve | Production inverse WCS now computes a detector-fixed slit destination |
@@ -235,3 +235,48 @@ heartbeats. The runner reports a rejected command rather than bypassing that
 policy. No roof or cover command was issued during this source audit. A bounded
 live RRCI/AIWeather failure-injection cycle and a front-end run through
 `FinalizeObservation` remain the field acceptance boundary.
+
+## 2026-08-28 Occam gate-severity pass
+
+The production coordinator now carries an explicit severity independently of
+its advance decision. A warning is `Passed + Warning`: it is shown as
+`警告/继续`, written to the timeline/manifest and included in the completion
+summary, but it does not manufacture a Resume step. `Failed` and
+`Indeterminate` are both errors and pause because the next action is known to
+be invalid or lacks evidence that cannot safely be guessed. The complete
+classification is [Gate severity and observation-continuity policy](design/gate-severity-and-continuity-policy.md).
+
+This pass removed the following production false blockers:
+
+1. QHY/GS350 is now an optional parallel branch after the immutable run is
+   locked. Service proof, connection, exact optional-device match, acquisition,
+   WCS/focus, photometry health and photometry cleanup failures disable that
+   branch and leave ATR/G3/UVEX spectroscopy running. `PauseOnQualityFailure`
+   is false for the parallel photometry job. Lost guide authority still blocks
+   both branches before a new ATR exposure.
+2. Low ATR contrast or single-frame SNR is not conflated with clipping. The
+   ladder still climbs and remeasures; at the longest safe unclipped tier the
+   frame is retained for stacking and the run completes with a warning.
+   Clipping automatically backs off and reprobes inside the same unattended
+   stage. It pauses only after the bounded safe-tier/attempt policy is actually
+   exhausted.
+3. The project-authored local G3 stellar-core heuristic no longer vetoes a
+   formal target-inside PL3 solution and no longer prevents configured bounded
+   neighbouring-field recovery. Weak supervision may run the same charged,
+   horizon-limited overlapping search; missing environmental adapters remain
+   visible warnings while connected explicit danger remains a stop.
+4. Missing weak-supervision environment capabilities, high humidity, optional
+   cover uncertainty and unavailable pre-capture ATR ROI/readout telemetry now
+   use the warning severity rather than green `Passed` or a hidden pause.
+5. Finalization separates required cleanup errors from optional QHY cleanup
+   warnings. A failed optional photometry stop cannot turn an otherwise
+   complete spectrum into a false failed observation; failure to stop PHD2 or
+   to attest a configured cover/mount/roof terminal action still does.
+
+The deliberate hard stops are consequently smaller and easier to explain:
+exact owner/identity conflicts, changed motion-authorizing evidence, explicit
+unsafe/rain/cloud/wind/closed-roof/closed-cover reports, horizon or movement
+limit violations, exhausted bounded acquisition, loss of physical slit or
+guide authority, no safe unclipped ATR tier, and unattested required terminal
+cleanup. No source inspection or test in this pass connected or moved real
+hardware.

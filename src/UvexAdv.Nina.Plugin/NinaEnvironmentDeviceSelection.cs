@@ -49,7 +49,7 @@ internal sealed record NinaEnvironmentDeviceSelection(
         }
 
         return weakSupervisionEnabled
-            ? GateResult.Pass(
+            ? GateResult.Warn(
                 "WEAK_SUPERVISION_ENVIRONMENT_ADAPTERS_DEGRADED",
                 $"Weak supervision will continue with warnings because the Profile has no {string.Join(", ", missing)}. " +
                 "Only the missing capabilities are degraded; every selected and connected adapter remains authoritative.")

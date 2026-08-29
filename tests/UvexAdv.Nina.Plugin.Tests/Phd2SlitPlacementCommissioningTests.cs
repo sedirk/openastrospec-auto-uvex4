@@ -119,7 +119,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
     public void ProductionRunnerSelectsOnlyFromFreshCommissionedExposureFrame()
     {
         var capture = RunnerSource.IndexOf("CaptureAndSelectPhd2GuideAtExposureAsync", StringComparison.Ordinal);
-        var fullFrame = RunnerSource.IndexOf("phd2.CaptureFullFrameAsync", capture, StringComparison.Ordinal);
+        var fullFrame = RunnerSource.IndexOf("CaptureG3FullFrameForAcquisitionAsync", capture, StringComparison.Ordinal);
         var analyze = RunnerSource.IndexOf("G3FrameInputPolicy.Create", fullFrame, StringComparison.Ordinal);
         var select = RunnerSource.IndexOf("GuideStarSelector.Select", analyze, StringComparison.Ordinal);
 
@@ -146,6 +146,78 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Equal(3, CountIn(LegacyRunnerSource, "PublishGuideSelectionEvidenceAsync(")); // Two call sites plus the evidence helper declaration.
         Assert.Equal(1, CountIn(LegacyRunnerSource, "guideSelectionAuthority = \"same-frame compact-source morphology; PHD2 fallback confined to ROI\""));
         Assert.Contains("bright-target/halo guard, compact FWHM", LegacyRunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeOffSlitExhaustionNeverUsesCoordinatorRankedSubstituteAndDegradesExplicitly()
+    {
+        var nativeSelection = Section(
+            "private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected)> SelectFreshPhd2GuideAsync(",
+            "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(");
+        Assert.Contains("throw new Phd2NativeGuideSelectionExhaustedException", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("requestedAlternate", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("PHD2_GUIDE_RESELECTED_AFTER_GEOMETRY_REJECTIONS", nativeSelection, StringComparison.Ordinal);
+
+        var fallback = Section(
+            "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(",
+            "private async Task<Phd2PlacementGuideChoice> CaptureAndSelectPhd2GuideAtExposureAsync(");
+        Assert.Contains("PHD2_OFF_SLIT_NATIVE_EXHAUSTED_DIRECT_TARGET_FALLBACK", fallback, StringComparison.Ordinal);
+        Assert.Contains("Phd2SlitGuideMode.DegradedDirectTargetGuiding", fallback, StringComparison.Ordinal);
+        Assert.Contains("exactLockOrMountMutationIssued = false", fallback, StringComparison.Ordinal);
+        Assert.Contains("coordinatorRankedSubstituteUsed = false", fallback, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeNoCandidateUsesOnlyTheBoundedFreshFrameReselectionPath()
+    {
+        var nativeSelection = Section(
+            "const int maximumNativeSelectionAttempts = 4;",
+            "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(");
+        var find = nativeSelection.IndexOf("phd2.FindGuideStarAsync", StringComparison.Ordinal);
+        var exactCatch = nativeSelection.IndexOf("catch (Phd2NoGuideStarException noGuideStar)", StringComparison.Ordinal);
+        var freshFrame = nativeSelection.IndexOf("phd2.SaveNextLoopingFrameAsync", exactCatch, StringComparison.Ordinal);
+        var continueSelection = nativeSelection.IndexOf("continue;", freshFrame, StringComparison.Ordinal);
+        var exhaustion = nativeSelection.LastIndexOf("throw new Phd2NativeGuideSelectionExhaustedException", StringComparison.Ordinal);
+
+        Assert.True(find >= 0 && exactCatch > find && freshFrame > exactCatch && continueSelection > freshFrame && exhaustion > continueSelection);
+        Assert.Contains("g3-phd2-native-no-candidate-{attempt}", nativeSelection, StringComparison.Ordinal);
+        Assert.Contains("attempt < maximumNativeSelectionAttempts", nativeSelection, StringComparison.Ordinal);
+        Assert.Contains("rejected.Add(reason)", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("catch (Phd2Exception", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("catch (Exception", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("phd2.GuideAsync", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetExactLockPosition", nativeSelection, StringComparison.Ordinal);
+        Assert.DoesNotContain("mount.", nativeSelection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeSelectionExhaustionRetainsFourNoCandidateRejectionsForCheckedStopEvidence()
+    {
+        var rejections = Enumerable.Range(1, 4)
+            .Select(attempt => $"attempt {attempt}: {Phd2NoGuideStarException.FailureCode}")
+            .ToArray();
+
+        var exception = new Phd2NativeGuideSelectionExhaustedException(4, rejections);
+
+        Assert.Equal(4, exception.Attempts);
+        Assert.Equal(rejections, exception.Rejections);
+        Assert.Contains(Phd2NativeGuideSelectionExhaustedException.FailureCode, exception.Message, StringComparison.Ordinal);
+        Assert.All(rejections, rejection => Assert.Contains(rejection, exception.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FullFieldRelockIsLimitedToStructuredLostLockOrDisconnectEvidence()
+    {
+        var placement = Section(
+            "private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(",
+            "private Task<StageResult> ReturnPhd2LockToOriginAsync(");
+        var classifier = placement.IndexOf("IsStructuredPhd2GuideSessionLoss(ex)", StringComparison.Ordinal);
+        var fullReacquisition = placement.IndexOf("AcquireG3SlitFieldAsync(", classifier, StringComparison.Ordinal);
+
+        Assert.True(classifier >= 0 && fullReacquisition > classifier);
+        Assert.Contains("PHD2_SLIT_PLACEMENT_FAILED_SAFE", placement, StringComparison.Ordinal);
+        Assert.Contains("not reclassified by message text", placement, StringComparison.Ordinal);
+        Assert.DoesNotContain("ex.Message.Contains", placement, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -264,6 +336,69 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("PHD2_LOCK_LEDGER_ALREADY_SETTLED", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("RecoveryContextSha256", RunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LocallyAttestedGuideEpochRebindPreservesEveryDurableBudgetDimension()
+    {
+        var state = CreateState("run-a", Phd2LockShiftPendingPhase.ReturnRequired) with
+        {
+            AttemptsUsed = 7,
+            CumulativeCommandedPixels = 42.5,
+        };
+        var rebound = state.RebindAfterLocallyAttestedGuideEpoch(
+            state.ConnectionEpoch,
+            state.GuideEpoch + 2,
+            new Phd2Point(107.5, 101.25),
+            state.UpdatedUtc.AddMilliseconds(1),
+            "fault-injected locally attested guide epoch");
+
+        Assert.Equal(state.ConnectionEpoch, rebound.ConnectionEpoch);
+        Assert.Equal(state.GuideEpoch + 2, rebound.GuideEpoch);
+        Assert.Equal(107.5, rebound.CurrentLockX);
+        Assert.Equal(101.25, rebound.CurrentLockY);
+        Assert.Equal(state.LineageId, rebound.LineageId);
+        Assert.Equal(state.AttemptsUsed, rebound.AttemptsUsed);
+        Assert.Equal(state.CumulativeCommandedPixels, rebound.CumulativeCommandedPixels);
+        Assert.Equal(state.MaximumAttempts, rebound.MaximumAttempts);
+        Assert.Equal(state.MaximumCumulativePixels, rebound.MaximumCumulativePixels);
+        Assert.Equal(state.MaximumElapsedSeconds, rebound.MaximumElapsedSeconds);
+        Assert.Equal(state.StartedUtc, rebound.StartedUtc);
+        Assert.Equal(state.OriginLockX, rebound.OriginLockX);
+        Assert.Equal(state.OriginLockY, rebound.OriginLockY);
+    }
+
+    [Fact]
+    public void DurableReturnReplansPreDispatchDriftWithoutResendOrBudgetRollback()
+    {
+        var recovery = Section(
+            "private async Task<StageResult> ReturnPhd2LockToOriginCoreAsync(",
+            "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
+        var precharge = recovery.IndexOf("AttemptsUsed = state.AttemptsUsed + 1", StringComparison.Ordinal);
+        var drift = recovery.IndexOf("Fresh runtime lock changed before dispatch", precharge, StringComparison.Ordinal);
+        var continuation = recovery.IndexOf("continue;", drift, StringComparison.Ordinal);
+        var exact = recovery.IndexOf("phd2.SetExactLockPositionAsync", drift, StringComparison.Ordinal);
+
+        Assert.True(precharge >= 0 && drift > precharge && continuation > drift && exact > continuation);
+        var driftBranch = recovery[drift..continuation];
+        Assert.DoesNotContain("AttemptsUsed =", driftBranch, StringComparison.Ordinal);
+        Assert.DoesNotContain("CumulativeCommandedPixels =", driftBranch, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetExactLockPositionAsync", driftBranch, StringComparison.Ordinal);
+        Assert.Contains("pendingPhd2LockShift = state", driftBranch, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryNewOrResettleGuideRetainsLastMomentCalibrationReadback()
+    {
+        var returnPath = Section(
+            "private async Task<StageResult> ReturnPhd2LockToOriginCoreAsync(",
+            "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
+        var returnValidation = returnPath.IndexOf("calibrationBeforeReturnSettle", StringComparison.Ordinal);
+        var returnGuide = returnPath.IndexOf("phd2.GuideAndSettleAsync", returnValidation, StringComparison.Ordinal);
+
+        Assert.True(returnValidation >= 0 && returnGuide > returnValidation);
+        Assert.Contains("PHD2_LOCK_RECOVERY_LAST_MOMENT_CALIBRATION_INVALID", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("calibrationBeforeStageSettle", RunnerSource, StringComparison.Ordinal);
     }
 
     [Fact]

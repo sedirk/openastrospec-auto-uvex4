@@ -34,6 +34,61 @@ public sealed class SlitFieldAnalysisTests
     }
 
     [Fact]
+    public void FilledSaturatedTargetIsSeparatedFromCloserAnnularGhost()
+    {
+        const int width = 300, height = 220;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddGaussian(pixels, width, height, 190, 130, 9, 100_000);
+        AddAnnularGhost(pixels, width, height, 140, 105, 22, 3, 100_000);
+        var frame = new MonochromeFrame(width, height, pixels, 65_520);
+        var prediction = new PixelPoint(155, 110); // Intentionally closer to the ghost ring.
+
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(frame, prediction, 100);
+
+        Assert.Equal(GateDisposition.Passed, topology.Gate.Disposition);
+        Assert.Equal("SATURATED_TARGET_SOLID_CORE_IDENTIFIED", topology.Gate.Code);
+        Assert.NotNull(topology.Target);
+        Assert.Equal(SaturatedSourceTopology.SolidStellarCore, topology.Target!.Topology);
+        Assert.InRange(topology.Target.Centroid.X, 188, 192);
+        Assert.InRange(topology.Target.Centroid.Y, 128, 132);
+        var ghost = Assert.Single(topology.Ghosts);
+        Assert.Equal(SaturatedSourceTopology.AnnularGhost, ghost.Topology);
+        Assert.InRange(ghost.CentralSaturationFraction, 0, 0.15);
+        Assert.True(ghost.AnnularSaturationFraction >= 0.35);
+
+        var identified = SlitTargetIdentifier.Identify(
+            frame,
+            StarFieldDetector.Detect(frame),
+            prediction,
+            100);
+
+        Assert.Equal(GateDisposition.Passed, identified.Gate.Disposition);
+        Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", identified.Gate.Code);
+        Assert.Equal(TargetIdentificationAuthority.BrightWingCentroid, identified.Authority);
+        Assert.InRange(identified.Target!.Centroid.X, 188, 192);
+        Assert.Contains("1 hollow annular ghost", identified.Gate.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnnularGhostAloneCannotBecomeTargetCentroid()
+    {
+        const int width = 220, height = 180;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddAnnularGhost(pixels, width, height, 110, 90, 22, 3, 100_000);
+        var frame = new MonochromeFrame(width, height, pixels, 65_520);
+
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(
+            frame,
+            new PixelPoint(110, 90),
+            80);
+
+        Assert.Equal(GateDisposition.Indeterminate, topology.Gate.Disposition);
+        Assert.Equal("SATURATED_TARGET_ONLY_ANNULAR_GHOSTS", topology.Gate.Code);
+        Assert.Null(topology.Target);
+        Assert.Single(topology.Ghosts);
+    }
+
+    [Fact]
     public void CatalogWcsTargetDoesNotInventAStellarDetectionOrFlux()
     {
         var predicted = new PixelPoint(123.25, 456.75);
@@ -294,6 +349,27 @@ public sealed class SlitFieldAnalysisTests
         {
             var value = 500 + amplitude * Math.Exp(-((x - cx) * (x - cx) + (y - cy) * (y - cy)) / (2 * sigma * sigma));
             pixels[y * width + x] = (ushort)Math.Min(65520, Math.Round(value));
+        }
+    }
+
+    private static void AddAnnularGhost(
+        ushort[] pixels,
+        int width,
+        int height,
+        double centerX,
+        double centerY,
+        double radius,
+        double sigma,
+        double amplitude)
+    {
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var radialDistance = Math.Sqrt((x - centerX) * (x - centerX) + (y - centerY) * (y - centerY));
+            var ringDistance = radialDistance - radius;
+            var value = pixels[y * width + x] +
+                        amplitude * Math.Exp(-(ringDistance * ringDistance) / (2 * sigma * sigma));
+            pixels[y * width + x] = (ushort)Math.Min(65_520, Math.Round(value));
         }
     }
 }

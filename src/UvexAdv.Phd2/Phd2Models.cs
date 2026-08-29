@@ -34,6 +34,22 @@ public enum Phd2ValidationStatus
 
 public sealed record Phd2Point(double X, double Y);
 
+/// <summary>
+/// Result of a bounded, read-only lock-position reconciliation.  The operation
+/// never sends guide, stop, star-selection, or lock-position mutation commands.
+/// </summary>
+public sealed record Phd2SameEpochLockReadback(
+    Phd2Point? Position,
+    int Attempts,
+    int MaximumAttempts,
+    bool SameGuideEpoch,
+    long ConnectionEpoch,
+    long GuideEpoch,
+    Phd2AppState AppState)
+{
+    public bool Succeeded => Position is not null && SameGuideEpoch;
+}
+
 public sealed record Phd2Rectangle(int X, int Y, int Width, int Height);
 
 public sealed record Phd2Profile(int Id, string Name);

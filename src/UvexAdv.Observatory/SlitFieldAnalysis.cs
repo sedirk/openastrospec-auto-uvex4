@@ -318,6 +318,47 @@ public enum TargetIdentificationAuthority
 public static class SlitTargetIdentifier
 {
     public static TargetIdentification Identify(
+        MonochromeFrame frame,
+        IReadOnlyList<StarCandidate> candidates,
+        PixelPoint predictedPoint,
+        double maximumPredictionResidualPixels,
+        double minimumSignalToNoise = 8,
+        double minimumUniquenessRatio = 1.5)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(
+            frame,
+            predictedPoint,
+            maximumPredictionResidualPixels);
+        if (topology.Gate.Disposition == GateDisposition.Passed && topology.Target is { } saturatedTarget)
+        {
+            return new TargetIdentification(
+                GateResult.Pass(
+                    "TARGET_IDENTIFIED_SATURATED_TOPOLOGY",
+                    $"Formal WCS proximity and filled-core topology identify the target at ({saturatedTarget.Centroid.X:F2}, {saturatedTarget.Centroid.Y:F2}) px; {topology.Ghosts.Count} hollow annular ghost(s) were excluded.",
+                    topology.Gate.Metrics),
+                saturatedTarget.Source,
+                predictedPoint,
+                saturatedTarget.DistanceToPredictionPixels,
+                topology.UniquenessRatio,
+                TargetIdentificationAuthority.BrightWingCentroid);
+        }
+
+        var ghostFiltered = topology.Ghosts.Count == 0
+            ? candidates
+            : candidates
+                .Where(candidate => topology.Ghosts.All(ghost =>
+                    Distance(candidate.Centroid, ghost.Centroid) > ghost.ExclusionRadiusPixels))
+                .ToArray();
+        return Identify(
+            ghostFiltered,
+            predictedPoint,
+            maximumPredictionResidualPixels,
+            minimumSignalToNoise,
+            minimumUniquenessRatio);
+    }
+
+    public static TargetIdentification Identify(
         IReadOnlyList<StarCandidate> candidates,
         PixelPoint predictedPoint,
         double maximumPredictionResidualPixels,
@@ -409,10 +450,10 @@ public static class GuideStarSelector
     }
 
     /// <summary>
-    /// Validates the star selected by PHD2's native full-frame auto-selection.
-    /// This method never ranks a replacement: a rejected native selection is
-    /// returned as a rejection so the caller can stop or use an explicit
-    /// degraded route.
+    /// Applies deterministic geometry guards to the star selected by PHD2's
+    /// native full-frame auto-selection. Local morphology is diagnostic only:
+    /// PHD2 owns star detection and selection, and a second detector must not
+    /// revoke that result merely because its segmentation differs.
     /// </summary>
     public static GuideStarSelection ValidateNativeSelection(
         IReadOnlyList<StarCandidate> candidates,
@@ -443,9 +484,9 @@ public static class GuideStarSelector
         if (matches.Length == 0)
         {
             return new GuideStarSelection(
-                GateResult.Fail(
-                    "PHD2_NATIVE_GUIDE_NOT_STELLAR",
-                    $"PHD2 selected ({nativeSelection.X:F1}, {nativeSelection.Y:F1}), but no stellar morphology matched it within {matchRadiusPixels:F1}px."),
+                GateResult.Pass(
+                    "PHD2_NATIVE_GUIDE_ACCEPTED_MORPHOLOGY_UNAVAILABLE",
+                    $"Accepted PHD2 native guide position ({nativeSelection.X:F1}, {nativeSelection.Y:F1}); the local detector found no matching segmentation within {matchRadiusPixels:F1}px, so morphology remains diagnostic and no coordinator substitute was selected."),
                 null,
                 0);
         }
@@ -457,28 +498,30 @@ public static class GuideStarSelector
         var targetGuard = targetIsUltraBright
             ? Math.Max(effectivePolicy.TargetGuardPixels, effectivePolicy.BrightTargetHaloGuardPixels)
             : effectivePolicy.TargetGuardPixels;
-        var failures = new List<string>();
+        var diagnostics = new List<string>();
         if (!double.IsFinite(candidate.SignalToNoise) || candidate.SignalToNoise < effectivePolicy.MinimumSignalToNoise)
-            failures.Add($"SNR {candidate.SignalToNoise:F1} is below {effectivePolicy.MinimumSignalToNoise:F1}");
+            diagnostics.Add($"local SNR {candidate.SignalToNoise:F1} is below {effectivePolicy.MinimumSignalToNoise:F1}");
         if (!double.IsFinite(candidate.FwhmPixels) || candidate.FwhmPixels <= 0 || candidate.FwhmPixels > effectivePolicy.MaximumFwhmPixels)
-            failures.Add($"FWHM {candidate.FwhmPixels:F1}px is outside the compact-star envelope");
+            diagnostics.Add($"local FWHM {candidate.FwhmPixels:F1}px is outside the compact-star envelope");
         if (!double.IsFinite(candidate.Ellipticity) || candidate.Ellipticity > effectivePolicy.MaximumEllipticity)
-            failures.Add($"ellipticity {candidate.Ellipticity:F2} is too high");
+            diagnostics.Add($"local ellipticity {candidate.Ellipticity:F2} is high");
         if (!double.IsFinite(candidate.SaturatedFraction) || candidate.SaturatedFraction > effectivePolicy.MaximumSaturatedFraction)
-            failures.Add($"saturated fraction {candidate.SaturatedFraction:F4} is too high");
-        if (candidate.EdgeDistancePixels < effectivePolicy.MinimumEdgeDistancePixels)
-            failures.Add("selection is too close to a detector edge");
-        if (Distance(candidate.Centroid, target.Centroid) < targetGuard)
-            failures.Add($"selection is inside the {targetGuard:F0}px target/halo guard");
-        if (DistanceToSlit(candidate.Centroid, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
-            failures.Add("selection is inside the physical-slit guard");
+            diagnostics.Add($"local saturated fraction {candidate.SaturatedFraction:F4} is high");
 
-        if (failures.Count > 0)
+        var geometryFailures = new List<string>();
+        if (candidate.EdgeDistancePixels < effectivePolicy.MinimumEdgeDistancePixels)
+            geometryFailures.Add("selection is too close to a detector edge");
+        if (Distance(nativeSelection, target.Centroid) < targetGuard)
+            geometryFailures.Add($"selection is inside the {targetGuard:F0}px target/halo guard");
+        if (DistanceToSlit(nativeSelection, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
+            geometryFailures.Add("selection is inside the physical-slit guard");
+
+        if (geometryFailures.Count > 0)
         {
             return new GuideStarSelection(
                 GateResult.Fail(
                     "PHD2_NATIVE_GUIDE_REJECTED",
-                    $"PHD2's native selection was rejected without substitution: {string.Join("; ", failures)}."),
+                    $"PHD2's native selection violated deterministic detector/target/slit geometry and was rejected without substitution: {string.Join("; ", geometryFailures)}."),
                 candidate,
                 candidate.SignalToNoise);
         }
@@ -486,7 +529,9 @@ public static class GuideStarSelector
         return new GuideStarSelection(
             GateResult.Pass(
                 "PHD2_NATIVE_GUIDE_ACCEPTED",
-                $"Accepted PHD2 native guide star at ({candidate.Centroid.X:F1}, {candidate.Centroid.Y:F1}); the coordinator did not rank or substitute candidates."),
+                diagnostics.Count == 0
+                    ? $"Accepted PHD2 native guide position ({nativeSelection.X:F1}, {nativeSelection.Y:F1}); the coordinator did not rank or substitute candidates."
+                    : $"Accepted PHD2 native guide position ({nativeSelection.X:F1}, {nativeSelection.Y:F1}); local morphology is diagnostic only ({string.Join("; ", diagnostics)}), and the coordinator did not rank or substitute candidates."),
             candidate,
             candidate.SignalToNoise);
     }

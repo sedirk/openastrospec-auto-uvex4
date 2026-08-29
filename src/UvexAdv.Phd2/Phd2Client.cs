@@ -820,7 +820,7 @@ public sealed class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
             var selected = ParsePointArray(result)
-                ?? throw new Phd2Exception("PHD2 native automatic selection found no guide star.");
+                ?? throw new Phd2NoGuideStarException();
             UpdateSnapshot(current => current with
             {
                 LockPosition = selected,
@@ -1059,6 +1059,75 @@ public sealed class Phd2Client : IPhd2Client
         }
     }
 
+    public async Task<Phd2SameEpochLockReadback> GetLockPositionWithSameEpochRetryAsync(
+        long expectedConnectionEpoch,
+        long expectedGuideEpoch,
+        int maximumAttempts,
+        CancellationToken cancellationToken)
+    {
+        if (expectedConnectionEpoch < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedConnectionEpoch));
+        if (expectedGuideEpoch < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedGuideEpoch));
+        if (maximumAttempts is < 1 or > 5)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumAttempts),
+                "Same-epoch lock readback attempts must be between 1 and 5.");
+        }
+
+        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfAutomationPaused();
+            for (var attempt = 1; attempt <= maximumAttempts; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var before = Snapshot;
+                if (!IsExpectedGuidingEpoch(before, expectedConnectionEpoch, expectedGuideEpoch))
+                {
+                    return BuildSameEpochLockReadback(
+                        position: null,
+                        attempts: attempt - 1,
+                        maximumAttempts,
+                        sameGuideEpoch: false,
+                        before);
+                }
+
+                var position = await GetLockPositionCoreAsync(cancellationToken).ConfigureAwait(false);
+                var after = Snapshot;
+                var sameGuideEpoch = IsExpectedGuidingEpoch(
+                    after,
+                    expectedConnectionEpoch,
+                    expectedGuideEpoch);
+                if (!sameGuideEpoch || position is not null)
+                {
+                    return BuildSameEpochLockReadback(
+                        position,
+                        attempt,
+                        maximumAttempts,
+                        sameGuideEpoch,
+                        after);
+                }
+            }
+
+            var exhausted = Snapshot;
+            return BuildSameEpochLockReadback(
+                position: null,
+                attempts: maximumAttempts,
+                maximumAttempts,
+                sameGuideEpoch: IsExpectedGuidingEpoch(
+                    exhausted,
+                    expectedConnectionEpoch,
+                    expectedGuideEpoch),
+                exhausted);
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     public async Task<Phd2ExactLockPositionResult> SetExactLockPositionAsync(
         Phd2ExactLockPositionRequest request,
         CancellationToken cancellationToken)
@@ -1217,6 +1286,20 @@ public sealed class Phd2Client : IPhd2Client
         Phd2SettleCriteria criteria,
         bool forceRecalibration,
         Phd2Rectangle? selectionRoi,
+        CancellationToken cancellationToken) =>
+        await GuideAndSettleAsync(
+                criteria,
+                forceRecalibration,
+                selectionRoi,
+                preserveSameEpochGuidingOnSettleTimeout: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    public async Task<Phd2SettleResult> GuideAndSettleAsync(
+        Phd2SettleCriteria criteria,
+        bool forceRecalibration,
+        Phd2Rectangle? selectionRoi,
+        bool preserveSameEpochGuidingOnSettleTimeout,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(criteria);
@@ -1361,8 +1444,17 @@ public sealed class Phd2Client : IPhd2Client
             await BestEffortStopCaptureAsync().ConfigureAwait(false);
             throw;
         }
-        catch (Phd2CommandTimeoutException)
+        catch (Phd2CommandTimeoutException ex)
         {
+            if (preserveSameEpochGuidingOnSettleTimeout && operationId.HasValue)
+            {
+                var timedOutGuiding = TryAttestTimedOutGuidingOperation(operationId.Value, ex);
+                if (timedOutGuiding is not null)
+                {
+                    operationCompleted = true;
+                    return timedOutGuiding;
+                }
+            }
             if (operationId.HasValue)
             {
                 AbortSettleOperation(operationId.Value);
@@ -2341,6 +2433,55 @@ public sealed class Phd2Client : IPhd2Client
                 : current);
     }
 
+    private Phd2SettleResult? TryAttestTimedOutGuidingOperation(
+        long operationId,
+        Phd2CommandTimeoutException timeout)
+    {
+        Phd2SettleResult? accepted = null;
+        UpdateSnapshot(current =>
+        {
+            if (current.PendingSettleOperationId != operationId ||
+                current.PendingSettleConnectionEpoch != current.ConnectionEpoch ||
+                current.PendingSettleGuideEpoch != current.GuideEpoch ||
+                !current.PendingSettleCommandAccepted ||
+                !current.IsConnected ||
+                current.AutomationPaused ||
+                current.Phd2Paused ||
+                current.AppState != Phd2AppState.Guiding)
+            {
+                return current;
+            }
+
+            accepted = new Phd2SettleResult(
+                Succeeded: false,
+                Error: timeout.Message,
+                TotalFrames: 0,
+                DroppedFrames: 0,
+                CompletedUtc: DateTimeOffset.UtcNow);
+            return current with
+            {
+                LastSettle = accepted,
+                SettleProgress = null,
+                LastSettleOperationId = operationId,
+                LastSettleCommandAccepted = true,
+                LastSettleConnectionEpoch = current.ConnectionEpoch,
+                LastSettleGuideEpoch = current.GuideEpoch,
+                PendingSettleOperationId = null,
+                PendingSettleConnectionEpoch = null,
+                PendingSettleGuideEpoch = null,
+                PendingSettleArmedAfterSequence = null,
+                PendingSettleBeginSequence = null,
+                PendingSettleCommandAccepted = false,
+                PendingTakeoverLoopStopAllowed = false,
+                PendingLateLoopFrameAllowed = false,
+                PendingForceRecalibration = false,
+                PendingCalibrationStartSequence = null,
+                PendingCalibrationTerminalSequence = null,
+            };
+        });
+        return accepted;
+    }
+
     private EventWaiterRegistration RegisterEventWaiter(Func<Phd2EventMessage, bool> predicate)
     {
         var id = Guid.NewGuid();
@@ -2644,6 +2785,31 @@ public sealed class Phd2Client : IPhd2Client
         UpdateSnapshot(current => current with { LockPosition = lockPosition });
         return lockPosition;
     }
+
+    private static bool IsExpectedGuidingEpoch(
+        Phd2StateSnapshot snapshot,
+        long expectedConnectionEpoch,
+        long expectedGuideEpoch) =>
+        snapshot.IsConnected &&
+        !snapshot.AutomationPaused &&
+        !snapshot.Phd2Paused &&
+        snapshot.AppState == Phd2AppState.Guiding &&
+        snapshot.ConnectionEpoch == expectedConnectionEpoch &&
+        snapshot.GuideEpoch == expectedGuideEpoch;
+
+    private static Phd2SameEpochLockReadback BuildSameEpochLockReadback(
+        Phd2Point? position,
+        int attempts,
+        int maximumAttempts,
+        bool sameGuideEpoch,
+        Phd2StateSnapshot snapshot) => new(
+            position,
+            attempts,
+            maximumAttempts,
+            sameGuideEpoch,
+            snapshot.ConnectionEpoch,
+            snapshot.GuideEpoch,
+            snapshot.AppState);
 
     private static void ValidateExactLockPositionRequest(Phd2ExactLockPositionRequest request)
     {

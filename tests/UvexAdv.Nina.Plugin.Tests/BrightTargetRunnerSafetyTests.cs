@@ -33,7 +33,7 @@ public sealed class BrightTargetRunnerSafetyTests
 
         var checkpoint = body.IndexOf("RequireImmediatePhysicalActionGatesAsync", StringComparison.Ordinal);
         var qhyRehash = body.IndexOf("currentAcceptedQhySha256 = await ComputeFileSha256Async", StringComparison.Ordinal);
-        var exposure = body.IndexOf("phd2.CaptureFullFrameAsync", StringComparison.Ordinal);
+        var exposure = body.IndexOf("CaptureG3FullFrameForAcquisitionAsync", StringComparison.Ordinal);
         var authority = body.IndexOf("BrightTargetAuthorityGate.Evaluate", StringComparison.Ordinal);
         var pass = body.IndexOf("G3_BRIGHT_TARGET_FIELD_IDENTIFIED", StringComparison.Ordinal);
         Assert.True(qhyRehash >= 0 && qhyRehash < checkpoint);

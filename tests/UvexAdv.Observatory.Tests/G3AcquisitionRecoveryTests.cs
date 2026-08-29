@@ -6,6 +6,16 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3AcquisitionRecoveryTests
 {
     [Fact]
+    public void StableNearOriginToleranceIsWiderThanStrictBindingButCappedByFreshSolveLimit()
+    {
+        var state = State(DateTimeOffset.UtcNow) with { ArrivalToleranceArcseconds = 2 };
+
+        Assert.Equal(10, G3AcquisitionMotionPlanner.ComputeStableNearOriginToleranceArcseconds(state, 60));
+        Assert.Equal(6, G3AcquisitionMotionPlanner.ComputeStableNearOriginToleranceArcseconds(state, 6));
+        Assert.True(double.IsNaN(G3AcquisitionMotionPlanner.ComputeStableNearOriginToleranceArcseconds(state, 0)));
+    }
+
+    [Fact]
     public void ExposurePresetIsVersionedOrderedAndContainsNoUniversalFallback()
     {
         var valid = new G3PlateSolveExposurePreset(
@@ -392,6 +402,71 @@ public sealed class G3AcquisitionRecoveryTests
         Assert.Equal(20, continued.MaximumRadiusArcseconds);
         Assert.Equal("run-b", continued.ObservationRunId);
         Assert.Equal(G3AcquisitionMotionKind.LocalSearch, continued.Kind);
+    }
+
+    [Fact]
+    public void ReattestedCommissioningCeilingAllowsFamilyIncrementWithoutResettingConsumption()
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        var prior = State(started) with
+        {
+            MaximumCumulativeMotionArcseconds = 150,
+            MaximumCorrectionAttempts = 8,
+            MaximumElapsedSeconds = 180,
+            CumulativeMotionArcseconds = 137,
+            CorrectionAttempts = 7,
+            UpdatedUtc = started.AddMinutes(2),
+        };
+
+        var continued = G3AcquisitionMotionPlanner.ContinueSettledLedger(
+            prior,
+            "run-b",
+            G3AcquisitionMotionKind.LocalSearch,
+            "evidence/run-b-g3-search.json",
+            started.AddMinutes(3),
+            familyMaximumSingleCorrectionArcseconds: 6,
+            familyMaximumRadiusArcseconds: 20,
+            familyAdditionalCumulativeMotionArcseconds: 40,
+            familyAdditionalCorrectionAttempts: 3,
+            familyAdditionalElapsedTime: TimeSpan.FromMinutes(1),
+            attestedLineageMaximumCumulativeMotionArcseconds: 500,
+            attestedLineageMaximumCorrectionAttempts: 20,
+            attestedLineageMaximumElapsedTime: TimeSpan.FromMinutes(5));
+
+        Assert.Equal(prior.BudgetLineageId, continued.BudgetLineageId);
+        Assert.Equal(prior.StartedUtc, continued.StartedUtc);
+        Assert.Equal(137, continued.CumulativeMotionArcseconds);
+        Assert.Equal(7, continued.CorrectionAttempts);
+        Assert.Equal(177, continued.MaximumCumulativeMotionArcseconds);
+        Assert.Equal(10, continued.MaximumCorrectionAttempts);
+        Assert.Equal(240, continued.MaximumElapsedSeconds);
+    }
+
+    [Fact]
+    public void NominalSearchStepAllowsPriorArrivalErrorAndReservesNextArrivalError()
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        var state = State(started) with
+        {
+            CurrentRaTangentOffsetArcseconds = -2,
+            MaximumSingleCorrectionArcseconds = 304,
+            ArrivalToleranceArcseconds = 2,
+            MaximumRadiusArcseconds = 900,
+            MaximumCumulativeMotionArcseconds = 3_600,
+            MaximumCorrectionAttempts = 12,
+            WorstCaseActionSeconds = 10,
+            MaximumElapsedSeconds = 1_200,
+        };
+
+        var reserve = G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(
+            state,
+            300,
+            0,
+            started);
+
+        Assert.Equal(GateDisposition.Passed, reserve.Gate.Disposition);
+        Assert.InRange(reserve.MoveFromCurrentArcseconds, 301.99, 302.01);
+        Assert.Equal(1, reserve.ReservedReturnMoves);
     }
 
     private static G3AcquisitionMotionState State(DateTimeOffset started) => new(

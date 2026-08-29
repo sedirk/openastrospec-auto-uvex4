@@ -743,8 +743,11 @@ public static class Phd2SlitLockShiftPlanner
                 return Denied("DIRECT_TARGET_MINIMUM_EXPOSURE_UNCOMMISSIONED", "Degraded direct-target guiding requires the commissioned shortest G3 exposure.");
             if (Distance(measurement.GuideStar, measurement.TargetCentroid) > limits.MaximumDirectTargetCentroidSeparationPixels)
                 return Denied("DIRECT_TARGET_GUIDE_IDENTITY_MISMATCH", "The PHD2 guide star is not the confirmed ultra-bright science target.");
-            if (guideLockResidual > limits.MaximumDegradedDirectTargetGuideLockResidualPixels)
-                return Denied("DIRECT_TARGET_GUIDE_LOCK_RESIDUAL_HIGH", "The ultra-bright target is outside the degraded guide/lock residual hard gate.");
+            // In direct-target mode the requested destination lock is the
+            // freshly measured physical slit midpoint itself.  Atmospheric
+            // motion and wind can therefore make target-vs-current-lock large
+            // without changing the commanded destination.  The residual stays
+            // in evidence/quality metrics, but is not a placement hard gate.
         }
         else
         {

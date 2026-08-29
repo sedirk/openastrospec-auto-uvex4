@@ -35,7 +35,12 @@ public sealed record BrightTargetWingCandidate(
     double WingCentroidDisagreementPixels,
     double EdgeDistancePixels,
     double NearestOtherSaturatedCorePixels,
-    double SecondaryPeakRatio);
+    double SecondaryPeakRatio,
+    SaturatedSourceTopology SaturatedTopology,
+    double CentralSaturationFraction,
+    double AnnularSaturationFraction,
+    double CentralToAnnularSignalRatio,
+    double SaturatedBoundingBoxFillFraction);
 
 /// <summary>
 /// The result is intentionally ineligible for focus. A saturated-core frame
@@ -64,8 +69,24 @@ public static class BrightTargetWingCentroidAnalyzer
         Validate(options);
 
         var (background, sigma) = EstimateBackground(frame);
-        var cores = FindSaturatedCores(frame);
-        if (cores.Count == 0)
+        // The wing estimator must not call every connected saturated feature a
+        // stellar core.  In particular, a hollow optical ghost can have bright,
+        // symmetric unsaturated wings and otherwise win the flux ranking.  Run
+        // the existing topology classifier over the complete detector first;
+        // catalogue/QHY evidence remains the separate identity authority.
+        var detectorCenter = new PixelPoint((frame.Width - 1) / 2d, (frame.Height - 1) / 2d);
+        var detectorRadius = Math.Sqrt(frame.Width * (double)frame.Width + frame.Height * (double)frame.Height);
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(
+            frame,
+            detectorCenter,
+            detectorRadius,
+            new SaturatedTargetGhostTopologyOptions(
+                MinimumComponentPixels: 1,
+                MaximumComponentPixels: checked(frame.Width * frame.Height)));
+        var cores = topology.Candidates
+            .Select(candidate => new SaturatedCore(candidate.SaturatedPixels, candidate.Centroid, candidate))
+            .ToArray();
+        if (cores.Length == 0)
         {
             return Failure(
                 "BRIGHT_TARGET_SATURATED_CORE_NOT_FOUND",
@@ -85,10 +106,22 @@ public static class BrightTargetWingCentroidAnalyzer
         {
             var reasons = string.Join(" ", candidates.Select(candidate =>
                 $"{candidate.Gate.Code}: {candidate.Gate.Message}"));
+            var onlyAnnularGhosts = candidates.All(candidate =>
+                candidate.SaturatedTopology == SaturatedSourceTopology.AnnularGhost);
+            var noProvenSolidCore = candidates.All(candidate =>
+                candidate.SaturatedTopology != SaturatedSourceTopology.SolidStellarCore);
             return new BrightTargetCentroidAnalysis(
                 GateResult.Unknown(
-                    "BRIGHT_TARGET_WINGS_UNUSABLE",
-                    $"Saturated cores were present, but no candidate had complete, isolated unsaturated wings. {reasons}",
+                    onlyAnnularGhosts
+                        ? "BRIGHT_TARGET_ONLY_ANNULAR_GHOSTS"
+                        : noProvenSolidCore
+                            ? "BRIGHT_TARGET_TOPOLOGY_UNPROVEN"
+                            : "BRIGHT_TARGET_WINGS_UNUSABLE",
+                    onlyAnnularGhosts
+                        ? $"Every saturated feature is a hollow annular ghost; none may enter bright-target wing ranking. {reasons}"
+                        : noProvenSolidCore
+                            ? $"No saturated feature has proven filled-stellar-core topology; an indeterminate feature cannot become the automatic target. {reasons}"
+                            : $"Saturated cores were present, but no candidate had complete, isolated unsaturated wings. {reasons}",
                     Metrics(candidates.Length, 0, 0, background, sigma)),
                 null,
                 candidates,
@@ -219,7 +252,7 @@ public static class BrightTargetWingCentroidAnalyzer
 
         GateResult gate;
         var metrics = CandidateMetrics(
-            core.Pixels.Count,
+            core.PixelCount,
             pixels.Count,
             wingFlux,
             wingSnr,
@@ -229,12 +262,26 @@ public static class BrightTargetWingCentroidAnalyzer
             edgeDistance,
             nearestCore,
             secondaryPeakRatio);
-        if (core.Pixels.Count < options.MinimumSaturatedCorePixels ||
-            core.Pixels.Count > options.MaximumSaturatedCorePixels)
+        if (core.Topology.Topology == SaturatedSourceTopology.AnnularGhost)
+        {
+            gate = GateResult.Fail(
+                "BRIGHT_TARGET_ANNULAR_GHOST_REJECTED",
+                "The connected saturated feature has a hollow annular topology and is excluded before wing-flux ranking.",
+                metrics);
+        }
+        else if (core.Topology.Topology != SaturatedSourceTopology.SolidStellarCore)
+        {
+            gate = GateResult.Unknown(
+                "BRIGHT_TARGET_TOPOLOGY_INDETERMINATE",
+                "The connected saturated feature is neither a proven filled stellar core nor a proven annular ghost; it cannot become the automatic bright target.",
+                metrics);
+        }
+        else if (core.PixelCount < options.MinimumSaturatedCorePixels ||
+            core.PixelCount > options.MaximumSaturatedCorePixels)
         {
             gate = GateResult.Fail(
                 "BRIGHT_TARGET_CORE_SIZE_INVALID",
-                $"Saturated core size {core.Pixels.Count} px is outside [{options.MinimumSaturatedCorePixels}, {options.MaximumSaturatedCorePixels}] px.",
+                $"Saturated core size {core.PixelCount} px is outside [{options.MinimumSaturatedCorePixels}, {options.MaximumSaturatedCorePixels}] px.",
                 metrics);
         }
         else if (edgeDistance < options.EdgeMarginPixels)
@@ -292,7 +339,7 @@ public static class BrightTargetWingCentroidAnalyzer
             gate,
             centroid,
             coreCenter,
-            core.Pixels.Count,
+            core.PixelCount,
             pixels.Count,
             wingFlux,
             wingSnr,
@@ -301,7 +348,12 @@ public static class BrightTargetWingCentroidAnalyzer
             disagreement,
             edgeDistance,
             nearestCore,
-            secondaryPeakRatio);
+            secondaryPeakRatio,
+            core.Topology.Topology,
+            core.Topology.CentralSaturationFraction,
+            core.Topology.AnnularSaturationFraction,
+            core.Topology.CentralToAnnularSignalRatio,
+            core.Topology.BoundingBoxFillFraction);
     }
 
     private static double FindSecondaryPeakRatio(
@@ -343,43 +395,6 @@ public static class BrightTargetWingCentroidAnalyzer
             if (frame[x + dx, y + dy] > value) return false;
         }
         return true;
-    }
-
-    private static IReadOnlyList<SaturatedCore> FindSaturatedCores(MonochromeFrame frame)
-    {
-        var visited = new bool[checked(frame.Width * frame.Height)];
-        var result = new List<SaturatedCore>();
-        for (var y = 0; y < frame.Height; y++)
-        for (var x = 0; x < frame.Width; x++)
-        {
-            var offset = y * frame.Width + x;
-            if (visited[offset] || frame[x, y] < frame.SaturationLevel) continue;
-            var queue = new Queue<(int X, int Y)>();
-            var pixels = new List<(int X, int Y)>();
-            visited[offset] = true;
-            queue.Enqueue((x, y));
-            while (queue.Count > 0)
-            {
-                var current = queue.Dequeue();
-                pixels.Add(current);
-                for (var dy = -1; dy <= 1; dy++)
-                for (var dx = -1; dx <= 1; dx++)
-                {
-                    if (dx == 0 && dy == 0) continue;
-                    var nx = current.X + dx;
-                    var ny = current.Y + dy;
-                    if (nx < 0 || ny < 0 || nx >= frame.Width || ny >= frame.Height) continue;
-                    var next = ny * frame.Width + nx;
-                    if (visited[next] || frame[nx, ny] < frame.SaturationLevel) continue;
-                    visited[next] = true;
-                    queue.Enqueue((nx, ny));
-                }
-            }
-            result.Add(new SaturatedCore(
-                pixels,
-                new PixelPoint(pixels.Average(pixel => pixel.X), pixels.Average(pixel => pixel.Y))));
-        }
-        return result;
     }
 
     private static (double Background, double Sigma) EstimateBackground(MonochromeFrame frame)
@@ -507,7 +522,10 @@ public static class BrightTargetWingCentroidAnalyzer
     private static double Finite(double value) => double.IsFinite(value) ? value : 0;
     private static double FiniteOrLarge(double value) => double.IsFinite(value) ? value : double.MaxValue;
 
-    private sealed record SaturatedCore(IReadOnlyList<(int X, int Y)> Pixels, PixelPoint Center);
+    private sealed record SaturatedCore(
+        int PixelCount,
+        PixelPoint Center,
+        SaturatedSourceTopologyCandidate Topology);
     private sealed record WingPixel(int X, int Y, double Flux, bool Inner);
 }
 

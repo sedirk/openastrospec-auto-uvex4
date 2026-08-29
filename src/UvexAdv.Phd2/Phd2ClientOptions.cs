@@ -20,9 +20,11 @@ public sealed class Phd2ClientOptions
     /// </summary>
     // The commissioned G3 normally publishes a full-frame event in roughly
     // 1-5 seconds even for a 10/20 ms exposure, but the PHD2/camera pipeline
-    // has demonstrated occasional 10+ second USB/readout stalls.  Keep a
-    // finite bound while allowing one such transient to finish normally.
-    public TimeSpan MinimumLoopingFrameEventTimeout { get; init; } = TimeSpan.FromSeconds(20);
+    // has demonstrated occasional 20+ second USB/readout/event-dispatch stalls.
+    // The timeout covers the complete native command -> sensor readout -> FITS
+    // flush -> SingleFrameComplete event path, not merely the exposure itself.
+    // Keep a finite bound while allowing one such transient to finish normally.
+    public TimeSpan MinimumLoopingFrameEventTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
     public TimeSpan FileReadyTimeout { get; init; } = TimeSpan.FromSeconds(5);
 

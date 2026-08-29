@@ -3,8 +3,10 @@ namespace UvexAdv.Observatory;
 /// <summary>
 /// Evaluates the physical plausibility of a plate solver's formal solution.
 /// Source and catalogue-match counts are deliberately telemetry rather than a
-/// second project-level acceptance threshold.  The optical-axis envelope is
-/// independent of the much smaller post-solve mount-correction budget.
+/// second project-level acceptance threshold.  The selected sky-hint envelope
+/// is independent of the much smaller post-solve mount-correction budget.  In
+/// production the hint may be a fresh same-pointing QHY/PL3 WCS rather than an
+/// inaccurate absolute mount/catalogue hint after a manual mount zero.
 /// </summary>
 public static class G3PlateSolveTrustPolicy
 {
@@ -60,13 +62,13 @@ public static class G3PlateSolveTrustPolicy
         {
             return GateResult.Fail(
                 "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED",
-                $"The formal solution is outside the physical camera/optical-axis envelope: hint residual {hintResidualArcseconds:F1} arcsec (maximum {maximumHintResidualArcseconds:F1}), scale ratio {scaleRatio:F3}.",
+                $"The formal solution is outside the selected sky-hint plausibility envelope: hint residual {hintResidualArcseconds:F1} arcsec (maximum {maximumHintResidualArcseconds:F1}), scale ratio {scaleRatio:F3}. Do not copy a target/mount residual into an optical-axis setting; use a fresh same-pointing QHY/PL3 WCS hint when available.",
                 metrics);
         }
 
         return GateResult.Pass(
             "G3_PLATE_SOLVE_FORMAL_SUCCESS_TRUSTED",
-            $"The solver's formal solution is trusted inside the independent {maximumOpticalAxisOffsetDegrees:F2} degree optical-axis envelope; source and match counts remain telemetry (hint residual {hintResidualArcseconds:F1} arcsec, scale ratio {scaleRatio:F3}).",
+            $"The solver's formal solution is trusted inside the independent {maximumOpticalAxisOffsetDegrees:F2} degree selected sky-hint envelope; source and match counts remain telemetry (hint residual {hintResidualArcseconds:F1} arcsec, scale ratio {scaleRatio:F3}).",
             metrics);
     }
 }

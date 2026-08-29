@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Runtime.CompilerServices;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -16,6 +17,18 @@ namespace UvexAdv.Nina.Plugin;
 /// </summary>
 public partial class EmbeddedImageViewer : UserControl
 {
+    private sealed class SharedDisplayState
+    {
+        public bool Automatic { get; set; }
+        public double BlackPoint { get; set; }
+        public double WhitePoint { get; set; } = 255;
+        public double Gamma { get; set; } = 1;
+        public event EventHandler? Changed;
+        public void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static readonly ConditionalWeakTable<ImageSource, SharedDisplayState> SharedDisplayStates = new();
+
     private enum ViewMode
     {
         Fit,
@@ -24,6 +37,9 @@ public partial class EmbeddedImageViewer : UserControl
     }
 
     private const double ButtonZoomFactor = 1.25;
+    private static string T(string chinese, string english) =>
+        ObservationUiPresentation.Text(chinese, english, ObservationStaticTextLocalization.EffectiveCulture);
+
     private Point dragStart;
     private double horizontalOffsetAtDragStart;
     private double verticalOffsetAtDragStart;
@@ -37,26 +53,28 @@ public partial class EmbeddedImageViewer : UserControl
     private double displayWhitePoint = 255;
     private double displayGamma = 1;
     private EmbeddedImageDisplayLevels displayedLevels = new(0, 255, 1, false);
+    private SharedDisplayState? sharedDisplayState;
+    private bool applyingSharedDisplayState;
     private double zoom = 1.0;
     private ViewMode viewMode = ViewMode.Fit;
 
     public static readonly RoutedUICommand FitCommand = new(
-        "适配图像",
+        T("适配图像", "Fit image"),
         nameof(FitCommand),
         typeof(EmbeddedImageViewer));
 
     public static readonly RoutedUICommand ActualSizeCommand = new(
-        "一比一显示",
+        T("一比一显示", "Show at 1:1"),
         nameof(ActualSizeCommand),
         typeof(EmbeddedImageViewer));
 
     public static readonly RoutedUICommand ZoomInCommand = new(
-        "放大图像",
+        T("放大图像", "Zoom in"),
         nameof(ZoomInCommand),
         typeof(EmbeddedImageViewer));
 
     public static readonly RoutedUICommand ZoomOutCommand = new(
-        "缩小图像",
+        T("缩小图像", "Zoom out"),
         nameof(ZoomOutCommand),
         typeof(EmbeddedImageViewer));
 
@@ -76,13 +94,15 @@ public partial class EmbeddedImageViewer : UserControl
         nameof(EmptyTitle),
         typeof(string),
         typeof(EmbeddedImageViewer),
-        new FrameworkPropertyMetadata("尚无预览图像"));
+        new FrameworkPropertyMetadata(T("尚无预览图像", "No preview image")));
 
     public static readonly DependencyProperty EmptyDetailsProperty = DependencyProperty.Register(
         nameof(EmptyDetails),
         typeof(string),
         typeof(EmbeddedImageViewer),
-        new FrameworkPropertyMetadata("自动观测尚未提供这一通道的图像。请检查当前阶段、服务连接和最近质量门。"));
+        new FrameworkPropertyMetadata(T(
+            "自动观测尚未提供这一通道的图像。请检查当前阶段、服务连接和最近质量门。",
+            "Automation has not provided an image for this channel. Check the current stage, service connection and latest quality gate.")));
 
     public static readonly DependencyProperty FitOnImageChangedProperty = DependencyProperty.Register(
         nameof(FitOnImageChanged),
@@ -100,7 +120,7 @@ public partial class EmbeddedImageViewer : UserControl
         nameof(PopoutLabel),
         typeof(string),
         typeof(EmbeddedImageViewer),
-        new FrameworkPropertyMetadata("弹出大图"));
+        new FrameworkPropertyMetadata(T("弹出大图", "Open large view")));
 
     public static readonly DependencyProperty ShowPopoutButtonProperty = DependencyProperty.Register(
         nameof(ShowPopoutButton),
@@ -136,12 +156,30 @@ public partial class EmbeddedImageViewer : UserControl
 
         Loaded += (_, _) =>
         {
+            ObservationStaticTextLocalization.CultureChanged += OnUiCultureChanged;
+            AttachSharedDisplayState(PreviewImage);
             RefreshImageState();
             if (HasImage && viewMode == ViewMode.Fit)
             {
                 ScheduleFitToViewport();
             }
         };
+        Unloaded += (_, _) =>
+        {
+            ObservationStaticTextLocalization.CultureChanged -= OnUiCultureChanged;
+            DetachSharedDisplayState();
+        };
+    }
+
+    private void OnUiCultureChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(() => OnUiCultureChanged(sender, e));
+            return;
+        }
+        SyncDisplayControls();
+        RefreshDisplayedImage();
     }
 
     public ImageSource? PreviewImage
@@ -210,6 +248,7 @@ public partial class EmbeddedImageViewer : UserControl
         displayGamma = double.IsFinite(gamma) ? Math.Clamp(gamma, 0.2, 5) : 1;
         SyncDisplayControls();
         RefreshDisplayedImage();
+        PublishSharedDisplayState();
     }
 
     /// <summary>Shows the complete image within the current embedded viewport.</summary>
@@ -256,6 +295,7 @@ public partial class EmbeddedImageViewer : UserControl
     private static void OnPreviewImageChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args)
     {
         var viewer = (EmbeddedImageViewer)dependencyObject;
+        viewer.AttachSharedDisplayState(args.NewValue as ImageSource);
         viewer.RefreshDisplayedImage();
         viewer.RefreshImageState();
 
@@ -304,7 +344,9 @@ public partial class EmbeddedImageViewer : UserControl
         {
             PreviewImageElement.Source = PreviewImage;
             displayedLevels = new EmbeddedImageDisplayLevels(0, 255, 1, false);
-            DisplayLevelsText.Text = PreviewImage is null ? "显示：无图像" : "显示：此图像不支持拉伸";
+            DisplayLevelsText.Text = PreviewImage is null
+                ? T("显示：无图像", "Display: no image")
+                : T("显示：此图像不支持拉伸", "Display: stretch is unsupported for this image");
             return;
         }
 
@@ -318,10 +360,14 @@ public partial class EmbeddedImageViewer : UserControl
                 displayGamma,
                 out displayedLevels);
             DisplayLevelsText.Text = displayedLevels.Automatic
-                ? $"显示：自动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}"
+                ? T(
+                    $"显示：自动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}",
+                    $"Display: auto black {displayedLevels.BlackPoint} / white {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}")
                 : displayedLevels.BlackPoint == 0 && displayedLevels.WhitePoint == 255 && Math.Abs(displayedLevels.Gamma - 1) < 1e-9
-                    ? "显示：原图"
-                    : $"显示：手动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}";
+                    ? T("显示：原图", "Display: original")
+                    : T(
+                        $"显示：手动 黑 {displayedLevels.BlackPoint} / 白 {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}",
+                        $"Display: manual black {displayedLevels.BlackPoint} / white {displayedLevels.WhitePoint} / γ {displayedLevels.Gamma:0.00}");
         }
         catch
         {
@@ -329,8 +375,71 @@ public partial class EmbeddedImageViewer : UserControl
             // source preview. Fall back to the immutable source bitmap.
             PreviewImageElement.Source = bitmapSource;
             displayedLevels = new EmbeddedImageDisplayLevels(0, 255, 1, false);
-            DisplayLevelsText.Text = "显示：原图（拉伸不可用）";
+            DisplayLevelsText.Text = T("显示：原图（拉伸不可用）", "Display: original (stretch unavailable)");
         }
+    }
+
+    private void AttachSharedDisplayState(ImageSource? image)
+    {
+        DetachSharedDisplayState();
+        if (image is null) return;
+        sharedDisplayState = SharedDisplayStates.GetValue(image, _ => new SharedDisplayState
+        {
+            Automatic = automaticStretch,
+            BlackPoint = displayBlackPoint,
+            WhitePoint = displayWhitePoint,
+            Gamma = displayGamma,
+        });
+        sharedDisplayState.Changed += OnSharedDisplayStateChanged;
+        ApplySharedDisplayState(sharedDisplayState);
+    }
+
+    private void DetachSharedDisplayState()
+    {
+        if (sharedDisplayState is not null)
+        {
+            sharedDisplayState.Changed -= OnSharedDisplayStateChanged;
+            sharedDisplayState = null;
+        }
+    }
+
+    private void OnSharedDisplayStateChanged(object? sender, EventArgs args)
+    {
+        if (sender is not SharedDisplayState state || applyingSharedDisplayState) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => ApplySharedDisplayState(state));
+            return;
+        }
+        ApplySharedDisplayState(state);
+    }
+
+    private void ApplySharedDisplayState(SharedDisplayState state)
+    {
+        applyingSharedDisplayState = true;
+        try
+        {
+            automaticStretch = state.Automatic;
+            displayBlackPoint = Math.Clamp(state.BlackPoint, 0, 254);
+            displayWhitePoint = Math.Clamp(state.WhitePoint, displayBlackPoint + 1, 255);
+            displayGamma = double.IsFinite(state.Gamma) ? Math.Clamp(state.Gamma, 0.2, 5) : 1;
+            SyncDisplayControls();
+            RefreshDisplayedImage();
+        }
+        finally
+        {
+            applyingSharedDisplayState = false;
+        }
+    }
+
+    private void PublishSharedDisplayState()
+    {
+        if (sharedDisplayState is null || applyingSharedDisplayState) return;
+        sharedDisplayState.Automatic = automaticStretch;
+        sharedDisplayState.BlackPoint = displayBlackPoint;
+        sharedDisplayState.WhitePoint = displayWhitePoint;
+        sharedDisplayState.Gamma = displayGamma;
+        sharedDisplayState.RaiseChanged();
     }
 
     private void ScheduleDisplayRefresh()
@@ -358,7 +467,9 @@ public partial class EmbeddedImageViewer : UserControl
             BlackPointText.Text = $"{displayBlackPoint:0}";
             WhitePointText.Text = $"{displayWhitePoint:0}";
             GammaText.Text = $"{displayGamma:0.00}";
-            AutoStretchButton.Content = automaticStretch ? "自动拉伸：开" : "自动拉伸：关";
+            AutoStretchButton.Content = automaticStretch
+                ? T("自动拉伸：开", "Auto stretch: on")
+                : T("自动拉伸：关", "Auto stretch: off");
             AutoStretchButton.BorderBrush = automaticStretch ? Brushes.DeepSkyBlue : new SolidColorBrush(Color.FromRgb(82, 100, 122));
         }
         finally
@@ -506,6 +617,7 @@ public partial class EmbeddedImageViewer : UserControl
         automaticStretch = !automaticStretch;
         SyncDisplayControls();
         RefreshDisplayedImage();
+        PublishSharedDisplayState();
     }
 
     private void OnResetDisplayClick(object sender, RoutedEventArgs args) =>
@@ -521,8 +633,9 @@ public partial class EmbeddedImageViewer : UserControl
         BlackPointText.Text = $"{displayBlackPoint:0}";
         WhitePointText.Text = $"{displayWhitePoint:0}";
         GammaText.Text = $"{displayGamma:0.00}";
-        AutoStretchButton.Content = "自动拉伸：关";
+        AutoStretchButton.Content = T("自动拉伸：关", "Auto stretch: off");
         ScheduleDisplayRefresh();
+        PublishSharedDisplayState();
     }
 
     private void OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs args)

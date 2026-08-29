@@ -19,6 +19,39 @@ public sealed class ObservationRunCoordinatorTests
     }
 
     [Fact]
+    public async Task WarningStagesRemainVisibleButAdvanceWithoutPausing()
+    {
+        using var coordinator = new ObservationRunCoordinator();
+        var runner = new FakeRunner { WarnAt = ObservationStage.AcquireQhyWideField };
+
+        await coordinator.StartAsync(CreatePlan(), runner);
+
+        Assert.Equal(ObservationRunState.Completed, coordinator.Snapshot.State);
+        Assert.Equal(ObservationRunCoordinator.Stages, runner.Executed);
+        Assert.Equal(0, runner.PausedCount);
+        var warning = Assert.Single(
+            coordinator.Snapshot.RecentEvents,
+            item => item.Code == "TEST_WARNING");
+        Assert.Contains("continue", warning.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GateSeveritySeparatesWarningsFromErrorsWithoutChangingAdvanceSemantics()
+    {
+        var warning = GateResult.Warn("WARN", "continue");
+        var failure = GateResult.Fail("FAIL", "stop");
+        var unknown = GateResult.Unknown("UNKNOWN", "stop");
+
+        Assert.Equal(GateDisposition.Passed, warning.Disposition);
+        Assert.Equal(GateSeverity.Warning, warning.Severity);
+        Assert.True(new StageResult(warning).CanAdvance);
+        Assert.Equal(GateSeverity.Error, failure.Severity);
+        Assert.False(new StageResult(failure).CanAdvance);
+        Assert.Equal(GateSeverity.Error, unknown.Severity);
+        Assert.False(new StageResult(unknown).CanAdvance);
+    }
+
+    [Fact]
     public async Task FirstSnapshotIsNotPublishedWhileStartLockIsHeld()
     {
         using var coordinator = new ObservationRunCoordinator();
@@ -401,6 +434,7 @@ public sealed class ObservationRunCoordinatorTests
         private bool failed;
         public List<ObservationStage> Executed { get; } = new();
         public ObservationStage? FailOnceAt { get; init; }
+        public ObservationStage? WarnAt { get; init; }
         public ObservationStage? BlockAt { get; init; }
         public ObservationStage? ThrowAt { get; init; }
         public Action? BeforeThrow { get; init; }
@@ -433,6 +467,10 @@ public sealed class ObservationRunCoordinatorTests
             {
                 failed = true;
                 return new StageResult(GateResult.Fail("TEST_FAILURE", "test failure"));
+            }
+            if (stage == WarnAt)
+            {
+                return new StageResult(GateResult.Warn("TEST_WARNING", "warning recorded; continue automatically"));
             }
             return new StageResult(GateResult.Pass("PASS", "passed"));
         }

@@ -301,7 +301,7 @@ public sealed class G3SlitIlluminationPolicyTests
             "private async Task CaptureG3IlluminationFrameAsync(",
             "private GateResult ValidateG3SequenceImage(");
 
-        var capture = body.IndexOf("phd2.CaptureSingleFrameWithParametersAsync", StringComparison.Ordinal);
+        var capture = body.IndexOf("CaptureG3NativeSingleFrameForAcquisitionAsync", StringComparison.Ordinal);
         var load = body.IndexOf("imageDataFactory.CreateFromFile", capture, StringComparison.Ordinal);
         var preview = body.IndexOf("PublishG3Preview", load, StringComparison.Ordinal);
 
@@ -335,13 +335,36 @@ public sealed class G3SlitIlluminationPolicyTests
             "private async Task CaptureG3IlluminationPhaseAsync(");
 
         Assert.Contains("Task.Delay", prepareBody, StringComparison.Ordinal);
-        Assert.Contains("CaptureSingleFrameWithParametersAsync", captureBody, StringComparison.Ordinal);
+        Assert.Contains("CaptureG3NativeSingleFrameForAcquisitionAsync", captureBody, StringComparison.Ordinal);
         Assert.Contains("CaptureGainPercent", captureBody, StringComparison.Ordinal);
         Assert.DoesNotContain("CaptureFullFrameAsync", captureBody, StringComparison.Ordinal);
         Assert.DoesNotContain("StartLoopingAndWaitForFreshFrameAsync", prepareBody, StringComparison.Ordinal);
         Assert.DoesNotContain("SetExposureAndVerifyAsync", prepareBody, StringComparison.Ordinal);
         Assert.DoesNotContain("StopG3IlluminationPhaseLoopAsync", sequenceBody, StringComparison.Ordinal);
         Assert.Contains("PHD2 capture_single_frame applies exposure, binning and minimum gain atomically", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeSlitFramesTakeOverOnlyLoopingAndRetryOnlyTheProvenUnissuedRequest()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.cs"));
+        var helper = Slice(
+            source,
+            "private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameForAcquisitionAsync(",
+            "private GateResult ValidateCorrectionBudget(");
+
+        Assert.Contains("phd2.Snapshot.AppState == Phd2AppState.Looping", helper, StringComparison.Ordinal);
+        Assert.Contains("StopCaptureAndConfirmAsync", helper, StringComparison.Ordinal);
+        Assert.Contains("ValidateConfirmedPhdStop", helper, StringComparison.Ordinal);
+        Assert.Contains("catch (Phd2CaptureException ex)", helper, StringComparison.Ordinal);
+        Assert.Contains("current state is Looping", helper, StringComparison.Ordinal);
+        Assert.Equal(2, Count(helper, "CaptureSingleFrameWithParametersAsync"));
+        Assert.DoesNotContain("AppState == Phd2AppState.Guiding", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppState == Phd2AppState.Calibrating", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppState == Phd2AppState.LostLock", helper, StringComparison.Ordinal);
     }
 
     private static MonochromeFrame Frame(params ushort[] pixels) => new(3, 3, new ReadOnlyMemory<ushort>(pixels), ushort.MaxValue);

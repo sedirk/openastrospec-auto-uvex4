@@ -59,6 +59,42 @@ internal sealed record Phd2LockShiftPendingState(
 {
     public const int CurrentSchemaVersion = 3;
 
+    /// <summary>
+    /// Advances only the process-local guide epoch after a locally issued lock
+    /// mutation or guide/settle operation has produced fresh readback proof.
+    /// Durable motion debt, attempt/pixel budgets, lineage and start time are
+    /// deliberately preserved.
+    /// </summary>
+    public Phd2LockShiftPendingState RebindAfterLocallyAttestedGuideEpoch(
+        long connectionEpoch,
+        long guideEpoch,
+        Phd2Point verifiedLock,
+        DateTimeOffset nowUtc,
+        string reason)
+    {
+        ArgumentNullException.ThrowIfNull(verifiedLock);
+        if (connectionEpoch != ConnectionEpoch)
+            throw new InvalidOperationException("A durable PHD2 lock lineage cannot be rebound across connection epochs.");
+        if (guideEpoch < GuideEpoch)
+            throw new InvalidOperationException("A durable PHD2 lock lineage cannot move backward to an older guide epoch.");
+        if (!double.IsFinite(verifiedLock.X) || !double.IsFinite(verifiedLock.Y) ||
+            verifiedLock.X < 0 || verifiedLock.Y < 0)
+            throw new ArgumentOutOfRangeException(nameof(verifiedLock));
+        if (nowUtc < UpdatedUtc)
+            throw new ArgumentOutOfRangeException(nameof(nowUtc));
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("A guide-epoch rebind reason is required.", nameof(reason));
+
+        return this with
+        {
+            GuideEpoch = guideEpoch,
+            CurrentLockX = verifiedLock.X,
+            CurrentLockY = verifiedLock.Y,
+            UpdatedUtc = nowUtc,
+            LastReason = reason,
+        };
+    }
+
     public Phd2LockShiftLedger ToPlannerLedger() => new(
         LineageId,
         new Phd2Point(OriginLockX, OriginLockY),

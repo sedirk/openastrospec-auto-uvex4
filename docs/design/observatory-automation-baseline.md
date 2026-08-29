@@ -35,7 +35,7 @@ Automation must reduce repetitive manual work without hiding uncertainty. A fail
 
 - ATR585M is the spectral camera. Its commissioned normal setting is gain 100, offset 256, 1×1, High Conversion Gain, and −10 °C unless an explicitly versioned equipment preset says otherwise.
 - G3M2210M images the slit field and supplies the guide stream.
-- A roughly coaxial GS350 guide scope (350 mm, f/6) carries the photometric QHYminiCam8M. It is used first for a wide-field plate-solve witness, then remains active for simultaneous time-series photometry during spectral acquisition. In the production route validated on sky, QHY WCS does not itself authorize mount motion: fresh G3 WCS owns large acquisition corrections and post-move verification.
+- A roughly coaxial GS350 guide scope (350 mm, f/6) carries the photometric QHYminiCam8M. It is used first for a wide-field plate-solve witness, then remains active for simultaneous time-series photometry during spectral acquisition. In the production route validated on sky, QHY WCS does not directly authorize arbitrary mount motion: fresh G3 WCS owns large acquisition corrections and post-move verification. The explicit exception for a mount without a mechanical home or absolute encoders is one evidence-gated coordinate `Sync` from fresh QHY/PL3 WCS, followed by one reissued planned catalogue slew and fresh G3 verification as specified below.
 - The GS350, main telescope, and slit camera are not assumed to be perfectly rigid or exactly coaligned. Their transformations are calibrated measurements that can depend on pier side, orientation, temperature, and flexure.
 
 ### Local horizon
@@ -57,6 +57,10 @@ The invariant is one owner **per physical device**, not one process for all came
 - PHD2 must not switch between G3M2210M and QHYminiCam8M for this workflow.
 - The UVEX plugin must not load ToupTek or QHY SDKs directly into N.I.N.A.
 - The QHY service must not open G3M2210M or ATR585M.
+- Windows QHY drivers and SDKs are installed as one complete official QHYCCD
+  AllInOne distribution. The QHY service loads the hash-bound x64 SDK directly
+  from that vendor installation; it must not maintain a second private SDK copy
+  under the UVEX-ADV service directory.
 - No helper may scan camera or serial-device lists and select by ordinal position. Persist and validate stable identity.
 - A device hand-off, if ever required for diagnostics, must be explicit, logged, disconnected, confirmed, and outside an active science run. It is not part of normal acquisition.
 
@@ -87,7 +91,7 @@ Bias and dark masters may be reused across nights when camera identity, gain, of
 
 1. The QHY service remains the camera owner from acquisition through the end of simultaneous photometry.
 2. It captures a raw, full-field solve frame and supplies it to the configured plate solver.
-3. The coordinator retains the formal QHY WCS, target residual, immutable frame identity, mount readback and solver evidence as a wide-field witness. It does not send a mount command from that QHY result in the default production route.
+3. The coordinator retains the formal QHY WCS, target residual, immutable frame identity, mount readback and solver evidence as a wide-field witness. For a mount without a mechanical home or absolute encoders, a fresh, stationary, hash-bound QHY/PL3 WCS is also the absolute sky-coordinate authority: when its separation from the mount-reported coordinate exceeds the configured G3 sky-hint trust radius, the coordinator may issue one N.I.N.A.-mediated coordinate `Sync` per run and must verify the new readback. Sync itself does not slew the mount. After successful verification, the planned catalogue slew is reissued once and optical arrival still requires fresh G3 WCS. Smaller differences do not Sync, so ordinary QHY/G3 optical-axis separation cannot cause coordinate ownership to oscillate.
 4. A failed QHY solve advances the commissioned QHY exposure ladder. It does not invent a minimum-star-count veto after the configured solver has returned a physically plausible formal solution.
 5. The coordinator then hands acquisition to a fresh G3 frame. An independently activated, versioned QHY-to-G3 transfer may remain an optional optimization under ADR-0004, but it is not the production default and never replaces the fresh G3 verification.
 6. QHY frames taken for acquisition are tagged `ACQUISITION` and are never mixed into scientific photometry.
@@ -97,7 +101,7 @@ Random unbounded mount nudging is not an automated strategy.
 ### 5.2 Slit-field acquisition with G3/PHD2
 
 1. PHD2 remains the only G3 owner.
-2. A full slit-field frame is retained and solved. A formal, physically plausible fresh G3 WCS is the authority for a large acquisition correction through the N.I.N.A. telescope mediator; the commanded endpoint is not optical success evidence.
+2. A full slit-field frame is retained and solved. At an unchanged pointing, the most recent fresh QHY/PL3 WCS is the preferred G3 solver hint and may first repair a grossly incorrect mount coordinate under the one-Sync rule above. A formal, physically plausible fresh G3 WCS remains the authority for a large acquisition correction through the N.I.N.A. telescope mediator; the commanded endpoint is not optical success evidence.
 3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Only the fresh post-move G3 WCS may prove response and arrival. If direct G3 solving fails, the coordinator uses a bounded overlapping neighbouring-field search; an applicable QHY-to-G3 transfer remains optional. It must retain every attempt and confidence score.
 4. The expected target is identified using catalogue coordinates, WCS, temporal continuity, and stellar morphology. Brightness alone is insufficient.
 5. The target centroid is moved to the calibrated slit locus using a selected,
@@ -158,7 +162,7 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Target Observation` container composes reusable items rather than putting all logic in one command:
 
 1. Validate and lock Night Setup.
-2. Start/verify QHY service, acquire the wide field and retain its formal WCS as a no-motion witness.
+2. Start/verify QHY service, acquire the wide field and retain its formal WCS as a sky-coordinate witness. On a commissioned no-mechanical-home mount, use that fresh stationary WCS for at most one gross-coordinate Sync with readback verification; otherwise issue no QHY-derived mount command.
 3. Acquire/solve a fresh G3 slit field through PHD2; when the target is outside the field, issue a bounded N.I.N.A. WCS correction and prove its response with another fresh G3 solve. If no direct solve is available, use the bounded overlapping neighbouring-field search.
 4. Confirm that the catalogue target is inside the usable G3 field from fresh evidence.
 5. Select the versioned fine-motion authority. With PHD2 calibration authority,

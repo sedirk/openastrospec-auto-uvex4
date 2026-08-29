@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.IO;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using NINA.Astrometry;
 using UvexAdv.Observatory;
 using UvexAdv.Qhy.Core;
@@ -8,15 +11,531 @@ using UvexAdv.Qhy.Core;
 namespace UvexAdv.Nina.Plugin;
 
 /// <summary>
-/// Opportunistic, same-pointing QHY/G3 solve-pair collection.  This partial
-/// may request one QHY-service-owned exposure, but contains no mount command.
-/// It produces a versioned candidate only; it never promotes the candidate to
-/// wide-to-slit motion authority or substitutes it for G3PixelToMount.
+/// Opportunistic, same-pointing QHY/G3 solve-pair collection plus the explicitly
+/// separate no-mechanical-home coordinate recovery from ADR-0012.  The pair
+/// collector itself may request one QHY-service-owned exposure but contains no
+/// mount command and produces a Candidate only.  Coordinate recovery can issue
+/// one N.I.N.A.-mediated Sync and reissue the catalogue slew; it never promotes
+/// a pair Candidate to motion authority or substitutes it for G3PixelToMount.
 /// </summary>
 internal sealed partial class RealObservationStageRunner
 {
     private readonly ConcurrentDictionary<string, byte> attemptedQhyG3SolvePairFrames = new(StringComparer.OrdinalIgnoreCase);
     private Guid? activeQhyG3FastPairJobId;
+
+    /// <summary>
+    /// Selects the sky-coordinate hint for the long-focus G3 solve.  A fresh,
+    /// immutable, same-pointing QHY/PL3 solution is the preferred sky truth on
+    /// mounts which can start with an inaccurate absolute coordinate after a
+    /// manual zero.  A gross mismatch is corrected by one N.I.N.A.-mediated
+    /// Sync at a verified stationary pointing; ordinary small differences only
+    /// change the solver hint.  Neither path gives QHY mount-motion ownership.
+    /// </summary>
+    private async Task<G3PlateSolveHintSelection> SelectG3PlateSolveHintAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken)
+    {
+        var target = TargetCoordinates(context.Plan);
+        if (lastQhySolve?.Result.Success != true ||
+            lastQhySolve.Result.Coordinates is null ||
+            lastQhyAcquisition?.AcceptedFrameId is not { } frameId)
+        {
+            return new G3PlateSolveHintSelection(
+                target,
+                "PlannedCatalogTargetFallback",
+                "No current-run accepted QHY frame with a formal PL3 solution is available; the planned catalogue coordinate remains the solve hint.");
+        }
+
+        var accepted = lastQhyAcquisition.Frames.SingleOrDefault(frame => frame.FrameId == frameId);
+        if (accepted is null)
+        {
+            return new G3PlateSolveHintSelection(
+                target,
+                "PlannedCatalogTargetFallback",
+                "The accepted QHY frame id is absent from its immutable job manifest.");
+        }
+
+        var gate = await ValidateQhyAcceptedFrameMountBindingForMotionAsync(
+            context,
+            lastQhyAcquisition,
+            accepted,
+            lastQhySolve,
+            cancellationToken).ConfigureAwait(false);
+        if (gate.Disposition != GateDisposition.Passed)
+        {
+            await WriteAuditBestEffortAsync("g3-solve-hint-qhy-skipped", new
+            {
+                gate.Code,
+                gate.Message,
+                qhyFrame = accepted.FitsPath,
+                qhySolveEvidence = lastQhySolve.EvidencePath,
+                mountSyncCommanded = false,
+            }).ConfigureAwait(false);
+            return new G3PlateSolveHintSelection(
+                target,
+                "PlannedCatalogTargetFallback",
+                $"The available QHY WCS was not fresh at the unchanged current pointing ({gate.Code}); the planned catalogue coordinate remains the solve hint.");
+        }
+
+        var qhyCoordinates = lastQhySolve.Result.Coordinates;
+        var targetResidual = AngularSeparationArcseconds(target, qhyCoordinates);
+        var coordinateRecovery = await RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(
+            context,
+            accepted,
+            lastQhySolve,
+            qhyCoordinates,
+            cancellationToken).ConfigureAwait(false);
+        var selectedHintCoordinates = coordinateRecovery.SyncVerified
+            ? target
+            : qhyCoordinates;
+        var selectedHintAuthority = coordinateRecovery.SyncVerified
+            ? "CatalogTargetAfterFreshQhyWcsMountSync"
+            : coordinateRecovery.SyncCommanded
+                ? "FreshQhyPl3WcsAfterUnverifiedMountSync"
+                : "FreshQhyPl3Wcs";
+        context.Set("g3PlateSolveHintAuthority", selectedHintAuthority);
+        context.Set("g3PlateSolveHintQhyTargetResidualArcseconds", targetResidual);
+        context.Set("qhyMountCoordinateAuthorityOutcome", coordinateRecovery.Outcome);
+        Report(
+            $"G3 解算提示改用本轮新鲜 QHY/PL3 天空坐标；其与目标相差 {targetResidual / 3600d:F2}°。" +
+            $"该差值不写成两镜光轴差；赤道仪坐标处理：{coordinateRecovery.Message}");
+        await WriteAuditBestEffortAsync("g3-solve-hint-fresh-qhy-pl3", new
+        {
+            qhyFrame = accepted.FitsPath,
+            qhyFrameSha256 = accepted.Sha256,
+            qhySolveEvidence = lastQhySolve.EvidencePath,
+            qhySolveEvidenceSha256 = lastQhySolve.EvidenceSha256,
+            qhySolvedRaDegrees = qhyCoordinates.RADegrees,
+            qhySolvedDecDegrees = qhyCoordinates.Dec,
+            plannedTargetRaDegrees = target.RADegrees,
+            plannedTargetDecDegrees = target.Dec,
+            targetResidualArcseconds = targetResidual,
+            skyCoordinateAuthority = selectedHintAuthority,
+            mountCoordinateAuthorityOutcome = coordinateRecovery.Outcome,
+            coordinateRecovery.MountResidualBeforeArcseconds,
+            coordinateRecovery.MountResidualAfterArcseconds,
+            mountSyncCommanded = coordinateRecovery.SyncCommanded,
+            mountSyncVerified = coordinateRecovery.SyncVerified,
+            mountMotionAuthority = false,
+        }).ConfigureAwait(false);
+        return new G3PlateSolveHintSelection(
+            selectedHintCoordinates,
+            selectedHintAuthority,
+            coordinateRecovery.SyncVerified
+                ? $"Fresh immutable QHY/PL3 WCS repaired the mount coordinate and the catalogue slew was reissued; G3 now solves around the planned target. The original {targetResidual:F1} arcsec target residual is not optical-axis separation."
+                : coordinateRecovery.SyncCommanded
+                    ? $"The one allowed stationary mount Sync was not verified and will not be repeated. Fresh immutable QHY/PL3 WCS remains a read-only G3 solve hint at the unchanged physical pointing; no catalogue slew or motion authority was granted."
+                    : $"Fresh immutable QHY/PL3 WCS selected at the unchanged current pointing; target residual {targetResidual:F1} arcsec is not interpreted as optical-axis separation.");
+    }
+
+    private async Task<QhyMountCoordinateRecoveryResult> RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(
+        ObservationContext context,
+        QhyFrameRecord accepted,
+        PlateSolveEvidence qhySolve,
+        Coordinates qhyCoordinates,
+        CancellationToken cancellationToken)
+    {
+        var beforeInfo = telescopeMediator.GetInfo();
+        if (!beforeInfo.Connected || beforeInfo.AtPark || beforeInfo.Slewing || beforeInfo.IsPulseGuiding)
+        {
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                "QHY_MOUNT_COORDINATE_SYNC_STATE_INVALID",
+                $"Fresh QHY WCS cannot seed the mount coordinate while connected={beforeInfo.Connected}, parked={beforeInfo.AtPark}, slewing={beforeInfo.Slewing}, pulseGuiding={beforeInfo.IsPulseGuiding}."));
+        }
+
+        var before = telescopeMediator.GetCurrentPosition();
+        EnsureFiniteReportedCoordinates(before);
+        var beforePierSide = beforeInfo.SideOfPier.ToString();
+        if (!IsKnownPierSide(beforePierSide))
+        {
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                "QHY_MOUNT_COORDINATE_SYNC_PIER_UNKNOWN",
+                "Fresh QHY WCS cannot seed the mount coordinate while the pier side is unknown."));
+        }
+
+        // PL3/WCS is the physical sky truth, but ASCOM Sync consumes coordinates
+        // in the mount driver's currently reported epoch.  Keep an explicit
+        // J2000 authority record, then derive every mount-facing coordinate from
+        // that truth in the corresponding live readback epoch.  Passing the raw
+        // J2000 numbers to a JNOW driver creates an ordinary-precession offset.
+        var qhyTruthJ2000 = qhyCoordinates.Epoch == Epoch.J2000
+            ? qhyCoordinates
+            : qhyCoordinates.Transform(Epoch.J2000);
+        var qhyTruthAtBeforeEpoch = qhyTruthJ2000.Epoch == before.Epoch
+            ? qhyTruthJ2000
+            : qhyTruthJ2000.Transform(before.Epoch);
+        var residualBefore = AngularSeparationArcseconds(before, qhyTruthAtBeforeEpoch);
+        var thresholdArcseconds = configuration.G3.MaximumPlateSolveHintOffsetDegrees * 3600d;
+        if (!double.IsFinite(residualBefore) || !double.IsFinite(thresholdArcseconds) || thresholdArcseconds <= 0)
+        {
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                "QHY_MOUNT_COORDINATE_SYNC_RESIDUAL_INVALID",
+                "The QHY-to-mount coordinate residual or configured gross-mismatch threshold is invalid."));
+        }
+        if (residualBefore <= thresholdArcseconds)
+        {
+            return new QhyMountCoordinateRecoveryResult(
+                "FreshQhyWcsHintOnly",
+                false,
+                false,
+                residualBefore,
+                null,
+                $"差 {residualBefore / 3600d:F3}°，未超过 {configuration.G3.MaximumPlateSolveHintOffsetDegrees:F2}°，不 Sync");
+        }
+
+        await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+        // The physical-action gate may itself refresh/reconnect the mount.  Take
+        // a new readback immediately before durable intent and bind the one Sync
+        // command to that live epoch, rather than to the earlier gate snapshot.
+        var syncCommandReadback = telescopeMediator.GetCurrentPosition();
+        EnsureFiniteReportedCoordinates(syncCommandReadback);
+        var qhySyncCommandCoordinates = qhyTruthJ2000.Epoch == syncCommandReadback.Epoch
+            ? qhyTruthJ2000
+            : qhyTruthJ2000.Transform(syncCommandReadback.Epoch);
+        var intentPath = await PublishRunJsonEvidenceAsync(
+            "qhy-mount-coordinate-sync-intent",
+            "One-time stationary mount coordinate recovery from fresh QHY/PL3 WCS",
+            new
+            {
+                authority = "Fresh current-run QHY/PL3 formal WCS",
+                qhyFrame = accepted.FitsPath,
+                qhyFrameSha256 = accepted.Sha256,
+                qhySolveEvidence = qhySolve.EvidencePath,
+                qhySolveEvidenceSha256 = qhySolve.EvidenceSha256,
+                before = new { raDegrees = before.RADegrees, decDegrees = before.Dec, epoch = before.Epoch.ToString() },
+                qhyTruth = new { raDegrees = qhyCoordinates.RADegrees, decDegrees = qhyCoordinates.Dec, epoch = qhyCoordinates.Epoch.ToString() },
+                qhyTruthJ2000 = new
+                {
+                    raDegrees = qhyTruthJ2000.RADegrees,
+                    decDegrees = qhyTruthJ2000.Dec,
+                    epoch = qhyTruthJ2000.Epoch.ToString(),
+                },
+                syncCommandMountReadback = new
+                {
+                    raDegrees = syncCommandReadback.RADegrees,
+                    decDegrees = syncCommandReadback.Dec,
+                    epoch = syncCommandReadback.Epoch.ToString(),
+                },
+                qhySyncCommand = new
+                {
+                    raDegrees = qhySyncCommandCoordinates.RADegrees,
+                    decDegrees = qhySyncCommandCoordinates.Dec,
+                    epoch = qhySyncCommandCoordinates.Epoch.ToString(),
+                },
+                pierSide = beforePierSide,
+                residualBeforeArcseconds = residualBefore,
+                grossMismatchThresholdArcseconds = thresholdArcseconds,
+                syncAttemptOrdinal = 1,
+                mountSlewCommandCount = 0,
+            },
+            accepted.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+
+        // Consume the one-shot allowance only after all pre-action gates and
+        // durable intent evidence have succeeded.  A weather/safety refusal or
+        // an evidence-write problem must not pretend that a Sync was attempted.
+        if (Interlocked.CompareExchange(ref qhyMountCoordinateSyncPerformed, 1, 0) != 0)
+        {
+            return await ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(
+                context,
+                accepted,
+                qhySolve,
+                qhyCoordinates,
+                "QHY_MOUNT_COORDINATE_SYNC_REPEAT_BLOCKED",
+                $"The mount still differs from the fresh QHY WCS by {residualBefore / 3600d:F3} degrees after this run already consumed its one coordinate Sync attempt. Repeating Sync is prohibited; the fresh QHY WCS remains solve-hint-only.",
+                beforePierSide,
+                residualBefore,
+                null,
+                syncCommanded: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        bool acceptedByNina;
+        try
+        {
+            acceptedByNina = await telescopeMediator.Sync(qhySyncCommandCoordinates).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return await ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(
+                context,
+                accepted,
+                qhySolve,
+                qhyCoordinates,
+                "QHY_MOUNT_COORDINATE_SYNC_EXCEPTION",
+                $"N.I.N.A./ASCOM raised {ex.GetType().Name} while applying the one-time QHY WCS coordinate Sync: {ex.Message}. No slew was commanded; the one-shot allowance remains consumed.",
+                beforePierSide,
+                residualBefore,
+                null,
+                syncCommanded: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        if (!acceptedByNina)
+        {
+            return await ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(
+                context,
+                accepted,
+                qhySolve,
+                qhyCoordinates,
+                "QHY_MOUNT_COORDINATE_SYNC_REJECTED",
+                "N.I.N.A./ASCOM rejected the one-time QHY WCS coordinate Sync. No slew was commanded and the one-shot allowance remains consumed.",
+                beforePierSide,
+                residualBefore,
+                null,
+                syncCommanded: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        Coordinates after = telescopeMediator.GetCurrentPosition();
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        var qhyTruthAtReadbackEpoch = qhyTruthJ2000.Epoch == after.Epoch
+            ? qhyTruthJ2000
+            : qhyTruthJ2000.Transform(after.Epoch);
+        var residualAfter = AngularSeparationArcseconds(after, qhyTruthAtReadbackEpoch);
+        while ((!double.IsFinite(residualAfter) || residualAfter > 5d) && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+            after = telescopeMediator.GetCurrentPosition();
+            qhyTruthAtReadbackEpoch = qhyTruthJ2000.Epoch == after.Epoch
+                ? qhyTruthJ2000
+                : qhyTruthJ2000.Transform(after.Epoch);
+            residualAfter = AngularSeparationArcseconds(after, qhyTruthAtReadbackEpoch);
+        }
+        var afterInfo = telescopeMediator.GetInfo();
+        var afterPierSide = afterInfo.SideOfPier.ToString();
+        if (!afterInfo.Connected || afterInfo.AtPark || afterInfo.Slewing ||
+            !string.Equals(beforePierSide, afterPierSide, StringComparison.OrdinalIgnoreCase) ||
+            !double.IsFinite(residualAfter) || residualAfter > 5d)
+        {
+            var readbackFailure =
+                $"N.I.N.A. accepted QHY WCS Sync but same-epoch readback did not verify: connected={afterInfo.Connected}, parked={afterInfo.AtPark}, slewing={afterInfo.Slewing}, pier={beforePierSide}->{afterPierSide}, " +
+                $"readbackEpoch={after.Epoch}, QHY {qhyCoordinates.Epoch}->{qhyTruthAtReadbackEpoch.Epoch}, residual={residualAfter:F2} arcsec (limit 5.00). No slew was commanded.";
+            if (!afterInfo.Connected || afterInfo.AtPark || afterInfo.Slewing ||
+                !string.Equals(beforePierSide, afterPierSide, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PhysicalActionGateException(GateResult.Unknown(
+                    "QHY_MOUNT_COORDINATE_SYNC_READBACK_FAILED",
+                    readbackFailure));
+            }
+            return await ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(
+                context,
+                accepted,
+                qhySolve,
+                qhyCoordinates,
+                "QHY_MOUNT_COORDINATE_SYNC_READBACK_FAILED",
+                readbackFailure,
+                beforePierSide,
+                residualBefore,
+                residualAfter,
+                syncCommanded: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        await PublishRunJsonEvidenceAsync(
+            "qhy-mount-coordinate-sync-completed",
+            "One-time QHY/PL3 mount coordinate recovery verified",
+            new
+            {
+                intentPath,
+                authority = "Fresh current-run QHY/PL3 formal WCS",
+                before = new { raDegrees = before.RADegrees, decDegrees = before.Dec, epoch = before.Epoch.ToString() },
+                after = new { raDegrees = after.RADegrees, decDegrees = after.Dec, epoch = after.Epoch.ToString() },
+                qhyTruth = new { raDegrees = qhyCoordinates.RADegrees, decDegrees = qhyCoordinates.Dec, epoch = qhyCoordinates.Epoch.ToString() },
+                qhyTruthJ2000 = new
+                {
+                    raDegrees = qhyTruthJ2000.RADegrees,
+                    decDegrees = qhyTruthJ2000.Dec,
+                    epoch = qhyTruthJ2000.Epoch.ToString(),
+                },
+                qhySyncCommand = new
+                {
+                    raDegrees = qhySyncCommandCoordinates.RADegrees,
+                    decDegrees = qhySyncCommandCoordinates.Dec,
+                    epoch = qhySyncCommandCoordinates.Epoch.ToString(),
+                },
+                qhyTruthAtReadbackEpoch = new
+                {
+                    raDegrees = qhyTruthAtReadbackEpoch.RADegrees,
+                    decDegrees = qhyTruthAtReadbackEpoch.Dec,
+                    epoch = qhyTruthAtReadbackEpoch.Epoch.ToString(),
+                },
+                pierSide = afterPierSide,
+                residualBeforeArcseconds = residualBefore,
+                residualAfterArcseconds = residualAfter,
+                mountSlewCommandCount = 0,
+                verified = true,
+            },
+            accepted.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+        var catalogueSlew = await SlewToCatalogTargetAfterQhyCoordinateSyncAsync(
+            context,
+            accepted,
+            qhyCoordinates,
+            cancellationToken).ConfigureAwait(false);
+        context.Set("qhyMountCoordinateSyncPerformed", true);
+        context.Set("qhyMountCoordinateSyncResidualBeforeArcseconds", residualBefore);
+        context.Set("qhyMountCoordinateSyncResidualAfterArcseconds", residualAfter);
+        return new QhyMountCoordinateRecoveryResult(
+            "FreshQhyWcsSyncedAndVerified",
+            true,
+            true,
+            residualBefore,
+            residualAfter,
+            $"差 {residualBefore / 3600d:F3}°，已用 QHY/PL3 真值执行一次 Sync、以 {residualAfter:F2}″ 读回验证，并重新执行目录转向（实报残差 {catalogueSlew.CommandResidualArcseconds:F2}″；光学到位仍待 fresh G3）");
+    }
+
+    private async Task<QhyMountCoordinateRecoveryResult> ContinueWithFreshQhyHintAfterUnverifiedSyncAsync(
+        ObservationContext context,
+        QhyFrameRecord accepted,
+        PlateSolveEvidence qhySolve,
+        Coordinates qhyCoordinates,
+        string failureCode,
+        string failureMessage,
+        string expectedPierSide,
+        double residualBeforeArcseconds,
+        double? residualAfterArcseconds,
+        bool syncCommanded,
+        CancellationToken cancellationToken)
+    {
+        var currentInfo = telescopeMediator.GetInfo();
+        var currentPierSide = currentInfo.SideOfPier.ToString();
+        if (!currentInfo.Connected || currentInfo.AtPark || currentInfo.Slewing ||
+            !string.Equals(expectedPierSide, currentPierSide, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                failureCode,
+                $"{failureMessage} Hint-only continuation is also withheld because connected={currentInfo.Connected}, parked={currentInfo.AtPark}, slewing={currentInfo.Slewing}, pier={expectedPierSide}->{currentPierSide}."));
+        }
+
+        var evidencePath = await PublishRunJsonEvidenceAsync(
+            "qhy-mount-coordinate-sync-degraded-to-hint",
+            "Unverified stationary QHY mount Sync degraded to fresh optical solve hint",
+            new
+            {
+                context.Plan.ObservationRunId,
+                failureCode,
+                failureMessage,
+                qhyFrame = accepted.FitsPath,
+                qhyFrameSha256 = accepted.Sha256,
+                qhySolveEvidence = qhySolve.EvidencePath,
+                qhySolveEvidenceSha256 = qhySolve.EvidenceSha256,
+                qhyTruth = new
+                {
+                    raDegrees = qhyCoordinates.RADegrees,
+                    decDegrees = qhyCoordinates.Dec,
+                    epoch = qhyCoordinates.Epoch.ToString(),
+                },
+                residualBeforeArcseconds,
+                residualAfterArcseconds,
+                syncCommanded,
+                syncVerified = false,
+                additionalSyncAuthorized = false,
+                catalogueSlewAuthorized = false,
+                mountMotionAuthority = false,
+                nextAction = "Use the same fresh immutable QHY/PL3 WCS only as the G3 solver hint; require fresh G3 evidence before any motion.",
+            },
+            accepted.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+        context.Set("qhyMountCoordinateSyncDegradedEvidencePath", evidencePath);
+        context.Set("qhyMountCoordinateSyncFailureCode", failureCode);
+        context.Set("qhyMountCoordinateSyncPerformed", syncCommanded);
+        return new QhyMountCoordinateRecoveryResult(
+            "FreshQhyWcsAfterUnverifiedSyncHintOnly",
+            syncCommanded,
+            false,
+            residualBeforeArcseconds,
+            residualAfterArcseconds,
+            $"{failureCode}: one stationary Sync attempt was not verified; it will not be repeated and no catalogue slew is authorized. Fresh QHY/PL3 remains G3 solve-hint-only.");
+    }
+
+    private async Task<QhyPostSyncCatalogSlewResult> SlewToCatalogTargetAfterQhyCoordinateSyncAsync(
+        ObservationContext context,
+        QhyFrameRecord accepted,
+        Coordinates qhyCoordinates,
+        CancellationToken cancellationToken)
+    {
+        var target = TargetCoordinates(context.Plan);
+        var horizon = ValidateCommandCoordinateHorizon(
+            context,
+            target,
+            "catalogue slew after QHY WCS coordinate Sync");
+        if (horizon.Disposition != GateDisposition.Passed)
+        {
+            throw new PhysicalActionGateException(horizon);
+        }
+        await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+        var before = telescopeMediator.GetCurrentPosition();
+        var intentPath = await PublishRunJsonEvidenceAsync(
+            "qhy-post-sync-catalog-slew-intent",
+            "Catalogue slew reissued after one-time QHY WCS coordinate recovery",
+            new
+            {
+                authority = "Fresh QHY/PL3 WCS-verified mount coordinate",
+                qhyFrame = accepted.FitsPath,
+                qhyTruth = new { raDegrees = qhyCoordinates.RADegrees, decDegrees = qhyCoordinates.Dec },
+                before = new { raDegrees = before.RADegrees, decDegrees = before.Dec, epoch = before.Epoch.ToString() },
+                target = new { raDegrees = target.RADegrees, decDegrees = target.Dec, epoch = target.Epoch.ToString() },
+                predictedSlewArcseconds = AngularSeparationArcseconds(before, target),
+                horizonGate = new { disposition = horizon.Disposition.ToString(), horizon.Code, horizon.Message, horizon.Metrics },
+                commandCount = 1,
+                reason = "The original catalogue slew used a grossly wrong no-home mount coordinate; Sync repaired coordinates without motion, so the catalogue slew must be issued once again.",
+            },
+            accepted.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+        Report("QHY/PL3 已校正无机械零位赤道仪坐标；重新执行一次目录转向，随后由 fresh G3 WCS 验证光学到位");
+        if (!await telescopeMediator.SlewToCoordinatesAsync(target, cancellationToken).ConfigureAwait(false))
+        {
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                "QHY_POST_SYNC_CATALOG_SLEW_REJECTED",
+                "N.I.N.A. rejected the single catalogue slew after QHY WCS coordinate Sync."));
+        }
+        await telescopeMediator.WaitForSlew(cancellationToken).ConfigureAwait(false);
+        var immediatelyAfter = telescopeMediator.GetCurrentPosition();
+        var expectedPierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
+        var stability = await WaitForG3PostSlewStabilityAsync(
+            context,
+            target,
+            immediatelyAfter,
+            expectedPierSide,
+            immediatelyAfter.Epoch.ToString(),
+            "catalogue slew after QHY WCS coordinate Sync",
+            configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds,
+            cancellationToken).ConfigureAwait(false);
+        if (stability.Gate.Disposition != GateDisposition.Passed)
+        {
+            throw new PhysicalActionGateException(stability.Gate);
+        }
+        var settledReported = stability.Reported
+            ?? throw new PhysicalActionGateException(GateResult.Unknown(
+                "QHY_POST_SYNC_CATALOG_SLEW_READBACK_MISSING",
+                "The post-Sync catalogue slew passed without a reported mount coordinate; fresh G3 acquisition is withheld."));
+        await PublishRunJsonEvidenceAsync(
+            "qhy-post-sync-catalog-slew-completed",
+            "Catalogue slew after QHY WCS coordinate recovery completed; fresh G3 verification required",
+            new
+            {
+                intentPath,
+                target = new { raDegrees = target.RADegrees, decDegrees = target.Dec, epoch = target.Epoch.ToString() },
+                reported = new
+                {
+                    raDegrees = settledReported.RADegrees,
+                    decDegrees = settledReported.Dec,
+                    epoch = settledReported.Epoch.ToString(),
+                },
+                stability.ReportedDriftArcseconds,
+                commandResidualArcseconds = stability.CommandResidualArcseconds,
+                commandCount = 1,
+                opticalArrivalAuthority = "next fresh G3 WCS",
+            },
+            accepted.FitsPath,
+            cancellationToken).ConfigureAwait(false);
+        context.Set("qhyPostSyncCatalogSlewPerformed", true);
+        return new QhyPostSyncCatalogSlewResult(stability.CommandResidualArcseconds);
+    }
 
     private async Task TryCollectQhyG3FastSolvePairAsync(
         ObservationContext context,
@@ -29,6 +548,17 @@ internal sealed partial class RealObservationStageRunner
             qhyG3FastPairOutcome = "Disabled";
             return;
         }
+        // Paired QHY/G3 WCS is optional calibration telemetry, never a
+        // prerequisite for G3 centering or PHD2 slit placement. Collect at most
+        // one pair per observation run. Retrying it after every successful G3
+        // solve put a slow QHY exposure/solve inside the WCS correction loop and
+        // allowed an already-near-slit target to drift before PHD2 takeover.
+        if (string.Equals(qhyG3FastPairCollectionRunId, context.Plan.ObservationRunId, StringComparison.Ordinal))
+        {
+            qhyG3FastPairOutcome = "AlreadyAttemptedForRun";
+            return;
+        }
+        qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId;
         if (!attemptedQhyG3SolvePairFrames.TryAdd(probe.FramePath, 0)) return;
         latestQhyG3TransferCandidate = null;
         latestQhyG3TransferCandidateEvidencePath = null;
@@ -148,10 +678,41 @@ internal sealed partial class RealObservationStageRunner
                     ["pairSource"] = build.Candidate.PairSource.ToString(),
                     ["motionAuthority"] = bool.FalseString,
                 }).ConfigureAwait(false);
+            string? automaticCalibrationPath = null;
+            string? automaticCalibrationWarning = null;
+            try
+            {
+                automaticCalibrationPath = await PersistQhyG3CandidateCalibrationAsync(
+                    build.Candidate,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The immutable run evidence above is already complete.  A
+                // machine-local convenience index failure is a warning, never
+                // a reason to discard the valid pair or stop acquisition.
+                automaticCalibrationWarning = ex.Message;
+                await WriteAuditBestEffortAsync("qhy-g3-automatic-calibration-index-warning", new
+                {
+                    build.Candidate.CalibrationId,
+                    build.Candidate.CandidateSha256,
+                    warning = ex.Message,
+                    candidateEvidencePath = latestQhyG3TransferCandidateEvidencePath,
+                    motionAuthority = false,
+                }).ConfigureAwait(false);
+            }
             context.Set("qhyG3FastPairOutcome", qhyG3FastPairOutcome);
             context.Set("qhyG3FastPairCandidateId", build.Candidate.CalibrationId);
             context.Set("qhyG3FastPairCandidateSha256", build.Candidate.CandidateSha256);
             context.Set("qhyG3FastPairEvidencePath", latestQhyG3TransferCandidateEvidencePath);
+            if (automaticCalibrationPath is not null)
+                context.Set("qhyG3AutomaticCalibrationPath", automaticCalibrationPath);
+            if (automaticCalibrationWarning is not null)
+                context.Set("qhyG3AutomaticCalibrationWarning", automaticCalibrationWarning);
             await WriteAuditBestEffortAsync("qhy-g3-fast-solve-pair-created", new
             {
                 build.Candidate.CalibrationId,
@@ -165,6 +726,8 @@ internal sealed partial class RealObservationStageRunner
                 build.Candidate.Model.PredictedPrepositionMagnitudeArcseconds,
                 build.Candidate.Model.PredictionUncertaintyArcseconds,
                 evidencePath = latestQhyG3TransferCandidateEvidencePath,
+                automaticCalibrationPath,
+                automaticCalibrationWarning,
                 motionAuthority = false,
             }).ConfigureAwait(false);
         }
@@ -193,6 +756,108 @@ internal sealed partial class RealObservationStageRunner
                 "QHY_G3_PAIR_OPTIONAL_FAILURE",
                 $"Optional fast solve-pair collection failed without mount motion: {ex.Message}",
                 cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Keeps every valid same-pointing solve pair in a machine-local,
+    /// installation-scoped calibration archive and atomically advances a
+    /// latest-candidate index.  This removes manual transcription of the two
+    /// optical-axis measurement.  The index is data, not motion authority: a
+    /// single sample remains Candidate and cannot be used as a slew command.
+    /// </summary>
+    private static async Task<string> PersistQhyG3CandidateCalibrationAsync(
+        QhyToG3TransferCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        var integrity = candidate.ValidateIntegrity();
+        if (integrity.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot persist an invalid QHY/G3 automatic calibration candidate: " + string.Join(" ", integrity));
+        }
+
+        var fingerprintText = string.Join(
+            "|",
+            candidate.InstallationEpochId,
+            candidate.TelescopeDeviceId,
+            candidate.QhyCameraStableId,
+            candidate.G3CameraStableId,
+            candidate.QhyOpticalTrainId,
+            candidate.G3OpticalTrainId,
+            candidate.PierSide,
+            candidate.Model.ModelKind,
+            candidate.Model.ProjectionId);
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText))).ToLowerInvariant();
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "UVEX-ADV",
+            "calibration",
+            "qhy-g3",
+            fingerprint[..24]);
+        Directory.CreateDirectory(directory);
+
+        var immutablePath = Path.Combine(
+            directory,
+            $"candidate-{candidate.CreatedUtc.UtcDateTime:yyyyMMddTHHmmssfffZ}-{candidate.CandidateSha256[..24].ToLowerInvariant()}.json");
+        var envelope = new
+        {
+            schemaVersion = 1,
+            recordKind = "QhyToG3AutomaticCalibrationCandidate",
+            hardwareFingerprintSha256 = fingerprint,
+            updatedUtc = DateTimeOffset.UtcNow,
+            lifecycle = candidate.Lifecycle.ToString(),
+            motionAuthority = false,
+            automaticCollection = true,
+            candidate,
+            interpretation = new
+            {
+                measuredQuantity = "G3 WCS centre minus QHY WCS centre at the same unchanged mount pointing",
+                notMeasuredQuantity = "QHY/target or mount/target residual",
+                activation = "Multi-sample independent verification remains required before any pre-positioning motion.",
+            },
+        };
+        if (!File.Exists(immutablePath))
+        {
+            await WriteJsonAtomicallyAsync(immutablePath, envelope, overwrite: false, cancellationToken).ConfigureAwait(false);
+        }
+
+        var latestIndexPath = Path.Combine(directory, "latest-candidate.json");
+        await WriteJsonAtomicallyAsync(latestIndexPath, envelope, overwrite: true, cancellationToken).ConfigureAwait(false);
+        return immutablePath;
+    }
+
+    private static async Task WriteJsonAtomicallyAsync(
+        string path,
+        object payload,
+        bool overwrite,
+        CancellationToken cancellationToken)
+    {
+        var temporaryPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                1 << 16,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    payload,
+                    EvidenceJsonOptions,
+                    cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, path, overwrite);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
         }
     }
 
@@ -573,3 +1238,19 @@ internal sealed record QhyG3PairQhySource(
     PlateSolveEvidence Solve,
     QhyAcceptedFrameMountBinding Binding,
     QhyG3SolvePairSource Source);
+
+internal sealed record G3PlateSolveHintSelection(
+    Coordinates Coordinates,
+    string Authority,
+    string Reason);
+
+internal sealed record QhyMountCoordinateRecoveryResult(
+    string Outcome,
+    bool SyncCommanded,
+    bool SyncVerified,
+    double MountResidualBeforeArcseconds,
+    double? MountResidualAfterArcseconds,
+    string Message);
+
+internal sealed record QhyPostSyncCatalogSlewResult(
+    double CommandResidualArcseconds);

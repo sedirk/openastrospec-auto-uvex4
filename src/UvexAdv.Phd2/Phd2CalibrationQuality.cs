@@ -111,7 +111,9 @@ public sealed record Phd2CalibrationSettleEvidence(
     bool SettleBeginObserved,
     bool SameConnectionEpoch,
     bool SameGuideEpoch,
-    DateTimeOffset EvaluatedUtc);
+    DateTimeOffset EvaluatedUtc,
+    bool FreshGuidingWindowAccepted = false,
+    int FreshGuidingSampleCount = 0);
 
 /// <summary>
 /// A fresh, immutable target/slit measurement taken after the last calibration,
@@ -491,19 +493,30 @@ public static partial class Phd2CalibrationQualityEvaluator
             return;
         }
         var age = evaluatedUtc - settle.Result.CompletedUtc;
-        if (string.IsNullOrWhiteSpace(settle.EvidenceId) || !settle.Result.Succeeded ||
+        var freshGuidingFallback = !settle.Result.Succeeded &&
+            settle.FreshGuidingWindowAccepted &&
+            settle.FreshGuidingSampleCount >= 3;
+        if (string.IsNullOrWhiteSpace(settle.EvidenceId) ||
+            (!settle.Result.Succeeded && !freshGuidingFallback) ||
             !settle.GuideCommandAccepted || !settle.SettleBeginObserved ||
             !settle.SameConnectionEpoch || !settle.SameGuideEpoch)
         {
-            failures.Add("settle is unsuccessful, unsolicited, or from a different connection/guide epoch");
+            failures.Add("settle is unsuccessful without an accepted fresh guiding window, unsolicited, or from a different connection/guide epoch");
         }
         if (age < TimeSpan.Zero || age > policy.MaximumSettleEvidenceAge || settle.EvaluatedUtc < settle.Result.CompletedUtc)
         {
             failures.Add("settle evidence is stale or temporally inconsistent");
         }
+        if (freshGuidingFallback)
+        {
+            Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
+            reasons.Add($"PHD2 did not enter its configured settle circle in wind; {settle.FreshGuidingSampleCount} fresh same-epoch guiding frames replaced settle as supervised-only operational evidence");
+        }
+
         if (settle.Result.TotalFrames <= 0 || settle.Result.DroppedFrames < 0 || settle.Result.DroppedFrames > settle.Result.TotalFrames)
         {
-            failures.Add("settle frame counters are invalid");
+            if (!freshGuidingFallback)
+                failures.Add("settle frame counters are invalid");
             return;
         }
         var dropped = settle.Result.DroppedFrames / (double)settle.Result.TotalFrames;

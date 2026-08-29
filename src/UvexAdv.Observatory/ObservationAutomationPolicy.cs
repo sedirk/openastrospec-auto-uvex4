@@ -60,7 +60,7 @@ public static class ObservationAutomationPolicy
         }
 
         return allowWeakSupervision
-            ? GateResult.Pass(
+            ? GateResult.Warn(
                 "WEAK_SUPERVISION_CAPABILITIES_DECLARED",
                 $"Weak operator supervision explicitly permits missing {string.Join(", ", disabled)}. " +
                 "This is not unattended authority; connected adapters that explicitly report an unsafe or closed state still block actions.")
@@ -126,10 +126,16 @@ public static class ObservationAutomationPolicy
             .SelectMany(gate => gate.Metrics!)
             .GroupBy(item => item.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal);
-        return GateResult.Pass(
-            "IMMEDIATE_PHYSICAL_ACTION_GATES_VALID",
-            "Safety monitor, roof, weather, horizon, mount UTC and optical cover were freshly revalidated immediately before the physical action.",
-            metrics.Count == 0 ? null : metrics);
+        var warnings = gates.Where(gate => gate.Severity == GateSeverity.Warning).ToArray();
+        return warnings.Length == 0
+            ? GateResult.Pass(
+                "IMMEDIATE_PHYSICAL_ACTION_GATES_VALID",
+                "Safety monitor, roof, weather, horizon, mount UTC and optical cover were freshly revalidated immediately before the physical action.",
+                metrics.Count == 0 ? null : metrics)
+            : GateResult.Warn(
+                "IMMEDIATE_PHYSICAL_ACTION_GATES_VALID_WITH_WARNINGS",
+                $"Every required immediate physical-action gate passed. Advisory conditions: {string.Join(" ", warnings.Select(gate => $"{gate.Code}: {gate.Message}"))}",
+                metrics.Count == 0 ? null : metrics);
     }
 
     private static bool Same(double left, double right) =>

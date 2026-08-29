@@ -81,6 +81,56 @@ public sealed class Phd2CalibrationQualityTests
     }
 
     [Fact]
+    public void WindTimedOutSettleCanUseFreshGuidingWindowOnlyAsSupervisedAuthority()
+    {
+        var candidate = Candidate(orthogonalityDegrees: 4) with
+        {
+            Settle = Settle() with
+            {
+                Result = new Phd2SettleResult(
+                    false,
+                    "timed-out waiting for guider to settle",
+                    40,
+                    0,
+                    Now.AddSeconds(-5)),
+                FreshGuidingWindowAccepted = true,
+                FreshGuidingSampleCount = 3,
+            },
+        };
+
+        var assessment = Phd2CalibrationQualityEvaluator.Evaluate(
+            candidate,
+            Phd2CalibrationQualityPolicy.Default,
+            Now);
+
+        Assert.Equal(Phd2CalibrationQualityGrade.DegradedSupervised, assessment.Grade);
+        Assert.True(assessment.IsLockShiftAuthority);
+        Assert.True(assessment.IsUsableForSupervisedGuiding);
+        Assert.False(assessment.IsUnattendedScienceAuthority);
+        Assert.Contains(assessment.Reasons, reason => reason.Contains("fresh same-epoch guiding frames", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void FailedSettleWithoutFreshGuidingWindowRemainsRejected()
+    {
+        var candidate = Candidate(orthogonalityDegrees: 4) with
+        {
+            Settle = Settle() with
+            {
+                Result = new Phd2SettleResult(false, "star lost", 20, 2, Now.AddSeconds(-5)),
+            },
+        };
+
+        var assessment = Phd2CalibrationQualityEvaluator.Evaluate(
+            candidate,
+            Phd2CalibrationQualityPolicy.Default,
+            Now);
+
+        Assert.Equal(Phd2CalibrationQualityGrade.Rejected, assessment.Grade);
+        Assert.False(assessment.IsLockShiftAuthority);
+    }
+
+    [Fact]
     public void StaleOrPostMutationResidualIsRejected()
     {
         var stale = Candidate(orthogonalityDegrees: 4) with

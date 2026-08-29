@@ -7,7 +7,9 @@ public sealed class UvexDeviceController(
     UvexSafetyOptions options,
     ControlLeaseManager leases) : IDisposable
 {
+    private readonly SemaphoreSlim connectionGate = new(1, 1);
     private readonly SemaphoreSlim motionGate = new(1, 1);
+    private int unexpectedTransportRecoveryPending;
     private UvexDeviceStatus status = new()
     {
         PortName = options.PortName,
@@ -15,6 +17,9 @@ public sealed class UvexDeviceController(
     };
 
     public UvexDeviceStatus Status => status;
+
+    public bool UnexpectedTransportRecoveryPending =>
+        Volatile.Read(ref unexpectedTransportRecoveryPending) != 0;
 
     public event EventHandler<UvexDeviceStatus>? StatusChanged;
 
@@ -37,67 +42,160 @@ public sealed class UvexDeviceController(
         });
     }
 
-    public async Task ConnectAsync(CancellationToken cancellationToken)
+    public Task ConnectAsync(CancellationToken cancellationToken) =>
+        ConnectCoreAsync(isUnexpectedTransportRecovery: false, cancellationToken);
+
+    public async Task<bool> TryRecoverUnexpectedTransportLossAsync(CancellationToken cancellationToken)
     {
-        if (status.ConnectionState is not DeviceConnectionState.Disconnected and not DeviceConnectionState.Faulted)
+        if (!UnexpectedTransportRecoveryPending)
+        {
+            return false;
+        }
+
+        return await ConnectCoreAsync(isUnexpectedTransportRecovery: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public void MarkUnexpectedTransportLoss(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        if (status.ConnectionState is DeviceConnectionState.Disconnected or DeviceConnectionState.Maintenance)
         {
             return;
         }
 
+        Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 1);
         SetStatus(status with
         {
-            ConnectionState = DeviceConnectionState.Connecting,
+            ConnectionState = DeviceConnectionState.Faulted,
+            PositionKnown = false,
+            PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
             SlitIlluminationLedState = UvexOutputState.Unknown,
             SlitIlluminationLedCommandedUtc = null,
-            LastError = null,
+            LastError = $"Unexpected UVEX transport loss on {options.PortName}: {exception.Message}",
         });
+    }
+
+    private async Task<bool> ConnectCoreAsync(
+        bool isUnexpectedTransportRecovery,
+        CancellationToken cancellationToken)
+    {
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // A failed motion can leave the protocol session open while the
-            // controller state is Faulted. Close that session before opening a
-            // new one so COM5 is never opened twice by this process.
-            if (session.IsOpen)
+            if (isUnexpectedTransportRecovery && !UnexpectedTransportRecoveryPending)
             {
-                await session.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+                return false;
             }
 
-            await session.OpenAsync(cancellationToken).ConfigureAwait(false);
-            SetStatus(status with { ConnectionState = DeviceConnectionState.Initializing });
-            await RefreshIdentityAsync(cancellationToken).ConfigureAwait(false);
-            await RefreshSlitConfigurationAsync(cancellationToken).ConfigureAwait(false);
-            await RefreshPositionsAsync(cancellationToken).ConfigureAwait(false);
-            SetStatus(status with { ConnectionState = DeviceConnectionState.Ready });
-        }
-        catch (Exception ex)
-        {
-            try
+            // A user may explicitly request Connect in the short interval
+            // after USB/power loss but before the hosted refresh loop observes
+            // it.  Convert that stale Ready state into the same recovery path
+            // instead of silently treating Connect as a no-op.
+            if (!isUnexpectedTransportRecovery &&
+                status.ConnectionState == DeviceConnectionState.Ready &&
+                !session.IsOpen)
             {
-                await session.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+                MarkUnexpectedTransportLoss(
+                    new InvalidOperationException($"UVEX transport {options.PortName} is closed."));
             }
-            catch
+
+            if (!isUnexpectedTransportRecovery)
             {
+                Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 0);
+            }
+
+            if (status.ConnectionState is not DeviceConnectionState.Disconnected and not DeviceConnectionState.Faulted)
+            {
+                return false;
             }
 
             SetStatus(status with
             {
-                ConnectionState = DeviceConnectionState.Faulted,
-                LastError = ex.Message,
+                ConnectionState = DeviceConnectionState.Connecting,
                 PositionKnown = false,
                 PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
+                SlitIlluminationLedState = UvexOutputState.Unknown,
+                SlitIlluminationLedCommandedUtc = null,
+                LastError = null,
             });
-            throw;
+            try
+            {
+                // Always close the prior protocol session, even when the
+                // SerialPort already reports closed.  A USB/power loss can end
+                // the transport without cancelling the old read loop.
+                try
+                {
+                    await session.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Opening a fresh, identity-verified COM5 session below is
+                    // the recovery authority; stale-session cleanup is best effort.
+                }
+
+                await session.OpenAsync(cancellationToken).ConfigureAwait(false);
+                SetStatus(status with { ConnectionState = DeviceConnectionState.Initializing });
+                await RefreshIdentityAsync(cancellationToken).ConfigureAwait(false);
+                await RefreshSlitConfigurationAsync(cancellationToken).ConfigureAwait(false);
+                await RefreshPositionsAsync(cancellationToken).ConfigureAwait(false);
+                Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 0);
+                SetStatus(status with { ConnectionState = DeviceConnectionState.Ready, LastError = null });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await session.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
+                SetStatus(status with
+                {
+                    ConnectionState = DeviceConnectionState.Faulted,
+                    LastError = ex.Message,
+                    PositionKnown = false,
+                    PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
+                    SlitIlluminationLedState = UvexOutputState.Unknown,
+                    SlitIlluminationLedCommandedUtc = null,
+                });
+                throw;
+            }
+        }
+        finally
+        {
+            connectionGate.Release();
         }
     }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken)
     {
-        await session.CloseAsync(cancellationToken).ConfigureAwait(false);
-        SetStatus(status with
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            ConnectionState = DeviceConnectionState.Disconnected,
-            PositionKnown = false,
-            PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
-        });
+            Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 0);
+            try
+            {
+                await session.CloseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                SetStatus(status with
+                {
+                    ConnectionState = DeviceConnectionState.Disconnected,
+                    PositionKnown = false,
+                    PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
+                    SlitIlluminationLedState = UvexOutputState.Unknown,
+                    SlitIlluminationLedCommandedUtc = null,
+                });
+            }
+        }
+        finally
+        {
+            connectionGate.Release();
+        }
     }
 
     public async Task EnterMaintenanceAsync(string leaseToken, CancellationToken cancellationToken)
@@ -339,6 +437,7 @@ public sealed class UvexDeviceController(
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
+        EnsureTransportOpenOrMarkLost();
         await RefreshPositionsAsync(cancellationToken).ConfigureAwait(false);
         await RefreshSlitDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
         var temperature = await session.SendAsync(UvexCommands.Temperature(), cancellationToken).ConfigureAwait(false);
@@ -348,7 +447,11 @@ public sealed class UvexDeviceController(
         }
     }
 
-    public void Dispose() => motionGate.Dispose();
+    public void Dispose()
+    {
+        connectionGate.Dispose();
+        motionGate.Dispose();
+    }
 
     private async Task RefreshIdentityAsync(CancellationToken cancellationToken)
     {
@@ -604,6 +707,20 @@ public sealed class UvexDeviceController(
         {
             throw new InvalidOperationException("UVEX is not ready.");
         }
+
+        EnsureTransportOpenOrMarkLost();
+    }
+
+    private void EnsureTransportOpenOrMarkLost()
+    {
+        if (session.IsOpen)
+        {
+            return;
+        }
+
+        var exception = new InvalidOperationException($"UVEX transport {options.PortName} is closed.");
+        MarkUnexpectedTransportLoss(exception);
+        throw exception;
     }
 
     private void SetStatus(UvexDeviceStatus next)

@@ -227,9 +227,12 @@ public sealed class CommissioningProfileCatalogTests : IDisposable
             nameof(UvexPluginSettings.G3PixelSizeMicrometers),
             nameof(UvexPluginSettings.QhyFocalLengthMillimeters),
             nameof(UvexPluginSettings.QhyPixelSizeMicrometers),
+            nameof(UvexPluginSettings.QhyG3FastPairEnabled),
         ];
 
         Assert.All(allowed, name => Assert.True(CommissioningProfileCatalog.IsOperationalProfileSetting(name), name));
+        Assert.True(CommissioningProfileCatalog.IsPostBindingsOperationalPreference(nameof(UvexPluginSettings.QhyG3FastPairEnabled)));
+        Assert.False(CommissioningProfileCatalog.IsPostBindingsOperationalPreference(nameof(UvexPluginSettings.G3FocalLengthMillimeters)));
         Assert.False(CommissioningProfileCatalog.IsOperationalProfileSetting(nameof(UvexPluginSettings.RealModeCommissioned)));
         Assert.False(CommissioningProfileCatalog.IsOperationalProfileSetting(nameof(UvexPluginSettings.BrightTargetWingCentroidEnabled)));
     }

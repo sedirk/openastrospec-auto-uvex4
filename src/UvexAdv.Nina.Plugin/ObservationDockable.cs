@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Versioning;
@@ -95,6 +96,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand cancelCommand;
     private readonly SimpleCommand takeoverCommand;
     private readonly SimpleAsyncCommand clearG3RecoveryStateCommand;
+    private readonly SimpleAsyncCommand restartWithCurrentConfigurationCommand;
     private readonly SimpleCommand openQhyPreviewCommand;
     private readonly SimpleCommand openG3PreviewCommand;
     private readonly SimpleCommand openAtrPreviewCommand;
@@ -106,6 +108,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand showStartupRequirementsCommand;
     private readonly SimpleCommand showManualUvexControlCommand;
     private readonly SimpleCommand showAdvancedSettingsCommand;
+    private readonly SimpleCommand saveAdvancedSettingsCommand;
     private readonly SimpleCommand autoFillConnectedNinaDevicesCommand;
     private readonly SimpleCommand selectNightSetupSnapshotCommand;
     private readonly SimpleCommand createNightSetupDraftCommand;
@@ -141,8 +144,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string pauseReason = string.Empty;
     private string runManifestPath = string.Empty;
     private string operatorNotice = "先选择运行模式。选择真实模式本身不会连接或移动设备。";
+    private string operatorNoticeTechnicalDetails = string.Empty;
     private string error = string.Empty;
+    private string errorTechnicalDetails = string.Empty;
+    private string advancedSettingsSaveStatus = "字段修改会立即进入当前 N.I.N.A. Profile；需要明确落盘时请点击“保存当前高级设置”。";
     private double progressPercent;
+    private string progressSummary = "0 / 0";
+    private string currentOperationText = string.Empty;
+    private double currentOperationPercent;
+    private bool hasCurrentOperationProgress;
+    private bool isRecovering;
+    private ObservationStage? progressStage;
     private ImageSource? qhyPreviewImage;
     private ImageSource? g3PreviewImage;
     private ImageSource? atrPreviewImage;
@@ -152,6 +164,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string lastFailureHeadline = "目前没有失败记录。";
     private string lastFailureCode = "—";
     private string lastFailureMessage = "运行开始后，这里会显示最近未通过的质量门及其完整原因。";
+    private string lastFailureContext = "—";
+    private string lastFailureImpact = "自动流程尚未启动。";
+    private string lastFailureRecovery = "尚未触发自动恢复。";
+    private string lastFailureTechnicalDetails = string.Empty;
     private string lastFailureMetrics = "—";
     private string lastFailureRecommendation = "三路预览、质量门、时间线和证据文件会在运行中持续更新。";
     private string lastFailureEvidencePath = string.Empty;
@@ -183,11 +199,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string atrManualCameraStatus = "尚未检查 N.I.N.A. 当前相机。";
     private string atrManualCaptureStatus = "尚未采集单帧检查光谱。";
     private string atrManualCaptureError = string.Empty;
+    private string atrManualCaptureErrorTechnicalDetails = string.Empty;
     private string mountTrackingManualStatus = "尚未请求；正式自动流程会在目录转向前自行启用并核验。";
     private string manualUvexConnectionStatus = "尚未读取 UVEX 服务状态。";
     private string manualUvexPositionStatus = "狭缝、M2 与光栅位置尚未读取。";
     private string manualUvexLastAction = "设备选择已保存；打开本页不会连接 COM5。请先点击“连接”。";
     private string manualUvexError = string.Empty;
+    private string manualUvexErrorTechnicalDetails = string.Empty;
     private bool isManualUvexBusy;
     private bool hasManualUvexStatus;
     private bool manualUvexPositionKnown;
@@ -245,7 +263,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                     : planetarium.StellariumHost.Trim();
                 return new UriBuilder(Uri.UriSchemeHttp, hostName, planetarium.StellariumPort).Uri;
             });
+        ApplyInitialUiCulture();
+        // Keep the canonical public Chinese title literal for branding checks;
+        // N.I.N.A.'s selected UI language may replace it immediately below.
         Title = "OpenAstroSpec 自动观测";
+        if (!ObservationUiPresentation.IsChinese(UiCulture)) Title = "OpenAstroSpec Automation";
         var icon = new GeometryGroup();
         icon.Children.Add(Geometry.Parse("M1,14 L5,9 8,11 12,4 15,6 M2,3 L2,7 M0,5 L4,5"));
         icon.Freeze();
@@ -266,6 +288,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             () => host.RequestTakeover("操作员从实时面板请求人工接管。"),
             () => IsControllable && RunState is not ObservationRunState.ManualTakeover);
         clearG3RecoveryStateCommand = new SimpleAsyncCommand(ClearG3RecoveryStateAsync);
+        restartWithCurrentConfigurationCommand = new SimpleAsyncCommand(
+            RestartWithCurrentConfigurationAsync,
+            CanRestartWithCurrentConfiguration);
         openQhyPreviewCommand = new SimpleCommand(
             () => OpenPreview("GS350 / QHY 广域取景与测光", QhyPreviewImage, QhyPreviewCaption),
             () => QhyPreviewImage is not null);
@@ -288,7 +313,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         showManualUvexControlCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
         showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 2);
         showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 3);
-        showAdvancedSettingsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 7);
+        showAdvancedSettingsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 6);
+        saveAdvancedSettingsCommand = new SimpleCommand(SaveAdvancedSettings);
         autoFillConnectedNinaDevicesCommand = new SimpleCommand(
             AutoFillConnectedNinaDevices,
             CanEditTargetPlan);
@@ -363,6 +389,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
         host.DashboardChanged += OnDashboardChanged;
         UvexRuntimeState.Changed += OnManualSpectrumChanged;
+        activeProfileService.LocaleChanged += OnLocaleChanged;
         activeProfileService.ProfileChanged += OnProfileChanged;
         ApplyDashboard(host.Dashboard);
     }
@@ -377,6 +404,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand CancelCommand => cancelCommand;
     public ICommand TakeoverCommand => takeoverCommand;
     public ICommand ClearG3RecoveryStateCommand => clearG3RecoveryStateCommand;
+    public ICommand RestartWithCurrentConfigurationCommand => restartWithCurrentConfigurationCommand;
     public ICommand OpenQhyPreviewCommand => openQhyPreviewCommand;
     public ICommand OpenG3PreviewCommand => openG3PreviewCommand;
     public ICommand OpenAtrPreviewCommand => openAtrPreviewCommand;
@@ -388,6 +416,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
     public ICommand ShowManualUvexControlCommand => showManualUvexControlCommand;
     public ICommand ShowAdvancedSettingsCommand => showAdvancedSettingsCommand;
+    public ICommand SaveAdvancedSettingsCommand => saveAdvancedSettingsCommand;
     public ICommand AutoFillConnectedNinaDevicesCommand => autoFillConnectedNinaDevicesCommand;
     public ICommand SelectNightSetupSnapshotCommand => selectNightSetupSnapshotCommand;
     public ICommand CreateNightSetupDraftCommand => createNightSetupDraftCommand;
@@ -1228,8 +1257,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 selected,
                 NinaProfileOwnerPreflight.NoPhysicalFilterWheelDeviceId,
                 StringComparison.Ordinal)
-                ? "✓ N.I.N.A. 滤镜轮为 No_Device；QHY 物理滤镜轮只归独立 QHY 服务所有。"
-                : $"✗ N.I.N.A. 当前滤镜轮为“{selected}”；真实模式必须先在 N.I.N.A. 设备选择器中改为 No_Device，避免重复打开 QHY 物理轮。";
+                ? ObservationUiPresentation.Text(
+                    "✓ N.I.N.A. 滤镜轮为 No_Device；QHY 物理滤镜轮只归独立 QHY 服务所有。",
+                    "✓ The N.I.N.A. filter wheel is No_Device; the physical QHY wheel remains solely owned by the QHY service.",
+                    UiCulture)
+                : ObservationUiPresentation.Text(
+                    $"✗ N.I.N.A. 当前滤镜轮为“{selected}”；真实模式必须先在 N.I.N.A. 设备选择器中改为 No_Device，避免重复打开 QHY 物理轮。",
+                    $"✗ The active N.I.N.A. filter wheel is '{selected}'. Select No_Device before a real run to avoid duplicate ownership of the physical QHY wheel.",
+                    UiCulture);
         }
     }
 
@@ -1242,29 +1277,54 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 selected,
                 NinaProfileOwnerPreflight.Phd2GuiderName,
                 StringComparison.Ordinal)
-                ? "✓ N.I.N.A. 导星适配器为稳定 ID PHD2_Single。"
-                : $"✗ N.I.N.A. 当前导星适配器为“{selected}”；真实模式要求设备选择器中的精确稳定 ID PHD2_Single（不是显示名 PHD2）。";
+                ? ObservationUiPresentation.Text(
+                    "✓ N.I.N.A. 导星适配器为稳定 ID PHD2_Single。",
+                    "✓ The N.I.N.A. guider adapter uses the stable ID PHD2_Single.",
+                    UiCulture)
+                : ObservationUiPresentation.Text(
+                    $"✗ N.I.N.A. 当前导星适配器为“{selected}”；真实模式要求设备选择器中的精确稳定 ID PHD2_Single（不是显示名 PHD2）。",
+                    $"✗ The active N.I.N.A. guider is '{selected}'. Real mode requires the exact stable ID PHD2_Single (not the display name PHD2).",
+                    UiCulture);
         }
     }
 
     public string ModeText => UseRealMode
-        ? settings.WeakSupervisionEnabled ? "自动观测：真实设备 · 有人弱监督" : "自动观测：真实设备 · 完整安全链"
-        : "自动观测：模拟演练";
+        ? settings.WeakSupervisionEnabled
+            ? ObservationUiPresentation.Text("自动观测：真实设备 · 有人弱监督", "Automation: real equipment · supervised", UiCulture)
+            : ObservationUiPresentation.Text("自动观测：真实设备 · 完整安全链", "Automation: real equipment · full safety chain", UiCulture)
+        : ObservationUiPresentation.Text("自动观测：模拟演练", "Automation: simulation", UiCulture);
     public bool IsSimulationMode => !UseRealMode;
     public bool IsRealMode => UseRealMode;
     public string ModeDescription => UseRealMode
         ? settings.WeakSupervisionEnabled
-            ? "有人弱监督：Safety Monitor、屋顶、天气和镜盖适配器缺失时记录警告并继续；已连接适配器明确报告危险或关闭时仍阻断。本模式不是无人值守。"
-            : "全无人监管：锁定并自动连接 N.I.N.A. 当前选择的 Safety Monitor、天气、RRCI 平移顶和镜盖；安全门通过后自动开顶，异常/结束时停数据源、关镜盖、停放赤道仪并关顶。"
-        : "模拟演练不会连接相机、赤道仪、PHD2 或 UVEX，可用于熟悉自动推进、暂停、恢复、取消、诊断和证据界面。";
+            ? ObservationUiPresentation.Text(
+                "有人弱监督：Safety Monitor、屋顶、天气和镜盖适配器缺失时记录警告并继续；已连接适配器明确报告危险或关闭时仍阻断。本模式不是无人值守。",
+                "Supervised mode: missing Safety Monitor, roof, weather or cover adapters are recorded as warnings; an explicit unsafe/closed state from a connected adapter still blocks. This is not unattended operation.",
+                UiCulture)
+            : ObservationUiPresentation.Text(
+                "全无人监管：锁定并自动连接 N.I.N.A. 当前选择的 Safety Monitor、天气、RRCI 平移顶和镜盖；安全门通过后自动开顶，异常/结束时停数据源、关镜盖、停放赤道仪并关顶。",
+                "Full unattended mode: lock and connect the selected N.I.N.A. Safety Monitor, weather, RRCI roof and cover; after safety gates pass, manage opening and perform stop/cover/park/roof cleanup on failure or completion.",
+                UiCulture)
+        : ObservationUiPresentation.Text(
+            "模拟演练不会连接相机、赤道仪、PHD2 或 UVEX，可用于熟悉自动推进、暂停、恢复、取消、诊断和证据界面。",
+            "Simulation never connects cameras, the mount, PHD2 or UVEX. Use it to inspect automatic progression, pause/resume, cancellation, diagnostics and evidence UI.",
+            UiCulture);
     public string StartButtonText => UseRealMode
-        ? "启动真实设备自动观测"
-        : "启动模拟演练（不连接设备）";
+        ? ObservationUiPresentation.Text("启动真实设备自动观测", "Start real-equipment automation", UiCulture)
+        : ObservationUiPresentation.Text("启动模拟演练（不连接设备）", "Start simulation (no equipment connection)", UiCulture);
     public string RealModeStatus
     {
         get
         {
             var issues = RealModeEligibilityIssues();
+            if (!ObservationUiPresentation.IsChinese(UiCulture))
+            {
+                return issues.Count == 0
+                    ? settings.WeakSupervisionEnabled
+                        ? "⚠ Real-mode static requirements are complete; this run remains supervised and missing environment adapters only warn."
+                        : "✓ Full-unattended static requirements are complete. Live environment and cleanup capabilities are revalidated at startup."
+                    : $"Real mode currently has {issues.Count} startup blocker(s). Use Automatic preparation for operator-facing fixes; Advanced settings retains engineering details.";
+            }
             return issues.Count == 0
                 ? settings.WeakSupervisionEnabled
                     ? "⚠ 真实模式静态条件完整；当前为有人弱监督，缺失的四类环境适配器只警告，不能称为无人值守。"
@@ -1277,6 +1337,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get
         {
             var issueCount = RealModeEligibilityIssues().Count;
+            if (!ObservationUiPresentation.IsChinese(UiCulture))
+            {
+                return issueCount == 0
+                    ? settings.WeakSupervisionEnabled
+                        ? "⚠ Ready for supervised operation; missing environment adapters warn, explicit danger still blocks."
+                        : "✓ Full-unattended fields are complete; environment equipment and safe cleanup are revalidated at startup."
+                    : "Automatic-observation preparation is incomplete; manual UVEX control remains available. Resolve the highlighted groups in Automatic preparation.";
+            }
             return issueCount == 0
                 ? settings.WeakSupervisionEnabled
                     ? "⚠ 已就绪：有人弱监督；环境适配器缺失只警告，明确危险仍阻断。"
@@ -1293,8 +1361,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RightAscensionDegrees is < 0 or >= 360 ||
         DeclinationDegrees is < -90 or > 90;
     public string TargetPreparationStatus => IsTargetPreparationMissing
-        ? "未完成：请选择或导入目标，并确认 J2000 坐标。"
-        : $"已选择：{TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°";
+        ? ObservationUiPresentation.Text("未完成：请选择或导入目标，并确认 J2000 坐标。", "Incomplete: select or import a target and verify its J2000 coordinates.", UiCulture)
+        : ObservationUiPresentation.Text(
+            $"已选择：{TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°",
+            $"Selected: {TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°",
+            UiCulture);
     public bool IsDevicePreparationMissing =>
         string.IsNullOrWhiteSpace(settings.ExpectedTelescopeId) ||
         string.IsNullOrWhiteSpace(settings.ObservationExpectedAtrCameraId) ||
@@ -1304,8 +1375,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         settings.Phd2ProfileId < 0 ||
         string.IsNullOrWhiteSpace(settings.Phd2CameraStableId);
     public string DevicePreparationStatus => IsDevicePreparationMissing
-        ? "未完成：请从下拉候选选择设备；候选来自 N.I.N.A.、PHD2 与 QHY 服务保存的配置，不需要先连接。"
-        : $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}";
+        ? ObservationUiPresentation.Text(
+            "未完成：请从下拉候选选择设备；候选来自 N.I.N.A.、PHD2 与 QHY 服务保存的配置，不需要先连接。",
+            "Incomplete: select devices from the saved N.I.N.A., PHD2 and QHY-service candidates; no connection is required to list them.",
+            UiCulture)
+        : ObservationUiPresentation.Text(
+            $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
+            $"Bound: mount {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
+            UiCulture);
     public bool IsCommissioningPreparationMissing =>
         !settings.RealModeCommissioned ||
         string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) ||
@@ -1335,20 +1412,102 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string StateText { get => stateText; private set { stateText = value; RaisePropertyChanged(); } }
     public string CurrentStageText { get => currentStageText; private set { currentStageText = value; RaisePropertyChanged(); } }
     public string NextStageText { get => nextStageText; private set { nextStageText = value; RaisePropertyChanged(); } }
-    public string StatusMessage { get => statusMessage; private set { statusMessage = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationGradeText { get => phd2CalibrationGradeText; private set { phd2CalibrationGradeText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationPolicyText { get => phd2CalibrationPolicyText; private set { phd2CalibrationPolicyText = value; RaisePropertyChanged(); } }
-    public string Phd2CommissioningRouteText { get => phd2CommissioningRouteText; private set { phd2CommissioningRouteText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationPermissionText { get => phd2CalibrationPermissionText; private set { phd2CalibrationPermissionText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationScaleText { get => phd2CalibrationScaleText; private set { phd2CalibrationScaleText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationReasonText { get => phd2CalibrationReasonText; private set { phd2CalibrationReasonText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationOverviewGradeText { get => phd2CalibrationOverviewGradeText; private set { phd2CalibrationOverviewGradeText = value; RaisePropertyChanged(); } }
-    public string Phd2CalibrationOverviewText { get => phd2CalibrationOverviewText; private set { phd2CalibrationOverviewText = value; RaisePropertyChanged(); } }
+    public string StatusMessage
+    {
+        get => statusMessage;
+        private set
+        {
+            statusMessage = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HasStatusMessage));
+        }
+    }
+    public string Phd2CalibrationGradeText { get => phd2CalibrationGradeText; private set { phd2CalibrationGradeText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationPolicyText { get => phd2CalibrationPolicyText; private set { phd2CalibrationPolicyText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CommissioningRouteText { get => phd2CommissioningRouteText; private set { phd2CommissioningRouteText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationPermissionText { get => phd2CalibrationPermissionText; private set { phd2CalibrationPermissionText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationScaleText { get => phd2CalibrationScaleText; private set { phd2CalibrationScaleText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationReasonText { get => phd2CalibrationReasonText; private set { phd2CalibrationReasonText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationOverviewGradeText { get => phd2CalibrationOverviewGradeText; private set { phd2CalibrationOverviewGradeText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string Phd2CalibrationOverviewText { get => phd2CalibrationOverviewText; private set { phd2CalibrationOverviewText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
     public string PauseReason { get => pauseReason; private set { pauseReason = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasPauseReason)); } }
     public string RunManifestPath { get => runManifestPath; private set { runManifestPath = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasRunManifest)); } }
-    public string OperatorNotice { get => operatorNotice; private set { operatorNotice = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasOperatorNotice)); } }
-    public string Error { get => error; private set { error = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasError)); } }
+    public string OperatorNotice
+    {
+        get => operatorNotice;
+        private set
+        {
+            var presentation = ObservationUiPresentation.PresentUiNotice(value, UiCulture);
+            operatorNotice = presentation.Message;
+            operatorNoticeTechnicalDetails = presentation.TechnicalDetails;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(OperatorNoticeTechnicalDetails));
+            RaisePropertyChanged(nameof(HasOperatorNotice));
+            RaisePropertyChanged(nameof(HasOperatorNoticeTechnicalDetails));
+        }
+    }
+    public string OperatorNoticeTechnicalDetails => operatorNoticeTechnicalDetails;
+    public string Error
+    {
+        get => error;
+        private set
+        {
+            var presentation = ObservationUiPresentation.PresentUiOperationError(value, UiCulture);
+            error = presentation.Message;
+            errorTechnicalDetails = presentation.TechnicalDetails;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ErrorTechnicalDetails));
+            RaisePropertyChanged(nameof(HasError));
+            RaisePropertyChanged(nameof(HasErrorTechnicalDetails));
+        }
+    }
+    public string ErrorTechnicalDetails => errorTechnicalDetails;
+    public string AdvancedSettingsSaveStatus { get => advancedSettingsSaveStatus; private set { advancedSettingsSaveStatus = value; RaisePropertyChanged(); } }
     public double ProgressPercent { get => progressPercent; private set { progressPercent = value; RaisePropertyChanged(); } }
+    public string ProgressSummary { get => progressSummary; private set { progressSummary = value; RaisePropertyChanged(); } }
+    public string CurrentOperationText
+    {
+        get => currentOperationText;
+        private set
+        {
+            currentOperationText = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HasCurrentOperationText));
+        }
+    }
+    public double CurrentOperationPercent { get => currentOperationPercent; private set { currentOperationPercent = value; RaisePropertyChanged(); } }
+    public bool HasCurrentOperationProgress
+    {
+        get => hasCurrentOperationProgress;
+        private set
+        {
+            if (hasCurrentOperationProgress == value) return;
+            hasCurrentOperationProgress = value;
+            RaisePropertyChanged();
+        }
+    }
+    public bool IsRecovering
+    {
+        get => isRecovering;
+        private set
+        {
+            if (isRecovering == value) return;
+            isRecovering = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(RunTone));
+        }
+    }
+    public ObservationUiTone RunTone => IsRecovering
+        ? ObservationUiTone.Recovering
+        : RunState switch
+        {
+            ObservationRunState.RunningAuto or ObservationRunState.Validating or ObservationRunState.Finalizing => ObservationUiTone.Info,
+            ObservationRunState.Completed => ObservationUiTone.Success,
+            ObservationRunState.PauseRequested or ObservationRunState.Paused or ObservationRunState.ManualTakeover => ObservationUiTone.Warning,
+            ObservationRunState.PausedNeedsAttention => ObservationUiTone.Attention,
+            ObservationRunState.Faulted => ObservationUiTone.Fault,
+            _ => ObservationUiTone.Neutral,
+        };
     public ImageSource? QhyPreviewImage { get => qhyPreviewImage; private set { qhyPreviewImage = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasQhyPreview)); RaisePropertyChanged(nameof(HasNoQhyPreview)); RaisePropertyChanged(nameof(HasFailurePreview)); } }
     public ImageSource? G3PreviewImage { get => g3PreviewImage; private set { g3PreviewImage = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasG3Preview)); RaisePropertyChanged(nameof(HasNoG3Preview)); RaisePropertyChanged(nameof(HasFailurePreview)); } }
     public ImageSource? AtrPreviewImage { get => atrPreviewImage; private set { atrPreviewImage = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasAtrPreview)); RaisePropertyChanged(nameof(HasNoAtrPreview)); RaisePropertyChanged(nameof(HasFailurePreview)); } }
@@ -1358,18 +1517,31 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public string LastFailureHeadline { get => lastFailureHeadline; private set { lastFailureHeadline = value; RaisePropertyChanged(); } }
     public string LastFailureCode { get => lastFailureCode; private set { lastFailureCode = value; RaisePropertyChanged(); } }
     public string LastFailureMessage { get => lastFailureMessage; private set { lastFailureMessage = value; RaisePropertyChanged(); } }
+    public string LastFailureContext { get => lastFailureContext; private set { lastFailureContext = value; RaisePropertyChanged(); } }
+    public string LastFailureImpact { get => lastFailureImpact; private set { lastFailureImpact = value; RaisePropertyChanged(); } }
+    public string LastFailureRecovery { get => lastFailureRecovery; private set { lastFailureRecovery = value; RaisePropertyChanged(); } }
+    public string LastFailureTechnicalDetails
+    {
+        get => lastFailureTechnicalDetails;
+        private set
+        {
+            lastFailureTechnicalDetails = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HasFailureTechnicalDetails));
+        }
+    }
     public string LastFailureMetrics { get => lastFailureMetrics; private set { lastFailureMetrics = value; RaisePropertyChanged(); } }
     public string LastFailureRecommendation { get => lastFailureRecommendation; private set { lastFailureRecommendation = value; RaisePropertyChanged(); } }
     public string LastFailureEvidencePath { get => lastFailureEvidencePath; private set { lastFailureEvidencePath = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasFailureEvidence)); } }
     public string LastFailurePreviewLabel { get => lastFailurePreviewLabel; private set { lastFailurePreviewLabel = value; RaisePropertyChanged(); } }
     public string LatestEvidencePath { get => latestEvidencePath; private set { latestEvidencePath = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasLatestEvidence)); } }
     public string LatestEvidenceSummary { get => latestEvidenceSummary; private set { latestEvidenceSummary = value; RaisePropertyChanged(); } }
-    public string GhostCalibrationSummaryText { get => ghostCalibrationSummaryText; private set { ghostCalibrationSummaryText = value; RaisePropertyChanged(); } }
-    public string SlitIdentityStatusText { get => slitIdentityStatusText; private set { slitIdentityStatusText = value; RaisePropertyChanged(); } }
-    public string GhostApplicabilityText { get => ghostApplicabilityText; private set { ghostApplicabilityText = value; RaisePropertyChanged(); } }
-    public string GhostDecisionText { get => ghostDecisionText; private set { ghostDecisionText = value; RaisePropertyChanged(); } }
-    public string GhostAssistanceModeText { get => ghostAssistanceModeText; private set { ghostAssistanceModeText = value; RaisePropertyChanged(); } }
-    public string GhostOverviewText { get => ghostOverviewText; private set { ghostOverviewText = value; RaisePropertyChanged(); } }
+    public string GhostCalibrationSummaryText { get => ghostCalibrationSummaryText; private set { ghostCalibrationSummaryText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string SlitIdentityStatusText { get => slitIdentityStatusText; private set { slitIdentityStatusText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string GhostApplicabilityText { get => ghostApplicabilityText; private set { ghostApplicabilityText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string GhostDecisionText { get => ghostDecisionText; private set { ghostDecisionText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string GhostAssistanceModeText { get => ghostAssistanceModeText; private set { ghostAssistanceModeText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
+    public string GhostOverviewText { get => ghostOverviewText; private set { ghostOverviewText = LocalizeStatusValue(value); RaisePropertyChanged(); } }
     public bool HasFailure
     {
         get => hasFailure;
@@ -1394,8 +1566,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public bool HasLatestEvidence => !string.IsNullOrWhiteSpace(LatestEvidencePath) && PathExists(LatestEvidencePath);
     public bool HasRunManifest => !string.IsNullOrWhiteSpace(RunManifestPath) && PathExists(RunManifestPath);
     public bool HasOperatorNotice => !string.IsNullOrWhiteSpace(OperatorNotice);
+    public bool HasOperatorNoticeTechnicalDetails => !string.IsNullOrWhiteSpace(OperatorNoticeTechnicalDetails);
     public bool HasError => !string.IsNullOrWhiteSpace(Error);
+    public bool HasErrorTechnicalDetails => !string.IsNullOrWhiteSpace(ErrorTechnicalDetails);
     public bool HasPauseReason => !string.IsNullOrWhiteSpace(PauseReason);
+    public bool HasStatusMessage => !string.IsNullOrWhiteSpace(StatusMessage);
+    public bool HasCurrentOperationText => !string.IsNullOrWhiteSpace(CurrentOperationText);
+    public bool HasFailureTechnicalDetails => !string.IsNullOrWhiteSpace(LastFailureTechnicalDetails);
     public bool IsTargetPlanEditable => !IsTargetImportBusy && CanEditTargetPlan();
     public bool ImportFramingCenter
     {
@@ -1487,14 +1664,21 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => atrManualCaptureError;
         private set
         {
-            if (string.Equals(atrManualCaptureError, value, StringComparison.Ordinal)) return;
-            atrManualCaptureError = value;
+            var presentation = ObservationUiPresentation.PresentUiOperationError(value, UiCulture);
+            if (string.Equals(atrManualCaptureError, presentation.Message, StringComparison.Ordinal) &&
+                string.Equals(atrManualCaptureErrorTechnicalDetails, presentation.TechnicalDetails, StringComparison.Ordinal)) return;
+            atrManualCaptureError = presentation.Message;
+            atrManualCaptureErrorTechnicalDetails = presentation.TechnicalDetails;
             RaisePropertyChanged();
+            RaisePropertyChanged(nameof(AtrManualCaptureErrorTechnicalDetails));
             RaisePropertyChanged(nameof(HasAtrManualCaptureError));
+            RaisePropertyChanged(nameof(HasAtrManualCaptureErrorTechnicalDetails));
         }
     }
 
+    public string AtrManualCaptureErrorTechnicalDetails => atrManualCaptureErrorTechnicalDetails;
     public bool HasAtrManualCaptureError => !string.IsNullOrWhiteSpace(AtrManualCaptureError);
+    public bool HasAtrManualCaptureErrorTechnicalDetails => !string.IsNullOrWhiteSpace(AtrManualCaptureErrorTechnicalDetails);
     public string MountTrackingManualStatus
     {
         get => mountTrackingManualStatus;
@@ -1551,12 +1735,18 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => manualUvexError;
         private set
         {
-            manualUvexError = value;
+            var presentation = ObservationUiPresentation.PresentUiOperationError(value, UiCulture);
+            manualUvexError = presentation.Message;
+            manualUvexErrorTechnicalDetails = presentation.TechnicalDetails;
             RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ManualUvexErrorTechnicalDetails));
             RaisePropertyChanged(nameof(HasManualUvexError));
+            RaisePropertyChanged(nameof(HasManualUvexErrorTechnicalDetails));
         }
     }
+    public string ManualUvexErrorTechnicalDetails => manualUvexErrorTechnicalDetails;
     public bool HasManualUvexError => !string.IsNullOrWhiteSpace(ManualUvexError);
+    public bool HasManualUvexErrorTechnicalDetails => !string.IsNullOrWhiteSpace(ManualUvexErrorTechnicalDetails);
     public bool IsManualUvexBusy
     {
         get => isManualUvexBusy;
@@ -1601,9 +1791,53 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         host.DashboardChanged -= OnDashboardChanged;
         UvexRuntimeState.Changed -= OnManualSpectrumChanged;
+        activeProfileService.LocaleChanged -= OnLocaleChanged;
         activeProfileService.ProfileChanged -= OnProfileChanged;
         lifetime.Cancel();
         lifetime.Dispose();
+    }
+
+    private CultureInfo UiCulture =>
+        activeProfileService.ActiveProfile.ApplicationSettings.Language ?? CultureInfo.CurrentUICulture;
+
+    private string LocalizeStatusValue(string value) =>
+        ObservationUiPresentation.PresentUiNotice(value, UiCulture).Message;
+
+    private void ApplyInitialUiCulture()
+    {
+        ObservationStaticTextLocalization.SetCulture(UiCulture);
+        stateText = ObservationUiPresentation.RunStateName(ObservationRunState.Idle, UiCulture);
+        statusMessage = ObservationUiPresentation.Text(
+            "尚未开始自动观测。",
+            "Automation has not started.",
+            UiCulture);
+        operatorNotice = ObservationUiPresentation.Text(
+            "先选择运行模式。选择真实模式本身不会连接或移动设备。",
+            "Select an execution mode first. Selecting real mode does not connect or move equipment.",
+            UiCulture);
+        advancedSettingsSaveStatus = ObservationUiPresentation.Text(
+            "字段修改会立即进入当前 N.I.N.A. Profile；需要明确落盘时请点击“保存当前高级设置”。",
+            "Field edits update the active N.I.N.A. profile in memory; use Save advanced settings to persist them immediately.",
+            UiCulture);
+        lastFailureHeadline = ObservationUiPresentation.Text("目前没有失败记录。", "No failure is currently recorded.", UiCulture);
+        lastFailureMessage = ObservationUiPresentation.Text(
+            "运行开始后，这里会显示最近未通过的质量门及其明确原因。",
+            "After a run starts, the most recent non-passing quality gate and its specific cause appear here.",
+            UiCulture);
+        lastFailureImpact = ObservationUiPresentation.Text("自动流程尚未启动。", "Automation has not started.", UiCulture);
+        lastFailureRecovery = ObservationUiPresentation.Text("尚未触发自动恢复。", "No automatic recovery has been triggered.", UiCulture);
+        lastFailureRecommendation = ObservationUiPresentation.Text(
+            "三路预览、质量门、时间线和证据文件会在运行中持续更新。",
+            "The three previews, quality gates, timeline and evidence files update throughout the run.",
+            UiCulture);
+        lastFailurePreviewLabel = ObservationUiPresentation.Text("没有需要检查的失败图像", "No failure image to inspect", UiCulture);
+        latestEvidenceSummary = ObservationUiPresentation.Text("尚未生成运行证据。", "No run evidence has been generated.", UiCulture);
+        phd2CalibrationGradeText = ObservationUiPresentation.Text("尚未评估", "Not evaluated", UiCulture);
+        phd2CalibrationOverviewGradeText = phd2CalibrationGradeText;
+        phd2CalibrationOverviewText = ObservationUiPresentation.Text(
+            "启动导星后自动评估；评估前不执行精调或科学曝光。",
+            "Evaluated after guiding starts; no fine placement or science exposure is allowed beforehand.",
+            UiCulture);
     }
 
     private Task StartSelectedModeAsync() => UseRealMode
@@ -1614,7 +1848,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         UseRealMode = useRealMode;
         OperatorNotice = useRealMode
-            ? "已选择真实设备自动观测。此按钮不是设备连接入口；观测前切缝和 M2 对焦请直接进入“设备手控”。"
+            ? "已选择真实设备自动观测。启动后会在 Night Setup 边界自动连接并回读 UVEX4；观测前如需手动切缝或调整 M2，请进入“设备手控”。"
             : "已选择模拟演练。模拟运行不会连接或移动任何真实设备。";
         Error = string.Empty;
     }
@@ -1836,6 +2070,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 var automatic = commissioningProfiles.FirstOrDefault(item => item.IsAutomatic);
                 ApplyAutomaticSiteProfile(automatic?.BindingsPath);
                 ApplyCommissioningBindings(profile.BindingsPath, rememberSelection: true);
+                ApplyPostBindingsOperationalPreferences(automatic?.BindingsPath);
             }
             else
             {
@@ -1974,6 +2209,28 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             if (!property.CanWrite)
             {
                 throw new InvalidDataException($"本机运行模板设置 '{item.Key}' 不可写。");
+            }
+            assignments.Add((property, ConvertBindingValue(item.Value, property.PropertyType, item.Key)));
+        }
+        foreach (var assignment in assignments) assignment.Property.SetValue(settings, assignment.Value);
+        return assignments.Count;
+    }
+
+    private int ApplyPostBindingsOperationalPreferences(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return 0;
+        var values = CommissioningProfileCatalog.ReadProfileValues(path);
+        var assignments = new List<(PropertyInfo Property, object Value)>();
+        foreach (var item in values)
+        {
+            if (!CommissioningProfileCatalog.IsPostBindingsOperationalPreference(item.Key)) continue;
+            var property = typeof(UvexPluginSettings).GetProperty(
+                item.Key,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase)
+                ?? throw new InvalidDataException($"本机运行偏好包含当前插件不认识的设置 '{item.Key}'。");
+            if (!property.CanWrite)
+            {
+                throw new InvalidDataException($"本机运行偏好 '{item.Key}' 不可写。");
             }
             assignments.Add((property, ConvertBindingValue(item.Value, property.PropertyType, item.Key)));
         }
@@ -2369,7 +2626,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             await host.RunSimulationAsync(
                 plan,
                 SimulationStageMilliseconds,
-                new Progress<ApplicationStatus>(),
+                new Progress<ApplicationStatus>(ApplyApplicationStatus),
                 CancellationToken.None).ConfigureAwait(true);
         }
         catch (Exception ex)
@@ -2409,7 +2666,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             await using var runner = realRunnerFactory.Create(
                 host,
                 settings,
-                new Progress<ApplicationStatus>(),
+                new Progress<ApplicationStatus>(ApplyApplicationStatus),
                 lockedConfiguration);
             await host.RunAsync(plan, runner, CancellationToken.None).ConfigureAwait(true);
         }
@@ -2425,6 +2682,38 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     }
 
     private async Task ClearG3RecoveryStateAsync()
+    {
+        await RetireG3RecoveryStateAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Ends the old run boundary, retires its discoverable G3 recovery ledger
+    /// with an operator audit, and only then captures the currently selected
+    /// settings in a brand-new real run.  This is the deliberate A/B route for
+    /// action-bearing choices such as the ultra-bright-target branch: hashes
+    /// freeze one run, never all future runs.
+    /// </summary>
+    private async Task RestartWithCurrentConfigurationAsync()
+    {
+        Error = string.Empty;
+        var eligibility = RealModeEligibilityIssues();
+        if (eligibility.Count > 0)
+        {
+            SelectedWorkspaceTabIndex = 3;
+            Error = "无法按当前设置新开一轮：请先完成“自动准备”中标红的字段。工程级详细原因仍可在“高级设置”查看。";
+            return;
+        }
+
+        OperatorNotice =
+            "正在结束旧运行并为当前设置建立新的运行边界。旧哈希不会被改写；不会把新分支热替换进旧运行。";
+        if (!await RetireG3RecoveryStateAsync().ConfigureAwait(true)) return;
+
+        OperatorNotice =
+            "旧运行边界已关闭；现在按当前表单重新捕获动作配置哈希并启动一条全新真实运行。";
+        await StartRealAsync().ConfigureAwait(true);
+    }
+
+    private async Task<bool> RetireG3RecoveryStateAsync()
     {
         Error = string.Empty;
         OperatorNotice = "正在取消当前失败运行并关闭旧 G3 恢复状态；不会发送赤道仪命令。";
@@ -2467,7 +2756,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 OperatorNotice = "没有需要清除的旧 G3 恢复状态；可以直接重新启动自动观测。";
                 HasFailure = false;
                 SelectedWorkspaceTabIndex = 0;
-                return;
+                return true;
             }
             if (outstanding.Length > 1)
             {
@@ -2520,14 +2809,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             OperatorNotice =
                 $"已退役 {results.Count} 条旧 G3 恢复状态（包含 settled 账本；运行 {string.Join("、", results.Select(result => result.PriorState.ObservationRunId).Distinct(StringComparer.Ordinal))}）。" +
                 "没有移动赤道仪；原账本和人工接管记录已保留，canonical 恢复名已移除。现在可直接重新点击“启动真实设备自动观测”。";
+            return true;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
         {
+            return false;
         }
         catch (Exception ex)
         {
             Error = $"清除旧 G3 恢复状态失败：{ex.Message}";
             OperatorNotice = string.Empty;
+            return false;
         }
         finally
         {
@@ -2568,6 +2860,16 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ObservationRunState.Faulted;
 
     private bool CanStartReal() => CanStart();
+
+    private bool CanRestartWithCurrentConfiguration() =>
+        !IsTargetImportBusy && RunState is
+            ObservationRunState.Idle or
+            ObservationRunState.Paused or
+            ObservationRunState.PausedNeedsAttention or
+            ObservationRunState.ManualTakeover or
+            ObservationRunState.Completed or
+            ObservationRunState.Cancelled or
+            ObservationRunState.Faulted;
 
     private void BindCurrentAtrCamera()
     {
@@ -2876,35 +3178,95 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private void ApplyDashboard(ObservationDashboardSnapshot dashboard)
     {
         var run = dashboard.Run;
-        StateText = RunStateDisplayName(run.State);
-        CurrentStageText = run.CurrentStage is { } current ? SimulatedObservationStageRunner.StageDisplayName(current) : "—";
-        NextStageText = run.NextStage is { } next ? SimulatedObservationStageRunner.StageDisplayName(next) : "—";
-        StatusMessage = run.StatusMessage;
-        PauseReason = run.PauseReason ?? string.Empty;
+        var culture = UiCulture;
+        GateResult? currentGate = null;
+        if (run.CurrentStage is { } currentGateStage)
+        {
+            dashboard.Gates.TryGetValue(currentGateStage, out currentGate);
+        }
+        var latestEvent = run.RecentEvents.LastOrDefault();
+        var statusStage = latestEvent?.Stage ?? run.CurrentStage;
+        var statusCode = latestEvent?.Code ?? currentGate?.Code;
+        var localizedStatus = ObservationUiPresentation.EventMessage(
+            statusStage,
+            statusCode,
+            run.StatusMessage,
+            culture,
+            isAttention: run.State is ObservationRunState.PausedNeedsAttention or ObservationRunState.Faulted);
+        var localizedPause = string.IsNullOrWhiteSpace(run.PauseReason)
+            ? string.Empty
+            : ObservationUiPresentation.EventMessage(
+                run.CurrentStage ?? statusStage,
+                currentGate?.Code ?? statusCode,
+                run.PauseReason,
+                culture,
+                isAttention: true);
+
+        StateText = ObservationUiPresentation.RunStateName(run.State, culture);
+        CurrentStageText = run.CurrentStage is { } current ? ObservationUiPresentation.StageName(current, culture) : "—";
+        NextStageText = run.NextStage is { } next ? ObservationUiPresentation.StageName(next, culture) : "—";
+        // The coordinator may deliberately publish the same reason as both
+        // StatusMessage and PauseReason. Show it once in the attention line.
+        StatusMessage = !string.IsNullOrWhiteSpace(localizedPause) &&
+                        string.Equals(localizedStatus, localizedPause, StringComparison.Ordinal)
+            ? string.Empty
+            : localizedStatus;
+        PauseReason = localizedPause;
         RunManifestPath = dashboard.ManifestPath ?? string.Empty;
         ProgressPercent = run.TotalStageCount == 0 ? 0 : 100d * run.CompletedStageCount / run.TotalStageCount;
+        ProgressSummary = run.TotalStageCount == 0
+            ? ObservationUiPresentation.Text("尚无运行进度", "No run progress", culture)
+            : ObservationUiPresentation.Text(
+                $"总体阶段 {run.CompletedStageCount}/{run.TotalStageCount} · {ProgressPercent:0}%",
+                $"Overall stages {run.CompletedStageCount}/{run.TotalStageCount} · {ProgressPercent:0}%",
+                culture);
+        if (progressStage != run.CurrentStage)
+        {
+            progressStage = run.CurrentStage;
+            CurrentOperationText = string.Empty;
+            CurrentOperationPercent = 0;
+            HasCurrentOperationProgress = false;
+            IsRecovering = false;
+        }
+        RaisePropertyChanged(nameof(RunTone));
 
         GateRows.Clear();
         foreach (var stage in ObservationRunCoordinator.Stages)
         {
             dashboard.Gates.TryGetValue(stage, out var gate);
+            var message = gate is null
+                ? ObservationUiPresentation.NotRun(culture)
+                : DisplayGateMessage(stage, gate, culture);
+            var technicalMessage = gate is null || string.Equals(message, gate.Message, StringComparison.Ordinal)
+                ? string.Empty
+                : gate.Message;
             GateRows.Add(new ObservationGateRow(
-                SimulatedObservationStageRunner.StageDisplayName(stage),
-                gate is null ? "等待" : GateDisplayName(gate.Disposition),
+                ObservationUiPresentation.StageName(stage, culture),
+                gate is null ? ObservationUiPresentation.Waiting(culture) : ObservationUiPresentation.GateStateName(gate, culture),
                 gate?.Code ?? "—",
-                gate?.Message ?? "尚未执行",
-                FormatMetrics(gate?.Metrics),
-                gate?.Disposition ?? GateDisposition.Indeterminate));
+                message,
+                technicalMessage,
+                ObservationUiPresentation.FormatMetrics(gate?.Metrics, culture),
+                gate?.Disposition ?? GateDisposition.Indeterminate,
+                gate?.Severity ?? GateSeverity.Info,
+                GateTone(gate)));
         }
 
         TimelineRows.Clear();
         foreach (var item in run.RecentEvents.TakeLast(80))
         {
-            TimelineRows.Add(new ObservationTimelineRow(
-                item.TimestampUtc.ToLocalTime().ToString("HH:mm:ss"),
-                item.Stage is { } eventStage ? SimulatedObservationStageRunner.StageDisplayName(eventStage) : "运行",
+            var message = ObservationUiPresentation.EventMessage(
+                item.Stage,
                 item.Code,
                 item.Message,
+                culture,
+                isAttention: item.State is ObservationRunState.PausedNeedsAttention or ObservationRunState.Faulted);
+            TimelineRows.Add(new ObservationTimelineRow(
+                item.TimestampUtc.ToLocalTime().ToString("HH:mm:ss"),
+                item.Stage is { } eventStage ? ObservationUiPresentation.StageName(eventStage, culture) : ObservationUiPresentation.RunLabel(culture),
+                item.Code,
+                message,
+                string.Equals(message, item.Message, StringComparison.Ordinal) ? string.Empty : item.Message,
                 item.EvidencePath ?? string.Empty));
         }
 
@@ -2913,15 +3275,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             EvidenceRows.Add(new ObservationEvidenceRow(
                 item.PublishedUtc.ToLocalTime().ToString("HH:mm:ss"),
-                item.Kind,
+                ObservationUiPresentation.EvidenceKind(item.Kind, culture),
                 Path.GetFileName(item.AbsolutePath),
                 item.AbsolutePath));
         }
         var latestEvidence = dashboard.Evidence.LastOrDefault();
         LatestEvidencePath = latestEvidence?.AbsolutePath ?? string.Empty;
         LatestEvidenceSummary = latestEvidence is null
-            ? "尚未生成运行证据。"
-            : $"{latestEvidence.Kind} · {Path.GetFileName(latestEvidence.AbsolutePath)} · {latestEvidence.PublishedUtc.ToLocalTime():HH:mm:ss}";
+            ? ObservationUiPresentation.Text("尚未生成运行证据。", "No run evidence has been generated.", culture)
+            : $"{ObservationUiPresentation.EvidenceKind(latestEvidence.Kind, culture)} · {Path.GetFileName(latestEvidence.AbsolutePath)} · {latestEvidence.PublishedUtc.ToLocalTime():HH:mm:ss}";
 
         ApplyPhd2CalibrationQuality(dashboard);
         ApplyGhostAssistanceStatus(dashboard);
@@ -2970,13 +3332,23 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         if (failureGate is null || failureStage is null)
         {
             HasFailure = false;
-            LastFailureHeadline = "目前没有失败记录。";
+            LastFailureHeadline = ObservationUiPresentation.Text("目前没有失败记录。", "No failure is currently recorded.", UiCulture);
             LastFailureCode = "—";
-            LastFailureMessage = "运行开始后，这里会显示最近未通过的质量门及其完整原因。";
+            LastFailureMessage = ObservationUiPresentation.Text(
+                "运行开始后，这里会显示最近未通过的质量门及其明确原因。",
+                "After a run starts, the most recent non-passing gate and its specific cause appear here.",
+                UiCulture);
+            LastFailureContext = "—";
+            LastFailureImpact = ObservationUiPresentation.Text("自动流程当前没有因错误停止。", "Automation is not currently stopped by an error.", UiCulture);
+            LastFailureRecovery = ObservationUiPresentation.Text("尚无需要说明的自动恢复。", "There is no automatic recovery to report.", UiCulture);
+            LastFailureTechnicalDetails = string.Empty;
             LastFailureMetrics = "—";
-            LastFailureRecommendation = "三路预览、质量门、时间线和证据文件会在运行中持续更新。";
+            LastFailureRecommendation = ObservationUiPresentation.Text(
+                "三路预览、质量门、时间线和证据文件会在运行中持续更新。",
+                "The three previews, quality gates, timeline and evidence files update throughout the run.",
+                UiCulture);
             LastFailureEvidencePath = string.Empty;
-            LastFailurePreviewLabel = "没有需要检查的失败图像";
+            LastFailurePreviewLabel = ObservationUiPresentation.Text("没有需要检查的失败图像", "No failure image to inspect", UiCulture);
             lastFailurePreviewChannel = null;
             RaisePropertyChanged(nameof(HasFailurePreview));
             return;
@@ -2988,16 +3360,24 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             SelectedWorkspaceTabIndex = 5;
         }
-        var guidance = ObservationOperatorGuidance.For(failureStage.Value, failureGate);
-        LastFailureHeadline = $"{SimulatedObservationStageRunner.StageDisplayName(failureStage.Value)} · {GateDisplayName(failureGate.Disposition)}";
+        var guidance = ObservationOperatorGuidance.For(failureStage.Value, failureGate, UiCulture);
+        var presentation = ObservationUiPresentation.Present(failureStage.Value, failureGate, UiCulture);
+        LastFailureHeadline = presentation.Summary;
         LastFailureCode = failureGate.Code;
-        LastFailureMessage = failureGate.Message;
-        LastFailureMetrics = FormatMetrics(failureGate.Metrics);
-        LastFailureRecommendation = guidance.Recommendation;
+        LastFailureMessage = presentation.Summary;
+        LastFailureContext = $"{ObservationUiPresentation.StageName(failureStage.Value, UiCulture)} · {ObservationUiPresentation.GateStateName(failureGate, UiCulture)}";
+        LastFailureImpact = presentation.Impact;
+        LastFailureRecovery = presentation.AutomaticRecovery;
+        LastFailureTechnicalDetails = presentation.TechnicalDetails;
+        LastFailureMetrics = ObservationUiPresentation.FormatMetrics(failureGate.Metrics, UiCulture);
+        LastFailureRecommendation = presentation.Recommendation;
         LastFailureEvidencePath = failureEvent?.EvidencePath ?? string.Empty;
         LastFailurePreviewLabel = guidance.PreviewChannel is null
-            ? "此类联锁失败通常没有天文图像；请检查启动条件和时间线"
-            : $"打开 {guidance.PreviewLabel}";
+            ? ObservationUiPresentation.Text(
+                "此类联锁通常没有天文图像；查看启动条件和时间线",
+                "This interlock normally has no astronomical image; inspect startup conditions and the timeline",
+                UiCulture)
+            : ObservationUiPresentation.Text($"打开 {guidance.PreviewLabel}", $"Open {guidance.PreviewLabel}", UiCulture);
         lastFailurePreviewChannel = guidance.PreviewChannel;
         RaisePropertyChanged(nameof(HasFailurePreview));
     }
@@ -3005,19 +3385,20 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private void ApplyPreview(ObservationDashboardSnapshot dashboard, ObservationPreviewChannel channel)
     {
         if (!dashboard.Previews.TryGetValue(channel, out var preview)) return;
+        var localizedCaption = ObservationUiPresentation.PresentUiNotice(preview.Caption, UiCulture).Message;
         switch (channel)
         {
             case ObservationPreviewChannel.QhyWideField:
                 QhyPreviewImage = preview.Image;
-                QhyPreviewCaption = preview.Caption;
+                QhyPreviewCaption = localizedCaption;
                 break;
             case ObservationPreviewChannel.G3SlitField:
                 G3PreviewImage = preview.Image;
-                G3PreviewCaption = preview.Caption;
+                G3PreviewCaption = localizedCaption;
                 break;
             case ObservationPreviewChannel.AtrSpectrum:
                 AtrPreviewImage = preview.Image;
-                AtrPreviewCaption = preview.Caption;
+                AtrPreviewCaption = localizedCaption;
                 break;
         }
     }
@@ -3037,6 +3418,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         cancelCommand.RaiseCanExecuteChanged();
         takeoverCommand.RaiseCanExecuteChanged();
         clearG3RecoveryStateCommand.RaiseCanExecuteChanged();
+        restartWithCurrentConfigurationCommand.RaiseCanExecuteChanged();
         openQhyPreviewCommand.RaiseCanExecuteChanged();
         openG3PreviewCommand.RaiseCanExecuteChanged();
         openAtrPreviewCommand.RaiseCanExecuteChanged();
@@ -3100,6 +3482,57 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         previousNinaImageFilePattern is not null &&
         previousNinaImageFilePatternProfileId == activeProfileService.ActiveProfile.Id;
 
+    private void SaveAdvancedSettings()
+    {
+        try
+        {
+            var profile = activeProfileService.ActiveProfile;
+            profile.Save();
+            Error = string.Empty;
+            AdvancedSettingsSaveStatus = $"已于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 写入当前 N.I.N.A. Profile（{profile.Id:D}）。";
+        }
+        catch (Exception ex)
+        {
+            AdvancedSettingsSaveStatus = $"保存失败：{ex.Message}";
+            Error = $"保存当前高级设置失败：{ex.Message}";
+        }
+    }
+
+    private void ApplyApplicationStatus(ApplicationStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            _ = dispatcher.BeginInvoke(() => ApplyApplicationStatus(status));
+            return;
+        }
+
+        var raw = status.Status?.Trim() ?? string.Empty;
+        IsRecovering = raw.Contains("将自动恢复", StringComparison.Ordinal) ||
+                       raw.Contains("automatic recovery", StringComparison.OrdinalIgnoreCase);
+        CurrentOperationText = string.IsNullOrWhiteSpace(raw)
+            ? string.Empty
+            : ObservationUiPresentation.EventMessage(
+                progressStage,
+                code: null,
+                raw,
+                UiCulture);
+        var fraction = status.Progress;
+        if (double.IsFinite(fraction) && fraction >= 0)
+        {
+            // N.I.N.A. ApplicationStatus uses a 0..1 fraction. Clamp instead
+            // of allowing a faulty adapter report to distort the WPF bar.
+            CurrentOperationPercent = Math.Clamp(fraction, 0, 1) * 100d;
+            HasCurrentOperationProgress = true;
+        }
+        else
+        {
+            CurrentOperationPercent = 0;
+            HasCurrentOperationProgress = false;
+        }
+    }
+
     private void ApplyRecommendedImageFilePattern()
     {
         if (!CanApplyRecommendedImageFilePattern()) return;
@@ -3143,6 +3576,26 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             Error = $"恢复 N.I.N.A. 图像文件模板失败：{ex.Message}";
         }
         RefreshImageFilePatternDisplay();
+    }
+
+    private void OnLocaleChanged(object? sender, EventArgs e)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        void Refresh()
+        {
+            ObservationStaticTextLocalization.SetCulture(UiCulture);
+            Title = ObservationUiPresentation.Text(
+                "OpenAstroSpec 自动观测",
+                "OpenAstroSpec Automation",
+                UiCulture);
+            ApplyDashboard(host.Dashboard);
+            // Computed labels such as mode descriptions and preparation
+            // summaries are re-read using the active N.I.N.A. UI language.
+            RaisePropertyChanged(string.Empty);
+        }
+
+        if (dispatcher is null || dispatcher.CheckAccess()) Refresh();
+        else _ = dispatcher.BeginInvoke(Refresh);
     }
 
     private void OnProfileChanged(object? sender, EventArgs e)
@@ -3251,14 +3704,32 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             !gate.Metrics.TryGetValue("phd2CalibrationGrade", out var numericGrade) ||
             !double.IsFinite(numericGrade))
         {
-            Phd2CalibrationGradeText = gate is null ? "尚未评估" : "尚未获得 PostSettle 权限";
+            Phd2CalibrationGradeText = gate is null
+                ? ObservationUiPresentation.Text("尚未评估", "Not evaluated", UiCulture)
+                : ObservationUiPresentation.Text("尚未获得稳定后权限", "Post-settle authority unavailable", UiCulture);
             Phd2CalibrationOverviewGradeText = Phd2CalibrationGradeText;
-            Phd2CalibrationPermissionText = "验证导星：等待 · exact-lock：等待 · 无人值守科学：否";
-            Phd2CalibrationScaleText = "步长/残差缩放：等待 PostSettle 证据";
-            Phd2CalibrationReasonText = gate?.Message ?? "当前生产路径只评估 PHD2 当前 active calibration（单候选，并非历史择优）；本轮真实 settle 和 fresh residual 到齐后才授予 exact-lock 或科学权限。";
+            Phd2CalibrationPermissionText = ObservationUiPresentation.Text(
+                "验证导星：等待 · 精确锁点：等待 · 无人值守科学：否",
+                "Validation guiding: waiting · exact lock: waiting · unattended science: no",
+                UiCulture);
+            Phd2CalibrationScaleText = ObservationUiPresentation.Text(
+                "步长/残差缩放：等待稳定后证据",
+                "Step/residual scaling: waiting for post-settle evidence",
+                UiCulture);
+            Phd2CalibrationReasonText = gate is null
+                ? ObservationUiPresentation.Text(
+                    "当前生产路径只评估 PHD2 当前使用的校准（单候选，并非历史择优）；本轮真实稳定判定和新采残差到齐后才授予精确锁点或科学权限。",
+                    "The production route evaluates only the active PHD2 calibration (one candidate, not history ranking); exact-lock or science authority waits for this run's settle and fresh residual.",
+                    UiCulture)
+                : ObservationUiPresentation.EventMessage(
+                    ObservationStage.StartGuiding,
+                    gate.Code,
+                    gate.Message,
+                    UiCulture,
+                    isAttention: gate.Disposition != GateDisposition.Passed);
             Phd2CalibrationOverviewText = gate is null
-                ? "启动导星后自动评估；评估前不执行精调或科学曝光。"
-                : "等待本轮导星稳定和新的入缝残差；暂不继续精调或科学曝光。";
+                ? ObservationUiPresentation.Text("启动导星后自动评估；评估前不执行精调或科学曝光。", "Evaluated after guiding starts; no fine placement or science exposure is allowed beforehand.", UiCulture)
+                : ObservationUiPresentation.Text("等待本轮导星稳定和新的入缝残差；暂不继续精调或科学曝光。", "Waiting for this run's guiding settle and fresh slit residual; fine placement and science remain withheld.", UiCulture);
             return;
         }
 
@@ -3266,26 +3737,49 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         var grade = Enum.IsDefined(typeof(Phd2CalibrationQualityGrade), gradeValue)
             ? (Phd2CalibrationQualityGrade?)gradeValue
             : null;
-        Phd2CalibrationGradeText = grade?.ToString() ?? $"未知等级 {numericGrade:G4}";
+        Phd2CalibrationGradeText = grade switch
+        {
+            Phd2CalibrationQualityGrade.Excellent => ObservationUiPresentation.Text("优秀（Excellent）", "Excellent", UiCulture),
+            Phd2CalibrationQualityGrade.Qualified => ObservationUiPresentation.Text("合格（Qualified）", "Qualified", UiCulture),
+            Phd2CalibrationQualityGrade.DegradedSupervised => ObservationUiPresentation.Text("降级（需人工监督）", "Degraded (supervision required)", UiCulture),
+            Phd2CalibrationQualityGrade.Rejected => ObservationUiPresentation.Text("不可用（Rejected）", "Rejected", UiCulture),
+            _ => ObservationUiPresentation.Text($"未知等级 {numericGrade:G4}", $"Unknown grade {numericGrade:G4}", UiCulture),
+        };
         Phd2CalibrationOverviewGradeText = grade switch
         {
-            Phd2CalibrationQualityGrade.Excellent => "优秀",
-            Phd2CalibrationQualityGrade.Qualified => "合格",
-            Phd2CalibrationQualityGrade.DegradedSupervised => "降级（需人工监督）",
-            Phd2CalibrationQualityGrade.Rejected => "不可用",
-            _ => "未知等级",
+            Phd2CalibrationQualityGrade.Excellent => ObservationUiPresentation.Text("优秀", "Excellent", UiCulture),
+            Phd2CalibrationQualityGrade.Qualified => ObservationUiPresentation.Text("合格", "Qualified", UiCulture),
+            Phd2CalibrationQualityGrade.DegradedSupervised => ObservationUiPresentation.Text("降级（需人工监督）", "Degraded (supervision required)", UiCulture),
+            Phd2CalibrationQualityGrade.Rejected => ObservationUiPresentation.Text("不可用", "Rejected", UiCulture),
+            _ => ObservationUiPresentation.Text("未知等级", "Unknown grade", UiCulture),
         };
         Phd2CalibrationPermissionText =
-            $"验证导星：{Permission(gate.Metrics, "phd2CanAttemptValidationGuide")} · " +
-            $"exact-lock：{Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
-            $"无人值守科学：{Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}";
-        Phd2CalibrationScaleText =
+            ObservationUiPresentation.Text(
+                $"验证导星：{Permission(gate.Metrics, "phd2CanAttemptValidationGuide")} · " +
+                $"精确锁点：{Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
+                $"无人值守科学：{Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}",
+                $"Validation guiding: {Permission(gate.Metrics, "phd2CanAttemptValidationGuide")} · " +
+                $"exact lock: {Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
+                $"unattended science: {Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}",
+                UiCulture);
+        Phd2CalibrationScaleText = ObservationUiPresentation.Text(
             $"步长缩放：{Metric(gate.Metrics, "phd2MaximumLockShiftScale")} · " +
-            $"残差门缩放：{Metric(gate.Metrics, "phd2RequiredResidualToleranceScale")}";
-        Phd2CalibrationReasonText = gate.Message;
-        Phd2CalibrationOverviewText =
+            $"残差门缩放：{Metric(gate.Metrics, "phd2RequiredResidualToleranceScale")}",
+            $"Step scaling: {Metric(gate.Metrics, "phd2MaximumLockShiftScale")} · " +
+            $"residual-gate scaling: {Metric(gate.Metrics, "phd2RequiredResidualToleranceScale")}",
+            UiCulture);
+        Phd2CalibrationReasonText = ObservationUiPresentation.EventMessage(
+            ObservationStage.StartGuiding,
+            gate.Code,
+            gate.Message,
+            UiCulture,
+            isAttention: gate.Disposition != GateDisposition.Passed);
+        Phd2CalibrationOverviewText = ObservationUiPresentation.Text(
             $"精确入缝：{Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
-            $"无人值守拍摄：{Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}";
+            $"无人值守拍摄：{Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}",
+            $"Exact slit placement: {Permission(gate.Metrics, "phd2IsLockShiftAuthority")} · " +
+            $"unattended imaging: {Permission(gate.Metrics, "phd2IsUnattendedScienceAuthority")}",
+            UiCulture);
     }
 
     private IReadOnlyList<string> ValidateCommissioningPresetUiRequirements()
@@ -3540,15 +4034,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         return normalized.Length >= 12 ? normalized[..12] : normalized;
     }
 
-    private static string Permission(IReadOnlyDictionary<string, double> metrics, string key) =>
+    private string Permission(IReadOnlyDictionary<string, double> metrics, string key) =>
         metrics.TryGetValue(key, out var value) && double.IsFinite(value)
-            ? value >= 0.5 ? "是" : "否"
-            : "未知";
+            ? value >= 0.5
+                ? ObservationUiPresentation.Text("是", "yes", UiCulture)
+                : ObservationUiPresentation.Text("否", "no", UiCulture)
+            : ObservationUiPresentation.Text("未知", "unknown", UiCulture);
 
-    private static string Metric(IReadOnlyDictionary<string, double> metrics, string key) =>
+    private string Metric(IReadOnlyDictionary<string, double> metrics, string key) =>
         metrics.TryGetValue(key, out var value) && double.IsFinite(value)
             ? value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
-            : "未知";
+            : ObservationUiPresentation.Text("未知", "unknown", UiCulture);
 
     private void ImportCommissioningBindings()
     {
@@ -3750,38 +4246,20 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private static bool PathExists(string path) =>
         !string.IsNullOrWhiteSpace(path) && (File.Exists(path) || Directory.Exists(path));
 
-    private static string FormatMetrics(IReadOnlyDictionary<string, double>? metrics)
-    {
-        if (metrics is null || metrics.Count == 0) return "—";
-        return string.Join(
-            " · ",
-            metrics.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => $"{pair.Key}={pair.Value:0.####}"));
-    }
+    private static string DisplayGateMessage(
+        ObservationStage stage,
+        GateResult gate,
+        CultureInfo culture) =>
+        ObservationUiPresentation.Present(stage, gate, culture).Summary;
 
-    private static string GateDisplayName(GateDisposition disposition) => disposition switch
+    private static ObservationUiTone GateTone(GateResult? gate) => gate switch
     {
-        GateDisposition.Passed => "通过",
-        GateDisposition.Failed => "失败/已暂停",
-        GateDisposition.Indeterminate => "不确定/已暂停",
-        _ => disposition.ToString(),
-    };
-
-    private static string RunStateDisplayName(ObservationRunState state) => state switch
-    {
-        ObservationRunState.Idle => "空闲",
-        ObservationRunState.Validating => "正在验证",
-        ObservationRunState.RunningAuto => "自动推进",
-        ObservationRunState.PauseRequested => "请求暂停（等待有界动作结束）",
-        ObservationRunState.Paused => "已暂停",
-        ObservationRunState.PausedNeedsAttention => "质量门失败，等待人工处理",
-        ObservationRunState.ManualTakeover => "人工接管",
-        ObservationRunState.Cancelling => "正在取消",
-        ObservationRunState.Finalizing => "正在持久化最终清单",
-        ObservationRunState.Completed => "已完成",
-        ObservationRunState.Cancelled => "已取消",
-        ObservationRunState.Faulted => "故障",
-        _ => state.ToString(),
+        null => ObservationUiTone.Neutral,
+        { Disposition: GateDisposition.Passed, Severity: GateSeverity.Warning } => ObservationUiTone.Warning,
+        { Disposition: GateDisposition.Passed } => ObservationUiTone.Success,
+        { Disposition: GateDisposition.Failed } => ObservationUiTone.Fault,
+        { Disposition: GateDisposition.Indeterminate } => ObservationUiTone.Attention,
+        _ => ObservationUiTone.Neutral,
     };
 }
 
@@ -3795,13 +4273,16 @@ public sealed record ObservationGateRow(
     string State,
     string Code,
     string Message,
+    string TechnicalMessage,
     string Metrics,
-    GateDisposition Disposition)
+    GateDisposition Disposition,
+    GateSeverity Severity,
+    ObservationUiTone Tone)
 {
     public bool HasDetails =>
         !string.Equals(Code, "—", StringComparison.Ordinal) ||
-        !string.Equals(Message, "尚未执行", StringComparison.Ordinal) ||
         !string.Equals(Metrics, "—", StringComparison.Ordinal);
+    public bool HasTechnicalDetails => !string.IsNullOrWhiteSpace(TechnicalMessage);
 }
 
 public sealed record ObservationTimelineRow(
@@ -3809,9 +4290,11 @@ public sealed record ObservationTimelineRow(
     string Stage,
     string Code,
     string Message,
+    string TechnicalMessage,
     string EvidencePath)
 {
     public bool HasEvidence => !string.IsNullOrWhiteSpace(EvidencePath);
+    public bool HasTechnicalDetails => !string.IsNullOrWhiteSpace(TechnicalMessage);
 }
 
 public sealed record ObservationEvidenceRow(

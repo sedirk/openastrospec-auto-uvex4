@@ -50,10 +50,9 @@ public sealed class XamlBindingSafetyTests
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
 
-        Assert.Contains(
-            "Header=\"超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）\" IsExpanded=\"False\"",
-            xaml,
-            StringComparison.Ordinal);
+        Assert.Matches(
+            "Header=\"超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）\"[^>]*IsExpanded=\"False\"",
+            xaml);
         Assert.DoesNotContain(
             "IsExpanded=\"{Binding BrightTargetWingCentroidEnabled",
             xaml,
@@ -120,15 +119,22 @@ public sealed class XamlBindingSafetyTests
         Assert.DoesNotContain("MinWidth=\"920\"", dock, StringComparison.Ordinal);
         Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", dock, StringComparison.Ordinal);
         Assert.StartsWith("x:Key=\"UvexAdv.Nina.Plugin.ObservationDockable_Dockable\">\r\n    <Grid", dock.Replace("\n", "\r\n", StringComparison.Ordinal).Replace("\r\r\n", "\r\n", StringComparison.Ordinal), StringComparison.Ordinal);
-        Assert.Contains("Content=\"模拟自动观测\"", dock, StringComparison.Ordinal);
-        Assert.Contains("Content=\"真实自动观测\"", dock, StringComparison.Ordinal);
-        Assert.Contains("Content=\"UVEX 设备手控\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"模拟\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"真实\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"设备手控\"", dock, StringComparison.Ordinal);
         Assert.Contains("StartSelectedModeCommand", dock, StringComparison.Ordinal);
-        Assert.Contains("Header=\"失败诊断\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"新开一轮\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding RestartWithCurrentConfigurationCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("不会把新设置热替换进旧运行", dock, StringComparison.Ordinal);
+        Assert.Contains("Header=\"诊断与证据\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Header=\"当前问题\"", dock, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"RealModeStartupSummary\"", dock, StringComparison.Ordinal);
         Assert.Contains("Text=\"{Binding RealModeStatusSummary}\"", dock, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding ShowObservationPlanCommand}\"", dock, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding ShowStartupRequirementsCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"保存当前高级设置\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding SaveAdvancedSettingsCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Text=\"{Binding AdvancedSettingsSaveStatus}\"", dock, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"RealModeStartupDetails\"", dock, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(dock, "Text=\\\"\\{Binding RealModeStatus\\}\\\"", RegexOptions.CultureInvariant).Cast<Match>());
         var overviewTabStart = dock.IndexOf("<TabItem Header=\"运行概览\">", StringComparison.Ordinal);
@@ -136,7 +142,7 @@ public sealed class XamlBindingSafetyTests
         var planTabStart = dock.IndexOf("<TabItem Header=\"观测计划\">", manualTabStart, StringComparison.Ordinal);
         var preparationTabStart = dock.IndexOf("<TabItem Header=\"自动准备\">", planTabStart, StringComparison.Ordinal);
         var realtimeTabStart = dock.IndexOf("<TabItem Header=\"实时图像\">", preparationTabStart, StringComparison.Ordinal);
-        var failureTabStart = dock.IndexOf("<TabItem Header=\"失败诊断\">", realtimeTabStart, StringComparison.Ordinal);
+        var failureTabStart = dock.IndexOf("<TabItem Header=\"诊断与证据\">", realtimeTabStart, StringComparison.Ordinal);
         var advancedTabStart = dock.IndexOf("<TabItem Header=\"高级设置\">", failureTabStart, StringComparison.Ordinal);
         Assert.True(
             overviewTabStart >= 0 &&
@@ -198,7 +204,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("站点、40° 围墙与模拟速度", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("HasNoFailure", dock, StringComparison.Ordinal);
         Assert.Contains("HasFailure", dock, StringComparison.Ordinal);
-        Assert.Contains("当前没有失败或待处理质量门", dock, StringComparison.Ordinal);
+        Assert.Contains("当前没有错误或待处理证据门", dock, StringComparison.Ordinal);
         Assert.Contains("TargetType=\"ListBox\"", dock, StringComparison.Ordinal);
         Assert.Contains("Value=\"#0F172A\"", dock, StringComparison.Ordinal);
         Assert.Contains("QHY 广域 / 解算", dock, StringComparison.Ordinal);
@@ -223,7 +229,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("Points=\"{Binding ManualSpectrumPoints}\"", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("Content=\"影子采集\"", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("UvexAdv.Nina.Plugin.UvexDockable_Dockable", xaml, StringComparison.Ordinal);
-        Assert.Contains("当前没有失败或待处理质量门", dock, StringComparison.Ordinal);
+        Assert.Contains("当前没有错误或待处理证据门", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("没有需要检查的失败图像", dock, StringComparison.Ordinal);
 
         foreach (Match button in Regex.Matches(dock, "<Button\\b(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))

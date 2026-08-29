@@ -1,3 +1,4 @@
+using UvexAdv.Nina.Plugin;
 using UvexAdv.Nina.Plugin.UiHarness;
 
 namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
@@ -9,10 +10,13 @@ public sealed class ScenarioCatalogTests
     {
         var scenarios = ScenarioCatalog.Select(null);
 
-        Assert.Equal(["idle", "uvex-manual", "startup-requirements", "running", "atr-manual", "failure", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
+        Assert.Equal(["idle", "uvex-manual", "startup-requirements", "running", "recovering", "atr-manual", "failure", "failure-en", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced"], scenarios.Select(item => item.Name));
+        Assert.Equal("zh-CN", scenarios.Single(item => item.Name == "failure").Culture.Name);
+        Assert.Equal("en-US", scenarios.Single(item => item.Name == "failure-en").Culture.Name);
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);
         Assert.False(scenarios.Single(item => item.Name == "idle").ViewModel.HasFailure);
         Assert.True(scenarios.Single(item => item.Name == "running").ViewModel.IsRunActive);
+        Assert.Equal(ObservationUiTone.Recovering, scenarios.Single(item => item.Name == "recovering").ViewModel.RunTone);
         var atrManual = scenarios.Single(item => item.Name == "atr-manual").ViewModel;
         Assert.Equal(4, atrManual.SelectedWorkspaceTabIndex);
         Assert.Equal(2, atrManual.SelectedPreviewTabIndex);
@@ -36,7 +40,7 @@ public sealed class ScenarioCatalogTests
         Assert.False(manual.SelectManualSlit1Command.CanExecute(null));
         Assert.True(manual.ReleaseManualUvexComPortCommand.CanExecute(null));
         var advanced = scenarios.Single(item => item.Name == "advanced").ViewModel;
-        Assert.Equal(7, advanced.SelectedWorkspaceTabIndex);
+        Assert.Equal(6, advanced.SelectedWorkspaceTabIndex);
         Assert.True(advanced.BrightTargetWingCentroidEnabled);
         Assert.True(advanced.BrightTargetMinimumG3ExposureMilliseconds > 0);
         var degraded = scenarios.Single(item => item.Name == "phd2-degraded").ViewModel;
@@ -59,7 +63,7 @@ public sealed class ScenarioCatalogTests
         Assert.Contains("不能建立身份或授权运动", ghost.GhostDecisionText, StringComparison.Ordinal);
         var fastPair = scenarios.Single(item => item.Name == "qhy-g3-fast-pair").ViewModel;
         Assert.True(fastPair.QhyG3FastPairEnabled);
-        Assert.Equal(7, fastPair.SelectedWorkspaceTabIndex);
+        Assert.Equal(6, fastPair.SelectedWorkspaceTabIndex);
         Assert.Contains("0 次赤道仪命令", fastPair.QhyG3FastPairStatus, StringComparison.Ordinal);
         Assert.Contains("Candidate", fastPair.WideToSlitTransferStatus, StringComparison.Ordinal);
     }

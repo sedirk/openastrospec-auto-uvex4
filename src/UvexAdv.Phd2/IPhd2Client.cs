@@ -99,6 +99,9 @@ public interface IPhd2Client : IAsyncDisposable
     /// Delegates full-frame guide-star selection to PHD2's native
     /// <c>find_star</c> implementation. The caller may apply acceptance gates
     /// to the returned selection, but does not rank or substitute candidates.
+    /// A successful RPC response with no candidate is reported as
+    /// <see cref="Phd2NoGuideStarException"/>; connection, protocol and RPC
+    /// failures retain their original exception types.
     /// </summary>
     Task<Phd2Point> FindGuideStarAsync(CancellationToken cancellationToken);
 
@@ -125,6 +128,17 @@ public interface IPhd2Client : IAsyncDisposable
     Task<Phd2Point?> GetLockPositionAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Repeats only the read-only <c>get_lock_position</c> RPC while the caller's
+    /// connected Guiding epoch remains current.  It never retries or issues a
+    /// guide, selection, stop, or exact-lock mutation.
+    /// </summary>
+    Task<Phd2SameEpochLockReadback> GetLockPositionWithSameEpochRetryAsync(
+        long expectedConnectionEpoch,
+        long expectedGuideEpoch,
+        int maximumAttempts,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Applies one explicitly bounded runtime lock-position stage with
     /// <c>exact=true</c>, then verifies the value with a fresh
     /// <c>get_lock_position</c>. The method never retries an ambiguous set.
@@ -148,6 +162,20 @@ public interface IPhd2Client : IAsyncDisposable
         Phd2SettleCriteria criteria,
         bool forceRecalibration,
         Phd2Rectangle? selectionRoi,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Starts guiding with the same bounded ROI contract, but permits a caller
+    /// to retain an already-live same-epoch Guiding session when PHD2 never
+    /// publishes SettleDone before the local event deadline.  The returned
+    /// result remains unsuccessful; only fresh caller-owned guiding evidence
+    /// may downgrade that timeout to supervised use.
+    /// </summary>
+    Task<Phd2SettleResult> GuideAndSettleAsync(
+        Phd2SettleCriteria criteria,
+        bool forceRecalibration,
+        Phd2Rectangle? selectionRoi,
+        bool preserveSameEpochGuidingOnSettleTimeout,
         CancellationToken cancellationToken);
 
     Task<Phd2StopCaptureResult> StopCaptureAndConfirmAsync(CancellationToken cancellationToken);

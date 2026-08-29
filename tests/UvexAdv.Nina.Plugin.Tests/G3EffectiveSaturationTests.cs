@@ -198,6 +198,23 @@ public sealed class G3EffectiveSaturationTests
         Assert.Contains("G3.SaturationAdu", differenceSummary, StringComparison.Ordinal);
 
         settings.G3SaturationAdu = UvexPluginSettings.G3M2210mDefaultSaturationAdu;
+        var ordinaryTargetLocked = RealRunConfiguration.Capture(settings, solver);
+        Assert.False(ordinaryTargetLocked.G3.EffectiveBrightTarget.Enabled);
+
+        settings.BrightTargetWingCentroidEnabled = true;
+
+        Assert.False(ordinaryTargetLocked.MatchesCurrentProfile(
+            settings,
+            solver,
+            string.Empty,
+            out var brightTargetHash,
+            out var brightTargetDifference));
+        Assert.NotEqual(ordinaryTargetLocked.ActionConfigurationSha256, brightTargetHash);
+        Assert.Contains("G3.BrightTarget.Enabled", brightTargetDifference, StringComparison.Ordinal);
+        Assert.False(ordinaryTargetLocked.G3.EffectiveBrightTarget.Enabled);
+        Assert.True(RealRunConfiguration.Capture(settings, solver).G3.EffectiveBrightTarget.Enabled);
+
+        settings.BrightTargetWingCentroidEnabled = false;
         settings.QhyCoarseMaximumSingleCorrectionArcseconds = 600;
         settings.QhyCoarseMaximumCumulativeCorrectionArcseconds = 2400;
         settings.QhyCoarseMaximumCorrectionAttempts = 8;
@@ -280,11 +297,16 @@ public sealed class G3EffectiveSaturationTests
         Assert.Equal(locked, captured);
     }
 
-    [Fact]
-    public void HardwareG3DefaultsFreezeTenSecondsFullGainAndSeparateRuntimeNames()
+    [Theory]
+    [InlineData("2000,5000,10000,15000,30000", 0)]
+    [InlineData("2000,5000,10000,15000", 1)]
+    public void HardwareG3DefaultsFreezeTenSecondsFullGainAndSeparateRuntimeNames(
+        string retiredExposureLadder,
+        int migrationVersion)
     {
         var values = new Dictionary<string, object?>(StringComparer.Ordinal);
-        values[nameof(UvexPluginSettings.G3PlateSolveExposureMillisecondsCsv)] = "2000,5000,10000,15000,30000";
+        values[nameof(UvexPluginSettings.G3PlateSolveExposureMillisecondsCsv)] = retiredExposureLadder;
+        values["G3PlateSolveEfficiencySemanticsVersion"] = migrationVersion;
         var accessor = CreateProxy<IPluginOptionsAccessor>((method, arguments) =>
         {
             var name = (string)arguments[0]!;
@@ -317,13 +339,13 @@ public sealed class G3EffectiveSaturationTests
 
         Assert.Equal(60, settings.ObservationDurationMinutes);
         Assert.Equal(10_000, settings.G3ExposureMilliseconds);
-        Assert.Equal(new[] { 2_000, 5_000, 10_000, 15_000 }, settings.ParseG3PlateSolveExposureLadder());
+        Assert.Equal(new[] { 5_000, 10_000, 15_000 }, settings.ParseG3PlateSolveExposureLadder());
         Assert.Equal(100, settings.G3GainPercent);
         Assert.Equal(60, settings.G3WcsFreshSolveAuthorizationResidualArcseconds);
         Assert.Equal("G3M2210M", settings.Phd2RuntimeCameraName);
         Assert.Equal("On-Step (ASCOM)", settings.Phd2RuntimeMountName);
         Assert.Equal(WideToSlitTransferMode.Skip, settings.WideToSlitTransferMode);
-        Assert.False(settings.QhyG3FastPairEnabled);
+        Assert.True(settings.QhyG3FastPairEnabled);
         Assert.Equal(QhyG3FastPairPolicy.CurrentSchemaVersion, settings.QhyG3FastPairSchemaVersion);
         Assert.Equal(2, settings.QhyG3FastPairExposureSeconds);
         Assert.Equal(QhyCoarseCenteringLimits.CurrentSchemaVersion, settings.QhyCoarseCenteringSchemaVersion);

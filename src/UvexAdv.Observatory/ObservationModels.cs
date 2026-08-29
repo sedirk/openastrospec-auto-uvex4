@@ -40,6 +40,18 @@ public enum GateDisposition
     Indeterminate
 }
 
+/// <summary>
+/// Describes operator impact independently from whether the state machine may
+/// advance.  In particular, a Warning is an explicit, persisted downgrade: it
+/// advances the run, while remaining visible in the dashboard and manifest.
+/// </summary>
+public enum GateSeverity
+{
+    Info,
+    Warning,
+    Error,
+}
+
 public sealed record EquatorialTarget(
     string Name,
     string CatalogId,
@@ -137,16 +149,20 @@ public sealed record GateResult(
     string Code,
     GateDisposition Disposition,
     string Message,
-    IReadOnlyDictionary<string, double>? Metrics = null)
+    IReadOnlyDictionary<string, double>? Metrics = null,
+    GateSeverity Severity = GateSeverity.Info)
 {
     public static GateResult Pass(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
-        new(code, GateDisposition.Passed, message, metrics);
+        new(code, GateDisposition.Passed, message, metrics, GateSeverity.Info);
+
+    public static GateResult Warn(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
+        new(code, GateDisposition.Passed, message, metrics, GateSeverity.Warning);
 
     public static GateResult Fail(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
-        new(code, GateDisposition.Failed, message, metrics);
+        new(code, GateDisposition.Failed, message, metrics, GateSeverity.Error);
 
     public static GateResult Unknown(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
-        new(code, GateDisposition.Indeterminate, message, metrics);
+        new(code, GateDisposition.Indeterminate, message, metrics, GateSeverity.Error);
 }
 
 public sealed record StageResult(

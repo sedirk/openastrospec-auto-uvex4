@@ -54,6 +54,7 @@ public sealed class ObservationAutomationPolicyTests
             allowWeakSupervision: true);
 
         Assert.Equal(GateDisposition.Passed, result.Disposition);
+        Assert.Equal(GateSeverity.Warning, result.Severity);
         Assert.Equal("WEAK_SUPERVISION_CAPABILITIES_DECLARED", result.Code);
         Assert.Contains("not unattended", result.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -69,6 +70,21 @@ public sealed class ObservationAutomationPolicyTests
 
         Assert.Equal(GateDisposition.Indeterminate, result.Disposition);
         Assert.Equal("ROOF_STATE_UNKNOWN", result.Code);
+    }
+
+    [Fact]
+    public void ImmediateActionCompositionPreservesWarningWithoutBlockingAction()
+    {
+        var result = ObservationAutomationPolicy.CombineImmediateActionGates(
+            GateResult.Warn("WEATHER_ADVISORY", "high humidity"),
+            GateResult.Pass("ROOF", "roof open"),
+            GateResult.Pass("CLOCK", "clock valid"),
+            GateResult.Pass("COVER", "cover open"));
+
+        Assert.Equal(GateDisposition.Passed, result.Disposition);
+        Assert.Equal(GateSeverity.Warning, result.Severity);
+        Assert.Equal("IMMEDIATE_PHYSICAL_ACTION_GATES_VALID_WITH_WARNINGS", result.Code);
+        Assert.Contains("high humidity", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

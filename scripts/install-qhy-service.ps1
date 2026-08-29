@@ -42,7 +42,6 @@ if (-not $installDirectory.StartsWith($installRoot + [IO.Path]::DirectorySeparat
 }
 $dataDirectory = Join-Path $env:ProgramData 'UVEX-ADV\qhy'
 $configurationPath = Join-Path $dataDirectory 'appsettings.json'
-$expectedSha256 = '5F0957E29FF510F19FA5DE8688162FB4B9F4562B0B79B693DCBB9377BF281D14'
 if ($EnableHardware) {
     if ([string]::IsNullOrWhiteSpace($HardwareConfigurationPath)) {
         throw '-EnableHardware requires -HardwareConfigurationPath pointing to an explicit machine-local JSON configuration. The tracked qhy.production.json is an intentionally non-runnable example.'
@@ -75,15 +74,20 @@ if ($EnableHardware) {
         $selectedStableId.IndexOf('placeholder', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
         throw "Hardware configuration '$sourceConfiguration' contains a missing or placeholder Qhy:ExpectedStableId. Supply the exact commissioned machine-local identity."
     }
-    if ($selectedSdkSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or $selectedSdkSha256 -ne $expectedSha256) {
-        throw "Hardware configuration '$sourceConfiguration' must bind Qhy:NativeSdkSha256 to the pinned SDK hash $expectedSha256."
+    if ($selectedSdkSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "Hardware configuration '$sourceConfiguration' must bind Qhy:NativeSdkSha256 to the commissioned 64-character vendor SDK hash."
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $VendorSdkDirectory 'qhyccd.dll'))) {
+    $vendorSdkPath = [IO.Path]::GetFullPath((Join-Path $VendorSdkDirectory 'qhyccd.dll'))
+    $configuredSdkPath = [IO.Path]::GetFullPath([string]$selectedConfiguration.Qhy.NativeSdkPath)
+    if (-not $configuredSdkPath.Equals($vendorSdkPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Hardware configuration '$sourceConfiguration' must reference the shared official QHY AllInOne SDK '$vendorSdkPath', not a private service copy."
+    }
+    if (-not (Test-Path -LiteralPath $vendorSdkPath)) {
         throw "The pinned vendor SDK was not found at '$VendorSdkDirectory'."
     }
-    $actualSha256 = (Get-FileHash -LiteralPath (Join-Path $VendorSdkDirectory 'qhyccd.dll') -Algorithm SHA256).Hash
-    if ($actualSha256 -ne $expectedSha256) {
-        throw "QHY SDK hash mismatch. Expected $expectedSha256, received $actualSha256. Review and version the new SDK before enabling hardware."
+    $actualSha256 = (Get-FileHash -LiteralPath $vendorSdkPath -Algorithm SHA256).Hash
+    if ($actualSha256 -ne $selectedSdkSha256) {
+        throw "QHY SDK hash mismatch. Expected $selectedSdkSha256, received $actualSha256. Review and commission the complete official AllInOne installation before enabling hardware."
     }
 }
 elseif (-not [bool]$selectedConfiguration.Qhy.Simulator) {
@@ -103,12 +107,9 @@ New-Item -ItemType Directory -Force $stagingDirectory | Out-Null
 try {
     Copy-Item -Path (Join-Path $ArtifactDirectory '*') -Destination $stagingDirectory -Recurse -Force
     if ($EnableHardware) {
-        $stagedNativeDirectory = Join-Path $stagingDirectory 'native'
-        New-Item -ItemType Directory -Force $stagedNativeDirectory | Out-Null
-        Copy-Item -Path (Join-Path $VendorSdkDirectory '*') -Destination $stagedNativeDirectory -Recurse -Force
-        $stagedSdkSha256 = (Get-FileHash -LiteralPath (Join-Path $stagedNativeDirectory 'qhyccd.dll') -Algorithm SHA256).Hash
-        if ($stagedSdkSha256 -ne $expectedSha256) {
-            throw "Staged QHY SDK hash mismatch. Expected $expectedSha256, received $stagedSdkSha256."
+        $privateSdkPath = Join-Path $stagingDirectory 'native\qhyccd.dll'
+        if (Test-Path -LiteralPath $privateSdkPath) {
+            throw "QHY service artifacts must not bundle a private native\qhyccd.dll. Install the complete official AllInOne package and reference its shared x64 SDK."
         }
     }
     foreach ($requiredFile in @($executableName, 'UvexAdv.Qhy.Service.dll', 'UvexAdv.Qhy.Core.dll')) {
@@ -148,7 +149,13 @@ New-Item -ItemType Directory -Force $dataDirectory | Out-Null
 
 # Installation mode is an explicit operator choice. Replace the machine configuration
 # so that a stale simulator/real-hardware setting cannot silently defeat that choice.
-Copy-Item -LiteralPath $sourceConfiguration -Destination $configurationPath -Force
+# A maintenance update may deliberately edit the installed machine configuration in
+# place and pass that same file back through this installer; do not copy a file onto
+# itself in that case.
+$resolvedConfigurationPath = [IO.Path]::GetFullPath($configurationPath)
+if (-not $sourceConfiguration.Equals($resolvedConfigurationPath, [StringComparison]::OrdinalIgnoreCase)) {
+    Copy-Item -LiteralPath $sourceConfiguration -Destination $configurationPath -Force
+}
 
 $aclOutput = & icacls.exe $dataDirectory /grant '*S-1-5-18:(OI)(CI)F' /T 2>&1
 if ($LASTEXITCODE -ne 0) {

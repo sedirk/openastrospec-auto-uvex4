@@ -50,6 +50,66 @@ public sealed class BrightTargetCentroidAnalysisTests
     }
 
     [Fact]
+    public void HollowAnnularGhostCannotBecomeTheOnlyBrightTarget()
+    {
+        var frame = SyntheticAnnularFrame(220, 170, 110, 85, 14, 2.5, 180_000);
+
+        var result = BrightTargetWingCentroidAnalyzer.Analyze(frame);
+
+        Assert.Equal(GateDisposition.Indeterminate, result.Gate.Disposition);
+        Assert.Equal("BRIGHT_TARGET_ONLY_ANNULAR_GHOSTS", result.Gate.Code);
+        Assert.Null(result.Target);
+        var ghost = Assert.Single(result.Candidates);
+        Assert.Equal(SaturatedSourceTopology.AnnularGhost, ghost.SaturatedTopology);
+        Assert.Equal("BRIGHT_TARGET_ANNULAR_GHOST_REJECTED", ghost.Gate.Code);
+        Assert.InRange(ghost.CentralSaturationFraction, 0, 0.15);
+        Assert.True(ghost.AnnularSaturationFraction >= 0.35);
+    }
+
+    [Fact]
+    public void IndeterminateSaturatedTopologyCannotBecomeTheOnlyBrightTarget()
+    {
+        const int width = 220, height = 170;
+        const ushort saturation = 60_000;
+        var pixels = Enumerable.Repeat((ushort)1_000, width * height).ToArray();
+        pixels[85 * width + 110] = saturation;
+        pixels[85 * width + 111] = saturation;
+        pixels[86 * width + 110] = saturation;
+        var frame = new MonochromeFrame(width, height, pixels, saturation);
+
+        var result = BrightTargetWingCentroidAnalyzer.Analyze(frame);
+
+        Assert.Equal(GateDisposition.Indeterminate, result.Gate.Disposition);
+        Assert.Equal("BRIGHT_TARGET_TOPOLOGY_UNPROVEN", result.Gate.Code);
+        Assert.Null(result.Target);
+        var candidate = Assert.Single(result.Candidates);
+        Assert.Equal(SaturatedSourceTopology.Indeterminate, candidate.SaturatedTopology);
+        Assert.Equal("BRIGHT_TARGET_TOPOLOGY_INDETERMINATE", candidate.Gate.Code);
+    }
+
+    [Fact]
+    public void FilledCoreWinsEvenWhenAnnularGhostHasMoreWingFlux()
+    {
+        var solid = SyntheticFrame(300, 180, [(75d, 90d, 120_000d, 6.5)]);
+        var pixels = new ushort[solid.Width * solid.Height];
+        for (var y = 0; y < solid.Height; y++)
+        for (var x = 0; x < solid.Width; x++)
+            pixels[y * solid.Width + x] = solid[x, y];
+        AddAnnularGhost(pixels, solid.Width, solid.Height, 225, 90, 14, 2.5, 220_000, solid.SaturationLevel);
+        var frame = new MonochromeFrame(solid.Width, solid.Height, pixels, solid.SaturationLevel);
+
+        var result = BrightTargetWingCentroidAnalyzer.Analyze(frame);
+
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.NotNull(result.Target);
+        Assert.Equal(SaturatedSourceTopology.SolidStellarCore, result.Target!.SaturatedTopology);
+        Assert.InRange(result.Target.Centroid.X, 74.5, 75.5);
+        Assert.Contains(result.Candidates, candidate =>
+            candidate.SaturatedTopology == SaturatedSourceTopology.AnnularGhost &&
+            candidate.Gate.Code == "BRIGHT_TARGET_ANNULAR_GHOST_REJECTED");
+    }
+
+    [Fact]
     public void EdgeTruncatedSaturatedSourceIsRejected()
     {
         var frame = SyntheticFrame(180, 140, [(20d, 70d, 120_000d, 6d)]);
@@ -193,5 +253,42 @@ public sealed class BrightTargetCentroidAnalysisTests
             pixels[y * width + x] = (ushort)Math.Clamp(Math.Round(value), 0, saturation);
         }
         return new MonochromeFrame(width, height, pixels, saturation);
+    }
+
+    private static MonochromeFrame SyntheticAnnularFrame(
+        int width,
+        int height,
+        double centerX,
+        double centerY,
+        double radius,
+        double sigma,
+        double amplitude)
+    {
+        const ushort saturation = 60_000;
+        var pixels = Enumerable.Repeat((ushort)1_000, width * height).ToArray();
+        AddAnnularGhost(pixels, width, height, centerX, centerY, radius, sigma, amplitude, saturation);
+        return new MonochromeFrame(width, height, pixels, saturation);
+    }
+
+    private static void AddAnnularGhost(
+        ushort[] pixels,
+        int width,
+        int height,
+        double centerX,
+        double centerY,
+        double radius,
+        double sigma,
+        double amplitude,
+        ushort saturation)
+    {
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var distance = Math.Sqrt((x - centerX) * (x - centerX) + (y - centerY) * (y - centerY));
+            var ringDistance = distance - radius;
+            var value = pixels[y * width + x] +
+                        amplitude * Math.Exp(-(ringDistance * ringDistance) / (2 * sigma * sigma));
+            pixels[y * width + x] = (ushort)Math.Clamp(Math.Round(value), 0, saturation);
+        }
     }
 }

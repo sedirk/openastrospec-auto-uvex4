@@ -229,6 +229,13 @@ r′ 同档 × 2
 
 ## 11. 外部与本机证据
 
+2026-08-27 与 2026-08-29 的两次 QHY USB 掉线已经确认属于同一故障族：相同稳定
+相机、相同全幅采集参数、相同全零帧和 gain 错误，并且从 QHY job start 到 Windows
+移除 `QHY5IIISeries_IO` 的间隔分别为 23.523 s 与 23.469 s。该证据优先指向采集期
+SDK/驱动/设备交互，而不是两起无关的线缆事件；但在单变量实机复现前仍不得宣称纯软件
+或纯硬件根因。完整时间线、USB 拓扑、恢复边界和后续测试要求见
+[QHYminiCam8M 确定性采集期 USB 掉线事件](incidents/2026-08-29-qhy-usb-acquisition-disconnect.md)。
+
 - QHYCCD 官方规格、HDR 说明和版本要求：<https://www.qhyccd.com/minicam8-imx585/>
 - QHYCCD 中文页面：<https://www.qhyccd.cn/minicam8/>
 - AAVSO CCD/CMOS 测光指南：<https://www.aavso.org/sites/default/files/publications_files/ccd_photometry_guide/CCDPhotometryGuide.pdf>

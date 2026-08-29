@@ -61,6 +61,10 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("maximumCommandResidualArcseconds", settle, StringComparison.Ordinal);
         Assert.Contains("drift > MountCommandArrivalToleranceArcseconds", settle, StringComparison.Ordinal);
         Assert.Contains("MountCommandArrivalToleranceArcseconds,", search, StringComparison.Ordinal);
+        Assert.Contains("limits.StepArcseconds + 2 * MountCommandArrivalToleranceArcseconds", search, StringComparison.Ordinal);
+        Assert.Contains("var durableWaypointOffset = G3AcquisitionMotionPlanner.SignedTangentOffsetArcseconds", search, StringComparison.Ordinal);
+        Assert.Contains("durableWaypointOffset.RaArcseconds", search, StringComparison.Ordinal);
+        Assert.Contains("attestedLineageMaximumAttempts: commissioning.MotionLimits.MaximumCorrectionAttempts", search, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -186,7 +190,9 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("var solveLadderHasStructuredContent = solveLadderProbe?.Attempts.Any", analysis, StringComparison.Ordinal);
         Assert.Contains("the local morphology heuristic accepted", analysis, StringComparison.Ordinal);
         Assert.Contains("That heuristic is diagnostic only", analysis, StringComparison.Ordinal);
-        Assert.Contains("Preserve TARGET_NOT_FOUND/TARGET_AMBIGUOUS", analysis, StringComparison.Ordinal);
+        Assert.Contains("Formal target-inside PL3 WCS remained mount-bound", analysis, StringComparison.Ordinal);
+        Assert.Contains("heuristic is useful telemetry", analysis, StringComparison.Ordinal);
+        Assert.Contains("TargetIdentification.FromCatalogWcs", analysis, StringComparison.Ordinal);
         Assert.Contains("pairAnalysis.Gate.Disposition == GateDisposition.Passed", recoverable, StringComparison.Ordinal);
     }
 
@@ -202,6 +208,22 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.DoesNotContain("RequestedParametersApplied", validate, StringComparison.Ordinal);
         Assert.Contains("gainAndBinningAppliedByJsonRpc", Source, StringComparison.Ordinal);
         Assert.Contains("hash-locked-windows-phd2-profile+fits-headers-when-exposed", Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void G3SlitGeometryIsPreparedBeforeTheFirstTargetSolveFrame()
+    {
+        var wrapper = MethodBody(
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        var prepare = wrapper.IndexOf("slitGeometryOnly: true", StringComparison.Ordinal);
+        var solve = wrapper.IndexOf("CaptureG3PlateSolveLadderAsync", StringComparison.Ordinal);
+
+        Assert.True(prepare >= 0 && solve > prepare);
+        Assert.Contains("if (slitGeometryPreparation.Gate.Disposition != GateDisposition.Passed)", wrapper, StringComparison.Ordinal);
+        Assert.Contains("run-scoped slit geometry", wrapper, StringComparison.Ordinal);
+        Assert.Contains("TryGetCurrentG3SlitGeometryRunCache", Source, StringComparison.Ordinal);
+        Assert.Contains("G3_SLIT_GEOMETRY_PREPARED_BEFORE_TARGET", Source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -340,6 +362,53 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.True(firstLockRead > recurse);
         Assert.Contains("exactLockCommandIssued = false", body, StringComparison.Ordinal);
         Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body, StringComparison.Ordinal);
+        Assert.True(CountOccurrences(
+            body,
+            "allowChargedCurrentPositionHandoff: true") >= 2);
+    }
+
+    [Fact]
+    public void Phd2CalibrationIsRevalidatedAfterSelectionLoopImmediatelyBeforeGuide()
+    {
+        var body = MethodBody(
+            Phd2SlitPlacementSource,
+            "private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(",
+            "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
+
+        var loop = body.IndexOf("StartLoopingAndWaitForFreshFrameAsync", StringComparison.Ordinal);
+        var binding = body.IndexOf("var preGuideBinding", loop, StringComparison.Ordinal);
+        var finalValidation = body.IndexOf(
+            "calibrationBefore = await phd2.ValidateCalibrationAsync(\n                hardRequirement",
+            binding,
+            StringComparison.Ordinal);
+        var guide = body.IndexOf("GuideAndSettleAsync", finalValidation, StringComparison.Ordinal);
+
+        Assert.True(loop >= 0 && binding > loop && finalValidation > binding && guide > finalValidation);
+        Assert.Contains("forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid", body[finalValidation..guide], StringComparison.Ordinal);
+        Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body[finalValidation..guide], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NestedDependencyFailuresReenterTheSameBoundedRecoverySupervisor()
+    {
+        var execute = MethodBody(
+            "public override async Task<StageResult> ExecuteStageAsync(",
+            "private async Task<(bool Retry, StageResult Result)> PrepareAutomaticStageRecoveryAsync(");
+        var recovery = MethodBody(
+            "private async Task<PreStageRecoveryFailure?> RecoverInterruptedStageAsync(",
+            "private async Task<StageResult> RestorePhotometryAfterResumeAsync(");
+
+        var nestedFailure = execute.IndexOf("if (resumeRecovery is not null)", StringComparison.Ordinal);
+        var classifyInner = execute.IndexOf("resumeRecovery.FailedStage", nestedFailure, StringComparison.Ordinal);
+        var sameSession = execute.IndexOf("automaticRecoverySession", classifyInner, StringComparison.Ordinal);
+        var rearmOuter = execute.IndexOf("Interlocked.Exchange(ref resumeRecoveryRequired, 1)", sameSession, StringComparison.Ordinal);
+
+        Assert.True(nestedFailure >= 0 && classifyInner > nestedFailure && sameSession > classifyInner && rearmOuter > sameSession);
+        Assert.Contains("new PreStageRecoveryFailure(ObservationStage.AcquireQhyWideField", recovery, StringComparison.Ordinal);
+        Assert.Contains("new PreStageRecoveryFailure(ObservationStage.AcquireG3SlitField", recovery, StringComparison.Ordinal);
+        Assert.Contains("new PreStageRecoveryFailure(ObservationStage.PlaceTargetOnSlit", recovery, StringComparison.Ordinal);
+        Assert.Contains("new PreStageRecoveryFailure(ObservationStage.StartGuiding", recovery, StringComparison.Ordinal);
+        Assert.Contains("new PreStageRecoveryFailure(ObservationStage.StartQhyPhotometry", recovery, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -584,6 +653,15 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private GateResult ValidateG3SearchMountState(");
 
         Assert.True(CountOccurrences(durableReturn, "ValidateSphericalCommand") >= 2);
+        Assert.Contains("ComputeStableNearOriginToleranceArcseconds", durableReturn, StringComparison.Ordinal);
+        Assert.Contains("WaitForG3PostSlewStabilityAsync", durableReturn, StringComparison.Ordinal);
+        Assert.Contains("no-motion near-origin verification", durableReturn, StringComparison.Ordinal);
+        Assert.Contains("without consuming another action", durableReturn, StringComparison.Ordinal);
+        Assert.Contains("another bounded correction", durableReturn, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "commandResidual > MountCommandArrivalToleranceArcseconds",
+            durableReturn,
+            StringComparison.Ordinal);
         Assert.True(CountOccurrences(wcs, "ValidateSphericalCommand") >= 2);
         Assert.True(CountOccurrences(search, "ValidateSphericalCommand") >= 2);
         Assert.DoesNotContain("ApplySkyCorrection(", wcs, StringComparison.Ordinal);
@@ -932,11 +1010,11 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunG3WcsCenteringAsync(",
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
 
-        Assert.Contains("coarseResidualPixels > placementPreset.MaximumAcquisitionResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("coarseResidualPixels > placementPreset.EffectiveAcquisitionResidualPixels", acquire, StringComparison.Ordinal);
         Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
         Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
         Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
-        Assert.Contains("placementPreset.MaximumAcquisitionResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("placementPreset.EffectiveAcquisitionResidualPixels", wcs, StringComparison.Ordinal);
         Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
     }
 
@@ -949,6 +1027,9 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var analysis = MethodBody(
             "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
             "private async Task<G3FieldState?> TryAcquireBrightTargetFromWingsAsync(");
+        var cachedAnalysis = MethodBody(
+            "private async Task<G3FieldState?> TryAnalyzeFreshG3ProbeWithRunSlitGeometryAsync(",
+            "private static bool FocusFailureMayBeSaturationDominated(");
         var wcs = MethodBody(
             "private async Task<StageResult> RunG3WcsCenteringAsync(",
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
@@ -958,6 +1039,14 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("G3_FIELD_ANALYZED_MOTION_PREDICTED", analysis, StringComparison.Ordinal);
         Assert.Contains("freshTargetFieldSolveRequired", analysis, StringComparison.Ordinal);
         Assert.Contains("slitDetection.Geometry.AcquisitionPoint", analysis, StringComparison.Ordinal);
+        Assert.Contains("G3WcsMotionPrediction? motionPrediction", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("G3_FIELD_ANALYZED_MOTION_PREDICTED", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("freshTargetFieldSolveRequired", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("repeatedHdrRequired = false", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("must not restart generic neighbouring-field search", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("configuration.G3.EffectiveBrightTarget.Enabled", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("configuration.G3.GhostAssistanceMode != GhostAssistanceMode.Skip", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("return null;", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("motionPrediction", wcs, StringComparison.Ordinal);
         Assert.Contains("CaptureAndAnalyzeG3WithSolveLadderAsync", wcs, StringComparison.Ordinal);
     }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
 using UvexAdv.Observatory;
@@ -39,7 +40,8 @@ internal sealed class ObservationAttentionNotificationTracker
 
     public ObservationAttentionNotificationEvaluation Evaluate(
         ObservationSnapshot snapshot,
-        GateResult? currentGate)
+        GateResult? currentGate,
+        CultureInfo? culture = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -60,9 +62,10 @@ internal sealed class ObservationAttentionNotificationTracker
             snapshot.StatusMessage,
             "自动观测已停止，原因未提供。 ");
         var stage = snapshot.CurrentStage;
+        var uiCulture = culture ?? CultureInfo.CurrentUICulture;
         var stageLabel = stage is null
-            ? "未标明阶段"
-            : SimulatedObservationStageRunner.StageDisplayName(stage.Value);
+            ? ObservationUiPresentation.Text("未标明阶段", "Unspecified stage", uiCulture)
+            : ObservationUiPresentation.StageName(stage.Value, uiCulture);
         var fingerprint = string.Join(
             "|",
             snapshot.ObservationRunId ?? "no-run",
@@ -81,9 +84,17 @@ internal sealed class ObservationAttentionNotificationTracker
             ? ObservationAttentionSeverity.Error
             : ObservationAttentionSeverity.Warning;
         var title = severity == ObservationAttentionSeverity.Error
-            ? "OpenAstroSpec 自动观测发生故障"
-            : "OpenAstroSpec 自动观测需要处理";
-        var body = $"阶段：{stageLabel}\n代码：{code}\n{reason}";
+            ? ObservationUiPresentation.Text("OpenAstroSpec 自动观测发生故障", "OpenAstroSpec automation fault", uiCulture)
+            : ObservationUiPresentation.Text("OpenAstroSpec 自动观测需要处理", "OpenAstroSpec automation needs attention", uiCulture);
+        var diagnosticGate = gate ?? GateResult.Unknown(code, reason);
+        var presentation = ObservationUiPresentation.Present(
+            stage ?? ObservationStage.ValidateNightSetup,
+            diagnosticGate,
+            uiCulture);
+        var body = ObservationUiPresentation.Text(
+            $"阶段：{stageLabel}\n代码：{code}\n{presentation.Summary}\n下一步：打开“诊断与证据”查看影响、自动处理和证据。",
+            $"Stage: {stageLabel}\nCode: {code}\n{presentation.Summary}\nNext: open Diagnostics and evidence for impact, recovery and evidence.",
+            uiCulture);
         return new ObservationAttentionNotificationEvaluation(
             new ObservationAttentionNotification(severity, title, body, fingerprint),
             false);

@@ -104,7 +104,7 @@ public sealed class EvidenceBuildersTests : IDisposable
         Assert.Equal(true, created.Bindings.NinaProfileValues["RequireOpenOpticalCover"]);
         Assert.Equal("NinaSafetyStack", created.Bindings.NinaProfileValues["PreparationSafetyCapabilityPreset"]);
         Assert.Equal(0, created.Bindings.NinaProfileValues["GhostAssistanceMode"]);
-        Assert.Equal(false, created.Bindings.NinaProfileValues["QhyG3FastPairEnabled"]);
+        Assert.Equal(true, created.Bindings.NinaProfileValues["QhyG3FastPairEnabled"]);
         Assert.Equal(QhyG3FastPairPolicy.CurrentSchemaVersion, created.Bindings.NinaProfileValues["QhyG3FastPairSchemaVersion"]);
         Assert.Equal("qhy-g3-fast-pair-v1", created.Bindings.NinaProfileValues["QhyG3FastPairPolicyId"]);
         Assert.Equal(2d, created.Bindings.NinaProfileValues["QhyG3FastPairExposureSeconds"]);

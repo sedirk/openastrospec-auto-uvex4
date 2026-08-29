@@ -23,6 +23,7 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [最新软件/实机收口](docs/commissioning-night-2026-08-26.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
+[0.4.0.80 界面/双语/恢复收口](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [参与贡献](CONTRIBUTING.md)
 
 本仓库包含两个面向用户、均采用 GPL-3.0-only 许可的软件产品：
@@ -63,6 +64,8 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 必做步骤。
 
 仓库已包含 QHY 服务、PHD2 事件服务器客户端、目标采集状态机以及 N.I.N.A. 真实/模拟运行器。健康阶段无需确认对话框即可自动推进；失败或不确定的安全门进入 `PausedNeedsAttention`。操作员始终可以暂停、恢复、取消或人工接管。必须先完成模拟 commissioning。构建和版本化 Git hook 会校验权威设计哈希，使意外架构修改明确失败。
+
+插件 `0.4.0.80` 已把固定运行栏、两级进度、当前问题、质量门、时间线和证据收敛到同一套语义展示。静态和动态操作员文案跟随 N.I.N.A. 当前选择的界面语言（`zh-*` 或中性英文）；稳定错误码与底层原始消息保持不变，只在默认折叠的技术详情中显示。经审核的临时故障按精确阶段/代码执行有界恢复并受全局次数保险约束，安全、身份、哈希、物理状态含糊和预算耗尽仍保持硬阻断。完整边界见[界面、双语与有界恢复收口](docs/ui-presentation-localization-and-recovery-2026-08-30.md)和[自动恢复矩阵](docs/automatic-recovery-matrix-2026-08-29.md)。
 
 当前 GS350/QHY 到 C11/G3 的光轴差绝不会作为编译期常量写入程序。未来可选预定位阶段可以消费由操作员明确选择、带版本和来源的记录；记录必须绑定硬件/安装指纹、环境适用性、不确定度与运动限制。当前生产路线只把 QHY WCS 作为不可变的“不移动见证”，随后获取新鲜 G3 WCS；只有这份 G3 解可以授权 N.I.N.A. 大步修正，并且必须由移动后的另一份新鲜 G3 解证明到达。转移证据缺失或无效时不会发生 QHY 派生的中间运动，也不会静默复用记忆中的偏移。
 
@@ -118,7 +121,7 @@ QHY 服务单独安装，默认使用合成模拟器：
 powershell -ExecutionPolicy Bypass -File .\scripts\install-qhy-service.ps1
 ```
 
-`-EnableHardware -HardwareConfigurationPath <machine-local-qhy-json>` 会锁定并复制本机已安装的 x64 QHY SDK，校验其版本化 SHA-256，要求显式机器本地文件中提供完全匹配且已 commissioning 的 QHY 稳定身份，并且仍只公开 `http://127.0.0.1:47845`。仓库内 `config/qhy.production.json` 是有意设计为不可直接运行的示例。在模拟器、锁定的 Night Setup、PHD2 profile 证据、狭缝几何、天文解析和有界像素到赤道仪变换全部通过 commissioning 前，不要启用真实硬件。
+`-EnableHardware -HardwareConfigurationPath <machine-local-qhy-json>` 会从 QHYCCD 官方完整 AllInOne 安装目录直接加载 x64 QHY SDK，校验其绝对路径和版本化 SHA-256，不再向 UVEX-ADV 服务目录复制第二份私有 SDK；同时要求显式机器本地文件中提供完全匹配且已 commissioning 的 QHY 稳定身份，并且仍只公开 `http://127.0.0.1:47845`。仓库内 `config/qhy.production.json` 是有意设计为不可直接运行的示例。在模拟器、锁定的 Night Setup、PHD2 profile 证据、狭缝几何、天文解析和有界像素到赤道仪变换全部通过 commissioning 前，不要启用真实硬件。
 
 从示例创建被 Git 忽略的 `config/qhy.local.json`，替换全部占位符，再明确选择此机器本地配置：
 

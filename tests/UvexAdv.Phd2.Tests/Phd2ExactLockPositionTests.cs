@@ -5,6 +5,82 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2ExactLockPositionTests
 {
     [Fact]
+    public async Task SameEpochReadbackRetriesOnlyReadsAndStopsAtFirstPosition()
+    {
+        var guidingPublished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            await session.SendEventAsync(new { Event = "AppState", State = "Guiding" }, cancellationToken);
+            guidingPublished.TrySetResult(true);
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                var read = await session.ReadRequestAsync(cancellationToken);
+                Assert.Equal("get_lock_position", read.GetProperty("method").GetString());
+                await session.ReplyResultAsync(
+                    read,
+                    attempt == 3 ? new[] { 123.5, 456.25 } : null,
+                    cancellationToken);
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        await guidingPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => client.Snapshot.AppState == Phd2AppState.Guiding);
+        var baseline = client.Snapshot;
+
+        var result = await client.GetLockPositionWithSameEpochRetryAsync(
+            baseline.ConnectionEpoch,
+            baseline.GuideEpoch,
+            maximumAttempts: 3,
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(3, result.Attempts);
+        Assert.Equal(new Phd2Point(123.5, 456.25), result.Position);
+        Assert.Equal(3, server.ReceivedMethods.Count(method => method == "get_lock_position"));
+        Assert.DoesNotContain("guide", server.ReceivedMethods);
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+    }
+
+    [Fact]
+    public async Task SameEpochReadbackStopsImmediatelyOnLostLockWithoutMutation()
+    {
+        var guidingPublished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            await session.SendEventAsync(new { Event = "AppState", State = "Guiding" }, cancellationToken);
+            guidingPublished.TrySetResult(true);
+            var read = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_lock_position", read.GetProperty("method").GetString());
+            await session.SendEventAsync(new { Event = "LockPositionLost" }, cancellationToken);
+            await session.ReplyResultAsync(read, null, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        await guidingPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => client.Snapshot.AppState == Phd2AppState.Guiding);
+        var baseline = client.Snapshot;
+
+        var result = await client.GetLockPositionWithSameEpochRetryAsync(
+            baseline.ConnectionEpoch,
+            baseline.GuideEpoch,
+            maximumAttempts: 5,
+            CancellationToken.None);
+
+        Assert.False(result.SameGuideEpoch);
+        Assert.Null(result.Position);
+        Assert.Equal(1, result.Attempts);
+        Assert.Equal(Phd2AppState.LostLock, result.AppState);
+        Assert.Single(server.ReceivedMethods, method => method == "get_lock_position");
+        Assert.DoesNotContain("guide", server.ReceivedMethods);
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+    }
+
+    [Fact]
     public async Task ExactSetUsesFreshPreconditionAndVerifiesWithoutRetry()
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
@@ -265,4 +341,15 @@ public sealed class Phd2ExactLockPositionTests
         EventTimeoutMargin = TimeSpan.FromSeconds(2),
         FileReadyTimeout = TimeSpan.FromSeconds(2),
     });
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+        while (!predicate())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Fake PHD2 state did not reach the expected condition.");
+            await Task.Delay(10);
+        }
+    }
 }
