@@ -86,6 +86,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly IImagingMediator imagingMediator;
     private readonly ITelescopeMediator telescopeMediator;
     private readonly CancellationTokenSource lifetime = new();
+    private readonly ObservationAutomationBridge automationBridge;
     private readonly SimpleAsyncCommand startSelectedModeCommand;
     private readonly SimpleAsyncCommand startSimulationCommand;
     private readonly SimpleAsyncCommand startRealCommand;
@@ -95,6 +96,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand resumeCommand;
     private readonly SimpleCommand cancelCommand;
     private readonly SimpleCommand takeoverCommand;
+    private readonly SimpleCommand enableModelAutomationBridgeCommand;
+    private readonly SimpleCommand armModelAutomationRealControlCommand;
+    private readonly SimpleCommand disarmModelAutomationRealControlCommand;
+    private readonly SimpleCommand armSlitQualityWarningCommand;
+    private readonly SimpleCommand disarmSlitQualityWarningCommand;
     private readonly SimpleAsyncCommand clearG3RecoveryStateCommand;
     private readonly SimpleAsyncCommand restartWithCurrentConfigurationCommand;
     private readonly SimpleCommand openQhyPreviewCommand;
@@ -122,6 +128,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand restorePreviousImageFilePatternCommand;
     private readonly SimpleAsyncCommand importFromFramingAssistantCommand;
     private readonly SimpleAsyncCommand importFromPlanetariumCommand;
+    private readonly ObservationTargetDraftCommand applyTargetDraftCommand;
     private readonly SimpleCommand bindCurrentAtrCameraCommand;
     private readonly SimpleCommand refreshAtrManualStatusCommand;
     private readonly SimpleAsyncCommand captureManualAtrSpectrumCommand;
@@ -207,6 +214,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string manualUvexError = string.Empty;
     private string manualUvexErrorTechnicalDetails = string.Empty;
     private bool isManualUvexBusy;
+    private bool modelAutomationRealControlArmed;
+    private long modelAutomationInvocationCount;
+    private long modelAutomationRecoveryInvocationCount;
+    private string modelAutomationLastActivity = "尚无后台调用。";
     private bool hasManualUvexStatus;
     private bool manualUvexPositionKnown;
     private DeviceConnectionState manualUvexConnectionState = DeviceConnectionState.Disconnected;
@@ -273,6 +284,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         icon.Freeze();
         ImageGeometry = icon;
 
+        applyTargetDraftCommand = new ObservationTargetDraftCommand(
+            () => new(TargetName, CatalogId, RightAscensionDegrees, DeclinationDegrees),
+            draft => ApplyImportedTarget(draft.ToImportResult()), CanImportTarget);
         startSelectedModeCommand = new SimpleAsyncCommand(StartSelectedModeAsync, CanStart);
         startSimulationCommand = new SimpleAsyncCommand(StartSimulationAsync, CanStart);
         startRealCommand = new SimpleAsyncCommand(StartRealAsync, CanStartReal);
@@ -287,6 +301,21 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         takeoverCommand = new SimpleCommand(
             () => host.RequestTakeover("操作员从实时面板请求人工接管。"),
             () => IsControllable && RunState is not ObservationRunState.ManualTakeover);
+        enableModelAutomationBridgeCommand = new SimpleCommand(
+            () => ModelAutomationBridgeEnabled = true,
+            () => !ModelAutomationBridgeEnabled);
+        armModelAutomationRealControlCommand = new SimpleCommand(
+            () => ModelAutomationRealControlArmed = true,
+            () => ModelAutomationBridgeEnabled && !ModelAutomationRealControlArmed);
+        disarmModelAutomationRealControlCommand = new SimpleCommand(
+            () => ModelAutomationRealControlArmed = false,
+            () => ModelAutomationRealControlArmed);
+        armSlitQualityWarningCommand = new SimpleCommand(
+            () => SupervisedSlitQualityWarningAuthorized = true,
+            () => !IsControllable && !SupervisedSlitQualityWarningAuthorized);
+        disarmSlitQualityWarningCommand = new SimpleCommand(
+            () => SupervisedSlitQualityWarningAuthorized = false,
+            () => !IsControllable && SupervisedSlitQualityWarningAuthorized);
         clearG3RecoveryStateCommand = new SimpleAsyncCommand(ClearG3RecoveryStateAsync);
         restartWithCurrentConfigurationCommand = new SimpleAsyncCommand(
             RestartWithCurrentConfigurationAsync,
@@ -381,6 +410,12 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             () => SetManualSlitLightAsync(enabled: false),
             CanOperateManualUvex);
 
+        automationBridge = new ObservationAutomationBridge(
+            CreateAutomationSnapshot,
+            InvokeAutomationCommand,
+            OnAutomationBridgeActivity,
+            settings.ModelAutomationBridgeEnabled);
+
         LoadTargetImportDisplay();
         RefreshCommissioningProfileCatalog(applySelected: true);
         RefreshGhostCommissioningSummary();
@@ -403,6 +438,30 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ResumeCommand => resumeCommand;
     public ICommand CancelCommand => cancelCommand;
     public ICommand TakeoverCommand => takeoverCommand;
+    public ICommand EnableModelAutomationBridgeCommand => enableModelAutomationBridgeCommand;
+    public ICommand ArmModelAutomationRealControlCommand => armModelAutomationRealControlCommand;
+    public ICommand DisarmModelAutomationRealControlCommand => disarmModelAutomationRealControlCommand;
+    public ICommand ArmSlitQualityWarningCommand => armSlitQualityWarningCommand;
+    public ICommand DisarmSlitQualityWarningCommand => disarmSlitQualityWarningCommand;
+    public bool SupervisedSlitQualityWarningAuthorized
+    {
+        get => settings.AllowSupervisedSlitQualityWarning;
+        private set
+        {
+            settings.AllowSupervisedSlitQualityWarning = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(SupervisedSlitQualityWarningStatusText));
+            RaiseCommandStates();
+            automationBridge?.NotifyStateChanged();
+        }
+    }
+    public string SupervisedSlitQualityWarningStatusText => ObservationUiPresentation.Text(
+        SupervisedSlitQualityWarningAuthorized
+            ? "本次会话已允许：入缝精度未达标时警告后 ATR 试拍；实际光谱质量独立判定，不表示精确入缝。"
+            : "严格入缝验收；尚未授权精度警告后的 ATR 试拍。",
+        SupervisedSlitQualityWarningAuthorized
+            ? "Session consent active: supervised ATR probing with slit-precision warnings; spectral quality is evaluated independently. This is not exact placement."
+            : "Strict slit acceptance; no consent for ATR probing with slit-precision warnings.", UiCulture);
     public ICommand ClearG3RecoveryStateCommand => clearG3RecoveryStateCommand;
     public ICommand RestartWithCurrentConfigurationCommand => restartWithCurrentConfigurationCommand;
     public ICommand OpenQhyPreviewCommand => openQhyPreviewCommand;
@@ -430,6 +489,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand RestorePreviousImageFilePatternCommand => restorePreviousImageFilePatternCommand;
     public ICommand ImportFromFramingAssistantCommand => importFromFramingAssistantCommand;
     public ICommand ImportFromPlanetariumCommand => importFromPlanetariumCommand;
+    public ICommand ApplyTargetDraftCommand => applyTargetDraftCommand;
     public ICommand BindCurrentAtrCameraCommand => bindCurrentAtrCameraCommand;
     public ICommand RefreshAtrManualStatusCommand => refreshAtrManualStatusCommand;
     public ICommand CaptureManualAtrSpectrumCommand => captureManualAtrSpectrumCommand;
@@ -791,8 +851,69 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             RaisePropertyChanged(nameof(IsSimulationMode));
             RaisePropertyChanged(nameof(IsRealMode));
             RaiseCommandStates();
+            automationBridge?.NotifyStateChanged();
         }
     }
+
+    public bool ModelAutomationBridgeEnabled
+    {
+        get => settings.ModelAutomationBridgeEnabled;
+        set
+        {
+            if (settings.ModelAutomationBridgeEnabled == value) return;
+            settings.ModelAutomationBridgeEnabled = value;
+            if (!value) modelAutomationRealControlArmed = false;
+            automationBridge?.UpdateAccess(value, modelAutomationRealControlArmed);
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ModelAutomationRealControlArmed));
+            RaisePropertyChanged(nameof(ModelAutomationBridgeStatusText));
+            RaisePropertyChanged(nameof(ModelAutomationInvocationSummary));
+            RaiseCommandStates();
+        }
+    }
+
+    /// <summary>
+    /// Deliberately process-local. It resets to false whenever N.I.N.A. starts.
+    /// The transport may invoke the exact visible authorization ICommand only
+    /// when that request carries the operator-provided attestation; the value
+    /// is reflected by the same UI property and is never persisted.
+    /// </summary>
+    public bool ModelAutomationRealControlArmed
+    {
+        get => modelAutomationRealControlArmed;
+        set
+        {
+            var next = ModelAutomationBridgeEnabled && value;
+            if (modelAutomationRealControlArmed == next) return;
+            modelAutomationRealControlArmed = next;
+            automationBridge?.UpdateAccess(ModelAutomationBridgeEnabled, next);
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(ModelAutomationBridgeStatusText));
+            RaisePropertyChanged(nameof(ModelAutomationInvocationSummary));
+            RaiseCommandStates();
+        }
+    }
+
+    public string ModelAutomationBridgeEndpoint => ObservationAutomationBridge.Endpoint;
+    public string ModelAutomationBridgeStatusText => !ModelAutomationBridgeEnabled
+        ? ObservationUiPresentation.Text(
+            "后台自动化桥已关闭；只读端点可报告关闭状态，不能触发按钮。",
+            "The model automation bridge is disabled; its read-only endpoint can report that state but cannot invoke buttons.",
+            UiCulture)
+        : ModelAutomationRealControlArmed
+            ? ObservationUiPresentation.Text(
+                "后台自动化桥已启用；本次 N.I.N.A. 会话已允许真实流程按钮。所有动作仍经过原按钮、质量门和安全预算。",
+                "The model automation bridge is enabled and real-flow buttons are armed for this N.I.N.A. session. Every action still uses the original UI commands, quality gates and safety budgets.",
+                UiCulture)
+            : ObservationUiPresentation.Text(
+                "后台自动化桥已启用；仅允许模拟与停止类按钮。真实启动/恢复需要本次会话单独授权；后台只有携带操作员证明时才能调用同一个可见授权按钮。",
+                "The model automation bridge is enabled for simulation and stop-like buttons only. Real start/resume requires a separate per-session grant; the backend can invoke the same visible authorization button only with the operator attestation.",
+                UiCulture);
+    public string ModelAutomationLastActivity => modelAutomationLastActivity;
+    public string ModelAutomationInvocationSummary => ObservationUiPresentation.Text(
+        $"后台调用 {modelAutomationInvocationCount} 次 · 闭环恢复触发 {modelAutomationRecoveryInvocationCount} 次",
+        $"{modelAutomationInvocationCount} backend invocation(s) · {modelAutomationRecoveryInvocationCount} recovery invocation(s)",
+        UiCulture);
 
     public bool RealModeCommissioned
     {
@@ -1349,7 +1470,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 ? settings.WeakSupervisionEnabled
                     ? "⚠ 已就绪：有人弱监督；环境适配器缺失只警告，明确危险仍阻断。"
                     : "✓ 全无人监管资料已填写；启动时将核验环境设备并管理开顶与安全收尾。"
-                : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
+                : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。";
         }
     }
 
@@ -1407,7 +1528,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         : $"尚未通过：当前还有 {AutomaticPreparationIssueCount} 项一致性检查未满足。这里仅汇总结果；请在上方导入锁定包或生成准备草稿，不需要逐项填写哈希和工程限额。";
     public string AutomaticPreparationSummary => AutomaticPreparationIssueCount == 0
         ? "✓ 表单已完成；启动时会自动读取实时状态并做最后复核。"
-        : "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
+        : "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。";
 
     public string StateText { get => stateText; private set { stateText = value; RaisePropertyChanged(); } }
     public string CurrentStageText { get => currentStageText; private set { currentStageText = value; RaisePropertyChanged(); } }
@@ -1789,6 +1910,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public void Dispose()
     {
+        automationBridge.Dispose();
         host.DashboardChanged -= OnDashboardChanged;
         UvexRuntimeState.Changed -= OnManualSpectrumChanged;
         activeProfileService.LocaleChanged -= OnLocaleChanged;
@@ -3175,7 +3297,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    private void ApplyDashboard(ObservationDashboardSnapshot dashboard)
+    private void ApplyDashboard(ObservationDashboardSnapshot dashboard, bool notifyBridge = true)
     {
         var run = dashboard.Run;
         var culture = UiCulture;
@@ -3294,6 +3416,245 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ApplyPreview(dashboard, ObservationPreviewChannel.AtrSpectrum);
         ApplyFailureDiagnostic(dashboard);
         RaiseCommandStates();
+        if (notifyBridge) automationBridge?.NotifyStateChanged();
+    }
+
+    private IReadOnlyList<ObservationAutomationCommandBinding> AutomationCommandBindings()
+    {
+        var selectedStartRequiresArm = UseRealMode;
+        var activeRunRequiresArm = UseRealMode;
+        return
+        [
+            new("enable-bridge", enableModelAutomationBridgeCommand, true, false, false, false, "Enable the persisted local bridge; this command cannot operate equipment."),
+            new("arm-real-control", armModelAutomationRealControlCommand, false, false, true, false, "Arm real Start/Resume for this N.I.N.A. process after explicit operator attestation."),
+            new("arm-slit-quality-warning", armSlitQualityWarningCommand, false, true, true, false, "Authorize this session's supervised ATR probe with measured slit-precision warnings; no new motion authority."),
+            new("disarm-slit-quality-warning", disarmSlitQualityWarningCommand, false, false, false, false, "Restore strict slit acceptance for subsequent runs in this session."),
+            new("disarm-real-control", disarmModelAutomationRealControlCommand, false, false, false, false, "Remove this process-local real Start/Resume authorization."),
+            new("select-simulation", selectSimulationModeCommand, false, false, false, false, "Select the simulation mode without starting it."),
+            new("select-real", selectRealModeCommand, false, false, false, false, "Select the real-equipment mode without connecting or moving equipment."),
+            new("apply-target-draft", applyTargetDraftCommand, false, false, false, false, "Apply only the visible J2000 target fields while the run is inactive; no equipment operation."),
+            new("import-planetarium-target", importFromPlanetariumCommand, false, false, false, false, "Import the current planetarium selection using the visible import button."),
+            new("import-framing-target", importFromFramingAssistantCommand, false, false, false, false, "Import the current framing selection using the visible import button."),
+            new("start-selected", startSelectedModeCommand, false, selectedStartRequiresArm, false, false, "Invoke the visible Start button for the selected mode."),
+            new("restart-real-run", restartWithCurrentConfigurationCommand, false, true, true, true, "Invoke the visible New run command: safely close the old run boundary, retire discoverable stale G3 recovery state with an audit, and start a new real run."),
+            new("pause", pauseCommand, false, false, false, false, "Request the same bounded pause as the UI."),
+            new("resume", resumeCommand, false, activeRunRequiresArm, false, true, "Invoke Resume revalidation; no quality or safety gate is bypassed."),
+            new("takeover", takeoverCommand, false, false, false, false, "Request the same operator-takeover boundary as the UI."),
+            new("cancel", cancelCommand, false, false, false, false, "Invoke the same cancel and safe-cleanup command as the UI."),
+        ];
+    }
+
+    private ObservationAutomationSnapshot CreateAutomationSnapshot(long revision)
+    {
+        // Host updates arrive before their queued UI notification. Render this
+        // one immutable dashboard now so a paused snapshot cannot carry the
+        // previous UI failure code (e.g. "—"). A read must not wake itself.
+        var dashboard = host.Dashboard;
+        ApplyDashboard(dashboard, notifyBridge: false);
+        var available = new List<string>();
+        var unavailable = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var binding in AutomationCommandBindings())
+        {
+            if (!ModelAutomationBridgeEnabled && !binding.CanInvokeWhileBridgeDisabled)
+            {
+                unavailable[binding.Name] = "bridge-disabled";
+            }
+            else if (binding.RequiresRealControlArm && !ModelAutomationRealControlArmed)
+            {
+                unavailable[binding.Name] = "real-control-not-armed-in-ui";
+            }
+            else if (!binding.Command.CanExecute(null))
+            {
+                unavailable[binding.Name] = "ui-command-cannot-execute-in-current-state";
+            }
+            else
+            {
+                available.Add(binding.Name);
+            }
+        }
+
+        var suggested = new List<string>();
+        if (RunState is ObservationRunState.Paused or ObservationRunState.PausedNeedsAttention or ObservationRunState.ManualTakeover)
+        {
+            if (resumeCommand.CanExecute(null)) suggested.Add("resume");
+            suggested.Add("cancel");
+        }
+        var requiredOperatorAction =
+            UseRealMode &&
+            !ModelAutomationRealControlArmed &&
+            RunState is ObservationRunState.Paused or ObservationRunState.PausedNeedsAttention or ObservationRunState.ManualTakeover
+                ? ObservationUiPresentation.Text(
+                    "真实流程尚未授权。后台只能在请求中提交操作员明确提供的安全证明，再调用与界面按钮相同的授权命令；界面会同步显示授权状态。",
+                    "The real flow is not armed. The backend may only present the operator-supplied safety attestation and invoke the same authorization command as the visible UI; the UI mirrors the resulting state.",
+                    UiCulture)
+                : string.Empty;
+        var run = dashboard.Run;
+        var latestRunEvent = run.RecentEvents.LastOrDefault();
+        return new ObservationAutomationSnapshot(
+            ObservationAutomationBridge.ProtocolVersion,
+            revision,
+            DateTimeOffset.UtcNow,
+            automationBridge.InstanceId,
+            Environment.ProcessId,
+            automationBridge.PluginVersion,
+            automationBridge.PluginBuildSha256,
+            run.ObservationRunId,
+            run.UpdatedUtc,
+            run.CurrentStage?.ToString(),
+            run.NextStage?.ToString(),
+            run.CompletedStageCount,
+            run.TotalStageCount,
+            run.StatusMessage,
+            run.PauseReason,
+            latestRunEvent is null
+                ? null
+                : new ObservationAutomationRunEventSnapshot(
+                    latestRunEvent.TimestampUtc,
+                    latestRunEvent.State.ToString(),
+                    latestRunEvent.Stage?.ToString(),
+                    latestRunEvent.Code,
+                    latestRunEvent.Message,
+                    latestRunEvent.EvidencePath),
+            run.State.ToString(),
+            CurrentStageText,
+            NextStageText,
+            ProgressPercent,
+            StatusMessage,
+            PauseReason,
+            LastFailureCode,
+            LastFailureMessage,
+            LastFailureRecovery,
+            LastFailureEvidencePath,
+            LatestEvidencePath,
+            RunManifestPath,
+            Error,
+            ErrorTechnicalDetails,
+            OperatorNotice,
+            TargetName,
+            CatalogId,
+            RightAscensionDegrees,
+            DeclinationDegrees,
+            UseRealMode,
+            ModelAutomationBridgeEnabled,
+            ModelAutomationRealControlArmed,
+            available,
+            unavailable,
+            suggested,
+            requiredOperatorAction,
+            ObservationAutomationBridge.Endpoint,
+            modelAutomationInvocationCount,
+            modelAutomationRecoveryInvocationCount,
+            modelAutomationLastActivity,
+            GateRows.Select(item => new ObservationAutomationGateSnapshot(
+                item.Stage,
+                item.State,
+                item.Code,
+                item.Message,
+                item.TechnicalMessage,
+                item.Metrics,
+                item.Disposition.ToString(),
+                item.Severity.ToString())).ToArray(),
+            TimelineRows.TakeLast(30).Select(item => new ObservationAutomationTimelineSnapshot(
+                item.Time,
+                item.Stage,
+                item.Code,
+                item.Message,
+                item.TechnicalMessage,
+                item.EvidencePath)).ToArray(),
+            EvidenceRows.Take(20).Select(item => new ObservationAutomationEvidenceSnapshot(
+                item.Time,
+                item.Kind,
+                item.FileName,
+                item.AbsolutePath)).ToArray(),
+            SupervisedSlitQualityWarningAuthorized);
+    }
+
+    private ObservationAutomationInvocationResult InvokeAutomationCommand(
+        string commandName,
+        string? operatorAttestation,
+        ObservationTargetDraft? targetDraft)
+    {
+        var binding = AutomationCommandBindings().FirstOrDefault(item =>
+            string.Equals(item.Name, commandName, StringComparison.OrdinalIgnoreCase));
+        if (binding is null)
+        {
+            return new ObservationAutomationInvocationResult(
+                false,
+                "COMMAND_NOT_EXPOSED",
+                $"Command '{commandName}' is not exposed. Manual UVEX controls, G3-ledger retirement, safety/equipment settings changes and evidence deletion are intentionally unavailable.",
+                false);
+        }
+        if (!ModelAutomationBridgeEnabled && !binding.CanInvokeWhileBridgeDisabled)
+        {
+            return new ObservationAutomationInvocationResult(
+                false,
+                "BRIDGE_DISABLED",
+                "Enable the model automation bridge before invoking this command.",
+                binding.IsRecoveryAction);
+        }
+        if (binding.RequiresOperatorAttestation &&
+            !string.Equals(
+                operatorAttestation,
+                binding.Name == "arm-slit-quality-warning"
+                    ? ObservationAutomationBridge.SlitQualityOperatorAttestation
+                    : ObservationAutomationBridge.RealControlOperatorAttestation,
+                StringComparison.Ordinal))
+        {
+            return new ObservationAutomationInvocationResult(
+                false,
+                "OPERATOR_ATTESTATION_REQUIRED",
+                "This command requires the exact real-control operator attestation in the current request. The attestation is checked but never logged.",
+                binding.IsRecoveryAction);
+        }
+        if (binding.RequiresRealControlArm && !ModelAutomationRealControlArmed)
+        {
+            return new ObservationAutomationInvocationResult(
+                false,
+                "REAL_CONTROL_NOT_ARMED",
+                "Real-equipment start/resume must be armed in the visible N.I.N.A. interface for this process session.",
+                binding.IsRecoveryAction);
+        }
+        if (targetDraft is not null && binding.Name != "apply-target-draft")
+            return new(false, "UNEXPECTED_TARGET_DRAFT", "Target data is accepted only by apply-target-draft.", false);
+        if (binding.Name == "apply-target-draft" && targetDraft is { IsValid: false })
+            return new(false, "INVALID_TARGET_DRAFT", "A target name and valid J2000 coordinates in degrees are required.", false);
+        object? commandParameter = binding.Name == "apply-target-draft" ? targetDraft : null;
+        if (!binding.Command.CanExecute(commandParameter))
+        {
+            return new ObservationAutomationInvocationResult(
+                false,
+                "UI_COMMAND_CANNOT_EXECUTE",
+                $"The same visible UI command '{binding.Name}' is disabled in the current state.",
+                binding.IsRecoveryAction);
+        }
+
+        binding.Command.Execute(commandParameter);
+        return new ObservationAutomationInvocationResult(
+            true,
+            "UI_COMMAND_DISPATCHED",
+            $"The exact ICommand bound to the visible '{binding.Name}' control was dispatched on the N.I.N.A. UI thread. Observe later revisions for completion or a new blocker.",
+            binding.IsRecoveryAction);
+    }
+
+    private void OnAutomationBridgeActivity(ObservationAutomationActivity activity)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        void Apply()
+        {
+            modelAutomationInvocationCount++;
+            if (activity.Accepted && activity.RecoveryInvocation)
+                modelAutomationRecoveryInvocationCount++;
+            var localTime = activity.TimestampUtc.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            modelAutomationLastActivity = ObservationUiPresentation.Text(
+                $"{localTime} · LLM 后台 · {activity.Command ?? activity.Operation} · {(activity.Accepted ? "已触发" : "被拒绝")} · {activity.Code}",
+                $"{localTime} · model backend · {activity.Command ?? activity.Operation} · {(activity.Accepted ? "dispatched" : "rejected")} · {activity.Code}",
+                UiCulture);
+            RaisePropertyChanged(nameof(ModelAutomationLastActivity));
+            RaisePropertyChanged(nameof(ModelAutomationInvocationSummary));
+            automationBridge?.NotifyStateChanged();
+        }
+        if (dispatcher is null || dispatcher.CheckAccess()) Apply();
+        else _ = dispatcher.BeginInvoke(Apply);
     }
 
     private void ApplyFailureDiagnostic(ObservationDashboardSnapshot dashboard)
@@ -3417,8 +3778,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         resumeCommand.RaiseCanExecuteChanged();
         cancelCommand.RaiseCanExecuteChanged();
         takeoverCommand.RaiseCanExecuteChanged();
+        enableModelAutomationBridgeCommand.RaiseCanExecuteChanged();
+        armModelAutomationRealControlCommand.RaiseCanExecuteChanged();
+        disarmModelAutomationRealControlCommand.RaiseCanExecuteChanged();
         clearG3RecoveryStateCommand.RaiseCanExecuteChanged();
         restartWithCurrentConfigurationCommand.RaiseCanExecuteChanged();
+        armSlitQualityWarningCommand.RaiseCanExecuteChanged();
+        disarmSlitQualityWarningCommand.RaiseCanExecuteChanged();
         openQhyPreviewCommand.RaiseCanExecuteChanged();
         openG3PreviewCommand.RaiseCanExecuteChanged();
         openAtrPreviewCommand.RaiseCanExecuteChanged();
@@ -3428,6 +3794,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         openRunDirectoryCommand.RaiseCanExecuteChanged();
         importFromFramingAssistantCommand.RaiseCanExecuteChanged();
         importFromPlanetariumCommand.RaiseCanExecuteChanged();
+        applyTargetDraftCommand.RaiseCanExecuteChanged();
         bindCurrentAtrCameraCommand.RaiseCanExecuteChanged();
         captureManualAtrSpectrumCommand.RaiseCanExecuteChanged();
         refreshManualUvexStatusCommand.RaiseCanExecuteChanged();

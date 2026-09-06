@@ -516,11 +516,11 @@ public sealed class Phd2Client : IPhd2Client
             }
 
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-            if (appState is not Phd2AppState.Stopped and not Phd2AppState.Selected)
+            if (appState != Phd2AppState.Stopped)
             {
                 throw new Phd2CaptureException(
-                    $"PHD2 native single-frame acquisition requires an idle Stopped or Selected state; current state is {appState}. " +
-                    "The existing capture, calibration, or guiding session was left untouched.");
+                    $"PHD2 native single-frame acquisition requires a confirmed Stopped state; current state is {appState}. " +
+                    "The existing capture, calibration, or guiding session was left untouched.", appState);
             }
 
             var baseline = Snapshot;
@@ -570,7 +570,7 @@ public sealed class Phd2Client : IPhd2Client
 
             await WaitForFileReadyAsync(destinationPath, cancellationToken).ConfigureAwait(false);
             var stateAfter = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-            if (stateAfter is not Phd2AppState.Stopped and not Phd2AppState.Selected ||
+            if (stateAfter != Phd2AppState.Stopped ||
                 !Snapshot.IsConnected || Snapshot.ConnectionEpoch != baseline.ConnectionEpoch)
             {
                 throw new Phd2CaptureException(
@@ -616,10 +616,15 @@ public sealed class Phd2Client : IPhd2Client
             ThrowIfAutomationPaused();
             var destinationPath = Path.GetFullPath(request.DestinationPath);
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-            if (appState != Phd2AppState.Looping)
+            // find_star may make get_app_state report Selected while the
+            // selection loop is still exposing. Neither state alone proves a
+            // fresh frame: the post-baseline LoopingExposures event and the
+            // same connected Looping epoch below remain mandatory. An idle
+            // Selected state only waits and times out; no loop is started.
+            if (appState is not Phd2AppState.Looping and not Phd2AppState.Selected)
             {
                 throw new Phd2CaptureException(
-                    $"PHD2 continuous full-frame save requires an existing Looping state; current state is {appState}. " +
+                    $"PHD2 continuous full-frame save requires Looping or Selected with a new loop-frame event; current state is {appState}. " +
                     "No exposure, loop, stop, or save command was sent.");
             }
 
@@ -784,15 +789,13 @@ public sealed class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
             var selected = ParsePointArray(result)
-                ?? throw new Phd2Exception("PHD2 found no guide star in the bounded search ROI.");
+                ?? throw new Phd2NoGuideStarException();
             var maximumX = searchRoi.X + searchRoi.Width;
             var maximumY = searchRoi.Y + searchRoi.Height;
-            if (selected.X < searchRoi.X || selected.X > maximumX ||
-                selected.Y < searchRoi.Y || selected.Y > maximumY)
+            if (selected.X < searchRoi.X || selected.X >= maximumX ||
+                selected.Y < searchRoi.Y || selected.Y >= maximumY)
             {
-                throw new Phd2Exception(
-                    $"PHD2 returned guide star ({selected.X:F2}, {selected.Y:F2}) outside " +
-                    $"the requested ROI [{searchRoi.X}, {searchRoi.Y}, {searchRoi.Width}, {searchRoi.Height}].");
+                throw new Phd2GuideStarOutsideRoiException(selected, searchRoi);
             }
 
             UpdateSnapshot(current => current with
@@ -885,11 +888,18 @@ public sealed class Phd2Client : IPhd2Client
                 message.Name == "LoopingExposures" &&
                 message.Sequence > baseline.EventSequence &&
                 GetOptionalInt64(message.Payload, "Frame") is >= 1);
+            // The first full frame has the same camera/USB readout latency as
+            // single-frame acquisition. Do not abort a valid 2 s exposure at
+            // the shorter selection timeout while its owner is still reading.
+            // This is one finite event wait, not another loop/guide command.
+            var frameTimeout = request.FreshFrameTimeout >= options.MinimumLoopingFrameEventTimeout
+                ? request.FreshFrameTimeout
+                : options.MinimumLoopingFrameEventTimeout;
             await InvokeAsync("loop", parameters: null, cancellationToken).ConfigureAwait(false);
             var frameEvent = await WaitForEventAsync(
                     frameWaiter,
                     "fresh full-frame looping exposure",
-                    request.FreshFrameTimeout,
+                    frameTimeout,
                     cancellationToken)
                 .ConfigureAwait(false);
             var frame = GetOptionalInt64(frameEvent.Payload, "Frame")
@@ -940,8 +950,8 @@ public sealed class Phd2Client : IPhd2Client
         {
             ThrowIfAutomationPaused();
             var state = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-            if (state is not Phd2AppState.Stopped and not Phd2AppState.Selected)
-                throw new Phd2CaptureException($"PHD2 exposure selection requires Stopped or Selected state; current state is {state}. No exposure command was sent.");
+            if (state != Phd2AppState.Stopped)
+                throw new Phd2CaptureException($"PHD2 exposure selection requires Stopped state; current state is {state}. No exposure command was sent.", state);
             try
             {
                 await InvokeAsync("set_exposure", new[] { exposureMilliseconds }, cancellationToken).ConfigureAwait(false);
@@ -1018,6 +1028,7 @@ public sealed class Phd2Client : IPhd2Client
                 ?? throw new Phd2CaptureException("Fresh PHD2 GuideStep omitted its frame number.");
 
             EnsureSameGuidingEpoch(baseline, "before save_image");
+            var beforeSave = Snapshot;
             var saveResult = await InvokeAsync("save_image", parameters: null, cancellationToken)
                 .ConfigureAwait(false);
             var sourcePath = GetRequiredString(saveResult, "filename");
@@ -1027,6 +1038,11 @@ public sealed class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
             EnsureSameGuidingEpoch(baseline, "after immutable evidence copy");
+            var afterSave = Snapshot;
+            var nativeFrameBound = beforeSave.LastGuideStep?.Frame == guideFrame &&
+                                   afterSave.LastGuideStep?.Frame == guideFrame &&
+                                   beforeSave.LockPosition is not null &&
+                                   beforeSave.LockPosition == afterSave.LockPosition;
 
             return new Phd2GuidingFrameResult(
                 destinationPath,
@@ -1038,7 +1054,9 @@ public sealed class Phd2Client : IPhd2Client
                 GuidingWasInterrupted: false,
                 ExposureChanged: false,
                 CaptureLoopStarted: false,
-                AutomaticRetryAllowed: false);
+                AutomaticRetryAllowed: false,
+                NativeGuideStep: nativeFrameBound ? guideStep : null,
+                NativeLockPosition: nativeFrameBound ? beforeSave.LockPosition : null);
         }
         finally
         {
@@ -1394,14 +1412,21 @@ public sealed class Phd2Client : IPhd2Client
                 .ConfigureAwait(false);
             MarkGuideCommandAccepted(localOperationId);
 
-            var eventTimeout = TimeSpan.FromSeconds(criteria.TimeoutSeconds) + options.EventTimeoutMargin;
+            // PHD2 starts its settle clock after taking over the capture loop,
+            // and reports completion at an exposure boundary. The local RPC
+            // clock must also cover startup/readout and that final frame.
+            // This does not lengthen PHD2's requested settle criteria.
+            var verifiedFrameMilliseconds = Math.Max(0, Snapshot.LastSingleFrame?.VerifiedExposureMilliseconds ?? 0);
+            var eventTimeout = TimeSpan.FromSeconds(criteria.TimeoutSeconds) +
+                options.EventTimeoutMargin + options.EventTimeoutMargin +
+                TimeSpan.FromMilliseconds(2d * verifiedFrameMilliseconds);
             Phd2EventMessage? calibrationTerminal = null;
             if (calibrationWaiter is not null)
             {
                 calibrationTerminal = await WaitForEventAsync(
                         calibrationWaiter,
                         "forced recalibration",
-                        eventTimeout,
+                        options.ForcedCalibrationEventTimeout,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -1444,17 +1469,12 @@ public sealed class Phd2Client : IPhd2Client
             await BestEffortStopCaptureAsync().ConfigureAwait(false);
             throw;
         }
-        catch (Phd2CommandTimeoutException ex)
+        catch (Phd2CommandTimeoutException)
         {
-            if (preserveSameEpochGuidingOnSettleTimeout && operationId.HasValue)
-            {
-                var timedOutGuiding = TryAttestTimedOutGuidingOperation(operationId.Value, ex);
-                if (timedOutGuiding is not null)
-                {
-                    operationCompleted = true;
-                    return timedOutGuiding;
-                }
-            }
+            // A local timeout is not a remote terminal event. In particular,
+            // do not synthesize LastSettle and clear the pending operation:
+            // its real, slightly later SettleDone would invalidate the guide
+            // epoch while the caller was already collecting residual frames.
             if (operationId.HasValue)
             {
                 AbortSettleOperation(operationId.Value);
@@ -1606,11 +1626,11 @@ public sealed class Phd2Client : IPhd2Client
         CancellationToken cancellationToken)
     {
         var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-        if (appState is not Phd2AppState.Stopped and not Phd2AppState.Selected)
+        if (appState != Phd2AppState.Stopped)
         {
             throw new Phd2CaptureException(
-                $"PHD2 full-frame acquisition requires an idle Stopped or Selected state; current state is {appState}. " +
-                "The existing capture, calibration, or guiding session was left untouched.");
+                $"PHD2 full-frame acquisition requires a confirmed Stopped state; current state is {appState}. " +
+                "The existing capture, calibration, or guiding session was left untouched.", appState);
         }
 
         var priorExposureResult = await InvokeAsync(
@@ -1715,7 +1735,7 @@ public sealed class Phd2Client : IPhd2Client
         return result;
     }
 
-    private async Task<Phd2AppState> GetAppStateAsync(CancellationToken cancellationToken)
+    public async Task<Phd2AppState> GetAppStateAsync(CancellationToken cancellationToken)
     {
         var result = await InvokeAsync("get_app_state", parameters: null, cancellationToken).ConfigureAwait(false);
         var appState = result.ValueKind == JsonValueKind.String
@@ -2433,55 +2453,6 @@ public sealed class Phd2Client : IPhd2Client
                 : current);
     }
 
-    private Phd2SettleResult? TryAttestTimedOutGuidingOperation(
-        long operationId,
-        Phd2CommandTimeoutException timeout)
-    {
-        Phd2SettleResult? accepted = null;
-        UpdateSnapshot(current =>
-        {
-            if (current.PendingSettleOperationId != operationId ||
-                current.PendingSettleConnectionEpoch != current.ConnectionEpoch ||
-                current.PendingSettleGuideEpoch != current.GuideEpoch ||
-                !current.PendingSettleCommandAccepted ||
-                !current.IsConnected ||
-                current.AutomationPaused ||
-                current.Phd2Paused ||
-                current.AppState != Phd2AppState.Guiding)
-            {
-                return current;
-            }
-
-            accepted = new Phd2SettleResult(
-                Succeeded: false,
-                Error: timeout.Message,
-                TotalFrames: 0,
-                DroppedFrames: 0,
-                CompletedUtc: DateTimeOffset.UtcNow);
-            return current with
-            {
-                LastSettle = accepted,
-                SettleProgress = null,
-                LastSettleOperationId = operationId,
-                LastSettleCommandAccepted = true,
-                LastSettleConnectionEpoch = current.ConnectionEpoch,
-                LastSettleGuideEpoch = current.GuideEpoch,
-                PendingSettleOperationId = null,
-                PendingSettleConnectionEpoch = null,
-                PendingSettleGuideEpoch = null,
-                PendingSettleArmedAfterSequence = null,
-                PendingSettleBeginSequence = null,
-                PendingSettleCommandAccepted = false,
-                PendingTakeoverLoopStopAllowed = false,
-                PendingLateLoopFrameAllowed = false,
-                PendingForceRecalibration = false,
-                PendingCalibrationStartSequence = null,
-                PendingCalibrationTerminalSequence = null,
-            };
-        });
-        return accepted;
-    }
-
     private EventWaiterRegistration RegisterEventWaiter(Func<Phd2EventMessage, bool> predicate)
     {
         var id = Guid.NewGuid();
@@ -2922,7 +2893,10 @@ public sealed class Phd2Client : IPhd2Client
     }
 
     private static bool IsIdle(Phd2AppState state) =>
-        state is Phd2AppState.Stopped or Phd2AppState.Selected;
+        // Guider::GetExposedState can return Selected while CaptureActive is
+        // true. StopCapturing is asynchronous, so keep polling until Stopped;
+        // the stop RPC acknowledgement or Selected alone is not idle proof.
+        state == Phd2AppState.Stopped;
 
     private static string GetRequiredString(JsonElement element, string propertyName)
     {

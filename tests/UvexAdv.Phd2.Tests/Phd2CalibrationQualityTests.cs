@@ -6,6 +6,67 @@ public sealed class Phd2CalibrationQualityTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ReadOnlyPostLockEvidenceNeverPretendsToBeNativeSettleOrUnattended(bool nativeSucceeded)
+    {
+        var native = new Phd2SettleResult(nativeSucceeded, nativeSucceeded ? null : "original timeout", 10, 0, Now.AddHours(-1));
+        var evidence = Settle() with
+        {
+            Result = native, GuideCommandAccepted = false, SettleBeginObserved = false,
+            ReadOnlyPostLockWindow = true, ExactLockReadbackVerified = true,
+            FreshGuidingWindowAccepted = true, FreshGuidingSampleCount = 3,
+            FreshGuidingWindowCompletedUtc = Now.AddSeconds(-2),
+        };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(
+            Candidate(0) with { Settle = evidence }, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.Equal(Phd2CalibrationQualityGrade.DegradedSupervised, result.Grade);
+        Assert.True(result.IsLockShiftAuthority);
+        Assert.False(result.IsUnattendedScienceAuthority);
+        Assert.True(result.RequiresOperatorSupervision);
+        Assert.Same(native, evidence.Result);
+        Assert.Contains(result.Reasons, reason => reason.Contains("No new native guide/settle"));
+
+        Phd2CalibrationSettleEvidence[] invalid =
+        [
+            evidence with { ExactLockReadbackVerified = false },
+            evidence with { FreshGuidingWindowAccepted = false },
+            evidence with { FreshGuidingSampleCount = 2 },
+            evidence with { SameConnectionEpoch = false },
+            evidence with { SameGuideEpoch = false },
+            evidence with { FreshGuidingWindowCompletedUtc = null },
+            evidence with { FreshGuidingWindowCompletedUtc = Now.AddHours(-1) },
+            evidence with { FreshGuidingWindowCompletedUtc = Now.AddSeconds(1) },
+        ];
+        foreach (var rejected in invalid)
+        {
+            var assessment = Phd2CalibrationQualityEvaluator.Evaluate(
+                Candidate(0) with { Settle = rejected }, Phd2CalibrationQualityPolicy.Default, Now);
+            Assert.Equal(Phd2CalibrationQualityGrade.Rejected, assessment.Grade);
+            Assert.False(assessment.IsLockShiftAuthority);
+        }
+    }
+
+    [Fact]
+    public void ProvenSupervisedGuideOffsetWarnsWithoutRelaxingTargetSlitTolerance()
+    {
+        var candidate = Candidate(0) with
+        {
+            FreshResidual = Residual() with { ResidualPixels = 5, IsSupervisedGuideLockResidual = true },
+        };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.True(result.IsLockShiftAuthority);
+        Assert.True(result.RequiresOperatorSupervision);
+        Assert.False(result.IsUnattendedScienceAuthority);
+        Assert.Empty(result.HardFailures);
+        Assert.Contains(result.Reasons, reason => reason.Contains("guide/lock tracking residual"));
+        var targetFailure = Phd2CalibrationQualityEvaluator.Evaluate(
+            candidate with { FreshResidual = candidate.FreshResidual! with { IsSupervisedGuideLockResidual = false } },
+            Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.False(targetFailure.IsLockShiftAuthority);
+    }
+
     [Fact]
     public void ElevenPointSevenDegreesIsDegradedAndUsableUnderExplicitSupervision()
     {
@@ -128,6 +189,40 @@ public sealed class Phd2CalibrationQualityTests
 
         Assert.Equal(Phd2CalibrationQualityGrade.Rejected, assessment.Grade);
         Assert.False(assessment.IsLockShiftAuthority);
+    }
+
+    [Fact]
+    public void SupervisedTrackingWarningDoesNotTightenPhysicalSlitTolerance()
+    {
+        var candidate = Candidate(4) with
+        {
+            Settle = Settle() with
+            {
+                Result = new Phd2SettleResult(false, "settle timeout", 40, 32, Now.AddSeconds(-5)),
+                FreshGuidingWindowAccepted = true,
+                FreshGuidingSampleCount = 3,
+            },
+            FreshResidual = Residual() with { IsSupervisedGuideLockResidual = true, ResidualPixels = 5 },
+        };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.True(result.IsLockShiftAuthority);
+        Assert.True(result.RequiresOperatorSupervision);
+        Assert.False(result.IsUnattendedScienceAuthority);
+        Assert.Equal(1, result.RequiredResidualToleranceScale);
+        Assert.Equal(0.5, result.MaximumLockShiftScale);
+        Assert.Empty(result.HardFailures);
+        Assert.False(candidate.Settle.Result.Succeeded);
+
+        var stale = Phd2CalibrationQualityEvaluator.Evaluate(candidate with
+        {
+            FreshResidual = candidate.FreshResidual with { CapturedUtc = Now.AddMinutes(-10) },
+        }, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.False(stale.IsLockShiftAuthority);
+        var epochMismatch = Phd2CalibrationQualityEvaluator.Evaluate(candidate with
+        {
+            Settle = candidate.Settle with { SameGuideEpoch = false },
+        }, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.False(epochMismatch.IsLockShiftAuthority);
     }
 
     [Fact]

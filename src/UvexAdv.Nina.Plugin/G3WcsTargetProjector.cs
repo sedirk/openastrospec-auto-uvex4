@@ -75,7 +75,27 @@ internal static class G3WcsTargetProjector
         int imageWidth,
         int imageHeight,
         string solverIdentity,
-        PixelPoint desiredTargetPixel)
+        PixelPoint desiredTargetPixel) => SolveCenterCore(
+            target, solve, imageWidth, imageHeight, solverIdentity, desiredTargetPixel, 0);
+
+    internal static G3WcsInverseSolution SolveCenterForNeighbourTargetAtPixel(
+        Coordinates target,
+        PlateSolveResult solve,
+        int imageWidth,
+        int imageHeight,
+        string solverIdentity,
+        PixelPoint desiredTargetPixel) => SolveCenterCore(
+            target, solve, imageWidth, imageHeight, solverIdentity, desiredTargetPixel,
+            G3WcsApproachPolicy.NeighbourClearancePixels);
+
+    private static G3WcsInverseSolution SolveCenterCore(
+        Coordinates target,
+        PlateSolveResult solve,
+        int imageWidth,
+        int imageHeight,
+        string solverIdentity,
+        PixelPoint desiredTargetPixel,
+        double exteriorMarginPixels)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(solve);
@@ -84,9 +104,11 @@ internal static class G3WcsTargetProjector
         if (imageWidth <= 0 || imageHeight <= 0)
             throw new ArgumentOutOfRangeException(nameof(imageWidth), "Image dimensions must be positive.");
         if (!double.IsFinite(desiredTargetPixel.X) || !double.IsFinite(desiredTargetPixel.Y) ||
-            desiredTargetPixel.X < 0 || desiredTargetPixel.X >= imageWidth ||
-            desiredTargetPixel.Y < 0 || desiredTargetPixel.Y >= imageHeight)
-            throw new ArgumentOutOfRangeException(nameof(desiredTargetPixel), "The requested detector destination must be finite and inside the image.");
+            desiredTargetPixel.X < -exteriorMarginPixels - 1e-6 || desiredTargetPixel.X > imageWidth + exteriorMarginPixels + 1e-6 ||
+            desiredTargetPixel.Y < -exteriorMarginPixels - 1e-6 || desiredTargetPixel.Y > imageHeight + exteriorMarginPixels + 1e-6 ||
+            (exteriorMarginPixels == 0 && (desiredTargetPixel.X < 0 || desiredTargetPixel.X >= imageWidth ||
+                                         desiredTargetPixel.Y < 0 || desiredTargetPixel.Y >= imageHeight)))
+            throw new ArgumentOutOfRangeException(nameof(desiredTargetPixel), "The requested detector destination is outside the permitted image/neighbor envelope.");
 
         var currentProjection = Project(target, solve, imageWidth, imageHeight, solverIdentity);
         var centerRaDegrees = NormalizeDegrees(solve.Coordinates.RADegrees);

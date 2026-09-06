@@ -46,22 +46,20 @@ internal static class PreviewImageFactory
     public static ImageSource CreateAtrSpectrum()
     {
         var visual = new DrawingVisual();
-        using var context = visual.RenderOpen();
-        context.DrawRectangle(new SolidColorBrush(Color.FromRgb(3, 9, 18)), null, new Rect(0, 0, Width, Height));
-
-        var bandBrush = new LinearGradientBrush(
-            Color.FromArgb(30, 56, 189, 248),
-            Color.FromArgb(95, 45, 212, 191),
-            0);
-        context.DrawRectangle(bandBrush, null, new Rect(32, Height * 0.42, Width - 64, Height * 0.16));
+        using (var context = visual.RenderOpen())
+        {
+            context.DrawRectangle(Brushes.Black, null, new Rect(0, 0, Width, Height));
+            var bandBrush = new LinearGradientBrush(Color.FromRgb(20, 20, 20), Color.FromRgb(100, 100, 100), 0);
+            context.DrawRectangle(bandBrush, null, new Rect(32, Height * 0.48, Width - 64, Height * 0.04));
+        }
 
         var spectrum = new StreamGeometry();
         using (var geometry = spectrum.Open())
         {
-            geometry.BeginFigure(new Point(32, Height * 0.72), false, false);
+            geometry.BeginFigure(new Point(32, 150), false, false);
             for (var x = 33; x < Width - 32; x += 3)
             {
-                var baseline = Height * 0.72;
+                const double baseline = 150;
                 var peak1 = 115 * Math.Exp(-Math.Pow((x - 265) / 14d, 2));
                 var peak2 = 82 * Math.Exp(-Math.Pow((x - 530) / 21d, 2));
                 var peak3 = 135 * Math.Exp(-Math.Pow((x - 744) / 10d, 2));
@@ -70,9 +68,13 @@ internal static class PreviewImageFactory
         }
 
         spectrum.Freeze();
-        context.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(56, 189, 248)), 2), spectrum);
-        DrawLabel(context, "ATR · 2D ROI + live 1D extraction", 18, 18, Color.FromRgb(125, 211, 252));
-        return Render(visual);
+        var plot = new DrawingGroup();
+        using (var context = plot.Open())
+        {
+            context.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), null, new Rect(0, 0, Width, 160));
+            context.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(56, 189, 248)), 2), spectrum);
+        }
+        return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new DrawingImage(plot));
     }
 
     private static DrawingVisual CreateStarField(int seed, bool defocused, out DrawingContext context)

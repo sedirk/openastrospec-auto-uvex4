@@ -12,6 +12,10 @@ public sealed class Phd2ClientOptions
 
     public TimeSpan EventTimeoutMargin { get; init; } = TimeSpan.FromSeconds(5);
 
+    // Calibration walks both axes and returns them before PHD2 starts its
+    // separate settle clock. A short settle timeout is not a calibration limit.
+    public TimeSpan ForcedCalibrationEventTimeout { get; init; } = TimeSpan.FromMinutes(4);
+
     /// <summary>
     /// Minimum wall-clock allowance for each full-frame LoopingExposures event.
     /// Short exposures are still dominated by camera readout, USB transfer and
@@ -52,6 +56,7 @@ public sealed class Phd2ClientOptions
 
         ValidatePositiveTimeout(CommandTimeout, nameof(CommandTimeout));
         ValidatePositiveTimeout(EventTimeoutMargin, nameof(EventTimeoutMargin));
+        ValidatePositiveTimeout(ForcedCalibrationEventTimeout, nameof(ForcedCalibrationEventTimeout));
         ValidatePositiveTimeout(MinimumLoopingFrameEventTimeout, nameof(MinimumLoopingFrameEventTimeout));
         ValidatePositiveTimeout(FileReadyTimeout, nameof(FileReadyTimeout));
         ValidatePositiveTimeout(CalibrationValidationTtl, nameof(CalibrationValidationTtl));

@@ -7,6 +7,17 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class ObservationUiPresentationTests
 {
+    [Fact]
+    public void ReadOnlyPostLockProgressIsLocalizedWithoutHidingTechnicalIdentity()
+    {
+        var chinese = ObservationUiPresentation.PresentUiNotice("PHD2_POST_LOCK_OBSERVING", new CultureInfo("zh-CN"));
+        var english = ObservationUiPresentation.PresentUiNotice("PHD2_POST_LOCK_OBSERVING", new CultureInfo("en-US"));
+        Assert.Contains("不重复启动稳定等待", chinese.Message);
+        Assert.Contains("without restarting native settling", english.Message);
+        Assert.False(ObservationUiPresentation.ContainsCjk(english.Message));
+        Assert.Equal("PHD2_POST_LOCK_OBSERVING", chinese.TechnicalDetails);
+    }
+
     private static readonly CultureInfo Chinese = CultureInfo.GetCultureInfo("zh-CN");
     private static readonly CultureInfo English = CultureInfo.GetCultureInfo("en-US");
 
@@ -39,9 +50,16 @@ public sealed class ObservationUiPresentationTests
     [InlineData("PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED", "撞到探测器边缘")]
     [InlineData("G3_FRAME_REUSED", "拒绝复用旧 G3")]
     [InlineData("G3_CATALOG_WCS_AUTHORITY_INVALID", "目录/WCS 目标几何证据格式无效")]
+    [InlineData("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", "饱和目标的目录身份")]
+    [InlineData("PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED", "有界补拍次数已经用尽")]
+    [InlineData("SLIT_LOCUS_LOW_CONFIDENCE", "物理狭缝对比度不足")]
+    [InlineData("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", "观测计划明确声明目标")]
+    [InlineData("G3_SOLVE_PROBE_OVEREXPOSED", "曝光或天光过亮")]
     [InlineData("G3_CLOUD_OR_TRANSPARENCY_INVALID", "云层或透明度突变")]
     [InlineData("QHY_MOUNT_COORDINATE_SYNC_READBACK_FAILED", "同步赤道仪坐标后")]
     [InlineData("UVEX_NOT_READY", "UVEX4 服务未返回 Ready")]
+    [InlineData("UVEX_SLIT_ILLUMINATION_OFF_UNVERIFIED", "关闭状态未得到完整确认")]
+    [InlineData("PHD2_LOCK_RESTART_RETURN_RESIDUAL_MISMATCH", "已经返回恢复原点")]
     public void FrequentCodesHaveSpecificChineseSummaries(string code, string expected)
     {
         var presentation = ObservationUiPresentation.Present(
@@ -72,6 +90,39 @@ public sealed class ObservationUiPresentationTests
         Assert.Contains("拒绝复用旧 G3", presentation.Summary, StringComparison.Ordinal);
         Assert.Contains("内部代码 G3_FRAME_REUSED", presentation.Summary, StringComparison.Ordinal);
         Assert.StartsWith("PHD2_SLIT_PLACEMENT_FAILED_SAFE:", presentation.TechnicalDetails, StringComparison.Ordinal);
+        Assert.Equal("PHD2_SLIT_PLACEMENT_FAILED_SAFE", gate.Code);
+    }
+
+    [Fact]
+    public void RecoveryCodeDoesNotMistakeTheLettersCoverInsideRecoveryForAnOpticalCoverFault()
+    {
+        var presentation = ObservationUiPresentation.Present(
+            ObservationStage.PlaceTargetOnSlit,
+            GateResult.Unknown(
+                "PHD2_LOCK_RECOVERY_FRESH_FIELD_REQUIRED",
+                "Fresh reacquisition returned G3_STAR_FIELD_SPARSE_VALID_EXPOSURE."),
+            Chinese);
+
+        Assert.Contains("正式 G3/PL3", presentation.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("屋顶", presentation.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("盖板", presentation.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExhaustedFreshSlitRetryWinsOverItsLastLowConfidenceCause()
+    {
+        var gate = GateResult.Unknown(
+            "PHD2_SLIT_PLACEMENT_FAILED_SAFE",
+            "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED: 2/3 accepted; " +
+            "SLIT_LOCUS_LOW_CONFIDENCE: contrast 2.93; bounded outcome PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED.");
+
+        var presentation = ObservationUiPresentation.Present(
+            ObservationStage.PlaceTargetOnSlit,
+            gate,
+            Chinese);
+
+        Assert.Contains("有界补拍次数已经用尽", presentation.Summary, StringComparison.Ordinal);
+        Assert.Contains("内部代码 PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED", presentation.Summary, StringComparison.Ordinal);
         Assert.Equal("PHD2_SLIT_PLACEMENT_FAILED_SAFE", gate.Code);
     }
 

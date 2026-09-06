@@ -36,7 +36,11 @@ public sealed class EmbeddedImageViewerControlTests
                 Assert.False(viewer.HasImage);
                 Assert.Equal(1.0, viewer.Zoom);
 
-                viewer.PreviewImage = CreateTestBitmap();
+                var overlay = new DrawingImage(new GeometryDrawing(Brushes.OrangeRed, null,
+                    new RectangleGeometry(new Rect(0, 0, 1600, 1200))));
+                var spectrum = new DrawingImage(new GeometryDrawing(Brushes.Turquoise, null,
+                    new RectangleGeometry(new Rect(0, 0, 1200, 180))));
+                viewer.PreviewImage = ObservationPreviewLayers.Attach(CreateTestBitmap(), overlay, spectrum);
                 viewer.Measure(new Size(800, 500));
                 viewer.Arrange(new Rect(0, 0, 800, 500));
                 viewer.UpdateLayout();
@@ -59,15 +63,23 @@ public sealed class EmbeddedImageViewerControlTests
                 Assert.Equal((byte)220, viewer.DisplayedLevels.WhitePoint);
                 Assert.Equal(1.4, viewer.DisplayedLevels.Gamma, precision: 10);
                 Assert.NotSame(viewer.PreviewImage, viewer.DisplayedImage);
+                Assert.Same(overlay, viewer.DisplayedOverlay);
+                Assert.Same(spectrum, viewer.DisplayedSpectrum);
 
                 viewer.SetDisplayStretch(true, 0, 255, 1);
                 Assert.True(viewer.AutomaticStretchEnabled);
                 Assert.True(viewer.DisplayedLevels.WhitePoint > viewer.DisplayedLevels.BlackPoint);
+                Assert.Same(overlay, viewer.DisplayedOverlay);
+                Assert.Same(spectrum, viewer.DisplayedSpectrum);
+                viewer.ShowActualSize();
+                Assert.Same(spectrum, viewer.DisplayedSpectrum);
 
                 viewer.PreviewImage = null;
                 Assert.False(viewer.HasImage);
                 Assert.Equal(1.0, viewer.Zoom, precision: 10);
                 Assert.Equal(Visibility.Collapsed, popoutButton.Visibility);
+                Assert.Null(viewer.DisplayedOverlay);
+                Assert.Null(viewer.DisplayedSpectrum);
             }
             catch (Exception exception)
             {

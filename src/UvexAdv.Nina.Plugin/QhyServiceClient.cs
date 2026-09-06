@@ -172,7 +172,8 @@ internal sealed class QhyServiceClient : IDisposable
     public async Task<QhyJobSnapshot> WaitForFirstFrameOrTerminalAsync(
         Guid id,
         Func<QhyJobSnapshot, Task>? onPoll,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowPhotometryQualityWarning = false)
     {
         while (true)
         {
@@ -181,13 +182,16 @@ internal sealed class QhyServiceClient : IDisposable
                 ?? throw new InvalidOperationException($"QHY service lost job {id:D}.");
             if (onPoll is not null) await onPoll(snapshot).ConfigureAwait(false);
             // A frame is published before its quality gate has necessarily been
-            // evaluated. Only acknowledge that exact frame after the service marks
-            // it healthy; PausedNeedsAttention remains a quiescent failure result.
-            var evaluatedHealthyFrameAvailable =
+            // evaluated. Require the service's evaluation of that exact saved
+            // frame. Optional photometry may retain a quality warning without
+            // blocking ATR; this never changes the frame's accepted/quality flag
+            // and never relaxes acquisition-frame acceptance.
+            var evaluatedFrameAvailable =
                 snapshot.LastEvaluatedFrameId is { } evaluatedFrameId &&
-                snapshot.LastFramePassedQualityGate == true &&
+                snapshot.LastFramePassedQualityGate is { } passedQuality &&
+                (passedQuality || (allowPhotometryQualityWarning && snapshot.Kind == QhyJobKind.Photometry)) &&
                 snapshot.Frames.Any(frame => frame.FrameId == evaluatedFrameId);
-            if (evaluatedHealthyFrameAvailable || snapshot.State == QhyJobState.PausedNeedsAttention || IsTerminal(snapshot.State)) return snapshot;
+            if (evaluatedFrameAvailable || snapshot.State == QhyJobState.PausedNeedsAttention || IsTerminal(snapshot.State)) return snapshot;
             await Task.Delay(400, cancellationToken).ConfigureAwait(false);
         }
     }

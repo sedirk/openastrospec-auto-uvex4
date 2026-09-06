@@ -263,7 +263,9 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 “10 ms 不可用”。目标不可直接稳定导星时才调用 PHD2 原生旁星选择。若同帧确实
 没有独立星，可继续采用有人监督的短曝光直导目标，追踪大气抖动与目标在狭缝上下
 漂移；不得把短曝光用作对焦证据。狭缝定位只认 LED/OFF 证据中的黑色不反光有限
-孔径，最终残差为目标到该有限中心线的垂直/端点距离，不是到历史中点的欧氏距离。
+孔径。2026-08-24 的 [ADR-0006](adr/0006-runtime-slit-midpoint-as-science-destination.md)
+已取代该夜的最近点规则：当前科学完成残差是目标到**本轮实测黑孔径几何中点**的
+欧氏距离，不是到历史固定像素的距离；有限中心线垂直/端点距离保留作物理保护与诊断。
 完整现场结论见 [2026-08-23 实机调试收口](commissioning-night-2026-08-23.md)。
 
 ### 4.2 N.I.N.A. 原生目标、文件名与 FITS 溯源
@@ -275,9 +277,16 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 3. 推荐使用 `$$DATEMINUS12$$\$$TARGETNAME$$\$$IMAGETYPE$$\$$DATETIME$$_$$TARGETNAME$$_$$EXPOSURETIME$$s_G$$GAIN$$_O$$OFFSET$$_$$FRAMENR$$`；不同布局只要保留目标令牌仍可运行，缺少 `$$IMAGETYPE$$` 作为可见建议而不是运动安全硬门；
 4. 只有操作员检查“当前值”和“推荐值”后，才点击“应用推荐的目标分目录模板”；本次 N.I.N.A. 会话可用相邻撤销按钮恢复。不得在插件加载或真实运行启动时静默改写 Profile；
 5. 在高级序列中确认 `OpenAstroSpec · UVEX4 目标观测` 能被 N.I.N.A. 识别为原生目标容器，目标名和 J2000 坐标修改后仍与兼容字段一致；
-6. 使用模拟/离线 FITS 验证器先检查 `OBJECT`、`OBSRUNID`、`UVEXSTG`、`UVEXCID`、`NIGHTSET`、`IMAGETYP` 和可选 `CATALOG`。真实保存后插件只读重开同一绝对路径；任何不一致均发布 `ATR_FITS_PROVENANCE_MISMATCH`，保留原始 FITS，不重命名、不移动、不改写，也不计为已接受科学帧。
+6. 使用模拟/离线 FITS 验证器先检查 `OBJECT`、`OBSRUNID`、`UVEXSTG`、`UVEXCID`、`NIGHTSET`、`IMAGETYP` 和可选 `CATALOG`。schema 2 还须检查 `NINATYP` 及原始目标/Night Setup/目录标识的全部 UTF-8 Base64 分段；ASCII 别名与可还原的原文必须同时匹配。NINA 把探测 `SNAPSHOT` 保存为 `IMAGETYP=LIGHT` 是原生表示，不代表科学帧；角色仍由 `UVEXSTG` 与 `NINATYP` 区分。真实保存后插件只读重开同一绝对路径；任何不一致均发布 `ATR_FITS_PROVENANCE_MISMATCH`，保留原始 FITS，不重命名、不移动、不改写，也不计为已接受科学帧。
 
 旧文件不会被追溯重排。若旧文件名没有目标，优先用当次 run manifest 建立跨相机关联；缺少 manifest 时只能读取 FITS `OBJECT` 和坐标。`OBJECT` 只保存稳定科学目标名，不得再拼入 run、probe/science、重试或帧号。完整约束见 [ADR-0007](adr/0007-nina-native-target-and-image-provenance.md)。
+
+有人监督且已授权的质量例外见 [ADR-0013](adr/0013-supervised-slit-quality-warning-probe.md)。
+0.4.0.138 的出站微调保留 PHD2 原生导星，只读观察锁点后的新事件与至少三张新帧，
+不在每一步重复请求原生稳定等待。`PHD2EV` 分别标记 `READONLY-WINDOW`、`WIND-WINDOW`
+或 `NATIVE-SETTLE`；前两者不是原生稳定成功，不能授予无人值守权限。初始导星、重标定
+与返程仍保留原生流程，设备安全、丢星与连接异常不会被隐藏。本轮最新实测版本是 .137，
+.138 待另外授权安装与前台实测；详见 [2026-09-07 收口记录](commissioning-night-2026-09-07.md)。
 
 ### 4.3 ATR585M 温控与收口
 

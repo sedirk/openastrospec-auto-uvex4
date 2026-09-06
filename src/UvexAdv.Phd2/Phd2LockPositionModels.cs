@@ -53,4 +53,21 @@ public sealed record Phd2GuidingFrameResult(
     bool GuidingWasInterrupted,
     bool ExposureChanged,
     bool CaptureLoopStarted,
-    bool AutomaticRetryAllowed);
+    bool AutomaticRetryAllowed,
+    Phd2GuideStep? NativeGuideStep = null,
+    Phd2Point? NativeLockPosition = null)
+{
+    // PHD2 camera offsets are measured star-minus-lock (or its native
+    // multistar refinement), not the requested destination. Never invent a
+    // zero guide residual when local star segmentation is inconclusive.
+    public Phd2Point? NativeMeasuredGuidePosition =>
+        NativeGuideStep is { Frame: { } frame, DxPixels: { } dx, DyPixels: { } dy } step &&
+        // PHD2 STAR_SATURATED (1) still supplies a successful native centroid;
+        // codes 2+ describe rejected/lost stars and cannot authorize geometry.
+        frame == TriggerGuideFrame && step.ErrorCode is null or 0 or 1 &&
+        NativeLockPosition is { } position &&
+        double.IsFinite(dx) && double.IsFinite(dy) &&
+        double.IsFinite(position.X) && double.IsFinite(position.Y)
+            ? new Phd2Point(position.X + dx, position.Y + dy)
+            : null;
+}

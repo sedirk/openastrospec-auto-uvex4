@@ -56,11 +56,12 @@
         <RowDefinition Height="Auto" />
         <RowDefinition Height="*" />
         <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
       <Border Grid.Row="0" Background="#101A28" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="4">
         <DockPanel LastChildFill="True" ToolTip="滚轮缩放 · 左键拖动 · 双击适配">
-          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
             <Button Content="{Binding PopoutLabel, ElementName=ViewerRoot}"
                     Command="{Binding PopoutCommand, ElementName=ViewerRoot}"
                     ToolTip="在独立可缩放窗口中打开当前图像"
@@ -168,14 +169,14 @@
                       PreviewMouseMove="OnPreviewMouseMove"
                       LostMouseCapture="OnLostMouseCapture"
                       SizeChanged="OnViewportSizeChanged">
-          <Image x:Name="PreviewImageElement"
-                 Stretch="Fill"
-                 SnapsToDevicePixels="True"
-                 RenderOptions.BitmapScalingMode="HighQuality">
-            <Image.LayoutTransform>
+          <Grid x:Name="ImageSurface" ClipToBounds="True">
+            <Grid.LayoutTransform>
               <ScaleTransform x:Name="ImageScaleTransform" ScaleX="1" ScaleY="1" />
-            </Image.LayoutTransform>
-          </Image>
+            </Grid.LayoutTransform>
+            <Image x:Name="PreviewImageElement" Stretch="Fill" SnapsToDevicePixels="True"
+                   RenderOptions.BitmapScalingMode="HighQuality" />
+            <Image x:Name="AnnotationImageElement" Stretch="Fill" IsHitTestVisible="False" />
+          </Grid>
         </ScrollViewer>
 
         <Border x:Name="EmptyStatePanel"
@@ -210,8 +211,17 @@
         </Border>
       </Grid>
 
+      <Border x:Name="SpectrumPanel" Grid.Row="2" Visibility="Collapsed"
+              Background="#081322" BorderBrush="#334155" BorderThickness="0,1,0,0" Padding="7,5">
+        <StackPanel>
+          <TextBlock x:Name="SpectrumTitle" Foreground="#7DD3FC" TextWrapping="Wrap" />
+          <Image x:Name="SpectrumImageElement" Height="110" Margin="0,4,0,0" Stretch="Fill" />
+          <TextBlock x:Name="SpectrumOrientationNote" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,3,0,0" />
+        </StackPanel>
+      </Border>
+
       <Border x:Name="CaptionPanel"
-              Grid.Row="2"
+              Grid.Row="3"
               Background="#0C1522"
               BorderBrush="#334155"
               BorderThickness="0,1,0,0"

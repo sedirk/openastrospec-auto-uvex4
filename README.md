@@ -25,11 +25,19 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/commissioning-night-2026-08-26.md) ·
+[latest software/real-sky closeout](docs/commissioning-night-2026-09-07.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [0.4.0.80 UI/localization/recovery closeout](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
+[model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
+
+The [2026-09-07 closeout](docs/commissioning-night-2026-09-07.md) records an installed
+**0.4.0.137 real frontend run: 11/11 completed, with three accepted 3 s Deneb spectra**
+under explicit supervision and retained slit-quality warnings. It also covers the
+layered-preview/FITS fixes and the **0.4.0.138 read-only post-lock guiding follow-up**;
+the latter is not yet installed or sky-verified. QHY photometry quality and stable
+slit throughput remain open, and this result does not certify unattended operation.
 
 The repository contains two user-facing GPL-3.0-only software products:
 
@@ -102,7 +110,7 @@ that commissioning step remains mandatory.
 
 The repository now includes the QHY service, the PHD2 event-server client, the target-acquisition state machine, and the N.I.N.A. real/simulator runners. Healthy stages advance automatically without confirmation dialogs. Failed or indeterminate gates enter `PausedNeedsAttention`; the operator can always pause, resume, cancel, or request manual takeover. Simulator-first commissioning remains mandatory. The authoritative design hashes are checked by the build and versioned Git hook so accidental architectural edits fail visibly.
 
-Plugin `0.4.0.80` consolidates the run header, two-level progress, current issue,
+The current plugin consolidates the run header, two-level progress, current issue,
 quality gates, timeline and evidence into one semantic presentation system. Static
 and dynamic operator text follows N.I.N.A.'s selected UI language (`zh-*` or
 neutral English); stable codes and raw adapter messages remain unchanged under a
@@ -111,6 +119,13 @@ bounded recovery with a run-wide fuse, while safety, identity, hashes, ambiguous
 physical state and exhausted budgets remain hard stops. See the
 [`UI, localization and bounded-recovery closeout`](docs/ui-presentation-localization-and-recovery-2026-08-30.md)
 and the [`automatic-recovery matrix`](docs/automatic-recovery-matrix-2026-08-29.md).
+A current-user-only named-pipe bridge now lets a model backend read that same run
+state and invoke a strict allowlist of the exact `ICommand` objects used by the
+visible front-end controls. It cannot call equipment directly or create a second
+workflow owner. Process-local real authority may be armed through that same
+front-end command only when the request carries the operator's exact attestation;
+the attestation is never logged. See the
+[`model-to-frontend closed-loop interface`](docs/model-frontend-closed-loop.md).
 
 The current GS350/QHY-to-C11/G3 optical-axis difference is never a compiled
 constant. A future optional pre-positioning stage may consume an explicitly

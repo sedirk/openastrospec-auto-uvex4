@@ -56,7 +56,10 @@ public sealed class Phd2GuidingFrameEvidenceTests
             await client.ConnectAsync(CancellationToken.None);
 
             var result = await client.SaveCurrentGuidingFrameAsync(
-                new Phd2GuidingFrameRequest(destinationPath, TimeSpan.FromSeconds(2)),
+                // Solution-wide CI executes every test assembly concurrently;
+                // leave enough wall-clock headroom for the intentionally raced
+                // GuideStep while preserving the same bounded-time assertion.
+                new Phd2GuidingFrameRequest(destinationPath, TimeSpan.FromSeconds(5)),
                 CancellationToken.None);
 
             Assert.Contains(result.TriggerGuideFrame, new long[] { 41, 42 });

@@ -104,6 +104,67 @@ public sealed class QhyServiceClientTests
         Assert.Equal(1, startPosts);
     }
 
+    [Theory]
+    [InlineData(QhyJobKind.Photometry, true, 1)]
+    [InlineData(QhyJobKind.Photometry, false, 2)]
+    [InlineData(QhyJobKind.Acquisition, true, 2)]
+    public async Task FirstFrameMayWarnOnlyForExplicitlyOptionalPhotometry(
+        QhyJobKind kind, bool allowWarning, int expectedPolls)
+    {
+        var id = Guid.NewGuid();
+        var frame = Frame();
+        var polls = 0;
+        var handler = new DelegateHandler(_ => Task.FromResult(JsonResponse(HttpStatusCode.OK,
+            Snapshot(id, QhyJobState.Running, DateTimeOffset.UtcNow.AddMinutes(2)) with
+            {
+                Kind = kind,
+                Frames = [frame],
+                LastEvaluatedFrameId = frame.FrameId,
+                LastFramePassedQualityGate = ++polls > 1,
+            })));
+        using var client = new QhyServiceClient("http://127.0.0.1:18991", handler);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await client.WaitForFirstFrameOrTerminalAsync(id, null, timeout.Token, allowWarning);
+        Assert.Equal(expectedPolls, polls);
+        Assert.Equal(expectedPolls > 1, result.LastFramePassedQualityGate);
+        Assert.Equal(0, result.TotalAcceptedFrameCount);
+        Assert.Contains("STAR_DETECTION_CAPPED", result.Frames.Single().Metrics.QualityFlags);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OptionalPhotometryStillWaitsForEvaluationOfTheExactSavedFrame(bool mismatchedFrame)
+    {
+        var id = Guid.NewGuid();
+        var frame = Frame();
+        var polls = 0;
+        var handler = new DelegateHandler(_ =>
+        {
+            polls++;
+            return Task.FromResult(JsonResponse(HttpStatusCode.OK,
+                Snapshot(id, QhyJobState.Running, DateTimeOffset.UtcNow.AddMinutes(2)) with
+                {
+                    Kind = QhyJobKind.Photometry,
+                    Frames = [frame],
+                    LastEvaluatedFrameId = polls == 1 && mismatchedFrame ? Guid.NewGuid() : frame.FrameId,
+                    LastFramePassedQualityGate = polls == 1 && !mismatchedFrame ? null : false,
+                }));
+        });
+        using var client = new QhyServiceClient("http://127.0.0.1:18991", handler);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await client.WaitForFirstFrameOrTerminalAsync(id, null, timeout.Token, allowPhotometryQualityWarning: true);
+        Assert.Equal(2, polls);
+        Assert.False(result.LastFramePassedQualityGate);
+    }
+
+    private static QhyFrameRecord Frame() => new(
+        Guid.NewGuid(), 1, "PHOTOMETRY-R", "raw.fits", "preview.png", new string('a', 64),
+        DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+        new QhyFrameSettings(5, 20, 20),
+        new QhyFrameMetrics(0, 100, 10, 10, 1, 20, 30, 40, 0, 0, 500, 2.8, 0.05, 1600, 1,
+            ["STAR_DETECTION_CAPPED"]));
+
     private static AcquisitionJobRequest Request(string requestId) => new(
         "plugin-owner-test",
         "target",

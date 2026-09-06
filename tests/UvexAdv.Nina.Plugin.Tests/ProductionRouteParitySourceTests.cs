@@ -116,9 +116,32 @@ public sealed class ProductionRouteParitySourceTests
         Assert.Contains("ATR_SIGNAL_LIMITED_LONGEST_SAFE_TIER", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("ATR_TARGET_CONTRAST_LOW", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("ATR_SNR_LOW", RealRunnerSource, StringComparison.Ordinal);
-        Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", RealRunnerSource, StringComparison.Ordinal);
+        Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", RealRunnerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("configuration.Environment.WeakSupervisionEnabled", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("IsRecoverableG3SearchGate", RealRunnerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SlitQualityWarningRequiresSeparateSessionConsentThroughTheVisibleCommand()
+    {
+        var settings = ReadSource("UvexPluginSettings.cs");
+        var configuration = ReadSource("RealRunConfiguration.cs");
+        var template = ReadSource("Templates.xaml");
+        Assert.Contains("public bool AllowSupervisedSlitQualityWarning { get; set; }", settings, StringComparison.Ordinal);
+        Assert.Contains("bool AllowSupervisedSlitQualityWarning = false)", configuration, StringComparison.Ordinal);
+        Assert.Contains("settings.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);
+        Assert.Contains("payload.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);
+        Assert.Contains("new(\"arm-slit-quality-warning\", armSlitQualityWarningCommand, false, true, true, false", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ArmSlitQualityWarningCommand}\"", template, StringComparison.Ordinal);
+        Assert.Contains("() => !IsControllable && !SupervisedSlitQualityWarningAuthorized", DockableSource, StringComparison.Ordinal);
+        AssertOrdered(DockableSource,
+            "binding.Name == \"arm-slit-quality-warning\"",
+            "ObservationAutomationBridge.SlitQualityOperatorAttestation",
+            "binding.Command.CanExecute(commandParameter)",
+            "binding.Command.Execute(commandParameter)");
+        Assert.Contains("\"SLITWARN\", placementSession.SlitPrecisionWarningActive", RealRunnerSource, StringComparison.Ordinal);
+        Assert.Contains("\"SLITRES\", PointDistance(", RealRunnerSource, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -62,7 +62,7 @@ public sealed class ObservationDockMockViewModel
     public string ModeText { get; init; } = "自动观测：模拟演练";
     public string ModeDescription { get; init; } = "只运行模拟状态机，不连接相机、赤道仪、PHD2 或 COM5。";
     public string RealModeStatus { get; init; } = "真实模式有 3 个启动阻断项；当前演练不受影响。";
-    public string RealModeStatusSummary { get; init; } = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。";
+    public string RealModeStatusSummary { get; init; } = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。";
     public string StartButtonText { get; init; } = "启动模拟演练（不连接设备）";
     public string StateText { get; init; } = "空闲";
     public string StatusMessage { get; init; } = "尚未启动；可以先检查计划与运行模式。";
@@ -85,6 +85,15 @@ public sealed class ObservationDockMockViewModel
     public string OperatorNotice { get; init; } = "离线截图数据；没有加载任何设备控制对象。";
     public string OperatorNoticeTechnicalDetails { get; init; } = string.Empty;
     public bool HasOperatorNoticeTechnicalDetails => !string.IsNullOrWhiteSpace(OperatorNoticeTechnicalDetails);
+    public bool ModelAutomationBridgeEnabled { get; init; }
+    public bool ModelAutomationRealControlArmed { get; init; }
+    public string ModelAutomationBridgeEndpoint { get; init; } = @"\\.\pipe\OpenAstroSpec.UVEX4.ObservationAutomation.v1";
+    public string ModelAutomationBridgeStatusText { get; init; } = "后台自动化桥已关闭；只读端点可报告关闭状态，不能触发按钮。";
+    public string ModelAutomationLastActivity { get; init; } = "尚无后台按钮调用。";
+    public string ModelAutomationInvocationSummary { get; init; } = "后台调用 0 次 · 闭环恢复触发 0 次";
+    public ICommand EnableModelAutomationBridgeCommand => EnabledCommand;
+    public ICommand ArmModelAutomationRealControlCommand => EnabledCommand;
+    public ICommand DisarmModelAutomationRealControlCommand => DisabledCommand;
     public string Error { get; init; } = string.Empty;
     public string ErrorTechnicalDetails { get; init; } = string.Empty;
     public bool HasErrorTechnicalDetails => !string.IsNullOrWhiteSpace(ErrorTechnicalDetails);
@@ -208,7 +217,7 @@ public sealed class ObservationDockMockViewModel
     public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
 
     public int AutomaticPreparationIssueCount { get; init; } = 3;
-    public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。";
+    public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。";
     public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles { get; init; } =
     [
         new(
@@ -425,12 +434,12 @@ public sealed class ObservationDockMockViewModel
         ModeText = "自动观测：真实设备",
         ModeDescription = "这里只选择自动观测的执行方式；手控不要求整套自动观测准入。",
         RealModeStatus = "真实模式仍缺少经过审核的设备标定证据与本夜光学设置；已自动恢复台站运行模板和四类设备候选。",
-        RealModeStatusSummary = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”按红色分组处理。",
+        RealModeStatusSummary = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。",
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
         SelectedWorkspaceTabIndex = 3,
         AutomaticPreparationIssueCount = 8,
-        AutomaticPreparationSummary = "准备尚未完成。先处理红色分组；内部校验不会再作为大段错误显示在主界面。",
+        AutomaticPreparationSummary = "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。",
         IsDevicePreparationMissing = false,
         IsCommissioningPreparationMissing = true,
         IsNightSetupPreparationMissing = true,
@@ -542,6 +551,9 @@ public sealed class ObservationDockMockViewModel
     public static ObservationDockMockViewModel EnglishFailure() => new()
     {
         OperatorNotice = "Offline screenshot data; no equipment-control object was loaded.",
+        ModelAutomationBridgeStatusText = "The model automation bridge is disabled; its read-only endpoint can report that state but cannot invoke buttons.",
+        ModelAutomationLastActivity = "No backend button invocation has occurred.",
+        ModelAutomationInvocationSummary = "0 backend invocations · 0 recovery invocations",
         ModeText = "Automation: real equipment · supervised",
         ModeDescription = "The run stopped at a bounded action boundary and awaits review.",
         RealModeStatus = "✓ Night Setup and device identities were locked for this run.",

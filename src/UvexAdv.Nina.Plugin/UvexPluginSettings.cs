@@ -121,6 +121,7 @@ internal sealed class UvexPluginSettings
     public string ObservationExpectedQhyCameraId { get => GetString(nameof(ObservationExpectedQhyCameraId), "SIM-QHYMINICAM8M"); set => values.SetValueString(nameof(ObservationExpectedQhyCameraId), value); }
     public int ObservationSimulationStageMilliseconds { get => values.GetValueInt32(nameof(ObservationSimulationStageMilliseconds), 1200); set => values.SetValueInt32(nameof(ObservationSimulationStageMilliseconds), value); }
     public bool ObservationUseRealMode { get => values.GetValueBoolean(nameof(ObservationUseRealMode), false); set => values.SetValueBoolean(nameof(ObservationUseRealMode), value); }
+    public bool ModelAutomationBridgeEnabled { get => values.GetValueBoolean(nameof(ModelAutomationBridgeEnabled), false); set => values.SetValueBoolean(nameof(ModelAutomationBridgeEnabled), value); }
 
     // Real target-observation mode is deliberately opt-in. Empty calibration/identity values are
     // interpreted as uncommissioned and cause a NeedsAttention gate instead of guessed motion.
@@ -167,6 +168,8 @@ internal sealed class UvexPluginSettings
     public string Phd2Host { get => GetString(nameof(Phd2Host), "127.0.0.1"); set => values.SetValueString(nameof(Phd2Host), value); }
     public int Phd2Port { get => values.GetValueInt32(nameof(Phd2Port), 4400); set => values.SetValueInt32(nameof(Phd2Port), value); }
     public bool AllowDegradedSupervisedScience { get => values.GetValueBoolean(nameof(AllowDegradedSupervisedScience), false); set => values.SetValueBoolean(nameof(AllowDegradedSupervisedScience), value); }
+    // Separate, process-local scientific-quality consent; never persisted.
+    public bool AllowSupervisedSlitQualityWarning { get; set; }
     public int Phd2ProfileId { get => values.GetValueInt32(nameof(Phd2ProfileId), -1); set => values.SetValueInt32(nameof(Phd2ProfileId), value); }
     public string Phd2ProfileName { get => GetString(nameof(Phd2ProfileName), string.Empty); set => values.SetValueString(nameof(Phd2ProfileName), value); }
     public string Phd2CameraName { get => GetString(nameof(Phd2CameraName), string.Empty); set => values.SetValueString(nameof(Phd2CameraName), value); }

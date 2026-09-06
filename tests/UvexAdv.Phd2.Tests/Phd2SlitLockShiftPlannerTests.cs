@@ -7,6 +7,24 @@ public sealed class Phd2SlitLockShiftPlannerTests
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void SupervisedMeasuredGuideOffsetUsesActualStarAndStillRequiresFrameProof()
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(new Phd2Point(104, 100), new Phd2Point(200, 200), new Phd2Point(205, 200))
+            with { GuidePositionMeasuredInFrame = true };
+        var qualification = fixture.Qualification with { RequiresOperatorSupervision = true, IsUnattendedScienceAuthority = false };
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement, fixture.Ledger, fixture.Safety, fixture.Topology, fixture.MotionLimits, Now);
+        Assert.True(result.IsAllowed, result.Message);
+        Assert.Equal(new Phd2Point(109, 100), result.Stage!.FullDesiredLockPosition);
+        var missingProof = Phd2SlitLockShiftPlanner.PlanOutboundStage(qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement with { GuidePositionMeasuredInFrame = false }, fixture.Ledger, fixture.Safety,
+            fixture.Topology, fixture.MotionLimits, Now);
+        Assert.False(missingProof.IsAllowed);
+        Assert.Equal("GUIDE_LOCK_RESIDUAL_HIGH", missingProof.Code);
+    }
+
+    [Fact]
     public void PierAdaptiveTopologyAcceptsPHD2AutomaticFlipAndCreatesCurrentSideFingerprint()
     {
         var source = Topology() with { PierSide = "East" };
@@ -134,6 +152,84 @@ public sealed class Phd2SlitLockShiftPlannerTests
 
         Assert.False(result.IsAllowed);
         Assert.Equal("G3_CATALOG_WCS_AUTHORITY_INVALID", result.Code);
+    }
+
+    [Fact]
+    public void CatalogIdentityWithFreshSaturatedTopologyCentroidDoesNotUseOrdinaryFluxEnvelope()
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(
+            guide: new Phd2Point(100, 100),
+            target: new Phd2Point(200, 200),
+            slit: new Phd2Point(215, 200),
+            fluxLabel: "SATURATED_TARGET_TOPOLOGY_FLUX_NOT_APPLICABLE",
+            fluxMetric: 0,
+            targetPositionAuthority: Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid);
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.True(result.IsAllowed, $"{result.Code}: {result.Message}");
+        Assert.Equal(new Phd2Point(15, 0), result.Stage!.TargetToSlitDelta);
+    }
+
+    [Theory]
+    [InlineData("TARGET_FLUX", 0)]
+    [InlineData("SATURATED_TARGET_TOPOLOGY_FLUX_NOT_APPLICABLE", 646_360_176)]
+    public void SaturatedTopologyCentroidRejectsAmbiguousOrFabricatedFluxClaims(string label, double flux)
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(
+            guide: new Phd2Point(100, 100),
+            target: new Phd2Point(200, 200),
+            slit: new Phd2Point(215, 200),
+            fluxLabel: label,
+            fluxMetric: flux,
+            targetPositionAuthority: Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid);
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", result.Code);
+    }
+
+    [Fact]
+    public void OrdinaryDetectedTargetStillRejectsFluxAboveCommissionedEnvelope()
+    {
+        var fixture = CreateFixture();
+        var measurement = Measurement(
+            guide: new Phd2Point(100, 100),
+            target: new Phd2Point(200, 200),
+            slit: new Phd2Point(215, 200),
+            fluxMetric: 646_360_176);
+
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", result.Code);
     }
 
     [Fact]
@@ -403,6 +499,71 @@ public sealed class Phd2SlitLockShiftPlannerTests
     }
 
     [Fact]
+    public void FreshPostStageFrameCanAuthorizeTheNextStageExactlyOnce()
+    {
+        var fixture = CreateFixture();
+        var firstMeasurement = Measurement(
+            new Phd2Point(100, 100),
+            new Phd2Point(200, 200),
+            new Phd2Point(215, 200),
+            frameSha: Hash('A'));
+        var first = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            firstMeasurement,
+            fixture.Ledger,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.True(first.IsAllowed);
+        var firstStage = first.Stage!;
+        var afterFirstDispatch = fixture.Ledger with
+        {
+            CurrentLockPosition = firstStage.RequestedLockPosition,
+            AttemptsUsed = fixture.Ledger.AttemptsUsed + 1,
+            CumulativeCommandedPixels = fixture.Ledger.CumulativeCommandedPixels + firstStage.StagePixels,
+            LastAcceptedFrameSha256 = firstStage.SourceFrameSha256,
+        };
+        var freshPostStageMeasurement = Measurement(
+            firstStage.RequestedLockPosition,
+            new Phd2Point(205, 200),
+            new Phd2Point(215, 200),
+            frameSha: Hash('B'));
+
+        var next = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            freshPostStageMeasurement,
+            afterFirstDispatch,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.True(next.IsAllowed);
+        Assert.Equal(Hash('B'), next.Stage!.SourceFrameSha256);
+
+        var afterSecondDispatch = afterFirstDispatch with
+        {
+            LastAcceptedFrameSha256 = next.Stage.SourceFrameSha256,
+        };
+        var reused = Phd2SlitLockShiftPlanner.PlanOutboundStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            freshPostStageMeasurement,
+            afterSecondDispatch,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now);
+
+        Assert.False(reused.IsAllowed);
+        Assert.Equal("G3_FRAME_REUSED", reused.Code);
+    }
+
+    [Fact]
     public void RecoveryUsesFreshActualLockAndReturnsInBoundedStage()
     {
         var fixture = CreateFixture(
@@ -426,6 +587,58 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.Equal(new Phd2Point(100, 100), result.Stage.RequestedLockPosition);
         Assert.False(result.Stage.RequiresFreshG3ResidualAfter);
         Assert.True(result.Stage.RequiresFreshLockVerificationAfter);
+    }
+
+    [Fact]
+    public void FinalReservedAttemptCanReturnToOriginWithoutReservingAnotherOutboundAttempt()
+    {
+        var fixture = CreateFixture(currentLock: new Phd2Point(109, 100), attempts: 9, cumulative: 40);
+        var result = Phd2SlitLockShiftPlanner.PlanRecoveryStage(
+            fixture.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            fixture.Ledger, fixture.Safety, fixture.Topology, fixture.MotionLimits, Now, Hash('B'), "target-proof");
+        Assert.True(result.IsAllowed, result.Message);
+        Assert.Equal(new Phd2Point(100, 100), result.Stage!.RequestedLockPosition);
+        Assert.Equal(0, result.Stage.ReservedRecoveryAttempts);
+    }
+
+    [Fact]
+    public void ExplicitRecoveryEpisodeIgnoresPassiveDowntimeWithoutResettingAttemptsOrPixels()
+    {
+        var fixture = CreateFixture(
+            currentLock: new Phd2Point(110, 100),
+            originLock: new Phd2Point(100, 100),
+            attempts: 1,
+            cumulative: 12.5);
+        var historical = fixture.Ledger with { StartedUtc = Now - TimeSpan.FromHours(2) };
+        var expired = Phd2SlitLockShiftPlanner.PlanRecoveryStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            historical,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now,
+            Hash('B'),
+            "target-proof");
+        var activeEpisode = historical with { StartedUtc = Now };
+        var recovered = Phd2SlitLockShiftPlanner.PlanRecoveryStage(
+            fixture.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar,
+            activeEpisode,
+            fixture.Safety,
+            fixture.Topology,
+            fixture.MotionLimits,
+            Now,
+            Hash('B'),
+            "target-proof");
+
+        Assert.False(expired.IsAllowed);
+        Assert.Equal("SLIT_LOCK_RETURN_TIME_RESERVE", expired.Code);
+        Assert.True(recovered.IsAllowed, $"{recovered.Code}: {recovered.Message}");
+        Assert.Equal(historical.LineageId, activeEpisode.LineageId);
+        Assert.Equal(historical.AttemptsUsed, activeEpisode.AttemptsUsed);
+        Assert.Equal(historical.CumulativeCommandedPixels, activeEpisode.CumulativeCommandedPixels);
+        Assert.Equal(Phd2LockShiftStageKind.Recovery, recovered.Stage!.Kind);
     }
 
     [Fact]

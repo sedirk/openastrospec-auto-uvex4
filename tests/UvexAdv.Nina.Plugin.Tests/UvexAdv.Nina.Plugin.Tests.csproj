@@ -15,6 +15,7 @@
   <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="true" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="true" />
+    <Reference Include="NINA.Image" HintPath="$(NinaInstallDir)\NINA.Image.dll" Private="true" />
     <Reference Include="NINA.PlateSolving" HintPath="$(NinaInstallDir)\NINA.PlateSolving.dll" Private="true" />
     <Reference Include="NINA.Profile" HintPath="$(NinaInstallDir)\NINA.Profile.dll" Private="true" />
     <Reference Include="NINA.Plugin" HintPath="$(NinaInstallDir)\NINA.Plugin.dll" Private="true" />
@@ -61,6 +62,15 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\ObservationDockable.cs"
           Link="Sources\ObservationDockable.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\ObservationAutomationBridge.cs"
+          Link="Sources\ObservationAutomationBridge.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\invoke-model-frontend-closed-loop.ps1"
+          Link="Sources\invoke-model-frontend-closed-loop.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\invoke-observation-automation-bridge.ps1"
+          Link="Sources\invoke-observation-automation-bridge.ps1"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\update-touptek-sdk.ps1"
           Link="Sources\update-touptek-sdk.ps1"

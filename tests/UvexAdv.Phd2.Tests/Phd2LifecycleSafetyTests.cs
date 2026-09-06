@@ -106,7 +106,7 @@ public sealed class Phd2LifecycleSafetyTests
     }
 
     [Fact]
-    public async Task PauseAndStopCaptureConfirmsSelectedIdleState()
+    public async Task PauseAndStopCaptureRequiresStoppedAfterSelectedTransition()
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
         {
@@ -119,6 +119,10 @@ public sealed class Phd2LifecycleSafetyTests
             var after = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_app_state", after.GetProperty("method").GetString());
             await session.ReplyResultAsync(after, "Selected", cancellationToken);
+            var confirmed = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", confirmed.GetProperty("method").GetString());
+            await session.ReplyResultAsync(confirmed, "Stopped", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
@@ -129,7 +133,7 @@ public sealed class Phd2LifecycleSafetyTests
         Assert.True(result.StopCommandSent);
         Assert.True(result.ConfirmedIdle);
         Assert.Equal(Phd2AppState.Guiding, result.InitialState);
-        Assert.Equal(Phd2AppState.Selected, result.FinalState);
+        Assert.Equal(Phd2AppState.Stopped, result.FinalState);
         Assert.Null(client.Snapshot.LastSettle);
     }
 
@@ -208,6 +212,31 @@ public sealed class Phd2LifecycleSafetyTests
         Assert.Contains("idle confirmation", error.Operation, StringComparison.Ordinal);
         Assert.Null(client.Snapshot.LastSettle);
         Assert.False(client.Snapshot.HasCurrentSuccessfulSettle);
+    }
+
+    [Fact]
+    public async Task SelectedIsAnActiveCaptureStateAndStopMustWaitForStoppedReadback()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var initial = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(initial, "Selected", cancellationToken);
+            var stop = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("stop_capture", stop.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stop, 0, cancellationToken);
+            var stillExposing = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(stillExposing, "Selected", cancellationToken);
+            var stopped = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(stopped, "Stopped", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var result = await client.StopCaptureAndConfirmAsync(CancellationToken.None);
+        Assert.True(result.StopCommandSent);
+        Assert.True(result.ConfirmedIdle);
+        Assert.Equal(Phd2AppState.Stopped, result.FinalState);
+        Assert.Equal(["get_app_state", "stop_capture", "get_app_state", "get_app_state"], server.ReceivedMethods.ToArray());
     }
 
     private static Phd2Client CreateClient(FakePhd2Server server) => new(new Phd2ClientOptions

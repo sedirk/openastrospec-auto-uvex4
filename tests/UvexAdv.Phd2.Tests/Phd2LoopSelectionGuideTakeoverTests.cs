@@ -149,6 +149,29 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
     }
 
     [Fact]
+    public async Task DelayedFirstLoopFrameUsesReadoutAllowanceWithoutAnotherCommand()
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var state = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(state, "Stopped", cancellationToken);
+            var loop = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(loop, 0, cancellationToken);
+            await Task.Delay(200, cancellationToken);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 1 }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server, TimeSpan.FromSeconds(1));
+        await client.ConnectAsync(CancellationToken.None);
+        var result = await client.StartLoopingAndWaitForFreshFrameAsync(
+            new Phd2LoopingStartRequest(TimeSpan.FromMilliseconds(50)), CancellationToken.None);
+        Assert.Equal(1, result.Frame);
+        Assert.True(result.LeavesLoopingForGuideTakeover);
+        Assert.False(result.StopCommandSent);
+        Assert.Equal(new[] { "get_app_state", "loop" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
     public async Task MissingFreshLoopFrameTimesOutWithoutImplicitStopOrRetry()
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
@@ -318,12 +341,13 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
         MaximumAxisRatePixelsPerSecond: 100,
         RequireKnownAge: true);
 
-    private static Phd2Client CreateClient(FakePhd2Server server) => new(new Phd2ClientOptions
+    private static Phd2Client CreateClient(FakePhd2Server server, TimeSpan? minimumLoopTimeout = null) => new(new Phd2ClientOptions
     {
         Host = "127.0.0.1",
         Port = server.Port,
         CommandTimeout = TimeSpan.FromSeconds(2),
         EventTimeoutMargin = TimeSpan.FromSeconds(2),
         FileReadyTimeout = TimeSpan.FromSeconds(2),
+        MinimumLoopingFrameEventTimeout = minimumLoopTimeout ?? TimeSpan.FromMilliseconds(100),
     });
 }

@@ -103,6 +103,8 @@ public sealed record Phd2CalibrationQualityPolicy(
 /// Attestation for one real guide/settle operation.  All epoch booleans must
 /// originate from the same locally issued guide RPC and its SettleBegin /
 /// SettleDone event sequence; an unsolicited SettleDone is not evidence.
+/// A separately marked supervised post-lock window preserves the original
+/// native result but proves only current readback and fresh optical continuity.
 /// </summary>
 public sealed record Phd2CalibrationSettleEvidence(
     string EvidenceId,
@@ -113,7 +115,10 @@ public sealed record Phd2CalibrationSettleEvidence(
     bool SameGuideEpoch,
     DateTimeOffset EvaluatedUtc,
     bool FreshGuidingWindowAccepted = false,
-    int FreshGuidingSampleCount = 0);
+    int FreshGuidingSampleCount = 0,
+    bool ReadOnlyPostLockWindow = false,
+    bool ExactLockReadbackVerified = false,
+    DateTimeOffset? FreshGuidingWindowCompletedUtc = null);
 
 /// <summary>
 /// A fresh, immutable target/slit measurement taken after the last calibration,
@@ -128,7 +133,8 @@ public sealed record Phd2CalibrationResidualEvidence(
     bool TargetIdentityConfirmed,
     bool TopologyMatched,
     bool NoUnvalidatedCalibrationOrLockShiftAfterMeasurement,
-    DateTimeOffset EvaluatedUtc);
+    DateTimeOffset EvaluatedUtc,
+    bool IsSupervisedGuideLockResidual = false);
 
 /// <summary>
 /// One selectable calibration candidate and all evidence used to grade it.
@@ -279,8 +285,11 @@ public static partial class Phd2CalibrationQualityEvaluator
             candidate.FreshResidual is not null;
         var lockShiftAuthority = grade != Phd2CalibrationQualityGrade.Rejected && operationalEvidenceComplete;
         var usableSupervised = lockShiftAuthority;
+        var guideTrackingWarning = candidate.FreshResidual is { IsSupervisedGuideLockResidual: true } guideResidual &&
+            guideResidual.ResidualPixels > guideResidual.MaximumResidualPixels;
         var unattended = grade is Phd2CalibrationQualityGrade.Excellent or Phd2CalibrationQualityGrade.Qualified &&
             usableSupervised &&
+            !guideTrackingWarning &&
             candidate.CalibrationProcessEvidenceComplete &&
             candidate.CalibrationTopologyMatched == true &&
             candidate.CalibrationPierSideMatched == true;
@@ -296,6 +305,17 @@ public static partial class Phd2CalibrationQualityEvaluator
             Phd2CalibrationQualityGrade.DegradedSupervised => policy.DegradedResidualToleranceScale,
             _ => 0,
         };
+        if (lockShiftAuthority &&
+            candidate.FreshResidual is { IsSupervisedGuideLockResidual: true } &&
+            candidate.Settle is { FreshGuidingWindowAccepted: true, FreshGuidingSampleCount: >= 3 } acceptedWindow &&
+            (!acceptedWindow.Result.Succeeded || acceptedWindow.ReadOnlyPostLockWindow))
+        {
+            // A transient tracking/settle warning does not change the physical
+            // slit acceptance geometry. Keep the commissioned target tolerance;
+            // retain the degraded motion scale and supervised-only permission.
+            residualToleranceScale = policy.QualifiedResidualToleranceScale;
+            reasons.Add("supervised fresh measured target/guide geometry retains the commissioned target/slit tolerance despite the settle warning; motion limits and unattended restrictions remain unchanged");
+        }
         var score = Score(candidate, grade, policy);
 
         return new Phd2CalibrationQualityAssessment(
@@ -308,7 +328,7 @@ public static partial class Phd2CalibrationQualityEvaluator
             usableSupervised,
             lockShiftAuthority,
             unattended,
-            grade == Phd2CalibrationQualityGrade.DegradedSupervised,
+            grade == Phd2CalibrationQualityGrade.DegradedSupervised || guideTrackingWarning,
             maximumLockShiftScale,
             residualToleranceScale,
             policy.RequiredFreshResidualsPerLockShiftStage,
@@ -492,25 +512,38 @@ public static partial class Phd2CalibrationQualityEvaluator
             failures.Add("actual guide/settle evidence is missing");
             return;
         }
-        var age = evaluatedUtc - settle.Result.CompletedUtc;
-        var freshGuidingFallback = !settle.Result.Succeeded &&
+        var completedUtc = settle.ReadOnlyPostLockWindow
+            ? settle.FreshGuidingWindowCompletedUtc ?? DateTimeOffset.MinValue
+            : settle.Result.CompletedUtc;
+        var age = evaluatedUtc - completedUtc;
+        var freshGuidingFallback = (!settle.Result.Succeeded || settle.ReadOnlyPostLockWindow) &&
             settle.FreshGuidingWindowAccepted &&
             settle.FreshGuidingSampleCount >= 3;
+        var operationBound = settle.ReadOnlyPostLockWindow
+            ? settle.ExactLockReadbackVerified && freshGuidingFallback
+            : settle.GuideCommandAccepted && settle.SettleBeginObserved;
         if (string.IsNullOrWhiteSpace(settle.EvidenceId) ||
             (!settle.Result.Succeeded && !freshGuidingFallback) ||
-            !settle.GuideCommandAccepted || !settle.SettleBeginObserved ||
+            !operationBound ||
             !settle.SameConnectionEpoch || !settle.SameGuideEpoch)
         {
             failures.Add("settle is unsuccessful without an accepted fresh guiding window, unsolicited, or from a different connection/guide epoch");
         }
-        if (age < TimeSpan.Zero || age > policy.MaximumSettleEvidenceAge || settle.EvaluatedUtc < settle.Result.CompletedUtc)
+        if (age < TimeSpan.Zero || age > policy.MaximumSettleEvidenceAge || settle.EvaluatedUtc < completedUtc)
         {
             failures.Add("settle evidence is stale or temporally inconsistent");
         }
         if (freshGuidingFallback)
         {
             Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
-            reasons.Add($"PHD2 did not enter its configured settle circle in wind; {settle.FreshGuidingSampleCount} fresh same-epoch guiding frames replaced settle as supervised-only operational evidence");
+            reasons.Add(settle.ReadOnlyPostLockWindow
+                ? $"No new native guide/settle was requested after verified exact lock; {settle.FreshGuidingSampleCount} fresh same-epoch optical frames provide supervised-only continuation evidence"
+                : $"PHD2 did not enter its configured settle circle in wind; {settle.FreshGuidingSampleCount} fresh same-epoch guiding frames replaced settle as supervised-only operational evidence");
+            // These fresh accepted frames supersede the old failed settle's
+            // dropout statistics, not its failure result or epoch checks.
+            // Do not veto currently measured guiding using past wind samples.
+            reasons.Add($"original native-settle result retained as diagnostics: succeeded={settle.Result.Succeeded}, total={settle.Result.TotalFrames}, dropped={settle.Result.DroppedFrames}");
+            return;
         }
 
         if (settle.Result.TotalFrames <= 0 || settle.Result.DroppedFrames < 0 || settle.Result.DroppedFrames > settle.Result.TotalFrames)
@@ -564,7 +597,10 @@ public static partial class Phd2CalibrationQualityEvaluator
         }
         else if (residual.ResidualPixels > residual.MaximumResidualPixels)
         {
-            failures.Add($"fresh target/slit residual {residual.ResidualPixels:F2}px exceeds {residual.MaximumResidualPixels:F2}px");
+            if (residual.IsSupervisedGuideLockResidual)
+                reasons.Add($"guide/lock tracking residual {residual.ResidualPixels:F2}px exceeds the {residual.MaximumResidualPixels:F2}px advisory threshold; supervised placement uses the measured same-frame guide position, not the requested lock position; target/slit acceptance is evaluated separately");
+            else
+                failures.Add($"fresh target/slit residual {residual.ResidualPixels:F2}px exceeds {residual.MaximumResidualPixels:F2}px");
         }
         else
         {

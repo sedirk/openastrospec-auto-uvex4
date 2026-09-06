@@ -11,6 +11,8 @@ internal sealed record ServiceOperation(Guid Id, string Kind, string State, Date
 internal sealed class UvexServiceClient : IDisposable
 {
     private static readonly TimeSpan SlitIlluminationOperationTimeout = TimeSpan.FromSeconds(15);
+    private const int SlitIlluminationReadbackAttempts = 8;
+    private static readonly TimeSpan SlitIlluminationReadbackDelay = TimeSpan.FromMilliseconds(500);
     private readonly HttpClient http;
 
     public UvexServiceClient(string serviceUrl)
@@ -72,23 +74,33 @@ internal sealed class UvexServiceClient : IDisposable
                 leaseToken,
                 deadline.Token).ConfigureAwait(false);
             await WaitForOperationAsync(operation, deadline.Token).ConfigureAwait(false);
-            var status = await GetStatusAsync(deadline.Token).ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    "UVEX service returned no device state after the slit-illumination operation completed.");
             var expected = enabled ? UvexOutputState.On : UvexOutputState.Off;
-            if (status.SlitIlluminationLedState != expected)
+            UvexDeviceStatus? status = null;
+            for (var attempt = 1; attempt <= SlitIlluminationReadbackAttempts; attempt++)
             {
-                throw new InvalidOperationException(
-                    $"UVEX slit-illumination operation succeeded, but readback is {status.SlitIlluminationLedState}; expected {expected}.");
+                status = await GetStatusAsync(deadline.Token).ConfigureAwait(false);
+                if (status?.SlitIlluminationLedState == expected &&
+                    status.SlitIlluminationLedCommandedUtc is { } readbackCommandedUtc &&
+                    readbackCommandedUtc >= operation.StartedUtc)
+                {
+                    return status;
+                }
+                if (attempt < SlitIlluminationReadbackAttempts)
+                {
+                    // The firmware operation can complete just before the
+                    // asynchronously refreshed device snapshot leaves its
+                    // transient Unknown state. Polling is read-only: never
+                    // resend ON, OFF, a lease action, or another COM5 command.
+                    await Task.Delay(SlitIlluminationReadbackDelay, deadline.Token).ConfigureAwait(false);
+                }
             }
-            if (status.SlitIlluminationLedCommandedUtc is not { } commandedUtc ||
-                commandedUtc < operation.StartedUtc)
-            {
-                throw new InvalidOperationException(
-                    "UVEX slit-illumination state did not include a current command timestamp after the completed operation.");
-            }
-
-            return status;
+            var code = enabled
+                ? "UVEX_SLIT_ILLUMINATION_ON_UNVERIFIED"
+                : "UVEX_SLIT_ILLUMINATION_OFF_UNVERIFIED";
+            var lastState = status?.SlitIlluminationLedState.ToString() ?? "missing";
+            throw new InvalidOperationException(
+                $"{code}: UVEX slit-illumination operation succeeded, but {SlitIlluminationReadbackAttempts} bounded read-only snapshots did not verify the command; " +
+                $"readback is {lastState}; expected {expected}; command timestamp {status?.SlitIlluminationLedCommandedUtc?.ToString("O") ?? "missing"}.");
         }
         catch (OperationCanceledException ex) when (
             deadline.IsCancellationRequested &&

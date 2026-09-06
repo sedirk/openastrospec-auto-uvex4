@@ -3,8 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 [assembly: Guid("A4183531-55BD-4FD0-B04A-97ED7EDC15DA")]
-[assembly: AssemblyVersion("0.4.0.80")]
-[assembly: AssemblyFileVersion("0.4.0.80")]
+[assembly: AssemblyVersion("0.4.0.138")]
+[assembly: AssemblyFileVersion("0.4.0.138")]
 [assembly: AssemblyTitle("OpenAstroSpec Auto — UVEX4")]
 [assembly: AssemblyDescription("UVEX4 control, spectral closed loops, calibration acquisition and operator-visible target-observation orchestration for N.I.N.A.")]
 [assembly: AssemblyCompany("OpenAstroSpec")]
@@ -14,3 +14,4 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("LongDescription", "Open-source automation for astronomical spectroscopy, with UVEX4 as the first fully supported spectrograph implementation. Provides operator-visible target observation with cooperative pause, resume, cancellation and manual takeover while preserving isolated device ownership.")]
 [assembly: ComVisible(false)]
 [assembly: InternalsVisibleTo("UvexAdv.Nina.Plugin.Tests")]
+[assembly: InternalsVisibleTo("UvexAdv.Nina.Plugin.UiHarness")]

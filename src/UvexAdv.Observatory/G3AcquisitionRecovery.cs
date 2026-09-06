@@ -355,6 +355,25 @@ public static class G3AcquisitionMotionPlanner
             state.ArrivalToleranceArcseconds * StableNearOriginToleranceMultiplier);
     }
 
+    public static bool CanReplanStableIntermediateReturn(
+        G3AcquisitionMotionState state,
+        double previousRadiusArcseconds,
+        double commandResidualArcseconds,
+        double reportedDriftArcseconds,
+        double actualMoveArcseconds) =>
+        state.Validate().Count == 0 &&
+        state.Phase == G3AcquisitionMotionPhase.ReturnIntent &&
+        double.IsFinite(previousRadiusArcseconds) &&
+        double.IsFinite(commandResidualArcseconds) &&
+        commandResidualArcseconds > state.ArrivalToleranceArcseconds &&
+        commandResidualArcseconds <= 2 * state.ArrivalToleranceArcseconds &&
+        double.IsFinite(reportedDriftArcseconds) && reportedDriftArcseconds >= 0 &&
+        reportedDriftArcseconds <= state.ArrivalToleranceArcseconds &&
+        double.IsFinite(actualMoveArcseconds) && actualMoveArcseconds >= 0 &&
+        actualMoveArcseconds <= state.MaximumSingleCorrectionArcseconds &&
+        state.CurrentRadiusArcseconds <= state.MaximumRadiusArcseconds &&
+        previousRadiusArcseconds - state.CurrentRadiusArcseconds > state.ArrivalToleranceArcseconds;
+
     public static G3AcquisitionMotionState ContinueSettledLedger(
         G3AcquisitionMotionState state,
         string observationRunId,
@@ -366,6 +385,8 @@ public static class G3AcquisitionMotionPlanner
         double? familyAdditionalCumulativeMotionArcseconds = null,
         int? familyAdditionalCorrectionAttempts = null,
         TimeSpan? familyAdditionalElapsedTime = null,
+        double? attestedLineageMaximumSingleCorrectionArcseconds = null,
+        double? attestedLineageMaximumRadiusArcseconds = null,
         double? attestedLineageMaximumCumulativeMotionArcseconds = null,
         int? attestedLineageMaximumCorrectionAttempts = null,
         TimeSpan? attestedLineageMaximumElapsedTime = null)
@@ -381,12 +402,26 @@ public static class G3AcquisitionMotionPlanner
         if (string.IsNullOrWhiteSpace(declaredEvidencePath)) throw new ArgumentException("Declared evidence path is required.", nameof(declaredEvidencePath));
         if (nowUtc < state.UpdatedUtc) throw new ArgumentOutOfRangeException(nameof(nowUtc), "Continuation time cannot precede the durable ledger update.");
 
+        var singleCeiling = state.MaximumSingleCorrectionArcseconds;
+        if (attestedLineageMaximumSingleCorrectionArcseconds is { } attestedSingle)
+        {
+            if (!double.IsFinite(attestedSingle) || attestedSingle <= 2 * state.ArrivalToleranceArcseconds)
+                throw new InvalidOperationException("The attested lineage single-motion ceiling must be finite and exceed twice the inherited arrival tolerance.");
+            singleCeiling = attestedSingle;
+        }
+        var radiusCeiling = state.MaximumRadiusArcseconds;
+        if (attestedLineageMaximumRadiusArcseconds is { } attestedRadius)
+        {
+            if (!double.IsFinite(attestedRadius) || attestedRadius <= 0)
+                throw new InvalidOperationException("The attested lineage radius ceiling must be finite and positive.");
+            radiusCeiling = attestedRadius;
+        }
         var maximumSingle = familyMaximumSingleCorrectionArcseconds is { } requestedSingle
-            ? Math.Min(state.MaximumSingleCorrectionArcseconds, requestedSingle)
-            : state.MaximumSingleCorrectionArcseconds;
+            ? Math.Min(singleCeiling, requestedSingle)
+            : singleCeiling;
         var maximumRadius = familyMaximumRadiusArcseconds is { } requestedRadius
-            ? Math.Min(state.MaximumRadiusArcseconds, requestedRadius)
-            : state.MaximumRadiusArcseconds;
+            ? Math.Min(radiusCeiling, requestedRadius)
+            : radiusCeiling;
         var cumulativeCeiling = state.MaximumCumulativeMotionArcseconds;
         if (attestedLineageMaximumCumulativeMotionArcseconds is { } attestedCumulative)
         {
@@ -447,12 +482,26 @@ public static class G3AcquisitionMotionPlanner
             throw new InvalidOperationException("The continued G3 motion-family limits are invalid, already consumed, or incompatible with the inherited arrival tolerance.");
         }
 
+        // The family does not rebase the durable origin. A local search radius
+        // therefore cannot replace the lineage radius when the accepted WCS
+        // endpoint is already farther from that origin. Reject before writing
+        // anything: otherwise a zero-action search corrupts a settled ledger
+        // into an envelope that cannot even contain its own starting position.
+        if (state.CurrentRadiusArcseconds > maximumRadius + state.ArrivalToleranceArcseconds)
+        {
+            throw new InvalidOperationException(
+                "G3_MOTION_FAMILY_RADIUS_INCOMPATIBLE: The requested family radius does not contain the already settled endpoint relative to the unchanged lineage origin. No new family or return obligation was created.");
+        }
+
         // Deliberately preserve lineage, origin, consumed motion, attempts and
         // the earliest start. By default the inherited ceilings cannot widen.
         // A caller that has already re-attested the immutable commissioning
-        // identity may supply the global lineage ceilings; the current family
-        // then receives only its declared increment and can never exceed those
-        // commissioning ceilings.
+        // identity may supply the independent large-WCS lineage ceilings; the
+        // current family then receives only its own declared limits/increment
+        // and can never exceed those re-attested ceilings. This prevents a
+        // preceding 300-arcsec local-search family from permanently truncating
+        // a later formally solved WCS correction while retaining every unit of
+        // already consumed motion, action count and elapsed time.
         return state with
         {
             ObservationRunId = observationRunId,
@@ -561,7 +610,9 @@ public static class G3AcquisitionMotionPlanner
         ArgumentNullException.ThrowIfNull(state);
         var issues = state.Validate();
         if (issues.Count > 0) return BlockReturn("G3_MOTION_LEDGER_INVALID", string.Join(" ", issues));
-        if (!double.IsFinite(arrivalToleranceArcseconds) || arrivalToleranceArcseconds <= 0)
+        if (!double.IsFinite(arrivalToleranceArcseconds) ||
+            arrivalToleranceArcseconds <= 0 ||
+            arrivalToleranceArcseconds >= state.MaximumSingleCorrectionArcseconds)
         {
             return BlockReturn("G3_MOTION_RETURN_TOLERANCE_INVALID", "The return arrival tolerance is invalid.");
         }
@@ -581,13 +632,39 @@ public static class G3AcquisitionMotionPlanner
                 state.OriginDeclinationDegrees,
                 0);
         }
-        if (radius > state.MaximumRadiusArcseconds + arrivalToleranceArcseconds)
+        if (radius > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds)
         {
             return BlockReturn("G3_MOTION_RETURN_OUTSIDE_RADIUS", "The reported mount position is outside the durable G3 acquisition radius; automatic return is prohibited.", radius);
         }
-        var maximumCommandArcseconds = state.MaximumSingleCorrectionArcseconds - state.ArrivalToleranceArcseconds;
-        var move = Math.Min(radius, maximumCommandArcseconds);
-        if (state.CumulativeMotionArcseconds + move + state.ArrivalToleranceArcseconds > state.MaximumCumulativeMotionArcseconds + 1e-9)
+        var maximumIntermediateCommandArcseconds =
+            state.MaximumSingleCorrectionArcseconds - state.ArrivalToleranceArcseconds;
+        var maximumDirectOriginCommandArcseconds =
+            state.MaximumSingleCorrectionArcseconds - arrivalToleranceArcseconds;
+        var commandTargetsOrigin = radius <= maximumDirectOriginCommandArcseconds + 1e-9;
+        // A final command that targets the origin must reserve the wider stable
+        // near-origin residual inside the same single-motion segment. If the
+        // origin is farther away, retain enough nominal radius that a strict
+        // intermediate residual can still land inside the no-motion envelope.
+        var retainedNearOriginRadiusArcseconds = Math.Max(
+            0,
+            arrivalToleranceArcseconds - state.ArrivalToleranceArcseconds);
+        var move = commandTargetsOrigin
+            ? radius
+            : Math.Min(
+                maximumIntermediateCommandArcseconds,
+                radius - retainedNearOriginRadiusArcseconds);
+        var commandResidualAllowanceArcseconds = commandTargetsOrigin
+            ? arrivalToleranceArcseconds
+            : state.ArrivalToleranceArcseconds;
+        if (!double.IsFinite(move) || move <= 0 ||
+            move + commandResidualAllowanceArcseconds > state.MaximumSingleCorrectionArcseconds + 1e-9)
+        {
+            return BlockReturn(
+                "G3_MOTION_RETURN_SINGLE_LIMIT",
+                "The next return command plus its endpoint residual allowance exceeds the durable single-motion envelope.",
+                radius);
+        }
+        if (state.CumulativeMotionArcseconds + move + commandResidualAllowanceArcseconds > state.MaximumCumulativeMotionArcseconds + 1e-9)
         {
             return BlockReturn("G3_MOTION_RETURN_CUMULATIVE_LIMIT", "The next return step no longer fits the durable cumulative-motion budget.", radius);
         }
@@ -611,7 +688,8 @@ public static class G3AcquisitionMotionPlanner
             return BlockReturn("G3_MOTION_RETURN_COORDINATE_INVALID", "The next segmented return coordinate is invalid.", radius);
         }
         var actualMove = AngularSeparationArcseconds(reportedRaDegrees, reportedDeclinationDegrees, ra, dec);
-        if (!double.IsFinite(actualMove) || actualMove > maximumCommandArcseconds + 1e-6)
+        if (!double.IsFinite(actualMove) ||
+            actualMove + commandResidualAllowanceArcseconds > state.MaximumSingleCorrectionArcseconds + 1e-6)
         {
             return BlockReturn("G3_MOTION_RETURN_SPHERICAL_LIMIT", "The spherical distance of the next return coordinate exceeds the reserved single-command limit.", radius);
         }

@@ -16,7 +16,7 @@ public sealed class UvexAutomaticConnectionRunnerSafetyTests
             "private async Task<StageResult> ValidateNightSetupAsync(",
             "private async Task<GateResult> EvaluateInterlocksAsync(");
         Assert.Contains("connectUvex: true", nightSetup, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(Source, "connectUvex: true"));
+        Assert.Equal(1, CountOccurrences(nightSetup, "connectUvex: true"));
 
         var signature = Source.IndexOf(
             "private async Task<GateResult> EvaluateInterlocksAsync(",
@@ -28,6 +28,30 @@ public sealed class UvexAutomaticConnectionRunnerSafetyTests
             "bool connectUvex = false",
             Source[signature..signatureEnd],
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DurableReturnRecoveryReconnectsOnlyAfterIdentityAndBeforeCheckedReturn()
+    {
+        var recovery = MethodBody(
+            "private async Task<StageResult?> RecoverDurableG3AcquisitionBeforeStageAsync(",
+            "private async Task<StageResult> RunG3WcsCenteringAsync(");
+
+        AssertInOrder(
+            recovery,
+            "var identity = ValidateG3AcquisitionMotionIdentity(context, state);",
+            "if (identity.Disposition != GateDisposition.Passed) return",
+            "var recoveryInterlocks = await EvaluateInterlocksAsync(",
+            "connectUvex: true",
+            "if (recoveryInterlocks.Disposition != GateDisposition.Passed)",
+            "return new StageResult(recoveryInterlocks, selected.Path);",
+            "ReturnDurableG3AcquisitionToOriginAsync(");
+        Assert.Equal(1, CountOccurrences(recovery, "connectUvex: true"));
+        // Night Setup and an identity-bound outstanding return are the only
+        // opt-in callers; ordinary runtime revalidation remains read-only.
+        Assert.Equal(2, CountOccurrences(Source, "connectUvex: true"));
+        Assert.Contains("StartedUtc = lineageCopies.Min(copy => copy.StartedUtc)", recovery, StringComparison.Ordinal);
+        Assert.Contains("CorrectionAttempts = lineageCopies.Max(copy => copy.CorrectionAttempts)", recovery, StringComparison.Ordinal);
     }
 
     [Fact]

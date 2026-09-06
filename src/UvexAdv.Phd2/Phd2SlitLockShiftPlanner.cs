@@ -228,12 +228,20 @@ public sealed record Phd2SlitFieldMeasurement(
     string FluxEvidenceLabel,
     double FluxMetric,
     string ResidualEvidenceLabel,
-    Phd2TargetPositionAuthority TargetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid);
+    Phd2TargetPositionAuthority TargetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid,
+    bool GuidePositionMeasuredInFrame = false);
 
 public enum Phd2TargetPositionAuthority
 {
     DetectedTargetCentroid,
     CatalogWcsProjection,
+    /// <summary>
+    /// Catalogue/WCS proves the target identity while a fresh guiding frame
+    /// proves the detector position from one unambiguous filled saturated core.
+    /// Saturation makes the integrated-flux envelope inapplicable; the fresh
+    /// topology and centroid remain mandatory residual evidence.
+    /// </summary>
+    CatalogWcsIdentityWithSaturatedTopologyCentroid,
 }
 
 public sealed record Phd2LockShiftSafetySnapshot(
@@ -457,7 +465,8 @@ public static class Phd2SlitLockShiftPlanner
     {
         var common = ValidateCommon(qualification, ledger, safety, topology, limits, now);
         if (common is not null) return common;
-        var measurementFailure = ValidateMeasurement(guideMode, measurement, ledger, topology, limits, now);
+        var measurementFailure = ValidateMeasurement(guideMode, measurement, ledger, topology, limits, now,
+            qualification.RequiresOperatorSupervision);
         if (measurementFailure is not null) return measurementFailure;
 
         var delta = Subtract(measurement.RecognizedSlitAcquisitionPoint, measurement.TargetCentroid);
@@ -695,7 +704,8 @@ public static class Phd2SlitLockShiftPlanner
         Phd2LockShiftLedger ledger,
         Phd2SensorTopology topology,
         Phd2LockShiftLimits limits,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool supervisedGuideResidualWarning)
     {
         ArgumentNullException.ThrowIfNull(measurement);
         if (!Sha256Pattern.IsMatch(measurement.FrameSha256 ?? string.Empty))
@@ -720,6 +730,14 @@ public static class Phd2SlitLockShiftPlanner
                 !string.Equals(measurement.FluxEvidenceLabel, "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE", StringComparison.Ordinal))
                 return Denied("G3_CATALOG_WCS_AUTHORITY_INVALID", "Catalogue-WCS target geometry must explicitly mark target flux as not applicable and must not fabricate a flux metric.");
         }
+        else if (measurement.TargetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid)
+        {
+            if (measurement.FluxMetric != 0 ||
+                !string.Equals(measurement.FluxEvidenceLabel, "SATURATED_TARGET_TOPOLOGY_FLUX_NOT_APPLICABLE", StringComparison.Ordinal))
+                return Denied(
+                    "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID",
+                    "A catalogue-identified saturated target must explicitly mark integrated flux as not applicable; its fresh filled-core topology and centroid remain the position evidence.");
+        }
         else if (!double.IsFinite(measurement.FluxMetric) ||
                  measurement.FluxMetric < limits.MinimumFluxMetric ||
                  measurement.FluxMetric > limits.MaximumFluxMetric)
@@ -734,7 +752,12 @@ public static class Phd2SlitLockShiftPlanner
                 return Denied("OFF_SLIT_GUIDE_GUARD", "The selected ordinary guide star is inside the slit guard region.");
             if (Distance(measurement.GuideStar, measurement.TargetCentroid) < limits.MinimumOffSlitGuideTargetSeparationPixels)
                 return Denied("OFF_SLIT_GUIDE_NOT_DISTINCT", "The ordinary guide star is not distinct from the science target.");
-            if (guideLockResidual > limits.MaximumGuideLockResidualPixels)
+            // Drift can keep a measured star off its requested lock. Planning
+            // uses measuredGuide + delta, so this is advisory with supervised,
+            // same-frame detector positions, never stale projections/setpoints.
+            if (guideLockResidual > limits.MaximumGuideLockResidualPixels &&
+                !(supervisedGuideResidualWarning && measurement.GuidePositionMeasuredInFrame &&
+                  measurement.TargetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection))
                 return Denied("GUIDE_LOCK_RESIDUAL_HIGH", "The ordinary guide star is not sufficiently settled at the fresh runtime lock position.");
         }
         else if (guideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)

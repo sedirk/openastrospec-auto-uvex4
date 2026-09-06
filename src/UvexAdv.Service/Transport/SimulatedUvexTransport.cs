@@ -72,6 +72,8 @@ internal sealed class SimulatedUvexTransport : IUvexTransport
             "SINT" => slitIlluminationEnabled ? ":SINT;800;#" : ":SINT;29;#",
             "SGTS" => ":SGTS;283;#",
             "SGPH" => ":SGPH;1;#",
+            "SLON" => ":SLON;#",
+            "SLOF" => ":SLOF;#",
             "CMAX" => ":CMAX;0;#",
             _ => null,
         };

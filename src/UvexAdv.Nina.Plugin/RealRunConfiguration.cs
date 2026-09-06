@@ -38,7 +38,8 @@ internal sealed record RealRunConfiguration(
     SlitRunConfiguration Slit,
     PlateSolverRunConfiguration PlateSolver,
     CommissioningRunBinding Commissioning,
-    NightSetupRunBinding NightSetup)
+    NightSetupRunBinding NightSetup,
+    bool AllowSupervisedSlitQualityWarning = false)
 {
     public static RealRunConfiguration Capture(
         UvexPluginSettings settings,
@@ -255,7 +256,8 @@ internal sealed record RealRunConfiguration(
                 settings.ObservationNightSetupId,
                 settings.ObservationExpectedAtrCameraId,
                 settings.ObservationExpectedG3ProfileName,
-                settings.ObservationExpectedQhyCameraId));
+                settings.ObservationExpectedQhyCameraId),
+            settings.AllowSupervisedSlitQualityWarning);
         var json = JsonSerializer.Serialize(payload);
         var sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
         return new RealRunConfiguration(
@@ -281,7 +283,8 @@ internal sealed record RealRunConfiguration(
             payload.Slit,
             payload.PlateSolver,
             payload.Commissioning,
-            payload.NightSetup);
+            payload.NightSetup,
+            payload.AllowSupervisedSlitQualityWarning);
     }
 
     public bool MatchesCurrentProfile(
@@ -373,7 +376,8 @@ internal sealed record RealRunConfiguration(
         Slit,
         PlateSolver,
         Commissioning,
-        NightSetup);
+        NightSetup,
+        AllowSupervisedSlitQualityWarning);
 
     private static void CollectDifferences(
         JsonElement locked,
@@ -449,7 +453,8 @@ internal sealed record RealRunConfiguration(
         SlitRunConfiguration Slit,
         PlateSolverRunConfiguration PlateSolver,
         CommissioningRunBinding Commissioning,
-        NightSetupRunBinding NightSetup);
+        NightSetupRunBinding NightSetup,
+        bool AllowSupervisedSlitQualityWarning);
 }
 
 /// <summary>

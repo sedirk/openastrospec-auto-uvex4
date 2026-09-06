@@ -101,6 +101,51 @@ public sealed class XamlBindingSafetyTests
     }
 
     [Fact]
+    public void AutomaticPreparationUsesNeutralSurfacesAndNarrowSemanticAccents()
+    {
+        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
+        var dockStart = xaml.IndexOf(
+            "x:Key=\"UvexAdv.Nina.Plugin.ObservationDockable_Dockable\"",
+            StringComparison.Ordinal);
+        var preparationStart = xaml.IndexOf("<TabItem Header=\"自动准备\">", dockStart, StringComparison.Ordinal);
+        var preparationEnd = xaml.IndexOf("<TabItem Header=\"实时图像\">", preparationStart, StringComparison.Ordinal);
+        var fieldStyleStart = xaml.IndexOf("x:Key=\"PreparationFieldBorder\"", dockStart, StringComparison.Ordinal);
+        var fieldStyleEnd = xaml.IndexOf("<Style TargetType=\"CheckBox\">", fieldStyleStart, StringComparison.Ordinal);
+        var comboStyleStart = xaml.IndexOf("<Style TargetType=\"ComboBox\">", dockStart, StringComparison.Ordinal);
+        var comboStyleEnd = xaml.IndexOf("x:Key=\"PreparationPanelBorder\"", comboStyleStart, StringComparison.Ordinal);
+
+        Assert.True(
+            dockStart >= 0 &&
+            preparationStart > dockStart &&
+            preparationEnd > preparationStart &&
+            fieldStyleStart > dockStart &&
+            fieldStyleEnd > fieldStyleStart &&
+            comboStyleStart > dockStart &&
+            comboStyleEnd > comboStyleStart);
+
+        var preparation = xaml[preparationStart..preparationEnd];
+        var fieldStyle = xaml[fieldStyleStart..fieldStyleEnd];
+        var comboStyle = xaml[comboStyleStart..comboStyleEnd];
+
+        Assert.Contains("Style=\"{StaticResource PreparationIntroBorder}\"", preparation, StringComparison.Ordinal);
+        Assert.Contains("Style=\"{StaticResource PreparationPanelBorder}\"", preparation, StringComparison.Ordinal);
+        Assert.Contains("Style=\"{StaticResource PreparationSecondaryButton}\"", preparation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Background=\"#10243B\"", preparation, StringComparison.Ordinal);
+        Assert.DoesNotContain("BorderBrush=\"#38BDF8\"", preparation, StringComparison.Ordinal);
+
+        Assert.Contains("Value=\"{StaticResource PreparationSurfaceBrush}\"", fieldStyle, StringComparison.Ordinal);
+        Assert.Contains("Value=\"3,1,1,1\"", fieldStyle, StringComparison.Ordinal);
+        Assert.Contains("Value=\"{StaticResource PreparationAttentionBrush}\"", fieldStyle, StringComparison.Ordinal);
+        Assert.DoesNotContain("Value=\"#0E2A1B\"", fieldStyle, StringComparison.Ordinal);
+        Assert.DoesNotContain("Value=\"#3F1515\"", fieldStyle, StringComparison.Ordinal);
+
+        Assert.Contains("x:Name=\"ObservationComboChrome\"", comboStyle, StringComparison.Ordinal);
+        Assert.Contains("Background=\"#0F172A\"", comboStyle, StringComparison.Ordinal);
+        Assert.Contains("Property=\"IsEnabled\" Value=\"False\"", comboStyle, StringComparison.Ordinal);
+        Assert.DoesNotContain("Value=\"#F8FAFC\"", comboStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ObservationDockIsNarrowFriendlyAndEveryControlIsHumanLabelled()
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
@@ -232,6 +277,17 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("当前没有错误或待处理证据门", dock, StringComparison.Ordinal);
         Assert.DoesNotContain("没有需要检查的失败图像", dock, StringComparison.Ordinal);
 
+        Assert.Contains("Text=\"LLM 后台：\"", dock, StringComparison.Ordinal);
+        Assert.Contains("IsChecked=\"{Binding ModelAutomationBridgeEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.AutomationId=\"OpenAstroSpec.ModelAutomationBridgeEnabled\"", dock, StringComparison.Ordinal);
+        Assert.Contains("IsChecked=\"{Binding ModelAutomationRealControlArmed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.AutomationId=\"OpenAstroSpec.ModelAutomationRealControlArmed\"", dock, StringComparison.Ordinal);
+        Assert.Contains("把后台请求派发到本页按钮绑定的同一个 ICommand", dock, StringComparison.Ordinal);
+        Assert.Contains("证明不会写入日志", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding EnableModelAutomationBridgeCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ArmModelAutomationRealControlCommand}\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding DisarmModelAutomationRealControlCommand}\"", dock, StringComparison.Ordinal);
+
         foreach (Match button in Regex.Matches(dock, "<Button\\b(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
         {
             Assert.Contains("Content=", button.Groups["attributes"].Value, StringComparison.Ordinal);
@@ -240,5 +296,78 @@ public sealed class XamlBindingSafetyTests
         {
             Assert.Contains("Content=", checkBox.Groups["attributes"].Value, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void ModelAutomationBridgeUsesCurrentUserPipeAndOnlyDispatchesWhitelistedUiCommands()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationAutomationBridge.cs"));
+        var dockable = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
+        var bindingStart = dockable.IndexOf("private IReadOnlyList<ObservationAutomationCommandBinding> AutomationCommandBindings()", StringComparison.Ordinal);
+        var bindingEnd = dockable.IndexOf("private ObservationAutomationSnapshot CreateAutomationSnapshot", bindingStart, StringComparison.Ordinal);
+
+        Assert.True(bindingStart >= 0 && bindingEnd > bindingStart);
+        var bindings = dockable[bindingStart..bindingEnd];
+
+        Assert.Contains("PipeOptions.CurrentUserOnly", source, StringComparison.Ordinal);
+        Assert.Contains("Application.Current?.Dispatcher", source, StringComparison.Ordinal);
+        Assert.Contains("ICommand Command", source, StringComparison.Ordinal);
+        Assert.Contains("expectedRevision", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("QualityGates", source, StringComparison.Ordinal);
+        Assert.Contains("RecentTimeline", source, StringComparison.Ordinal);
+        Assert.Contains("EvidenceFiles", source, StringComparison.Ordinal);
+        Assert.Contains("BridgeInstanceId", source, StringComparison.Ordinal);
+        Assert.Contains("PluginBuildSha256", source, StringComparison.Ordinal);
+        Assert.Contains("ObservationRunId", source, StringComparison.Ordinal);
+        Assert.Contains("RunUpdatedUtc", source, StringComparison.Ordinal);
+        Assert.Contains("CurrentStageCode", source, StringComparison.Ordinal);
+        Assert.Contains("CompletedStageCount", source, StringComparison.Ordinal);
+        Assert.Contains("LatestRunEvent", source, StringComparison.Ordinal);
+        Assert.Contains("UiError", source, StringComparison.Ordinal);
+        Assert.Contains("RealControlOperatorAttestation", source, StringComparison.Ordinal);
+        Assert.Contains("enable-bridge", bindings, StringComparison.Ordinal);
+        Assert.Contains("arm-real-control", bindings, StringComparison.Ordinal);
+        Assert.Contains("disarm-real-control", bindings, StringComparison.Ordinal);
+        Assert.Contains("start-selected", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("new(\"start-simulation\",", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("new(\"start-real\",", bindings, StringComparison.Ordinal);
+        Assert.Contains("restart-real-run", bindings, StringComparison.Ordinal);
+        Assert.Contains("restartWithCurrentConfigurationCommand", bindings, StringComparison.Ordinal);
+        Assert.Contains("pause", bindings, StringComparison.Ordinal);
+        Assert.Contains("resume", bindings, StringComparison.Ordinal);
+        Assert.Contains("takeover", bindings, StringComparison.Ordinal);
+        Assert.Contains("cancel", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClearG3RecoveryStateCommand", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("MoveManual", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveAdvancedSettingsCommand", bindings, StringComparison.Ordinal);
+        Assert.DoesNotContain("Delete", bindings, StringComparison.OrdinalIgnoreCase);
+
+        var dispatcherStart = source.IndexOf("dispatcher.InvokeAsync(() =>", StringComparison.Ordinal);
+        var revisionCheck = source.IndexOf("request.ExpectedRevision.Value != Revision", dispatcherStart, StringComparison.Ordinal);
+        var commandDispatch = source.IndexOf("return commandInvoker(command, request.OperatorAttestation, request.TargetDraft);", revisionCheck, StringComparison.Ordinal);
+        Assert.True(dispatcherStart >= 0 && revisionCheck > dispatcherStart && commandDispatch > revisionCheck);
+        Assert.DoesNotContain("capturedRevision", source, StringComparison.Ordinal);
+        Assert.Contains("dispatcher.InvokeAsync(() => snapshotFactory(Revision))", source, StringComparison.Ordinal);
+        Assert.Contains("new(\"apply-target-draft\", applyTargetDraftCommand", bindings, StringComparison.Ordinal);
+        Assert.Contains("ApplyDashboard(dashboard, notifyBridge: false)", dockable, StringComparison.Ordinal);
+        Assert.Contains("binding.Command.Execute(commandParameter)", dockable, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ModelAutomationControllerUsesOnlyVisibleStartAndRetriesStaleRevisions()
+    {
+        var controller = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "invoke-model-frontend-closed-loop.ps1"));
+        var client = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "invoke-observation-automation-bridge.ps1"));
+
+        Assert.Contains("$maximumStaleRevisionRetries = 3", controller, StringComparison.Ordinal);
+        Assert.Contains("FRONTEND_STALE_REVISION_RETRY", controller, StringComparison.Ordinal);
+        Assert.Contains("(Get-AvailableCommands $snapshot) -notcontains $Name", controller, StringComparison.Ordinal);
+        Assert.Contains("$currentRevision = [long]$nextRevision", controller, StringComparison.Ordinal);
+        Assert.Contains("$startCommand = 'start-selected'", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("$startCommand = 'start-real'", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("$startCommand = 'start-simulation'", controller, StringComparison.Ordinal);
+        Assert.Contains("'start-selected'", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("'start-real'", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("'start-simulation'", client, StringComparison.Ordinal);
     }
 }

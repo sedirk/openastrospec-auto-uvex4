@@ -89,10 +89,13 @@ public sealed class Phd2AutomationPausedException : Phd2Exception
 
 public sealed class Phd2CaptureException : Phd2Exception
 {
-    public Phd2CaptureException(string message)
+    public Phd2CaptureException(string message, Phd2AppState? rejectedBeforeMutationState = null)
         : base(message)
     {
+        RejectedBeforeMutationState = rejectedBeforeMutationState;
     }
+
+    public Phd2AppState? RejectedBeforeMutationState { get; }
 }
 
 /// <summary>
@@ -109,6 +112,20 @@ public sealed class Phd2NoGuideStarException : Phd2Exception
         : base($"{FailureCode}: PHD2 native automatic selection completed but returned no guide-star candidate point.")
     {
     }
+}
+
+/// <summary>A completed native selection refined its centroid outside the requested region.</summary>
+public sealed class Phd2GuideStarOutsideRoiException : Phd2Exception
+{
+    public Phd2GuideStarOutsideRoiException(Phd2Point selected, Phd2Rectangle requestedRoi)
+        : base($"PHD2 returned guide star ({selected.X:F2}, {selected.Y:F2}) outside the requested ROI [{requestedRoi.X}, {requestedRoi.Y}, {requestedRoi.Width}, {requestedRoi.Height}].")
+    {
+        Selected = selected;
+        RequestedRoi = requestedRoi;
+    }
+
+    public Phd2Point Selected { get; }
+    public Phd2Rectangle RequestedRoi { get; }
 }
 
 /// <summary>

@@ -131,7 +131,7 @@ Random unbounded mount nudging is not an automated strategy.
    the guide epoch before final placement, then use bounded exact runtime-lock
    stages to bring the measured target to the measured slit. Re-measure after
    every stage; never infer arrival from lock readback alone.
-6. Do not begin a science spectral exposure while guiding is unconfirmed or unstable, or while the fresh target/slit residual is outside tolerance.
+6. By default, do not begin a science spectral exposure while guiding is unconfirmed or unstable, or while the fresh target/slit residual is outside tolerance. The explicitly owner-approved, per-session supervised exception in ADR-0013 permits ATR probing and spectrum-quality-gated continuation with measured slit-precision/settle warnings; it never grants exact-placement or unattended-quality status, and does not waive identity, current guide/lock evidence, device safety or motion accounting.
 7. PHD2 remains connected to G3 for the entire science block. It never takes ownership of QHY.
 
 ### 5.4 Simultaneous QHY photometry

@@ -169,6 +169,14 @@
     <Grid Margin="4" Background="#0B1220" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.Resources>
         <BooleanToVisibilityConverter x:Key="ObservationBoolToVisibility" />
+        <SolidColorBrush x:Key="PreparationSurfaceBrush" Color="#111827" />
+        <SolidColorBrush x:Key="PreparationBorderBrush" Color="#334155" />
+        <SolidColorBrush x:Key="PreparationAccentBrush" Color="#4F8FA8" />
+        <SolidColorBrush x:Key="PreparationSuccessBrush" Color="#3F8C78" />
+        <SolidColorBrush x:Key="PreparationAttentionBrush" Color="#B45B66" />
+        <SolidColorBrush x:Key="PreparationPrimaryTextBrush" Color="#E5E7EB" />
+        <SolidColorBrush x:Key="PreparationSecondaryTextBrush" Color="#B7C3D0" />
+        <SolidColorBrush x:Key="PreparationMutedTextBrush" Color="#8FA1B5" />
         <Style TargetType="TextBlock">
           <Setter Property="Foreground" Value="#E5E7EB" />
           <Setter Property="FontSize" Value="13" />
@@ -229,24 +237,144 @@
           <Setter Property="MinHeight" Value="28" />
         </Style>
         <Style TargetType="ComboBox">
-          <Setter Property="Foreground" Value="#0F172A" />
-          <Setter Property="Background" Value="#F8FAFC" />
+          <Setter Property="Foreground" Value="#E5E7EB" />
+          <Setter Property="Background" Value="#0F172A" />
           <Setter Property="BorderBrush" Value="#475569" />
+          <Setter Property="BorderThickness" Value="1" />
           <Setter Property="Padding" Value="5,3" />
           <Setter Property="MinHeight" Value="28" />
+          <Setter Property="MaxDropDownHeight" Value="320" />
+          <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ComboBox">
+                <Grid SnapsToDevicePixels="True">
+                  <Border x:Name="ObservationComboChrome"
+                          Background="{TemplateBinding Background}"
+                          BorderBrush="{TemplateBinding BorderBrush}"
+                          BorderThickness="{TemplateBinding BorderThickness}"
+                          CornerRadius="3" />
+                  <ContentPresenter Margin="8,2,29,2"
+                                    HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                    VerticalAlignment="Center"
+                                    Content="{TemplateBinding SelectionBoxItem}"
+                                    ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                    ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                    TextElement.Foreground="{TemplateBinding Foreground}"
+                                    IsHitTestVisible="False"
+                                    SnapsToDevicePixels="True" />
+                  <Path Width="8" Height="5" Margin="0,0,10,0"
+                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Data="M 0 0 L 4 4 L 8 0 Z"
+                        Fill="{TemplateBinding Foreground}"
+                        IsHitTestVisible="False" />
+                  <ToggleButton x:Name="ObservationComboToggle"
+                                Background="Transparent" BorderThickness="0"
+                                Focusable="False" ClickMode="Press"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                    <ToggleButton.Template>
+                      <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="Transparent" />
+                      </ControlTemplate>
+                    </ToggleButton.Template>
+                  </ToggleButton>
+                  <Popup x:Name="PART_Popup"
+                         Placement="Bottom"
+                         AllowsTransparency="True"
+                         Focusable="False"
+                         IsOpen="{TemplateBinding IsDropDownOpen}"
+                         PopupAnimation="Fade">
+                    <Border MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                            MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                            Margin="0,2,0,0"
+                            Background="#0F172A"
+                            BorderBrush="#475569"
+                            BorderThickness="1"
+                            CornerRadius="3">
+                      <ScrollViewer Margin="1" SnapsToDevicePixels="True">
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
+                      </ScrollViewer>
+                    </Border>
+                  </Popup>
+                </Grid>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="ObservationComboChrome" Property="BorderBrush" Value="#64748B" />
+                  </Trigger>
+                  <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter TargetName="ObservationComboChrome" Property="BorderBrush" Value="#67A6BE" />
+                  </Trigger>
+                  <Trigger Property="IsDropDownOpen" Value="True">
+                    <Setter TargetName="ObservationComboChrome" Property="BorderBrush" Value="#67A6BE" />
+                  </Trigger>
+                  <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#8998AA" />
+                    <Setter Property="Background" Value="#151E2D" />
+                    <Setter Property="BorderBrush" Value="#2B3A4D" />
+                    <Setter Property="Opacity" Value="1" />
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
         </Style>
-        <Style x:Key="PreparationFieldBorder" TargetType="Border">
-          <Setter Property="Background" Value="#0E2A1B" />
-          <Setter Property="BorderBrush" Value="#22C55E" />
+        <Style TargetType="ComboBoxItem">
+          <Setter Property="Foreground" Value="#E5E7EB" />
+          <Setter Property="Background" Value="#0F172A" />
+          <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+          <Setter Property="Padding" Value="8,5" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ComboBoxItem">
+                <Border x:Name="ObservationComboItemBorder"
+                        Background="{TemplateBinding Background}"
+                        Padding="{TemplateBinding Padding}"
+                        SnapsToDevicePixels="True">
+                  <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                    VerticalAlignment="Center" />
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsHighlighted" Value="True">
+                    <Setter TargetName="ObservationComboItemBorder" Property="Background" Value="#1E3447" />
+                  </Trigger>
+                  <Trigger Property="IsSelected" Value="True">
+                    <Setter TargetName="ObservationComboItemBorder" Property="Background" Value="#174E63" />
+                  </Trigger>
+                  <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#718096" />
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        <Style x:Key="PreparationPanelBorder" TargetType="Border">
+          <Setter Property="Background" Value="{StaticResource PreparationSurfaceBrush}" />
+          <Setter Property="BorderBrush" Value="{StaticResource PreparationBorderBrush}" />
           <Setter Property="BorderThickness" Value="1" />
           <Setter Property="CornerRadius" Value="5" />
-          <Setter Property="Padding" Value="9" />
+          <Setter Property="Padding" Value="10" />
+          <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="PreparationIntroBorder" TargetType="Border" BasedOn="{StaticResource PreparationPanelBorder}">
+          <Setter Property="BorderBrush" Value="{StaticResource PreparationAccentBrush}" />
+          <Setter Property="BorderThickness" Value="3,1,1,1" />
+        </Style>
+        <Style x:Key="PreparationSecondaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+          <Setter Property="Background" Value="#18283A" />
+          <Setter Property="BorderBrush" Value="#486074" />
+          <Setter Property="Foreground" Value="#E2E8F0" />
+        </Style>
+        <Style x:Key="PreparationFieldBorder" TargetType="Border">
+          <Setter Property="Background" Value="{StaticResource PreparationSurfaceBrush}" />
+          <Setter Property="BorderBrush" Value="{StaticResource PreparationSuccessBrush}" />
+          <Setter Property="BorderThickness" Value="3,1,1,1" />
+          <Setter Property="CornerRadius" Value="5" />
+          <Setter Property="Padding" Value="10" />
           <Setter Property="Margin" Value="0,0,0,7" />
           <Style.Triggers>
             <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="True">
-              <Setter Property="Background" Value="#3F1515" />
-              <Setter Property="BorderBrush" Value="#EF4444" />
-              <Setter Property="BorderThickness" Value="2" />
+              <Setter Property="BorderBrush" Value="{StaticResource PreparationAttentionBrush}" />
             </DataTrigger>
           </Style.Triggers>
         </Style>
@@ -420,6 +548,11 @@
                     Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
                     ToolTip="清除旧 G3 状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的 G3 自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
             <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="取消当前运行并执行安全收尾。" />
+          </WrapPanel>
+          <WrapPanel Margin="0,4,0,0">
+            <TextBlock Text="LLM 后台：" FontWeight="Bold" Foreground="#7DD3FC" />
+            <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#94A3B8" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding ModelAutomationLastActivity, StringFormat=  ·  最近：{0}}" Foreground="#BAE6FD" TextWrapping="Wrap" />
           </WrapPanel>
         </StackPanel>
       </Border>
@@ -645,6 +778,8 @@
                 <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,6">
                   <TextBlock Text="目录 ID" FontWeight="SemiBold" />
                   <TextBox Text="{Binding CatalogId, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsTargetPlanEditable}" Margin="0,2,0,0" />
+                  <Button Content="确认 J2000 目标草稿" Command="{Binding ApplyTargetDraftCommand}" HorizontalAlignment="Right"
+                          ToolTip="校验并应用上述目标字段；不会连接设备或启动观测。" />
                 </StackPanel>
                 <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,6">
                   <TextBlock Text="赤经 RA（J2000，度）" FontWeight="SemiBold" />
@@ -702,20 +837,31 @@
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="9" Margin="0,0,0,8">
+            <Border Grid.Row="0" Style="{StaticResource PreparationIntroBorder}">
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                  <TextBlock Text="真实自动观测准备表" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="启动时自动恢复上次台站方案；设备候选来自 N.I.N.A.、PHD2 和 QHY 服务各自保存的配置。列出候选不会连接设备，红框只表示真正缺少的资料。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding AutomaticPreparationSummary}" Foreground="#FDE68A" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  <TextBlock Text="真实自动观测准备表" FontSize="15" FontWeight="Bold" Foreground="{StaticResource PreparationPrimaryTextBrush}" />
+                  <TextBlock Text="启动时自动恢复上次台站方案；设备候选来自 N.I.N.A.、PHD2 和 QHY 服务各自保存的配置。列出候选不会连接设备；左侧红色标记只表示真正缺少的资料。"
+                             Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  <TextBlock Text="{Binding AutomaticPreparationSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                        <Setter Property="Foreground" Value="#D9B86C" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding AutomaticPreparationIssueCount}" Value="0">
+                            <Setter Property="Foreground" Value="#87C7AE" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                 </StackPanel>
-                <Button Grid.Column="1" Content="重新扫描保存的配置" Command="{Binding RefreshCommissioningProfilesCommand}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Style="{StaticResource PreparationSecondaryButton}" Content="重新扫描保存的配置" Command="{Binding RefreshCommissioningProfilesCommand}" VerticalAlignment="Center" />
               </Grid>
             </Border>
 
-            <Border Grid.Row="1" Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="9" Margin="0,0,0,8">
+            <Border Grid.Row="1" Style="{StaticResource PreparationPanelBorder}">
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="台站配置方案" FontWeight="Bold" VerticalAlignment="Center" />
@@ -723,12 +869,12 @@
                   <ComboBox ItemsSource="{Binding CommissioningProfiles}"
                             SelectedItem="{Binding SelectedCommissioningProfile, Mode=TwoWay}"
                             DisplayMemberPath="DisplayName" MinWidth="360" HorizontalAlignment="Stretch" />
-                  <TextBlock Text="{Binding SelectedCommissioningProfileDescription}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding CommissioningProfileLoadStatus}" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
+                  <TextBlock Text="{Binding SelectedCommissioningProfileDescription}" Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  <TextBlock Text="{Binding CommissioningProfileLoadStatus}" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
                   <TextBlock Text="启动时默认选择最新完整标定包；哈希、内部引用和设备身份的静态校验全部通过后自动确认。此过程不连接或移动设备。"
-                             Foreground="#7DD3FC" TextWrapping="Wrap" Margin="0,2,0,0" />
+                             Foreground="#8FBACB" TextWrapping="Wrap" Margin="0,2,0,0" />
                 </StackPanel>
-                <Button Grid.Column="2" Content="加载所选方案" Command="{Binding ApplySelectedCommissioningProfileCommand}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="加载所选方案" Command="{Binding ApplySelectedCommissioningProfileCommand}" Margin="10,0,0,0" VerticalAlignment="Center" />
               </Grid>
             </Border>
 
@@ -737,7 +883,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="1. 观测目标" FontWeight="Bold" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="1" Text="{Binding TargetPreparationStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <Button Grid.Column="2" Content="选择/导入目标" Command="{Binding ShowObservationPlanCommand}" Margin="10,0,0,0" />
+                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="选择/导入目标" Command="{Binding ShowObservationPlanCommand}" Margin="10,0,0,0" />
               </Grid>
             </Border>
 
@@ -760,7 +906,7 @@
                     <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding QhyCameraCandidates}" SelectedItem="{Binding SelectedQhyCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
                   </Grid>
                   <TextBlock Text="这里只选择期望身份：ATR 仍归 N.I.N.A.，G3 仍归 PHD2，QHY 仍归独立 QHY 服务。无需把三台相机轮流接进 N.I.N.A.。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,5,0,0" />
+                             Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
                 </StackPanel>
               </Grid>
             </Border>
@@ -771,11 +917,11 @@
                 <TextBlock Grid.Column="0" Text="3. 一次性安装标定" FontWeight="Bold" VerticalAlignment="Top" Margin="0,5,8,0" />
                 <StackPanel Grid.Column="1">
                   <TextBlock Text="{Binding CommissioningPreparationStatus}" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding PreparationEvidenceInventorySummary}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding PreparationEvidenceInventorySummary}" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   <TextBlock Text="这里不是普通表单：ID、SHA-256、四槽狭缝指纹、三焦域身份和运动限额必须由标定流程整体生成或导入，界面不会让你手抄。"
-                             Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,4,0,0" />
+                             Foreground="#D6BC82" TextWrapping="Wrap" Margin="0,4,0,0" />
                 </StackPanel>
-                <Button Grid.Column="2" Content="导入完整标定包" Command="{Binding ImportCommissioningBindingsCommand}" Margin="10,0,0,0" VerticalAlignment="Top" />
+                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="导入完整标定包" Command="{Binding ImportCommissioningBindingsCommand}" Margin="10,0,0,0" VerticalAlignment="Top" />
               </Grid>
             </Border>
 
@@ -804,14 +950,14 @@
                     <CheckBox Grid.Row="3" Grid.Column="1" Content="已安装并经过确认的级次分选滤镜"
                               IsChecked="{Binding PreparationOrderSortingFilterInstalled, Mode=TwoWay}" Margin="4,4" />
                   </Grid>
-                  <TextBlock Text="{Binding PreparationDraftStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,5,0,0" />
+                  <TextBlock Text="{Binding PreparationDraftStatus}" Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
                   <WrapPanel Margin="0,6,0,0">
-                    <Button Content="自动生成准备草稿" Command="{Binding CreateNightSetupDraftCommand}" Margin="0,0,8,0" />
-                    <Button Content="导入锁定本夜配置" Command="{Binding SelectNightSetupSnapshotCommand}" Margin="0,0,8,0" />
-                    <Button Content="打开草稿位置" Command="{Binding OpenPreparationDraftFolderCommand}" />
+                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="自动生成准备草稿" Command="{Binding CreateNightSetupDraftCommand}" Margin="0,0,8,0" />
+                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="导入锁定本夜配置" Command="{Binding SelectNightSetupSnapshotCommand}" Margin="0,0,8,0" />
+                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="打开草稿位置" Command="{Binding OpenPreparationDraftFolderCommand}" />
                   </WrapPanel>
                   <TextBlock Text="草稿会自动汇总保存的身份、相机参数、狭缝和上述选择，但不会连接设备，也不会把尚未实测的焦点、光栅或运动证据伪装成已完成。"
-                             Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,5,0,0" />
+                             Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
                 </StackPanel>
               </Grid>
             </Border>
@@ -834,7 +980,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="6. 自动检查结果" FontWeight="Bold" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="1" Text="{Binding AutomationPolicyPreparationStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <Button Grid.Column="2" Content="查看工程诊断" Command="{Binding ShowAdvancedSettingsCommand}" Margin="10,0,0,0" />
+                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="查看工程诊断" Command="{Binding ShowAdvancedSettingsCommand}" Margin="10,0,0,0" />
               </Grid>
             </Border>
           </Grid>
@@ -1044,6 +1190,46 @@
                             AutomationProperties.AutomationId="OpenAstroSpec.SaveAdvancedSettings" />
                     <TextBlock Text="{Binding AdvancedSettingsSaveStatus}" Foreground="#FDE68A" TextWrapping="Wrap" VerticalAlignment="Center" />
                   </WrapPanel>
+                </StackPanel>
+              </Border>
+              <Border Background="#10243B" BorderBrush="#22D3EE" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+                <StackPanel>
+                  <TextBlock Text="大模型前端闭环桥" FontSize="15" FontWeight="Bold" Foreground="#67E8F9" />
+                  <WrapPanel Margin="0,5,0,5">
+                    <Button Content="本次会话允许入缝精度警告后试拍" Command="{Binding ArmSlitQualityWarningCommand}"
+                            AutomationProperties.AutomationId="OpenAstroSpec.ArmSlitQualityWarning" />
+                    <Button Content="恢复严格入缝验收" Command="{Binding DisarmSlitQualityWarningCommand}" Margin="8,0,0,0" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding SupervisedSlitQualityWarningStatusText}" TextWrapping="Wrap" Foreground="#FDE68A" />
+                  <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除 G3 状态、修改设置或删除证据。"
+                             Foreground="#CFFAFE" TextWrapping="Wrap" Margin="0,4,0,7" />
+                  <CheckBox Content="启用本机当前用户的 LLM 后台命名管道"
+                            IsChecked="{Binding ModelAutomationBridgeEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationBridgeEnabled" />
+                  <CheckBox Content="仅为本次 N.I.N.A. 会话授权后台触发真实流程的启动/恢复按钮"
+                            IsChecked="{Binding ModelAutomationRealControlArmed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            IsEnabled="{Binding ModelAutomationBridgeEnabled}"
+                            Margin="0,5,0,0"
+                            AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationRealControlArmed" />
+                  <WrapPanel Margin="0,6,0,0">
+                    <Button Content="代码启用后台桥"
+                            Command="{Binding EnableModelAutomationBridgeCommand}"
+                            Margin="0,0,6,0"
+                            AutomationProperties.AutomationId="OpenAstroSpec.EnableModelAutomationBridge" />
+                    <Button Content="代码授权本次真实流程"
+                            Command="{Binding ArmModelAutomationRealControlCommand}"
+                            Margin="0,0,6,0"
+                            AutomationProperties.AutomationId="OpenAstroSpec.ArmModelAutomationRealControl" />
+                    <Button Content="撤销本次真实流程授权"
+                            Command="{Binding DisarmModelAutomationRealControlCommand}"
+                            AutomationProperties.AutomationId="OpenAstroSpec.DisarmModelAutomationRealControl" />
+                  </WrapPanel>
+                  <TextBlock Text="该真实流程授权每次启动 N.I.N.A. 都会恢复为关闭。后台只有在本次请求携带精确操作员证明时，才能通过与可见按钮相同的 ICommand 重新授权；证明不会写入日志。暂停、取消和人工接管属于停止类动作；恢复仍会重新校验全部可能过期的门。"
+                             Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,5,0,0" />
+                  <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,6,0,0" />
+                  <TextBlock Text="{Binding ModelAutomationBridgeEndpoint, StringFormat=端点：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding ModelAutomationInvocationSummary}" Foreground="#C4B5FD" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding ModelAutomationLastActivity, StringFormat=最近调用：{0}}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,3,0,0" />
                 </StackPanel>
               </Border>
               <TextBlock Text="运行准入与数据归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />

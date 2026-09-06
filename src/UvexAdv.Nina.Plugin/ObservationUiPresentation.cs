@@ -281,6 +281,7 @@ public static partial class ObservationUiPresentation
             "g3-plate-solve-frame" => "G3 解算帧",
             "g3-phd2-guide-selection-frame" => "PHD2/G3 导星选星帧",
             "phd2-lock-shift-fresh-residual" => "PHD2 入缝新鲜残差",
+            "phd2-post-lock-readonly-window" => "PHD2 微调后只读导星窗口（有人监督）",
             "phd2-full-frame-guide-takeover" => "PHD2 全幅导星接管",
             "qhy-mount-coordinate-sync-intent" => "QHY WCS 坐标同步意图",
             "qhy-acquisition-frame" => "QHY 广域采集帧",
@@ -327,6 +328,12 @@ public static partial class ObservationUiPresentation
         var raw = rawMessage?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(raw)) return new ObservationUiOperationError(string.Empty, string.Empty);
 
+        if (raw == "PHD2_POST_LOCK_OBSERVING")
+            return new ObservationUiOperationError(Text(
+                "PHD2 微调后继续导星，正在检查锁点与连续新帧；不重复启动稳定等待。",
+                "PHD2 continues guiding after the fine lock shift; checking lock readback and fresh frames without restarting native settling.",
+                culture), raw);
+
         if (IsChinese(culture))
         {
             return ContainsEnglishSentence(raw)
@@ -345,10 +352,19 @@ public static partial class ObservationUiPresentation
         {
             "STAGE_EXCEPTION" => "当前阶段发生未分类异常，流程已在动作边界停止",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
+            "PHD2_LOCK_RECOVERY_FRESH_FIELD_REQUIRED" => "PHD2 旧锁点账本恢复时未取得新的正式 G3/PL3 目标与狭缝联合证据",
+            "PHD2_LOCK_RECOVERY_FOREIGN_ENDPOINT_UNPROVEN" => "旧观测留下的 PHD2 锁点端点无法由持久化读回唯一确认；没有发送返回命令",
+            "PHD2_LOCK_RECOVERY_SLIT_STATE_CHANGED" => "同一目标的锁点恢复中，fresh 物理狭缝位置与原账本不一致",
+            "SLIT_LOCK_RETURN_TIME_RESERVE" => "PHD2 锁点返程所需的最坏耗时无法装入当前活动恢复时窗；没有发送锁点命令",
+            "PHD2_LOCK_RESTART_RETURN_RESIDUAL_MISMATCH" => "PHD2 锁点已经返回恢复原点，但 fresh G3 星场尚未证明本次光学响应；流程保持停止且不会重复发送锁点命令",
+            "PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED" => "旧 PHD2 锁点债务已经安全结清，但自动重建 fresh G3/PL3/狭缝证据未通过；没有复用不稳定旧场",
             "PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED" => "PHD2 选中的导星星撞到探测器边缘、目标光晕或狭缝保护区",
             "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED" => "PHD2 已用完旁星有界重选次数，仍未找到满足几何限制的导星星",
             "G3_FRAME_REUSED" => "精调阶段拒绝复用旧 G3 残差帧；每次位移后都必须取得新帧",
             "G3_CATALOG_WCS_AUTHORITY_INVALID" => "目录/WCS 目标几何证据格式无效，不能据此授权入缝位移",
+            "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID" => "饱和目标的目录身份、实心核质心或光通量不适用标记不一致，不能据此授权入缝位移",
+            "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED" => "连续 fresh 导星帧仍无法可靠辨认物理狭缝，有界补拍次数已经用尽",
+            "SLIT_LOCUS_LOW_CONFIDENCE" => "fresh 导星帧中的物理狭缝对比度不足，当前帧不能授权入缝位移",
             "PHD2_PLACEMENT_SETTLE_STALE" => "入缝后保存的 PHD2 导星或稳定纪元已变化，旧证据不能继续使用",
             "PHD2_CALIBRATION_PRE_GUIDE_REJECTED" => "当前 PHD2 校准未通过导星前质量门，未发送导星命令",
             "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE" => "已执行一次强制校准，但 PHD2 仍未报告可用的当前校准",
@@ -357,12 +373,17 @@ public static partial class ObservationUiPresentation
             "GUIDING_LOST" => "PHD2 已确认脱锁，新的科学曝光已被禁止",
             "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" => "PHD2 仍在导星，但稳定性未达到本轮科学曝光门限",
             "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" => "G3 邻场搜索未找到可接受目标，赤道仪已返回保存的搜索起点",
+            "G3_MOTION_RETURN_INTERMEDIATE_RESIDUAL_LIMIT" => "G3 回原中间段未进入严格 2″ 命令包络；已保存 fresh 读回并停止后续回程段",
             "G3_FIELD_MOUNT_BINDING_STALE" => "G3 图像与赤道仪读回的时间绑定已过期，旧帧不能授权运动",
             "G3_FIELD_MOUNT_BINDING_FRAME_MISSING" => "G3 运动证据所引用的原始帧不存在",
             "G3_FIELD_MOUNT_BINDING_FRAME_UNREADABLE" => "G3 运动证据所引用的原始帧无法读取",
             "G3_FIELD_MOUNT_BINDING_READBACK_UNAVAILABLE" => "拍摄 G3 帧时没有取得可信的赤道仪位置读回",
             "G3_PLATE_SOLVE_LADDER_TRANSIENT_EXHAUSTED" => "G3 解算曝光阶梯遇到连续临时故障，本轮新鲜阶梯已经用尽",
+            "G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD" => "G3 三档长曝光均取得结构化星场，但 PL3 未能建立 WCS；不会把有星点误判成已解算",
+            "G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD" => "G3 解算阶梯未取得 WCS 或可见星点；仅因观测计划明确声明目标在 G3 中可能不可见，才允许继续目录/WCS 有界恢复",
+            "G3_SOLVE_PROBE_OVEREXPOSED" => "G3 解算帧有大面积像素达到饱和值，当前曝光或天光过亮；已停止更长曝光和邻场移动",
             "G3_CLOUD_OR_TRANSPARENCY_INVALID" => "G3 新帧没有足够的一致星点，当前更像云层或透明度突变而不是位置错误",
+            "G3_STAR_FIELD_SPARSE_VALID_EXPOSURE" => "G3 短曝光星场形态学只能证明曝光有效，仍需正式 PL3/WCS 建立目标位置",
             "BRIGHT_TARGET_ONLY_ANNULAR_GHOSTS" => "亮目标分析只找到空心环状鬼影，没有找到可作为真目标的实心核心",
             "BRIGHT_TARGET_TOPOLOGY_UNPROVEN" => "亮目标与鬼影的拓扑关系仍不唯一，目标身份尚未证明",
             "SLIT_LED_IDENTITY_GEOMETRY_UNAVAILABLE" => "狭缝灯差分图未能恢复可信的物理狭缝几何",
@@ -372,6 +393,8 @@ public static partial class ObservationUiPresentation
             "QHY_NATIVE_CENTER_FRESH_SOURCE_REQUIRED" => "粗定位只拿到旧 QHY 帧，必须重新采集新鲜见证帧",
             "UVEX_NOT_READY" => "UVEX4 服务未返回 Ready 和可信位置，机构动作被禁止",
             "UVEX_AUTO_CONNECT_FAILED" => "未能通过固定 COM5 配置连接并验证 UVEX4",
+            "UVEX_SLIT_ILLUMINATION_OFF_UNVERIFIED" => "狭缝定位 LED 的关闭命令或关闭状态未得到完整确认，流程已按安全规则停止",
+            "UVEX_SLIT_ILLUMINATION_ON_UNVERIFIED" => "狭缝定位 LED 的开启命令已经完成，但有界状态回读仍未确认开启；未采集任何 ON 帧",
             "NINA_EQUIPMENT_CONNECT_EXCEPTION" => "N.I.N.A. 设备连接阶段发生异常，尚未取得完整身份读回",
             "ATR_NOT_CONNECTED" or "ATR_CONNECT_FAILED" => "ATR585M 未连接或连接尝试失败，不能开始光谱曝光",
             "TELESCOPE_NOT_CONNECTED" or "TELESCOPE_CONNECT_FAILED" => "赤道仪未连接或连接尝试失败，不能转向或修正",
@@ -385,7 +408,7 @@ public static partial class ObservationUiPresentation
             _ when effectiveCode.Contains("IDENTITY", StringComparison.Ordinal) => "设备或目标身份与本轮锁定证据不一致",
             _ when effectiveCode.Contains("HASH", StringComparison.Ordinal) || effectiveCode.Contains("FINGERPRINT", StringComparison.Ordinal) => "证据哈希或硬件指纹不一致，不能把当前数据当作本轮授权依据",
             _ when effectiveCode.Contains("WEATHER", StringComparison.Ordinal) || effectiveCode.Contains("SAFETY", StringComparison.Ordinal) => "天气或安全能力没有给出允许继续的可信状态",
-            _ when effectiveCode.Contains("ROOF", StringComparison.Ordinal) || effectiveCode.Contains("COVER", StringComparison.Ordinal) => "屋顶或光路盖状态没有得到命令完成与读回确认",
+            _ when HasCodeToken(effectiveCode, "ROOF", "COVER") => "屋顶或光路盖状态没有得到命令完成与读回确认",
             _ when effectiveCode.Contains("BUDGET", StringComparison.Ordinal) || effectiveCode.Contains("EXHAUSTED", StringComparison.Ordinal) => "本轮有界恢复的次数、位移或时间预算已经用尽",
             _ when effectiveCode.Contains("CALIBRATION", StringComparison.Ordinal) => "当前校准证据未通过适用于本阶段的质量门",
             _ when effectiveCode.Contains("PHD2", StringComparison.Ordinal) || effectiveCode.Contains("GUIDE", StringComparison.Ordinal) => "PHD2 导星或入缝证据未达到本阶段要求",
@@ -471,7 +494,7 @@ public static partial class ObservationUiPresentation
         if (code.Contains("SAFETY", StringComparison.Ordinal) ||
             code.Contains("RAIN", StringComparison.Ordinal) ||
             code.Contains("HORIZON", StringComparison.Ordinal) ||
-            code.Contains("ROOF", StringComparison.Ordinal))
+            HasCodeToken(code, "ROOF", "COVER"))
         {
             return chinese ? "这是安全/环境硬门，等待条件真实改变后再复核。" : "this is a safety/environment hard gate and requires a real state change before revalidation.";
         }
@@ -540,6 +563,13 @@ public static partial class ObservationUiPresentation
                            code is not "NINA" and not "PHD" and not "WCS" and not "FITS")
             .ToArray();
         return candidates.Length == 0 ? outerCode : candidates[^1];
+    }
+
+    private static bool HasCodeToken(string code, params string[] expectedTokens)
+    {
+        var tokens = code.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return expectedTokens.Any(expected =>
+            tokens.Any(token => string.Equals(token, expected, StringComparison.Ordinal)));
     }
 
     private static string DisplayPassedMessage(GateResult gate, bool chinese)

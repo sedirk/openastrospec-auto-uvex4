@@ -19,6 +19,14 @@ public sealed record G3SolveProbeContentAssessment(
 
 public static class G3SolveProbeContentAnalyzer
 {
+    // A compact saturated target can still establish real spatial structure,
+    // but widespread clipping cannot distinguish stars, background or optical
+    // gradients and must never authorize a neighbouring-field mount search.
+    // Ten percent is deliberately far above an ordinary saturated stellar core
+    // while still rejecting detector-wide sky/background clipping.
+    public const double MaximumSearchAuthorizingSaturatedPixelFraction = 0.10d;
+    public const string OverexposedGateCode = "G3_SOLVE_PROBE_OVEREXPOSED";
+
     public static G3SolveProbeContentAssessment Analyze(MonochromeFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -56,9 +64,16 @@ public static class G3SolveProbeContentAnalyzer
             ["sampledSaturatedPixelFraction"] = saturatedFraction,
         };
 
-        // Saturated/broad sources still establish real spatial structure.  They
-        // may enter the deterministic bright-target branch, but never focus.
-        var gate = stellar.DetectedStarCount > 0
+        // Saturated/broad sources still establish real spatial structure when
+        // clipping remains local. Widespread clipping takes precedence over a
+        // morphology detection because it destroys the field evidence needed
+        // to justify a search move.
+        var gate = saturatedFraction >= MaximumSearchAuthorizingSaturatedPixelFraction
+            ? GateResult.Unknown(
+                OverexposedGateCode,
+                $"The solve-only G3 frame is overexposed: {saturatedFraction:P1} of sampled pixels reached the detector plateau, at or above the {MaximumSearchAuthorizingSaturatedPixelFraction:P0} no-motion limit. The frame cannot authorize a longer exposure or neighbouring-field mount search.",
+                metrics)
+            : stellar.DetectedStarCount > 0
             ? GateResult.Pass(
                 "G3_SOLVE_PROBE_STRUCTURED_FIELD",
                 $"The solve-only G3 frame contains {stellar.DetectedStarCount} spatially coherent source(s); a failed WCS may use only the configured bounded recovery path.",

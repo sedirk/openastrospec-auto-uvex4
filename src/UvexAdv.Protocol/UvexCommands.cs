@@ -46,8 +46,12 @@ public static class UvexCommands
     public static UvexCommand SlitPhotodiodeValue() => UvexCommand.Query("SINT");
     public static UvexCommand SlitPhotodiodeThreshold() => UvexCommand.Query("SGTS");
     public static UvexCommand SlitPhotodiodeEnabled() => UvexCommand.Query("SGPH");
-    public static UvexCommand SlitIlluminationOn() => new("SLON", []);
-    public static UvexCommand SlitIlluminationOff() => new("SLOF", []);
+    // UVEX firmware echoes these commands and then emits a same-code
+    // completion frame.  Treating them as fire-and-forget lets the next
+    // status query consume the delayed completion frame and eventually time
+    // out, which can falsely turn a healthy COM5 session into Faulted.
+    public static UvexCommand SlitIlluminationOn() => new("SLON", [], ExpectsResponse: true);
+    public static UvexCommand SlitIlluminationOff() => new("SLOF", [], ExpectsResponse: true);
     public static UvexCommand SlitMove(int position, bool usePhotodiode) =>
         new(
             "SMOV",

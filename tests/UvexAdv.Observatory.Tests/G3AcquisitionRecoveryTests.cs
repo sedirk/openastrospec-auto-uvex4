@@ -220,6 +220,82 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Fact]
+    public void FinalOriginCommandAndStrictIntermediateShareOneFullyChargedSegment()
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        const double finalStableToleranceArcseconds = 10;
+        var state = State(started) with
+        {
+            MaximumSingleCorrectionArcseconds = 310,
+            ArrivalToleranceArcseconds = 2,
+            MaximumRadiusArcseconds = 1_000,
+            MaximumCumulativeMotionArcseconds = 2_000,
+            MaximumCorrectionAttempts = 20,
+        };
+        var directReported = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees,
+            state.OriginDeclinationDegrees,
+            300,
+            0);
+        var stagedReported = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees,
+            state.OriginDeclinationDegrees,
+            305,
+            0);
+        var outsideRadiusReported = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees,
+            state.OriginDeclinationDegrees,
+            state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds + 1,
+            0);
+
+        var direct = G3AcquisitionMotionPlanner.PlanNextReturnStep(
+            state,
+            directReported.RaDegrees,
+            directReported.DecDegrees,
+            finalStableToleranceArcseconds,
+            started);
+        var staged = G3AcquisitionMotionPlanner.PlanNextReturnStep(
+            state,
+            stagedReported.RaDegrees,
+            stagedReported.DecDegrees,
+            finalStableToleranceArcseconds,
+            started);
+        var outsideRadius = G3AcquisitionMotionPlanner.PlanNextReturnStep(
+            state,
+            outsideRadiusReported.RaDegrees,
+            outsideRadiusReported.DecDegrees,
+            finalStableToleranceArcseconds,
+            started);
+
+        var directEndpointRadius = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+            state.OriginRaDegrees,
+            state.OriginDeclinationDegrees,
+            direct.CommandedRaDegrees,
+            direct.CommandedDeclinationDegrees);
+        var stagedEndpointRadius = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+            state.OriginRaDegrees,
+            state.OriginDeclinationDegrees,
+            staged.CommandedRaDegrees,
+            staged.CommandedDeclinationDegrees);
+
+        Assert.Equal(GateDisposition.Passed, direct.Gate.Disposition);
+        Assert.InRange(direct.CommandMagnitudeArcseconds, 299.999, 300.001);
+        Assert.InRange(directEndpointRadius, 0, 0.001);
+        Assert.True(
+            direct.CommandMagnitudeArcseconds + finalStableToleranceArcseconds <=
+            state.MaximumSingleCorrectionArcseconds + 1e-9);
+
+        Assert.Equal(GateDisposition.Passed, staged.Gate.Disposition);
+        Assert.InRange(staged.CommandMagnitudeArcseconds, 296.999, 297.001);
+        Assert.InRange(stagedEndpointRadius, 7.999, 8.001);
+        Assert.True(stagedEndpointRadius > 0);
+        Assert.True(
+            staged.CommandMagnitudeArcseconds + state.ArrivalToleranceArcseconds <=
+            state.MaximumSingleCorrectionArcseconds + 1e-9);
+        Assert.Equal("G3_MOTION_RETURN_OUTSIDE_RADIUS", outsideRadius.Gate.Code);
+    }
+
+    [Fact]
     public async Task CanonicalEnvelopeRejectsTamperingAndDiscoveryIsRunBounded()
     {
         var root = Path.Combine(Path.GetTempPath(), "uvex-g3-recovery-tests", Guid.NewGuid().ToString("N"));
@@ -443,6 +519,108 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Fact]
+    public void ReattestedLargeWcsFamilyIsNotPermanentlyTruncatedByPriorLocalSearchLimits()
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        var prior = State(started) with
+        {
+            MaximumSingleCorrectionArcseconds = 304,
+            MaximumRadiusArcseconds = 900,
+            MaximumCumulativeMotionArcseconds = 3_600,
+            MaximumCorrectionAttempts = 12,
+            MaximumElapsedSeconds = 1_200,
+            CumulativeMotionArcseconds = 302,
+            CorrectionAttempts = 1,
+            UpdatedUtc = started.AddMinutes(1),
+        };
+
+        var continued = G3AcquisitionMotionPlanner.ContinueSettledLedger(
+            prior,
+            "run-a",
+            G3AcquisitionMotionKind.WcsCentering,
+            "evidence/run-a-g3-wcs.json",
+            started.AddMinutes(2),
+            familyMaximumSingleCorrectionArcseconds: 5_400,
+            familyMaximumRadiusArcseconds: 18_000,
+            familyAdditionalCumulativeMotionArcseconds: 21_600,
+            familyAdditionalCorrectionAttempts: 8,
+            familyAdditionalElapsedTime: TimeSpan.FromMinutes(20),
+            attestedLineageMaximumSingleCorrectionArcseconds: 5_400,
+            attestedLineageMaximumRadiusArcseconds: 18_000,
+            attestedLineageMaximumCumulativeMotionArcseconds: 21_600,
+            attestedLineageMaximumCorrectionAttempts: 12,
+            attestedLineageMaximumElapsedTime: TimeSpan.FromMinutes(20));
+
+        Assert.Equal(5_400, continued.MaximumSingleCorrectionArcseconds);
+        Assert.Equal(18_000, continued.MaximumRadiusArcseconds);
+        Assert.Equal(21_600, continued.MaximumCumulativeMotionArcseconds);
+        Assert.Equal(9, continued.MaximumCorrectionAttempts);
+        Assert.Equal(1_200, continued.MaximumElapsedSeconds);
+        Assert.Equal(prior.CumulativeMotionArcseconds, continued.CumulativeMotionArcseconds);
+        Assert.Equal(prior.CorrectionAttempts, continued.CorrectionAttempts);
+        Assert.Equal(prior.BudgetLineageId, continued.BudgetLineageId);
+        Assert.Equal(prior.OriginRaDegrees, continued.OriginRaDegrees);
+        Assert.Equal(prior.OriginDeclinationDegrees, continued.OriginDeclinationDegrees);
+        Assert.Equal(prior.StartedUtc, continued.StartedUtc);
+        Assert.Empty(continued.Validate());
+    }
+
+    [Fact]
+    public void LocalSearchCannotShrinkRadiusBelowAlreadySettledWcsEndpoint()
+    {
+        var started = DateTimeOffset.Parse("2026-09-05T12:00:00Z");
+        var prior = State(started) with
+        {
+            Kind = G3AcquisitionMotionKind.WcsCentering,
+            MaximumSingleCorrectionArcseconds = 5_400,
+            MaximumRadiusArcseconds = 18_000,
+            MaximumCumulativeMotionArcseconds = 21_600,
+            MaximumCorrectionAttempts = 12,
+            MaximumElapsedSeconds = 1_200,
+            CurrentRaTangentOffsetArcseconds = 10_000,
+            CumulativeMotionArcseconds = 10_046,
+            CorrectionAttempts = 2,
+        };
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            G3AcquisitionMotionPlanner.ContinueSettledLedger(
+                prior, "run-b", G3AcquisitionMotionKind.LocalSearch,
+                "evidence/search.json", started.AddMinutes(5),
+                familyMaximumSingleCorrectionArcseconds: 310,
+                familyMaximumRadiusArcseconds: 900));
+
+        Assert.Contains("G3_MOTION_FAMILY_RADIUS_INCOMPATIBLE", error.Message);
+        Assert.Equal(G3AcquisitionMotionPhase.SettledBudgetLedger, prior.Phase);
+        Assert.Equal(18_000, prior.MaximumRadiusArcseconds);
+        Assert.Equal(10_046, prior.CumulativeMotionArcseconds);
+        Assert.Equal(started, prior.StartedUtc);
+    }
+
+    [Theory]
+    [InlineData(2.24, 0.3, 50, 100, true)]
+    [InlineData(4.01, 0.3, 50, 100, false)]
+    [InlineData(2.24, 2.01, 50, 100, false)]
+    [InlineData(2.24, 0.3, 101, 100, false)]
+    [InlineData(2.24, 0.3, 50, 1, false)]
+    public void IntermediateReturnReplanRequiresBoundedStableMeasuredProgress(
+        double residual, double drift, double move, double priorRadius, bool expected)
+    {
+        var state = State(DateTimeOffset.UtcNow) with
+        {
+            Phase = G3AcquisitionMotionPhase.ReturnIntent,
+            CommandMagnitudeArcseconds = 50,
+            MaximumSingleCorrectionArcseconds = 100,
+            MaximumRadiusArcseconds = 200,
+            MaximumCumulativeMotionArcseconds = 500,
+            ArrivalToleranceArcseconds = 2,
+            CumulativeMotionArcseconds = 100,
+            CorrectionAttempts = 1,
+        };
+        Assert.Equal(expected, G3AcquisitionMotionPlanner.CanReplanStableIntermediateReturn(
+            state, priorRadius, residual, drift, move));
+    }
+
+    [Fact]
     public void NominalSearchStepAllowsPriorArrivalErrorAndReservesNextArrivalError()
     {
         var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
@@ -467,6 +645,33 @@ public sealed class G3AcquisitionRecoveryTests
         Assert.Equal(GateDisposition.Passed, reserve.Gate.Disposition);
         Assert.InRange(reserve.MoveFromCurrentArcseconds, 301.99, 302.01);
         Assert.Equal(1, reserve.ReservedReturnMoves);
+    }
+
+    [Fact]
+    public void ExpiredReturnClockAllowsOnlyAlreadyObservedOriginNotAnotherMove()
+    {
+        var started = DateTimeOffset.Parse("2026-09-05T12:00:00Z");
+        var state = State(started) with
+        {
+            Phase = G3AcquisitionMotionPhase.ReturnIntent,
+            CommandMagnitudeArcseconds = 20,
+            CumulativeMotionArcseconds = 30,
+            CorrectionAttempts = 1,
+        };
+        var later = started.AddSeconds(state.MaximumElapsedSeconds + 60);
+        var origin = G3AcquisitionMotionPlanner.PlanNextReturnStep(
+            state, state.OriginRaDegrees, state.OriginDeclinationDegrees, 2, later);
+        var offset = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees, state.OriginDeclinationDegrees, 15, 0);
+        var away = G3AcquisitionMotionPlanner.PlanNextReturnStep(
+            state, offset.RaDegrees, offset.DecDegrees, 2, later);
+
+        Assert.True(origin.AlreadyAtOrigin);
+        Assert.Equal(0, origin.CommandMagnitudeArcseconds);
+        Assert.Equal("G3_MOTION_RETURN_TIME_LIMIT", away.Gate.Code);
+        Assert.False(away.AlreadyAtOrigin);
+        Assert.Equal(started, state.StartedUtc);
+        Assert.Equal(30, state.CumulativeMotionArcseconds);
     }
 
     private static G3AcquisitionMotionState State(DateTimeOffset started) => new(

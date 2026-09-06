@@ -71,8 +71,10 @@ Per-run and per-frame facts remain separate:
 - `UVEXCID`: per-capture correlation identifier;
 - `NIGHTSET`: locked Night Setup identifier;
 - `CATALOG`: requested catalogue identifier when available;
-- `IMAGETYP`: N.I.N.A. image type (`SNAPSHOT` for exposure probes and `LIGHT`
-  for accepted-candidate science images);
+- `IMAGETYP`: N.I.N.A.'s physical FITS image type (`LIGHT` for both a light
+  exposure probe and an accepted-candidate science image). The native capture
+  type is separately preserved as `NINATYP=SNAPSHOT` or `NINATYP=LIGHT`, and
+  `UVEXSTG=PROBE/SCIENCE` remains the mandatory role discriminator;
 - N.I.N.A. sequence title: root sequence identity where available.
 
 The run manifest remains the authoritative cross-camera relationship and quality
@@ -112,6 +114,27 @@ The runner verifies at least:
 - `OBSRUNID`, `UVEXSTG`, `UVEXCID` and `NIGHTSET` equal the locked capture
   context;
 - the N.I.N.A. image type agrees with probe/science role.
+
+#### Native FITS representation correction (2026-09-07, plugin 0.4.0.137)
+
+Actual N.I.N.A. 3.2 output demonstrated two writer limits and one native mapping:
+its FITS cards cannot store arbitrary Unicode or an unbounded string, and
+`FITSHeader.PopulateFromMetaData` deliberately maps `SNAPSHOT` to `LIGHT`.
+These are encoding/type semantics, not grounds to waive target identity.
+
+Header schema `UVEXPV=2` therefore uses a stable readable ASCII scientific-name
+alias for `OBJECT` and N.I.N.A.'s target filename token. The user-visible target
+and immutable observation plan retain the full original name. Long `NIGHTSET`
+and `CATALOG` values use bounded aliases with a content-hash suffix. Full original
+target, Night Setup and catalogue strings are independently stored as UTF-8
+Base64 in numbered `OBJ0001`, `NST0001`, `CAT0001` cards (48 characters per card),
+with explicit `*ENC` and `*CNT` cards. Read-only verification requires every exact
+chunk, count, alias, run/capture ID and role against the locked capture context;
+missing or changed chunks fail even if the readable alias matches. `NINATYP`
+records the requested native capture type without fighting N.I.N.A.'s physical
+`IMAGETYP` mapping. Filename directories still follow the native requested type.
+This correction only affects newly saved files; old FITS remain immutable and
+old failed provenance checks are not retroactively accepted.
 
 A metadata mismatch retains the immutable raw file and publishes failed evidence;
 it does not rename, rewrite, move or delete the FITS. No subsequent frame is

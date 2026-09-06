@@ -33,9 +33,40 @@ internal sealed partial class RealObservationStageRunner
     /// </summary>
     private async Task<G3PlateSolveHintSelection> SelectG3PlateSolveHintAsync(
         ObservationContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        G3WcsMotionPrediction? motionPrediction = null)
     {
         var target = TargetCoordinates(context.Plan);
+        if (motionPrediction?.EstimatedFieldCenter is { } arrivalHint &&
+            double.IsFinite(arrivalHint.RADegrees) && arrivalHint.RADegrees is >= 0 and < 360 &&
+            double.IsFinite(arrivalHint.Dec) && arrivalHint.Dec is >= -90 and <= 90 &&
+            !string.IsNullOrWhiteSpace(motionPrediction.SourceSolveEvidencePath))
+        {
+            // A bounded WCS move can stop at an intermediate sky field, still
+            // degrees from the catalogue target. Its preceding QHY frame is
+            // stale after motion. Use the already computed G3 WCS + measured
+            // arrival solely to center PL3's search, never as a solved frame.
+            const string authority = "G3WcsMeasuredArrivalSearchHintOnly";
+            context.Set("g3PlateSolveHintAuthority", authority);
+            await WriteAuditBestEffortAsync("g3-solve-hint-measured-wcs-arrival", new
+            {
+                motionPrediction.SourceFramePath,
+                motionPrediction.SourceSolveEvidencePath,
+                motionPrediction.SourceMountBindingSha256,
+                motionPrediction.SettledRaDegrees,
+                motionPrediction.SettledDecDegrees,
+                predictedSkyRaDegrees = arrivalHint.RADegrees,
+                predictedSkyDecDegrees = arrivalHint.Dec,
+                skyCoordinateAuthority = authority,
+                formalSolveStillRequired = true,
+                mountMotionAuthority = false,
+                mountSyncCommanded = false,
+            }).ConfigureAwait(false);
+            Report("G3 分段修正后按上一张 WCS 与实际到位回读预测当前天区，作为 PL3 搜索提示；仍须新帧正式解算");
+            return new G3PlateSolveHintSelection(
+                arrivalHint, authority,
+                "The settled intermediate field, not the still-distant catalogue target, is the search hint; this is not WCS or motion authority.");
+        }
         if (lastQhySolve?.Result.Success != true ||
             lastQhySolve.Result.Coordinates is null ||
             lastQhyAcquisition?.AcceptedFrameId is not { } frameId)

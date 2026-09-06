@@ -322,8 +322,10 @@ public sealed class Phd2ClientTests
             server.ReceivedMethods.ToArray());
     }
 
-    [Fact]
-    public async Task SaveNextLoopingFrameWaitsForFreshEventWithoutStartingOrStoppingLoop()
+    [Theory]
+    [InlineData("Looping")]
+    [InlineData("Selected")]
+    public async Task SaveNextLoopingFrameWaitsForFreshEventWithoutStartingOrStoppingLoop(string reportedState)
     {
         using var directory = new TemporaryDirectory();
         var source = Path.Combine(directory.Path, "phd-continuous-save.fit");
@@ -332,7 +334,7 @@ public sealed class Phd2ClientTests
         {
             var state = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_app_state", state.GetProperty("method").GetString());
-            await session.ReplyResultAsync(state, "Looping", cancellationToken);
+            await session.ReplyResultAsync(state, reportedState, cancellationToken);
 
             var exposure = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_exposure", exposure.GetProperty("method").GetString());
@@ -393,10 +395,32 @@ public sealed class Phd2ClientTests
         Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
     }
 
+    [Fact]
+    public async Task SelectedWithoutANewLoopFrameCannotSaveOrStartCapture()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var state = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(state, "Selected", cancellationToken);
+            var exposure = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(exposure, 1500, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.SaveNextLoopingFrameAsync(
+            new Phd2SingleFrameRequest(1500, 1, 70, Path.Combine(directory.Path, "must-not-exist.fit")), cancellation.Token));
+        Assert.Equal(["get_app_state", "get_exposure"], server.ReceivedMethods.ToArray());
+        Assert.False(File.Exists(Path.Combine(directory.Path, "must-not-exist.fit")));
+    }
+
     [Theory]
     [InlineData("Guiding", Phd2AppState.Guiding)]
     [InlineData("Calibrating", Phd2AppState.Calibrating)]
     [InlineData("Looping", Phd2AppState.Looping)]
+    [InlineData("Selected", Phd2AppState.Selected)]
     [InlineData("Paused", Phd2AppState.Paused)]
     [InlineData("LostLock", Phd2AppState.LostLock)]
     [InlineData("FutureState", Phd2AppState.Unknown)]
@@ -422,6 +446,7 @@ public sealed class Phd2ClientTests
             CancellationToken.None));
 
         Assert.Contains("left untouched", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(expectedState, exception.RejectedBeforeMutationState);
         Assert.Equal(expectedState, client.Snapshot.AppState);
         Assert.Equal(["get_app_state"], server.ReceivedMethods.ToArray());
         Assert.DoesNotContain("set_exposure", server.ReceivedMethods);
@@ -606,8 +631,10 @@ public sealed class Phd2ClientTests
         Assert.Null(client.Snapshot.SettleProgress);
     }
 
-    [Fact]
-    public async Task SupervisedSettleTimeoutKeepsSameLiveOperationWithoutGuideOrStopRetry()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SupervisedGuidingRequiresRemoteTerminalSettleInsteadOfLocalTimeout(bool remoteTerminal)
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
         {
@@ -633,33 +660,58 @@ public sealed class Phd2ClientTests
                 SettleTime = 0.0,
                 StarLocked = true,
             }, cancellationToken);
+            if (remoteTerminal)
+            {
+                // Later than the old timeout+one-margin (1.3s), but still
+                // inside the startup/readout-aware terminal-event allowance.
+                await Task.Delay(1450, cancellationToken);
+                await session.SendEventAsync(new { Event = "SettleDone", Status = 1,
+                    Error = "wind", TotalFrames = 2, DroppedFrames = 0 }, cancellationToken);
+            }
+            else
+            {
+                var stop = await session.ReadRequestAsync(cancellationToken);
+                Assert.Equal("stop_capture", stop.GetProperty("method").GetString());
+                await session.ReplyResultAsync(stop, 0, cancellationToken);
+            }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         });
         await using var client = CreateClient(
             server,
             commandTimeout: TimeSpan.FromSeconds(2),
-            eventTimeoutMargin: TimeSpan.FromMilliseconds(100));
+            eventTimeoutMargin: TimeSpan.FromMilliseconds(300));
         await client.ConnectAsync(CancellationToken.None);
         var validation = await client.ValidateCalibrationAsync(
             ValidCalibrationRequirement(),
             CancellationToken.None);
         Assert.True(validation.IsValid);
 
-        var result = await client.GuideAndSettleAsync(
+        var operation = client.GuideAndSettleAsync(
             new Phd2SettleCriteria(1.5, 1, 1),
             forceRecalibration: false,
             selectionRoi: null,
             preserveSameEpochGuidingOnSettleTimeout: true,
             CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("settle", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(Phd2AppState.Guiding, client.Snapshot.AppState);
-        Assert.Same(result, client.Snapshot.LastSettle);
-        Assert.Equal(client.Snapshot.ConnectionEpoch, client.Snapshot.LastSettleConnectionEpoch);
-        Assert.Equal(client.Snapshot.GuideEpoch, client.Snapshot.LastSettleGuideEpoch);
+        if (remoteTerminal)
+        {
+            var result = await operation;
+            Assert.False(result.Succeeded);
+            Assert.Equal(2, result.TotalFrames);
+            Assert.Equal(Phd2AppState.Guiding, client.Snapshot.AppState);
+            Assert.Same(result, client.Snapshot.LastSettle);
+            Assert.Equal(client.Snapshot.ConnectionEpoch, client.Snapshot.LastSettleConnectionEpoch);
+            Assert.Equal(client.Snapshot.GuideEpoch, client.Snapshot.LastSettleGuideEpoch);
+            Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<Phd2CommandTimeoutException>(() => operation);
+            Assert.Null(client.Snapshot.LastSettle);
+            Assert.Null(client.Snapshot.PendingSettleOperationId);
+            Assert.Single(server.ReceivedMethods.Where(method => method == "stop_capture"));
+        }
         Assert.Equal(1, server.ReceivedMethods.Count(method => method == "guide"));
-        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
         Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
     }
 
@@ -1047,6 +1099,27 @@ public sealed class Phd2ClientTests
         Assert.Equal(found, selected);
         Assert.Equal(found, client.Snapshot.LockPosition);
         Assert.Equal(found, client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task RoiCentroidEscapingTheSeedRegionIsATypedRejectedCandidateWithoutGuiding()
+    {
+        var roi = new Phd2Rectangle(21, 557, 1878, 502);
+        var found = new Phd2Point(747.41, 513.96);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyResultAsync(request, new[] { found.X, found.Y }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var error = await Assert.ThrowsAsync<Phd2GuideStarOutsideRoiException>(
+            () => client.FindGuideStarInRoiAsync(roi, CancellationToken.None));
+        Assert.Equal(found, error.Selected);
+        Assert.Equal(roi, error.RequestedRoi);
+        Assert.Null(client.Snapshot.SelectedStar);
         Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
     }
 

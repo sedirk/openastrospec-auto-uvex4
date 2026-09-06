@@ -239,6 +239,8 @@ public partial class EmbeddedImageViewer : UserControl
     internal EmbeddedImageDisplayLevels DisplayedLevels => displayedLevels;
 
     internal ImageSource? DisplayedImage => PreviewImageElement.Source;
+    internal ImageSource? DisplayedOverlay => AnnotationImageElement.Source;
+    internal ImageSource? DisplayedSpectrum => SpectrumImageElement.Source;
 
     public void SetDisplayStretch(bool automatic, double blackPoint, double whitePoint, double gamma)
     {
@@ -317,6 +319,10 @@ public partial class EmbeddedImageViewer : UserControl
         SetValue(HasImagePropertyKey, hasImage);
         EmptyStatePanel.Visibility = hasImage ? Visibility.Collapsed : Visibility.Visible;
         PreviewImageElement.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+        var layers = ObservationPreviewLayers.For(PreviewImage);
+        AnnotationImageElement.Source = layers?.Overlay;
+        SpectrumImageElement.Source = layers?.Spectrum;
+        SpectrumPanel.Visibility = layers?.Spectrum is null ? Visibility.Collapsed : Visibility.Visible;
 
         if (hasImage)
         {
@@ -324,12 +330,16 @@ public partial class EmbeddedImageViewer : UserControl
             // even when a FITS-derived BitmapSource contains unusual DPI metadata.
             PreviewImageElement.Width = imageWidth;
             PreviewImageElement.Height = imageHeight;
+            ImageSurface.Width = imageWidth;
+            ImageSurface.Height = imageHeight;
         }
         else
         {
             isDragging = false;
             PreviewImageElement.ClearValue(WidthProperty);
             PreviewImageElement.ClearValue(HeightProperty);
+            ImageSurface.ClearValue(WidthProperty);
+            ImageSurface.ClearValue(HeightProperty);
             SetZoom(1.0);
         }
 
@@ -471,6 +481,9 @@ public partial class EmbeddedImageViewer : UserControl
                 ? T("自动拉伸：开", "Auto stretch: on")
                 : T("自动拉伸：关", "Auto stretch: off");
             AutoStretchButton.BorderBrush = automaticStretch ? Brushes.DeepSkyBlue : new SolidColorBrush(Color.FromRgb(82, 100, 122));
+            SpectrumTitle.Text = T("即时 1D 光谱（空间方向抽样平均，仅诊断）", "Live 1D spectrum (spatially sampled mean; diagnostic only)");
+            SpectrumOrientationNote.Text = T("横轴：像素；蓝端/红端方向以 Night Setup 为准。图像拉伸不改变此曲线。",
+                "X axis: pixel; blue/red orientation follows Night Setup. Image stretch does not alter this curve.");
         }
         finally
         {

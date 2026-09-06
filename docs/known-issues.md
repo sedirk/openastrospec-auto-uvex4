@@ -1,5 +1,32 @@
 # Known issues
 
+## Current closeout boundary (2026-09-07)
+
+Installed .137 completed a supervised **real frontend 11/11** Deneb run with three
+accepted 3 s spectra; the [closeout report](commissioning-night-2026-09-07.md)
+separates this evidence from historical backend tests. QHY photometry accepted
+zero of seven retained frames, slit precision warnings remain, and throughput is
+not stable. Older entries below retain their dated verification scope: one
+successful run does not exercise every fault/recovery branch.
+
+- **UX-007 — fixed in .137:** ATR labels/curve were rasterized with pixels, so
+  stretch and image zoom also transformed interface content. Raw pixels, vector
+  overlays, WPF text and the spectrum panel are now separated in both viewers.
+- **OBS-022 — first-frame deadlock fixed; photometry quality open:** an actual QHY
+  first frame can advance with an audited quality warning rather than waiting
+  forever for a quality-accepted first frame. `STAR_DETECTION_CAPPED` frames are
+  still rejected, not relabelled usable photometry.
+- **OBS-023 — fixed and verified on five .137 FITS:** native FITS writing replaced
+  Chinese text, truncated long identifiers and represented SNAPSHOT as LIGHT.
+  Schema 2 uses verified ASCII aliases, reversible UTF-8 chunks and distinct
+  requested type/stage fields. Historical raw files remain unchanged.
+- **OBS-024 — fixed in .138 source; installation/sky replay pending:** redundant
+  native guide/settle requests after every fine lock shift generated repeated
+  timeout notifications in PHD2/NINA. The supervised outbound path now observes
+  the existing guide stream and three fresh optical frames without another guide
+  RPC. Evidence stays supervised/degraded; initial/strict/return native settling
+  and real fault notifications remain. No installed device settings were changed.
+
 ## OBS-020 — PHD2 selection-loop configuration event cleared calibration attestation before guide
 
 - **Observed:** 2026-08-30 on the live G3 slit-placement route. Calibration passed the initial policy check, but the subsequent full-frame selection loop/exposure transition emitted a PHD2 `ConfigurationChange`. The client correctly invalidated its cached calibration attestation; `GuideAndSettleAsync` then saw a null attestation and stopped with “guiding is blocked until calibration has passed the sanity gate.” The outer recovery fence did not classify this as LostLock/disconnect and paused the observation.

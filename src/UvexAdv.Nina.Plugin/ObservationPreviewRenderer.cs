@@ -16,11 +16,15 @@ internal static class ObservationPreviewRenderer
         PixelPoint? target = null,
         PixelPoint? guideStar = null)
     {
-        var source = image.RenderBitmapSource();
-        var visual = new DrawingVisual();
-        using (var drawing = visual.RenderOpen())
+        var source = image.RenderBitmapSource().Clone();
+        var overlay = new DrawingGroup
         {
-            drawing.DrawImage(source, new Rect(0, 0, source.PixelWidth, source.PixelHeight));
+            ClipGeometry = new RectangleGeometry(new Rect(0, 0, source.PixelWidth, source.PixelHeight)),
+        };
+        using (var drawing = overlay.Open())
+        {
+            // Fix the overlay coordinate bounds without baking it into pixels.
+            drawing.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, source.PixelWidth, source.PixelHeight));
             if (slit is not null)
             {
                 var angle = slit.AngleDegrees * Math.PI / 180d;
@@ -46,7 +50,7 @@ internal static class ObservationPreviewRenderer
                 DrawLabel(drawing, "GUIDE", point + new Vector(19, 15), Brushes.LimeGreen);
             }
         }
-        return Render(visual, source.PixelWidth, source.PixelHeight, source.DpiX, source.DpiY);
+        return ObservationPreviewLayers.Attach(source, overlay: new DrawingImage(overlay));
     }
 
     public static BitmapSource RenderAtr(IImageData image, ImageRoi roi)
@@ -56,29 +60,17 @@ internal static class ObservationPreviewRenderer
         var cropped = new CroppedBitmap(
             source,
             new Int32Rect(roi.X, roi.Y, roi.Width, roi.Height));
-        const int canvasWidth = 1200;
-        const int canvasHeight = 720;
-        const double imageTop = 34;
-        const double imageHeight = 450;
-        const double plotTop = 515;
-        const double plotHeight = 175;
-        var visual = new DrawingVisual();
-        using (var drawing = visual.RenderOpen())
+        // The scientific pixels remain a camera-sized bitmap. The 1D curve is
+        // a separate vector view, not part of the contrast/zoom input bitmap.
+        var plot = new DrawingGroup();
+        using (var drawing = plot.Open())
         {
-            drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(3, 10, 20)), null, new Rect(0, 0, canvasWidth, canvasHeight));
-            DrawLabel(drawing, $"ATR585M spectral ROI {roi.X},{roi.Y} {roi.Width}×{roi.Height}", new Point(16, 8), Brushes.WhiteSmoke, 16);
-            var imageRect = FitRect(cropped.PixelWidth, cropped.PixelHeight, new Rect(12, imageTop, canvasWidth - 24, imageHeight));
-            drawing.DrawImage(cropped, imageRect);
-            drawing.DrawRectangle(null, new Pen(Brushes.SlateGray, 1), imageRect);
-
             var spectrum = ExtractMeanSpectrum(image, roi);
-            var plotRect = new Rect(46, plotTop, canvasWidth - 66, plotHeight);
+            var plotRect = new Rect(0, 0, 1200, 180);
             drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), new Pen(Brushes.SlateGray, 1), plotRect);
             DrawSpectrum(drawing, spectrum, plotRect);
-            DrawLabel(drawing, "即时 1D（沿空间方向稳健抽样平均；仅诊断）", new Point(48, plotTop - 25), Brushes.LightSkyBlue, 14);
-            DrawLabel(drawing, "蓝端/红端方向以 Night Setup 为准", new Point(850, plotTop - 25), Brushes.Goldenrod, 13);
         }
-        return Render(visual, canvasWidth, canvasHeight, 96, 96);
+        return ObservationPreviewLayers.Attach(cropped, spectrum: new DrawingImage(plot));
     }
 
     private static double[] ExtractMeanSpectrum(IImageData image, ImageRoi roi)
@@ -124,26 +116,6 @@ internal static class ObservationPreviewRenderer
         }
         geometry.Freeze();
         drawing.DrawGeometry(null, new Pen(Brushes.Turquoise, 1.5), geometry);
-    }
-
-    private static Rect FitRect(double width, double height, Rect bounds)
-    {
-        var scale = Math.Min(bounds.Width / width, bounds.Height / height);
-        var fittedWidth = width * scale;
-        var fittedHeight = height * scale;
-        return new Rect(
-            bounds.Left + (bounds.Width - fittedWidth) / 2,
-            bounds.Top + (bounds.Height - fittedHeight) / 2,
-            fittedWidth,
-            fittedHeight);
-    }
-
-    private static BitmapSource Render(DrawingVisual visual, int width, int height, double dpiX, double dpiY)
-    {
-        var bitmap = new RenderTargetBitmap(width, height, dpiX > 0 ? dpiX : 96, dpiY > 0 ? dpiY : 96, PixelFormats.Pbgra32);
-        bitmap.Render(visual);
-        bitmap.Freeze();
-        return bitmap;
     }
 
     private static void DrawCrosshair(DrawingContext drawing, Point center, Brush brush, double radius)

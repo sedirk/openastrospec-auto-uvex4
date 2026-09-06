@@ -7,6 +7,27 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsTargetProjectorTests
 {
     [Fact]
+    public void NeighbourInversionSupportsOnlyItsBoundedExteriorEnvelopeWhileSlitInversionStaysInside()
+    {
+        var target = new Coordinates(310.35798, 45.28034, Epoch.J2000, Coordinates.RAType.Degrees);
+        var solve = new PlateSolveResult
+        {
+            Success = true, Coordinates = new Coordinates(310, 45.1, Epoch.J2000, Coordinates.RAType.Degrees),
+            Pixscale = 0.382, PositionAngle = 252.4,
+        };
+        var point = new UvexAdv.Observatory.PixelPoint(817, 1200);
+        const string solver = "NINA.PlateSolving.Solvers.Platesolve3Solver";
+        Assert.Throws<ArgumentOutOfRangeException>(() => G3WcsTargetProjector.SolveCenterForTargetAtPixel(
+            target, solve, 1920, 1080, solver, point));
+        var inverse = G3WcsTargetProjector.SolveCenterForNeighbourTargetAtPixel(
+            target, solve, 1920, 1080, solver, point);
+        Assert.True(inverse.InverseResidualPixels < 0.1);
+        Assert.Equal(point, inverse.DesiredTargetPixel);
+        Assert.Throws<ArgumentOutOfRangeException>(() => G3WcsTargetProjector.SolveCenterForNeighbourTargetAtPixel(
+            target, solve, 1920, 1080, solver, point with { Y = 1201 }));
+    }
+
+    [Fact]
     public void PlateSolve3ProjectionComplementsLiveDenebPositionAngle()
     {
         // Immutable values from

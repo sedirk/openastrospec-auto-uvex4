@@ -33,7 +33,29 @@ public sealed class G3SolveProbeContentAnalysisTests
         var result = G3SolveProbeContentAnalyzer.Analyze(new MonochromeFrame(width, height, pixels, 4095));
 
         Assert.True(result.HasCoherentSource);
+        Assert.True(
+            result.SaturatedPixelFraction <
+            G3SolveProbeContentAnalyzer.MaximumSearchAuthorizingSaturatedPixelFraction);
         Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
         Assert.Equal("G3_SOLVE_PROBE_STRUCTURED_FIELD", result.Gate.Code);
+        Assert.NotEqual(G3SolveProbeContentAnalyzer.OverexposedGateCode, result.Gate.Code);
+    }
+
+    [Fact]
+    public void FullyClippedFrameGetsDedicatedOverexposureGate()
+    {
+        const int width = 96;
+        const int height = 96;
+        const ushort saturation = 65520;
+        var pixels = Enumerable.Repeat(saturation, width * height).ToArray();
+
+        var result = G3SolveProbeContentAnalyzer.Analyze(
+            new MonochromeFrame(width, height, pixels, saturation));
+
+        Assert.Equal(1d, result.SaturatedPixelFraction, precision: 12);
+        Assert.Equal(GateDisposition.Indeterminate, result.Gate.Disposition);
+        Assert.Equal(G3SolveProbeContentAnalyzer.OverexposedGateCode, result.Gate.Code);
+        Assert.NotNull(result.Gate.Metrics);
+        Assert.Contains("sampledSaturatedPixelFraction", result.Gate.Metrics!.Keys);
     }
 }

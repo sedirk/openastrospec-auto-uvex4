@@ -356,11 +356,11 @@ public sealed class G3SlitIlluminationPolicyTests
             "private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameForAcquisitionAsync(",
             "private GateResult ValidateCorrectionBudget(");
 
-        Assert.Contains("phd2.Snapshot.AppState == Phd2AppState.Looping", helper, StringComparison.Ordinal);
+        Assert.Contains("phd2.Snapshot.AppState is Phd2AppState.Looping or Phd2AppState.Selected", helper, StringComparison.Ordinal);
         Assert.Contains("StopCaptureAndConfirmAsync", helper, StringComparison.Ordinal);
         Assert.Contains("ValidateConfirmedPhdStop", helper, StringComparison.Ordinal);
         Assert.Contains("catch (Phd2CaptureException ex)", helper, StringComparison.Ordinal);
-        Assert.Contains("current state is Looping", helper, StringComparison.Ordinal);
+        Assert.Contains("ex.RejectedBeforeMutationState is Phd2AppState.Looping or Phd2AppState.Selected", helper, StringComparison.Ordinal);
         Assert.Equal(2, Count(helper, "CaptureSingleFrameWithParametersAsync"));
         Assert.DoesNotContain("AppState == Phd2AppState.Guiding", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("AppState == Phd2AppState.Calibrating", helper, StringComparison.Ordinal);

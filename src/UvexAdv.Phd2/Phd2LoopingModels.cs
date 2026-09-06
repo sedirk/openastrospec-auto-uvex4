@@ -4,6 +4,8 @@ namespace UvexAdv.Phd2;
 /// Starts PHD2's normal idle full-frame exposure loop and waits for a newly
 /// completed LoopingExposures event. This request deliberately has no exposure,
 /// gain, binning, save, or stop parameter.
+/// FreshFrameTimeout is subject to the client's minimum camera/readout event
+/// allowance; caller cancellation remains immediate and no command is retried.
 /// </summary>
 public sealed record Phd2LoopingStartRequest(TimeSpan FreshFrameTimeout);
 

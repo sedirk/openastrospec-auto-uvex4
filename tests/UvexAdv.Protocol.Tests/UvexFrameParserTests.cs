@@ -54,6 +54,8 @@ public sealed class UvexFrameParserTests
         Assert.Equal(":SPAC;#", UvexCommands.SlitAutoCalibratePhotodiode().ToWireString());
         Assert.Equal(":SLON;#", UvexCommands.SlitIlluminationOn().ToWireString());
         Assert.Equal(":SLOF;#", UvexCommands.SlitIlluminationOff().ToWireString());
+        Assert.True(UvexCommands.SlitIlluminationOn().ExpectsResponse);
+        Assert.True(UvexCommands.SlitIlluminationOff().ExpectsResponse);
         Assert.Equal(":FSTP;#", UvexCommands.FocusStop().ToWireString());
     }
 }

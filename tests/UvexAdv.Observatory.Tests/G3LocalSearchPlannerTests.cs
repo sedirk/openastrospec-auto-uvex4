@@ -38,22 +38,26 @@ public sealed class G3LocalSearchPlannerTests
         var limits = new G3LocalSearchLimits(
             G3LocalSearchPattern.SquareSpiral,
             StepArcseconds: 10,
-            MaximumRadiusArcseconds: 10,
+            MaximumRadiusArcseconds: 20,
             MaximumCumulativeMotionArcseconds: 40,
             MaximumAttempts: 10,
             MaximumElapsedTime: TimeSpan.FromMinutes(1));
 
         var points = G3LocalSearchPlanner.Build(limits);
 
+        Assert.Equal(10, points.Count);
         Assert.Collection(
-            points,
+            points.Take(8),
             point => AssertOffset(point, 10, 0),
-            point => AssertOffset(point, 0, 0),
+            point => AssertOffset(point, 10, 10),
             point => AssertOffset(point, 0, 10),
-            point => AssertOffset(point, 0, 0),
+            point => AssertOffset(point, -10, 10),
             point => AssertOffset(point, -10, 0),
-            point => AssertOffset(point, 0, 0),
-            point => AssertOffset(point, 0, -10));
+            point => AssertOffset(point, -10, -10),
+            point => AssertOffset(point, 0, -10),
+            point => AssertOffset(point, 10, -10));
+        AssertOffset(points[8], 10, 0);
+        AssertOffset(points[9], 20, 0);
         Assert.All(points, point =>
         {
             Assert.InRange(point.RadiusArcseconds, 0, limits.MaximumRadiusArcseconds);
@@ -107,11 +111,46 @@ public sealed class G3LocalSearchPlannerTests
 
         var issues = limits.Validate();
 
-        Assert.Contains(issues, issue => issue.Contains("step cannot exceed", StringComparison.Ordinal));
+        Assert.Contains(issues, issue => issue.Contains("radius must reserve", StringComparison.Ordinal));
         Assert.Contains(issues, issue => issue.Contains("safe return", StringComparison.Ordinal));
         Assert.Contains(issues, issue => issue.Contains("attempt", StringComparison.Ordinal));
         Assert.Contains(issues, issue => issue.Contains("elapsed", StringComparison.Ordinal));
         Assert.Throws<ArgumentException>(() => G3LocalSearchPlanner.Build(limits));
+    }
+
+    [Fact]
+    public void FirstFullSegmentRoundTripAndTwoActionsMustFitTheDeclaredLimits()
+    {
+        const double stepArcseconds = 300;
+        const double fullSegmentArcseconds =
+            stepArcseconds + 2 * G3LocalSearchLimits.StableEndpointAllowanceArcseconds;
+        const double minimumRoundTripArcseconds = 2 * fullSegmentArcseconds;
+        var valid = new G3LocalSearchLimits(
+            G3LocalSearchPattern.SquareSpiral,
+            StepArcseconds: stepArcseconds,
+            MaximumRadiusArcseconds: fullSegmentArcseconds,
+            MaximumCumulativeMotionArcseconds: minimumRoundTripArcseconds,
+            MaximumAttempts: 2,
+            MaximumElapsedTime: TimeSpan.FromMinutes(1));
+
+        Assert.Empty(valid.Validate());
+        Assert.Equal(310, fullSegmentArcseconds);
+        Assert.Equal(620, minimumRoundTripArcseconds);
+
+        var radiusIssues = valid with { MaximumRadiusArcseconds = fullSegmentArcseconds - 0.01 };
+        Assert.Contains(
+            radiusIssues.Validate(),
+            issue => issue.Contains("radius must reserve one fully charged segment", StringComparison.Ordinal));
+
+        var cumulativeIssues = valid with { MaximumCumulativeMotionArcseconds = minimumRoundTripArcseconds - 0.01 };
+        Assert.Contains(
+            cumulativeIssues.Validate(),
+            issue => issue.Contains("cumulative-motion limit", StringComparison.Ordinal));
+
+        var attemptIssues = valid with { MaximumAttempts = 1 };
+        Assert.Contains(
+            attemptIssues.Validate(),
+            issue => issue.Contains("one outward action and one safe return action", StringComparison.Ordinal));
     }
 
     private static void AssertOffset(

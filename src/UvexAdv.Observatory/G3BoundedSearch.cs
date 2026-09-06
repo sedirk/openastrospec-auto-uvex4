@@ -31,9 +31,19 @@ public sealed record G3LocalSearchLimits(
     int MaximumAttempts,
     TimeSpan MaximumElapsedTime)
 {
+    // A local-search frame binds to the stable reported endpoint, not the
+    // nominal grid coordinate. Keep this allowance centralized so static
+    // configuration validation and the production durable ledger reserve the
+    // same worst-case outbound and return envelope.
+    public const double StableEndpointAllowanceArcseconds = 5d;
+
     public IReadOnlyList<string> Validate()
     {
         var issues = new List<string>();
+        var fullyChargedSegmentArcseconds =
+            StepArcseconds + 2 * StableEndpointAllowanceArcseconds;
+        var minimumRoundTripCumulativeArcseconds =
+            2 * fullyChargedSegmentArcseconds;
         if (!double.IsFinite(StepArcseconds) || StepArcseconds <= 0)
         {
             issues.Add("G3 search step must be positive and finite.");
@@ -43,9 +53,9 @@ public sealed record G3LocalSearchLimits(
             issues.Add("G3 search radius must be positive and finite.");
         }
         if (double.IsFinite(StepArcseconds) && double.IsFinite(MaximumRadiusArcseconds) &&
-            StepArcseconds > MaximumRadiusArcseconds)
+            MaximumRadiusArcseconds < fullyChargedSegmentArcseconds)
         {
-            issues.Add("G3 search step cannot exceed the search radius.");
+            issues.Add("G3 search radius must reserve one fully charged segment: the search step plus both stable-endpoint allowances.");
         }
         if (!double.IsFinite(MaximumCumulativeMotionArcseconds) || MaximumCumulativeMotionArcseconds <= 0)
         {
@@ -53,13 +63,13 @@ public sealed record G3LocalSearchLimits(
         }
         if (double.IsFinite(MaximumCumulativeMotionArcseconds) &&
             double.IsFinite(StepArcseconds) &&
-            MaximumCumulativeMotionArcseconds < StepArcseconds * 2)
+            MaximumCumulativeMotionArcseconds < minimumRoundTripCumulativeArcseconds)
         {
-            issues.Add("G3 search cumulative-motion limit must reserve at least one outward step and one safe return step.");
+            issues.Add("G3 search cumulative-motion limit must reserve at least one outward step with both stable-endpoint allowances and one fully charged safe return step.");
         }
-        if (MaximumAttempts <= 0)
+        if (MaximumAttempts < 2)
         {
-            issues.Add("G3 search attempt limit must be positive.");
+            issues.Add("G3 search attempt limit must reserve at least one outward action and one safe return action.");
         }
         if (MaximumElapsedTime <= TimeSpan.Zero)
         {
