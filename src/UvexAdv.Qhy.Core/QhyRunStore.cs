@@ -8,6 +8,7 @@ public sealed record StoredQhyFrame(QhyFrameRecord Record, QhyPreview Preview);
 public sealed class QhyRunStore
 {
     private readonly string root;
+    private readonly IQhyNativeFramePersistence? nativePersistence;
     private readonly SemaphoreSlim manifestGate = new(1, 1);
     private readonly Dictionary<Guid, long> manifestRevisions = [];
     private readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web)
@@ -21,10 +22,11 @@ public sealed class QhyRunStore
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public QhyRunStore(string root)
+    public QhyRunStore(string root, IQhyNativeFramePersistence? nativePersistence = null)
     {
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("A QHY data root is required.", nameof(root));
         this.root = Path.GetFullPath(root);
+        this.nativePersistence = nativePersistence;
     }
 
     public string GetManifestPath(string observationRunId, Guid jobId) =>
@@ -45,25 +47,39 @@ public sealed class QhyRunStore
         var directory = GetJobDirectory(job.ObservationRunId, job.Id);
         var rawDirectory = Path.Combine(directory, "raw");
         var previewDirectory = Path.Combine(directory, "preview");
-        Directory.CreateDirectory(rawDirectory);
+        if (nativePersistence is null) Directory.CreateDirectory(rawDirectory);
         Directory.CreateDirectory(previewDirectory);
         var timestamp = frame.ExposureStartedUtc.UtcDateTime.ToString("yyyyMMddTHHmmss.fffffffZ");
         var basename = $"{sequenceNumber:D6}_{Sanitize(role)}_{timestamp}_{frameId:N}";
         var fitsPath = Path.Combine(rawDirectory, basename + ".fits");
         var previewPath = Path.Combine(previewDirectory, basename + ".png");
-        var sha256 = await QhyFitsCodec.WriteAsync(
-            fitsPath,
-            frame,
-            job.Id,
-            job.ObservationRunId,
-            frameId,
-            sequenceNumber,
-            role,
-            job.RequestedTarget,
-            job.TargetRightAscensionDegrees,
-            job.TargetDeclinationDegrees,
-            job.CoordinateEpoch,
-            cancellationToken).ConfigureAwait(false);
+        string sha256;
+        if (nativePersistence is not null)
+        {
+            fitsPath = await nativePersistence.SaveNativeFrameAsync(job, frame, frameId,
+                sequenceNumber, role, cancellationToken).ConfigureAwait(false);
+            if (!Path.IsPathFullyQualified(fitsPath) || !File.Exists(fitsPath) ||
+                !new[] { ".fit", ".fits", ".fts" }.Contains(Path.GetExtension(fitsPath), StringComparer.OrdinalIgnoreCase))
+                throw new InvalidDataException("Native QHY owner did not publish an existing absolute FITS path.");
+            await using var input = File.OpenRead(fitsPath);
+            sha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(input, cancellationToken));
+        }
+        else
+        {
+            sha256 = await QhyFitsCodec.WriteAsync(
+                fitsPath,
+                frame,
+                job.Id,
+                job.ObservationRunId,
+                frameId,
+                sequenceNumber,
+                role,
+                job.RequestedTarget,
+                job.TargetRightAscensionDegrees,
+                job.TargetDeclinationDegrees,
+                job.CoordinateEpoch,
+                cancellationToken).ConfigureAwait(false);
+        }
         var preview = QhyPreviewEncoder.Encode(job.Id, frameId, frame, metrics);
         await File.WriteAllBytesAsync(previewPath, preview.PngBytes, cancellationToken).ConfigureAwait(false);
         var record = new QhyFrameRecord(
@@ -77,7 +93,9 @@ public sealed class QhyRunStore
                 frame.MidpointUtc,
                 frame.ExposureEndedUtc,
                 frame.Settings,
-                metrics);
+                metrics,
+                frame.TimingSource,
+                frame.TimingUncertaintySeconds);
         await AppendFrameIndexAsync(job, record, cancellationToken).ConfigureAwait(false);
         return new StoredQhyFrame(record, preview);
     }

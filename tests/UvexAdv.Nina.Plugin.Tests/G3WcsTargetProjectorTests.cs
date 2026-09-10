@@ -15,7 +15,8 @@ public sealed class G3WcsTargetProjectorTests
             Success = true, Coordinates = new Coordinates(310, 45.1, Epoch.J2000, Coordinates.RAType.Degrees),
             Pixscale = 0.382, PositionAngle = 252.4,
         };
-        var point = new UvexAdv.Observatory.PixelPoint(817, 1200);
+        var point = new UvexAdv.Observatory.PixelPoint(817,
+            1080 + UvexAdv.Observatory.G3WcsApproachPolicy.GetNeighbourClearancePixels(1920, 1080));
         const string solver = "NINA.PlateSolving.Solvers.Platesolve3Solver";
         Assert.Throws<ArgumentOutOfRangeException>(() => G3WcsTargetProjector.SolveCenterForTargetAtPixel(
             target, solve, 1920, 1080, solver, point));
@@ -24,7 +25,7 @@ public sealed class G3WcsTargetProjectorTests
         Assert.True(inverse.InverseResidualPixels < 0.1);
         Assert.Equal(point, inverse.DesiredTargetPixel);
         Assert.Throws<ArgumentOutOfRangeException>(() => G3WcsTargetProjector.SolveCenterForNeighbourTargetAtPixel(
-            target, solve, 1920, 1080, solver, point with { Y = 1201 }));
+            target, solve, 1920, 1080, solver, point with { Y = point.Y + 1 }));
     }
 
     [Fact]

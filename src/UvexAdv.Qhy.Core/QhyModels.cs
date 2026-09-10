@@ -53,7 +53,8 @@ public sealed record QhyCameraStatus(
     double? CoolerPowerPercent,
     string? LastError,
     DateTimeOffset TimestampUtc,
-    QhyFilterWheelStatus? FilterWheel = null);
+    QhyFilterWheelStatus? FilterWheel = null,
+    QhyFocuserStatus? Focuser = null);
 
 public sealed record QhyFrameSettings(
     double ExposureSeconds,
@@ -78,7 +79,9 @@ public sealed record QhyFrame(
     DateTimeOffset ExposureStartedUtc,
     DateTimeOffset ExposureEndedUtc,
     QhyFrameSettings Settings,
-    QhyCameraIdentity Identity)
+    QhyCameraIdentity Identity,
+    string TimingSource = "adapter-reported",
+    double? TimingUncertaintySeconds = null)
 {
     public DateTimeOffset MidpointUtc => ExposureStartedUtc + TimeSpan.FromSeconds(Settings.ExposureSeconds / 2);
 }
@@ -119,7 +122,9 @@ public sealed record QhyFrameRecord(
     DateTimeOffset ExposureMidpointUtc,
     DateTimeOffset ExposureEndedUtc,
     QhyFrameSettings Settings,
-    QhyFrameMetrics Metrics);
+    QhyFrameMetrics Metrics,
+    string TimingSource = "adapter-reported",
+    double? TimingUncertaintySeconds = null);
 
 public sealed record QhyJobEvent(
     DateTimeOffset TimestampUtc,
@@ -158,7 +163,10 @@ public sealed record QhyJobSnapshot(
     DateTimeOffset? LeaseExpiresUtc = null,
     int ControlLeaseSeconds = 120,
     Guid? LastEvaluatedFrameId = null,
-    bool? LastFramePassedQualityGate = null);
+    bool? LastFramePassedQualityGate = null,
+    string? NightSetupId = null,
+    bool OperatorInterventionRequired = false,
+    string? YieldedToAcquisitionRequestId = null);
 
 public sealed record AcquisitionJobRequest(
     string ObservationRunId,
@@ -183,7 +191,9 @@ public sealed record AcquisitionJobRequest(
     double? TargetRightAscensionDegrees = null,
     double? TargetDeclinationDegrees = null,
     string CoordinateEpoch = "ICRS",
-    int ControlLeaseSeconds = 120);
+    int ControlLeaseSeconds = 120,
+    string? NightSetupId = null,
+    QhyFocusRunPolicy? FocusPolicy = null);
 
 public sealed record PhotometryJobRequest(
     string ObservationRunId,
@@ -211,7 +221,9 @@ public sealed record PhotometryJobRequest(
     double? TargetDeclinationDegrees = null,
     string CoordinateEpoch = "ICRS",
     int ControlLeaseSeconds = 120,
-    IReadOnlyList<QhyPhotometryFilterStep>? FilterSequence = null);
+    IReadOnlyList<QhyPhotometryFilterStep>? FilterSequence = null,
+    string? NightSetupId = null,
+    QhyFocusRunPolicy? FocusPolicy = null);
 
 /// <summary>
 /// One element of a repeating QHY photometry/imaging cycle.  An empty request
@@ -223,7 +235,10 @@ public sealed record OperatorTakeoverRequest(bool Confirmed, string Operator, st
 
 public sealed record QhyFilterSelectionRequest(string FilterName);
 
-public sealed record QhyOwnerControlRequest(string OwnerToken, string Actor = "automation");
+public sealed record QhyOwnerControlRequest(
+    string OwnerToken,
+    string Actor = "automation",
+    string? YieldToAcquisitionRequestId = null);
 
 public sealed record QhyResumeRequest(string OwnerToken, int? LeaseSeconds = null, string Actor = "automation");
 

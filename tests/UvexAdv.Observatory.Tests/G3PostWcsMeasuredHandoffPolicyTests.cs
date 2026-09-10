@@ -20,15 +20,62 @@ public sealed class G3PostWcsMeasuredHandoffPolicyTests
     public void ActualNearSlitCentroidCanAvoidRedundantSolve() => Assert.True(Accept(Measured()));
 
     [Fact]
-    public void SaturatedSolidCoreHasExplicitMeasuredAuthority() => Assert.True(Accept(Measured() with
+    public void SaturatedSolidCoreAloneCannotProveAnUnblendedTarget() => Assert.False(Accept(Measured() with
     {
         Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Unique filled core"),
         Authority = TargetIdentificationAuthority.BrightWingCentroid,
     }));
 
     [Fact]
+    public void MatchingIndependentUnsaturatedShortFrameConfirmsASaturatedCore()
+    {
+        var saturated = Measured() with {
+            Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Filled clipped component"),
+            Authority = TargetIdentificationAuthority.BrightWingCentroid };
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanProposeHandoff(saturated, Predicted, 5, Slit, 1920,1080,20));
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanHandOff(saturated, Predicted, 5, Slit, 1920,1080,20, Measured(814,440)));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(saturated, Predicted, 5, Slit, 1920,1080,20, saturated));
+    }
+
+    [Fact]
+    public void DenebLongExposureMergedStarGhostIsRejectedByShortExposureActualCore()
+    {
+        var longBlob = Measured(814.42,409.14) with {
+            Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Merged star and ghost"),
+            Authority = TargetIdentificationAuthority.BrightWingCentroid };
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanProposeHandoff(longBlob, Predicted, 5, Slit,1920,1080,20));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(longBlob, Predicted, 5, Slit,1920,1080,20, Measured(827.28,476.91)));
+        Assert.False(Accept(longBlob));
+    }
+
+    [Fact]
     public void CatalogProjectionAloneCannotSkipSolve() => Assert.False(Accept(
         TargetIdentification.FromCatalogWcs(Predicted, 1920, 1080, "Prediction only")));
+
+    [Theory]
+    [InlineData(0.030470914127423823)]
+    [InlineData(double.NaN)]
+    [InlineData(-0.01)]
+    public void OrdinaryClippedHaloCannotMasqueradeAsNearSlitTarget(double saturatedFraction)
+    {
+        var target = Measured(823.4586, 417.0654);
+        Assert.False(Accept(target with
+        {
+            Target = target.Target! with { SaturatedFraction = saturatedFraction },
+        }));
+    }
+
+    [Fact]
+    public void IdentifiedCoreOutsideFineWindowStillRequiresFormalSolve()
+    {
+        var target = Measured(812.46, 373.10);
+        Assert.False(Accept(target with
+        {
+            Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Measured filled core"),
+            Authority = TargetIdentificationAuthority.BrightWingCentroid,
+            Target = target.Target! with { SaturatedFraction = 1 },
+        }));
+    }
 
     [Fact]
     public void FailedOrAmbiguousIdentificationCannotSkipSolve() => Assert.False(Accept(Measured() with

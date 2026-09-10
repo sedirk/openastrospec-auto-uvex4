@@ -164,13 +164,14 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         MinimumFluxMetric,
         MaximumFluxMetric);
 
-    // A target that is reachable by the commissioned bounded PHD2 session must
-    // not be sent back through another mount/WCS correction merely because it
-    // needs more than one lock-shift segment. The planner independently enforces
-    // MaximumStagePixels for each segment and MaximumCumulativePixels for the
-    // complete session, so the hand-off window should cover that full envelope.
+    // The recognition/reacquisition window is not a promise that its entire
+    // radius can be traversed while reserving an exact-lock return.
     public double EffectiveAcquisitionResidualPixels =>
         Math.Max(MaximumAcquisitionResidualPixels, MaximumCumulativePixels);
+
+    public double CoarseHandoffResidualPixels => Math.Min(MaximumAcquisitionResidualPixels,
+        Phd2CoarseHandoffPolicy.MaximumInitialResidual(BuildMotionLimits(),
+            CalibrationQualityPolicy.DegradedMaximumLockShiftScale, MaximumResidualGrowthPixels));
 
     public int ExposureFor(Phd2SlitGuideMode resolvedMode) => resolvedMode switch
     {

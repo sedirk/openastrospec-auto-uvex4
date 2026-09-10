@@ -74,6 +74,21 @@ public sealed class EmbeddedImageViewerControlTests
                 viewer.ShowActualSize();
                 Assert.Same(spectrum, viewer.DisplayedSpectrum);
 
+                viewer.FitToViewport();
+                var fullFrameZoom = viewer.Zoom;
+                var fullBitmap = CreateTestBitmap();
+                var focusRegion = new Rect(0, 500, 1600, 200);
+                viewer.PreviewImage = ObservationPreviewLayers.Attach(fullBitmap, spectrum: spectrum, focusRegion: focusRegion);
+                viewer.FitToViewport();
+                Assert.True(viewer.Zoom > fullFrameZoom);
+                Assert.Same(fullBitmap, viewer.PreviewImage);
+                Assert.Equal(1200, ((BitmapSource)viewer.PreviewImage).PixelHeight);
+                var traceToggle = Assert.IsType<System.Windows.Controls.Primitives.ToggleButton>(viewer.FindName("SpectralRegionToggle"));
+                traceToggle.IsChecked = false;
+                viewer.FitToViewport();
+                Assert.InRange(viewer.Zoom, 0.05, fullFrameZoom + 0.01);
+                Assert.Same(spectrum, viewer.DisplayedSpectrum);
+
                 viewer.PreviewImage = null;
                 Assert.False(viewer.HasImage);
                 Assert.Equal(1.0, viewer.Zoom, precision: 10);

@@ -8,17 +8,17 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2SlitPlacementCommissioningTests
 {
     [Fact]
-    public void FreshSlitSearchUsesFixedRunLedAnchorInsteadOfWalkingWithEachMeasurement()
+    public void FreshResidualReferencesRunLedGeometryWithoutSearchingForDarknessInStarlight()
     {
         var body = Section(
             "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(",
             "private async Task<Phd2PlacementGuideChoice> AcquireFreshPhd2PlacementGuideAsync(");
-        Assert.Contains("slitSearchAnchor = slitCache.SlitDetection.Geometry", body, StringComparison.Ordinal);
-        Assert.Contains("slitCache.ObservationRunId == context.Plan.ObservationRunId", body, StringComparison.Ordinal);
-        Assert.Contains("SameHash(slitCache.CommissioningPresetSha256", body, StringComparison.Ordinal);
-        Assert.Contains("Math.Min(preset.SlitMaximumPerpendicularSearchPixels", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("slitSearchAnchor = slitDetection.Geometry", body, StringComparison.Ordinal);
-        Assert.Contains("frame, slitSearchAnchor", body, StringComparison.Ordinal);
+        Assert.Contains("G3RunLedSlitGeometryPolicy.Evaluate", body, StringComparison.Ordinal);
+        Assert.Contains("RUN_LED_OFF_ON_OFF", body, StringComparison.Ordinal);
+        Assert.Contains("slitIdentityEvidenceSha256", body, StringComparison.Ordinal);
+        Assert.Contains("SlitIlluminationLedState == UvexOutputState.Off", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("DetectDarkSlit", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("SlitLocalBackgroundDetector.Detect", body, StringComparison.Ordinal);
         Assert.Contains("immutableRunSlitAnchorUsed", body, StringComparison.Ordinal);
     }
 
@@ -222,7 +222,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
             "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(");
         var find = nativeSelection.IndexOf("phd2.FindGuideStarAsync", StringComparison.Ordinal);
         var exactCatch = nativeSelection.IndexOf("catch (Phd2NoGuideStarException noGuideStar)", StringComparison.Ordinal);
-        var freshFrame = nativeSelection.IndexOf("phd2.SaveNextLoopingFrameAsync", exactCatch, StringComparison.Ordinal);
+        var freshFrame = nativeSelection.IndexOf("await RefreshNativeSelectionGeometryAsync", exactCatch, StringComparison.Ordinal);
         var continueSelection = nativeSelection.IndexOf("continue;", freshFrame, StringComparison.Ordinal);
         var exhaustion = nativeSelection.LastIndexOf("throw new Phd2NativeGuideSelectionExhaustedException", StringComparison.Ordinal);
 
@@ -235,6 +235,13 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.DoesNotContain("phd2.GuideAsync", nativeSelection, StringComparison.Ordinal);
         Assert.DoesNotContain("SetExactLockPosition", nativeSelection, StringComparison.Ordinal);
         Assert.DoesNotContain("mount.", nativeSelection, StringComparison.Ordinal);
+        var refresh = Section("async Task RefreshNativeSelectionGeometryAsync(string evidenceRole)",
+            "var targetIsUltraBright = target.FwhmPixels <= 0");
+        Assert.Contains("await phd2.SaveNextLoopingFrameAsync", refresh, StringComparison.Ordinal);
+        Assert.Contains("fresh.VerifiedExposureMilliseconds != preset.ExposureFor(choice.Mode)", refresh, StringComparison.Ordinal);
+        Assert.Contains("Phd2NativeGuideSaturatedRegions.Measure(exclusionFrame", refresh, StringComparison.Ordinal);
+        Assert.Contains("!insideSaturatedStructure", nativeSelection, StringComparison.Ordinal);
+        Assert.Contains("exclusionFramePath, cancellationToken", nativeSelection, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -11,7 +11,7 @@ Rendering is refused unless the caller supplies the explicit `--render` switch:
 .\.dotnet\dotnet.exe run --project .\tests\UvexAdv.Nina.Plugin.UiHarness\UvexAdv.Nina.Plugin.UiHarness.csproj --configuration Release -- --render
 ```
 
-The default output is the ignored `tmp/ui-screenshots/` directory. Fourteen PNG files
+The default output is the ignored `tmp/ui-screenshots/` directory. Twenty-six PNG files
 cover idle, startup requirements, running, the integrated ATR single-frame check,
 Chinese and English failed/paused presentation, bounded recovery in progress, PHD2 degraded,
 direct-target supervised guiding, calibrated ghost-assistance, QHY/G3 fast pairing,
@@ -31,10 +31,13 @@ The `failure-en` scenario sets the presentation culture to `en-US` before the
 production template is materialized. Its tests inspect the actual visible text and
 reject any CJK leakage. Other scenarios use `zh-CN`.
 
-The `atr-manual` scenario selects `Live Images > ATR 2D / 1D Spectrum` and verifies
-that camera identity binding and one-frame extraction diagnostics are integrated
-beside the automatic-observation preview instead of being exported as a separate
-placeholder dock. Its curve and camera identity are deterministic mock data.
+The `atr-live`, `atr-levels` and `atr-narrow` scenarios select the spectroscopy
+camera page and check its full-width preview, separate display-control row,
+display-only spectral-band fit and collapsed manual tools. `atr-manual` expands
+the integrated camera binding and single-frame extraction tools below the
+automatic preview. Its curve and camera identity are deterministic mock data.
+The independent diagnostic curve must not be stretched with the image, and
+opening controls must refit the spectral band to the changed viewport.
 
 The `ghost-assistance` scenario shows the compact operator summary for Auto mode;
 the full calibration/policy hashes, applicability and centroid/covariance-only
@@ -48,3 +51,10 @@ exposures are shown separately and the route remains explicitly supervised.
 The harness applies a small offline approximation of the N.I.N.A. night palette.
 Production XAML remains authoritative; the harness deliberately does not replace
 the production template with a separate mock layout.
+
+`photometry-off` verifies the fixed-header synchronized-photometry switch; the
+worker and worker-en scenarios render the separate production photometry dock
+template with synthetic data. Master/worker pairing, English role isolation, running,
+pending pause, narrow layout and the help page are also covered. Tests verify that
+the other role's actions and collapsed raw details are not visible. These scenarios
+never construct the real photometry host or connect devices.

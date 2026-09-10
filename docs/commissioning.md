@@ -1,5 +1,10 @@
 # OpenAstroSpec Auto — UVEX4 实机调试清单
 
+当前软件与验收状态见 [2026-09-10 / 0.4.0.167 收口](closeout-2026-09-10.md)。
+最近的多目标前台成功仍使用旧测光服务；双 N.I.N.A. 源码已实现，但须单独完成空闲
+所有权交接、原生采集/轮子/调焦与失联验收。下面的台站实例和历史日期不是通用默认值，
+也不代表所有列出的能力均已实机通过。
+
 ATR585M 已于 2026-08-16 使用官方工具升级到 FPGA 5.0，并完成 SDK 60、原版 N.I.N.A. 驱动和 ToupSky SDK 59 三路连续帧回归。版本、校验值、测试数据和回滚方式见 [ATR585M SDK / FPGA 实机调试记录](atr585m-sdk-firmware-commissioning-20260816.md)。相机固件升级不等于 UVEX 电机闭环已经验收；以下 M2、光栅和狭缝调试门槛仍然适用。
 
 ## 1. 上线前备份
@@ -93,7 +98,13 @@ extraction policy、三者哈希、runtime installation/optical/orientation fing
 当前高级序列容器只是共享生产 runner 的固定阶段外壳。中天翻转、同步测光/光谱拍摄规划
 以及可编辑高级序列的未来职责拆分见
 [N.I.N.A. Advanced Sequencer 真正耦合路线规划](nina-advanced-sequencer-coupling-roadmap.md)。
-该文档是规划，不表示这些能力已经实现或验收。
+该文档已于 2026-09-07 按用户选定的“双 N.I.N.A.：光谱主控 + 测光执行端”方向修订，
+配套 [ADR-0014](adr/0014-dual-nina-coordinated-acquisition.md) 已在用户要求程序实施后接受，
+冻结基线与所有权规则已对应更新。第一版 worker、原生接收项与顶部同步测光总开关的
+配置及限制见[双实例实现说明](dual-nina-implementation.md)。现有安装不自动切换：必须
+先备份、释放旧 QHY 服务，再完成双实例设备交接和单独验收，不能沿用既有服务的成功结论。
+本版 GS350 原生焦点补偿需要新的 `N.I.N.A.PhotometryWorker` Night Setup 绑定；旧的
+`ManualOperator` 焦点证明不能被静默升级为电机动作许可。
 
 ### 4.1 台站配置方案与设备候选
 
@@ -106,11 +117,14 @@ N.I.N.A.。“自动准备”页提供与 N.I.N.A. Profile 类似的台站方案
 
 - 赤道仪和 ATR585M：N.I.N.A. 保存的 Profile 与既有 ATR 稳定 ID 绑定；
 - G3M2210M：PHD2 Profile 的不可变注册表证据，包括 Profile、设备名和 USB 实例；
-- QHYminiCam8M：独立 QHY 服务的 `ExpectedStableId`，N.I.N.A. 历史记录只作辅助候选。
+- QHYminiCam8M：未迁移服务的配置发现使用 `ExpectedStableId`，N.I.N.A. 历史记录
+  只作辅助候选。双实例路线以测光端显式记录的设备绑定、双方配对与新的 Night Setup
+  为准，不能把服务候选当成 worker 已连接；见[双实例配置](dual-nina-implementation.md)。
 
 四项在界面中均为中文下拉列表。选择候选只设置“期望身份”；真实运行开始后仍由
-N.I.N.A.、PHD2 和 QHY 服务分别连接其唯一拥有的物理相机并复核实际身份。G3 和 QHY
-不得为了填表接入 N.I.N.A.。切换 N.I.N.A. Profile 后插件重新扫描并按该 Profile 保存
+光谱 N.I.N.A.、PHD2 与选定的测光拥有者分别连接其物理相机并复核实际身份。不得为了
+填表把导星相机或测光相机接入光谱主控；测光相机只在正式交接后接入独立测光 N.I.N.A.。
+切换 N.I.N.A. Profile 后插件重新扫描并按该 Profile 保存
 的上次台站方案自动加载。
 
 本机可在 `%ProgramData%\UVEX-ADV\commissioning\station-profiles\default.station-profile.json`
@@ -168,7 +182,7 @@ SHA-256、内部引用、设备身份和静态运行参数全部相互一致时�
 “静态校验已通过”。失败时保持未确认并显示问题，不退回到逐项手抄哈希。自动确认不等于
 实时设备状态通过，也不授予运动或无人值守权限；点击启动后仍重新回读所有可用设备。
 目标波段、波长标定参考、安全能力和级次分选滤镜改成中文选择项；设备身份仍从
-N.I.N.A.、PHD2 与 QHY 服务的已保存配置下拉选择。点击“自动生成准备草稿”会把当前
+各唯一拥有者的已保存配置和显式绑定选择。点击“自动生成准备草稿”会把当前
 目标、身份、相机参数、狭缝、光学位置、地平线和上述选择写入
 `%ProgramData%\UVEX-ADV\commissioning\drafts\*.night-setup-draft.json`，并生成相邻
 SHA-256。草稿使用独立的 `OpenAstroSpec.NightSetupPreparationDraft` 文档类型，明确列出
@@ -285,8 +299,10 @@ FWHM、椭率、饱和、边缘、超亮目标光晕和黑色物理狭缝保护�
 0.4.0.138 的出站微调保留 PHD2 原生导星，只读观察锁点后的新事件与至少三张新帧，
 不在每一步重复请求原生稳定等待。`PHD2EV` 分别标记 `READONLY-WINDOW`、`WIND-WINDOW`
 或 `NATIVE-SETTLE`；前两者不是原生稳定成功，不能授予无人值守权限。初始导星、重标定
-与返程仍保留原生流程，设备安全、丢星与连接异常不会被隐藏。本轮最新实测版本是 .137，
-.138 待另外授权安装与前台实测；详见 [2026-09-07 收口记录](commissioning-night-2026-09-07.md)。
+与返程仍保留原生流程，设备安全、丢星与连接异常不会被隐藏。`.138` 最初交付时的
+待验状态保留在 [2026-09-07 历史收口](commissioning-night-2026-09-07.md)；后续
+`.165/.167` 等监督前台成功已保留 `READONLY-WINDOW` 与实际残差，详见
+[最新收口](closeout-2026-09-10.md)。这些运行不表示所有异常恢复分支均已天空验收。
 
 ### 4.3 ATR585M 温控与收口
 

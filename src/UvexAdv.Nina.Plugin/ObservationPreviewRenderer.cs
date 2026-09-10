@@ -53,7 +53,7 @@ internal static class ObservationPreviewRenderer
         return ObservationPreviewLayers.Attach(source, overlay: new DrawingImage(overlay));
     }
 
-    public static BitmapSource RenderAtr(IImageData image, ImageRoi roi)
+    public static BitmapSource RenderAtr(IImageData image, ImageRoi roi, double traceCenter = double.NaN, double traceHalfWidth = double.NaN)
     {
         var source = image.RenderBitmapSource();
         roi.Validate(source.PixelWidth, source.PixelHeight);
@@ -70,7 +70,18 @@ internal static class ObservationPreviewRenderer
             drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), new Pen(Brushes.SlateGray, 1), plotRect);
             DrawSpectrum(drawing, spectrum, plotRect);
         }
-        return ObservationPreviewLayers.Attach(cropped, spectrum: new DrawingImage(plot));
+        Rect? focusRegion = null;
+        if (double.IsFinite(traceCenter) && double.IsFinite(traceHalfWidth) && traceHalfWidth > 0 &&
+            traceCenter > roi.Y && traceCenter < roi.Y + roi.Height)
+        {
+            var padding = Math.Max(64, traceHalfWidth * 3);
+            var top = Math.Max(0, traceCenter - roi.Y - padding);
+            var bottom = Math.Min(roi.Height, traceCenter - roi.Y + padding);
+            focusRegion = new Rect(0, top, roi.Width, bottom - top);
+        }
+        // Only a suggested viewport; the original ROI bitmap and science data
+        // remain intact and the operator can switch back to the full frame.
+        return ObservationPreviewLayers.Attach(cropped, spectrum: new DrawingImage(plot), focusRegion: focusRegion);
     }
 
     private static double[] ExtractMeanSpectrum(IImageData image, ImageRoi roi)

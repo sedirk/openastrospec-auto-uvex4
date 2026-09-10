@@ -8,6 +8,62 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class ObservationRunJournalStoreTests
 {
     [Fact]
+    public async Task TemporaryNonDeleteSharingReaderRetriesTheSameAtomicRevision()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        await using var temporary = new TemporaryDirectory();
+        var path = Path.Combine(temporary.Path, "manifest.json");
+        var store = new ObservationRunJournalStore(path);
+        var initial = await store.InitializeAsync(CreatePlan(), ObservationRunLockedMetadata.Empty);
+        var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Task<ObservationRunManifest> pending;
+        try
+        {
+            pending = store.PublishCountersAsync(new ObservationRunCounters(1, 1));
+            await Task.Delay(150);
+            Assert.False(pending.IsCompleted);
+            using var prior = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            Assert.Equal(initial.Revision, prior.RootElement.GetProperty("revision").GetInt64());
+        }
+        finally { reader.Dispose(); }
+        var committed = await pending;
+        Assert.Equal(initial.Revision + 1, committed.Revision);
+        Assert.Equal(1, committed.Counters.AtrAcceptedFrames);
+        Assert.Equal(committed.Revision, (await store.ReadAsync())!.Revision);
+        Assert.Empty(Directory.GetFiles(temporary.Path, "*.tmp-*"));
+    }
+
+    [Fact]
+    public async Task PersistentReaderLockStillFailsWithoutClaimingACommit()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        await using var temporary = new TemporaryDirectory();
+        var path = Path.Combine(temporary.Path, "manifest.json");
+        var store = new ObservationRunJournalStore(path);
+        var initial = await store.InitializeAsync(CreatePlan(), ObservationRunLockedMetadata.Empty);
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await Assert.ThrowsAsync<IOException>(() => store.PublishCountersAsync(new ObservationRunCounters(1, 1)));
+        Assert.Equal(initial.Revision, (await store.ReadAsync())!.Revision);
+        Assert.Empty(Directory.GetFiles(temporary.Path, "*.tmp-*"));
+    }
+
+    [Fact]
+    public async Task CancellationDuringSharingRetryPreservesThePriorCommit()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        await using var temporary = new TemporaryDirectory();
+        var path = Path.Combine(temporary.Path, "manifest.json");
+        var store = new ObservationRunJournalStore(path);
+        var initial = await store.InitializeAsync(CreatePlan(), ObservationRunLockedMetadata.Empty);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                store.PublishCountersAsync(new ObservationRunCounters(1, 1), cancellationToken: cancellation.Token));
+        Assert.Equal(initial.Revision, (await store.ReadAsync())!.Revision);
+        Assert.Empty(Directory.GetFiles(temporary.Path, "*.tmp-*"));
+    }
+
+    [Fact]
     public async Task ReinitializationRejectsChangedLockedMotionOrSafetyPlan()
     {
         await using var temporary = new TemporaryDirectory();

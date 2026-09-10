@@ -255,7 +255,12 @@ public static class NightSetupCompatibility
             }
             else
             {
-                gates.Add(position == expected.StartPositionSteps
+                var nativeOffsetVerified = role == FocusDomainRole.Gs350WideField &&
+                    expected.Owner == FocusDomainConventions.Gs350NinaWorkerOwner &&
+                    identityMatches && topologyMatches && actual.NativePositionVerified;
+                gates.Add(nativeOffsetVerified
+                    ? GateResult.Pass(code + "_POSITION", "The photometry N.I.N.A. owner verified the current bounded native filter-offset endpoint; it is not substituted for the locked reference position.")
+                    : position == expected.StartPositionSteps
                     ? GateResult.Pass(code + "_POSITION", $"{role} live position matches the locked start position {position} steps.")
                     : GateResult.Fail(code + "_POSITION", $"{role} live position {position} does not match locked start position {expected.StartPositionSteps}."));
             }

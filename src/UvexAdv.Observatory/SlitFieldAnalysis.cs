@@ -344,10 +344,12 @@ public static class SlitTargetIdentifier
                 TargetIdentificationAuthority.BrightWingCentroid);
         }
 
-        var ghostFiltered = topology.Ghosts.Count == 0
+        var excludedFeatures = topology.Ghosts.Concat(topology.Candidates.Where(candidate =>
+            candidate.Gate.Code == "SATURATED_SOURCE_HALO_FRAGMENT")).ToArray();
+        var ghostFiltered = excludedFeatures.Length == 0
             ? candidates
             : candidates
-                .Where(candidate => topology.Ghosts.All(ghost =>
+                .Where(candidate => excludedFeatures.All(ghost =>
                     Distance(candidate.Centroid, ghost.Centroid) > ghost.ExclusionRadiusPixels))
                 .ToArray();
         return Identify(

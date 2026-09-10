@@ -5,6 +5,10 @@
 **Scope:** acquisition and equipment-side software; the independent reduction pipeline is a downstream consumer  
 **Authority:** the observatory owner’s stated observing workflow and decisions
 
+**Ownership revision:** 2026-09-07, ADR-0014, explicitly requested by the owner:
+dual N.I.N.A. with a spectroscopy master and a photometry-only worker.
+Design acceptance is not deployment or real-hardware commissioning evidence.
+
 This document is the canonical design target for turning the existing UVEX workflow into a N.I.N.A. Advanced Sequencer-style pipeline. It records intended behavior, including functionality that does not exist yet. README files and implementation comments may summarize it but must not contradict it.
 
 The file is hash-protected. Ordinary implementation work must not modify it. A deliberate change requires the owner’s explicit request, a superseding ADR, a review of safety and data consequences, and an intentional hash-manifest update.
@@ -47,22 +51,37 @@ The observatory walls obscure the sky to roughly 40° altitude around the platfo
 | Physical device | Sole owner | Responsibilities |
 |---|---|---|
 | UVEX4 / COM5 | `UvexAdv.Service` | Protocol, state, slit, grating, M2, leases, limits, audit and emergency stop |
-| ATR585M | N.I.N.A. | Probe and science spectrum exposures, raw FITS and camera state |
+| ATR585M | spectroscopy/master N.I.N.A. | Probe and science spectrum exposures, raw FITS and camera state |
 | G3M2210M | PHD2 | Slit-field frames, guide-star tracking and mount guide corrections |
-| QHYminiCam8M | planned QHY acquisition/photometry service | Wide-field acquisition, plate-solve frames and calibrated time-series photometry |
-| Telescope/mount | N.I.N.A. telescope mediator, coordinated by the plugin | Slews, bounded acquisition corrections and sequence state |
+| QHYminiCam8M | photometry/worker N.I.N.A. | Wide-field acquisition, native raw saving and time-series photometry |
+| Photometry filter wheel and GS350 focuser | photometry/worker N.I.N.A. | Photometry filter selection and this optical path's focus only |
+| Telescope/mount and shared observatory equipment | spectroscopy/master N.I.N.A. mediators, coordinated by the plugin | Slews, bounded acquisition corrections, guiding orchestration, environment/roof/cover and sequence state |
 
 The invariant is one owner **per physical device**, not one process for all cameras. The three cameras are intended to run concurrently. In particular:
 
 - PHD2 must not switch between G3M2210M and QHYminiCam8M for this workflow.
 - The UVEX plugin must not load ToupTek or QHY SDKs directly into N.I.N.A.
-- The QHY service must not open G3M2210M or ATR585M.
-- Windows QHY drivers and SDKs are installed as one complete official QHYCCD
-  AllInOne distribution. The QHY service loads the hash-bound x64 SDK directly
-  from that vendor installation; it must not maintain a second private SDK copy
-  under the UVEX-ADV service directory.
+- The worker is limited to the photometry camera, filter wheel and photometry
+  focuser. No telescope, guider, roof, safety/weather, cover, rotator or switch
+  selection or shared-device command route is permitted in its Profile. Future
+  photometry accessories need explicit capability integration.
+- The legacy QHY service must not open any production camera while the worker
+  owns QHY. Retaining it for simulation/history does not authorize hot failover.
+- The worker uses N.I.N.A.'s native acquisition and saving APIs, not a private
+  camera SDK. Its actual native QHY SDK module is hash-recorded; driver-package
+  maintenance is explicit and cannot mix arbitrary DLL versions. ADR-0011's
+  direct AllInOne loading rule continues to describe the legacy service only.
 - No helper may scan camera or serial-device lists and select by ordinal position. Persist and validate stable identity.
 - A device hand-off, if ever required for diagnostics, must be explicit, logged, disconnected, confirmed, and outside an active science run. It is not part of normal acquisition.
+
+The two instances have distinct bound Profile IDs and process sessions. Only the
+master schedules targets and shared motion. The worker's local command surface
+is an allowlist with per-job ownership, idempotency, pause/cancel and expiring
+permission checked after preparation and before new exposure. It must not
+re-adopt an old job after a peer restart or override an operator pause. Native
+FITS saving is correlated by capture ID; the coordinator only hashes/indexes the
+original file. See ADR-0014 and the dual-N.I.N.A. roadmap for migration and
+separate source/simulator/real-frontend acceptance boundaries.
 
 ## 4. Night setup contract
 
@@ -89,7 +108,7 @@ Bias and dark masters may be reused across nights when camera identity, gain, of
 
 ### 5.1 Wide-field acquisition with GS350/QHY
 
-1. The QHY service remains the camera owner from acquisition through the end of simultaneous photometry.
+1. The photometry N.I.N.A. remains the QHY owner from acquisition through the end of simultaneous photometry.
 2. It captures a raw, full-field solve frame and supplies it to the configured plate solver.
 3. The coordinator retains the formal QHY WCS, target residual, immutable frame identity, mount readback and solver evidence as a wide-field witness. For a mount without a mechanical home or absolute encoders, a fresh, stationary, hash-bound QHY/PL3 WCS is also the absolute sky-coordinate authority: when its separation from the mount-reported coordinate exceeds the configured G3 sky-hint trust radius, the coordinator may issue one N.I.N.A.-mediated coordinate `Sync` per run and must verify the new readback. Sync itself does not slew the mount. After successful verification, the planned catalogue slew is reissued once and optical arrival still requires fresh G3 WCS. Smaller differences do not Sync, so ordinary QHY/G3 optical-axis separation cannot cause coordinate ownership to oscillate.
 4. A failed QHY solve advances the commissioned QHY exposure ladder. It does not invent a minimum-star-count veto after the configured solver has returned a physically plausible formal solution.
@@ -136,7 +155,7 @@ Random unbounded mount nudging is not an automated strategy.
 
 ### 5.4 Simultaneous QHY photometry
 
-After slit placement and guide settling, the QHY service changes from acquisition mode to photometry mode without disconnecting the camera. It records raw time-series images with fixed settings, comparison-star information, WCS, FWHM, ellipticity, background, saturation, transparency and quality flags.
+After slit placement and guide settling, the photometry N.I.N.A. changes from acquisition work to photometry work without disconnecting QHY. Native filter selection includes only the photometry optical path's configured focus offsets. The shared coordinator/analysis layer retains raw time-series images, comparison-star information, WCS, FWHM, ellipticity, background, saturation, transparency and quality flags; a saved native image alone does not prove scientific acceptance.
 
 QHY photometry and ATR spectral exposures share an observation run identifier and UTC timing. Each spectrum can therefore be associated with overlapping photometric samples and transparency measurements. Frames affected by slewing, guiding loss, clouds, saturation, or reacquisition remain preserved but are flagged.
 
@@ -162,7 +181,7 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Target Observation` container composes reusable items rather than putting all logic in one command:
 
 1. Validate and lock Night Setup.
-2. Start/verify QHY service, acquire the wide field and retain its formal WCS as a sky-coordinate witness. On a commissioned no-mechanical-home mount, use that fresh stationary WCS for at most one gross-coordinate Sync with readback verification; otherwise issue no QHY-derived mount command.
+2. Verify the explicitly enabled photometry N.I.N.A. worker, acquire the wide field and retain its formal WCS as a sky-coordinate witness. On a commissioned no-mechanical-home mount, use that fresh stationary WCS for at most one gross-coordinate Sync with readback verification through the master; otherwise issue no QHY-derived mount command.
 3. Acquire/solve a fresh G3 slit field through PHD2; when the target is outside the field, issue a bounded N.I.N.A. WCS correction and prove its response with another fresh G3 solve. If no direct solve is available, use the bounded overlapping neighbouring-field search.
 4. Confirm that the catalogue target is inside the usable G3 field from fresh evidence.
 5. Select the versioned fine-motion authority. With PHD2 calibration authority,
@@ -184,7 +203,11 @@ Conditions and triggers include UVEX readiness, device identity, camera temperat
 
 Normal successful execution does not contain per-stage operator confirmation prompts. The dockable workflow panel exposes `Pause`, `Resume`, `Cancel` and `Take over` throughout the run. Every transition rechecks any gate that may have become stale. A failed or indeterminate gate enters `PausedNeedsAttention`, preserves its evidence and reason, and waits for recovery or operator intervention.
 
-The QHY job must be startable and stoppable by sequence items while continuing in its isolated service process; it must not rely on replacing N.I.N.A.’s ATR camera selection.
+The QHY job must be startable and stoppable by sequence items while continuing in
+the isolated photometry N.I.N.A. process; it must not replace the master's ATR
+camera selection. A native worker receiver item and its dockable commands share
+one job implementation. Unreviewed arbitrary templates/scripts are not implicitly
+authorized by enabling the receiver.
 
 ## 8. Failure and recovery rules
 
@@ -251,10 +274,13 @@ Raw acquisition files are immutable. Repairs or calibration produce new files wi
 - Establish source/output separation, Git ignores, verification hooks and a reproducible baseline commit.
 - Do not operate hardware during this phase.
 
-### Phase 1 — QHY service in simulation/shadow mode
+### Phase 1 — isolated QHY acquisition in simulation/shadow mode
 
 - Implement identity-bound QHY configuration, acquisition/photometry job state, FITS metadata and a simulator/recorded-frame adapter.
 - Integrate an offline plate-solver contract and photometry quality metrics without mount commands.
+- The original service implementation is historical/component evidence. Under
+  ADR-0014, native worker transport, device-role isolation, saving, peer failure
+  and pause/cancel must be revalidated before a dual-instance real run.
 
 ### Phase 2 — wide-field acquisition
 

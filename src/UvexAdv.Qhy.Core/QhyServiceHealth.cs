@@ -255,4 +255,5 @@ public sealed record QhyServiceHealth(
     string Status,
     bool LoopbackOnly,
     QhyServiceConfigurationProof Configuration,
-    DateTimeOffset TimestampUtc);
+    DateTimeOffset TimestampUtc,
+    QhyNinaWorkerIdentity? NinaWorker = null);

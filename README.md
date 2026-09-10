@@ -25,19 +25,23 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/commissioning-night-2026-09-07.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-10.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [0.4.0.80 UI/localization/recovery closeout](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-07 closeout](docs/commissioning-night-2026-09-07.md) records an installed
-**0.4.0.137 real frontend run: 11/11 completed, with three accepted 3 s Deneb spectra**
-under explicit supervision and retained slit-quality warnings. It also covers the
-layered-preview/FITS fixes and the **0.4.0.138 read-only post-lock guiding follow-up**;
-the latter is not yet installed or sky-verified. QHY photometry quality and stable
-slit throughput remain open, and this result does not certify unattended operation.
+The [2026-09-10 closeout](docs/closeout-2026-09-10.md) covers **0.4.0.167** and the
+[multi-target frontend commissioning](docs/commissioning-multitarget-2026-09-09.md).
+Deneb, Gamma Cas, Scheat, Almach and 10 Lac each completed a real **11/11** run on
+the versions recorded in that report. The final .167 runs accepted three 60 s
+Almach spectra and three 120 s 10 Lac spectra, with 37 and 75 accepted photometry
+frames respectively. These were separate supervised runs, not one uninterrupted
+multi-target sequence. Slit-quality warnings remain; acquisition acceptance is
+not calibrated spectroscopy, precision photometry or unattended certification.
+The tested station still used the legacy QHY service: this is **not** real-sky
+acceptance of the newly implemented dual-N.I.N.A. worker.
 
 The repository contains two user-facing GPL-3.0-only software products:
 
@@ -93,10 +97,33 @@ lifecycle is recorded in
 [`ADR-0010`](docs/adr/0010-nina-environment-supervision-and-rolloff-roof.md).
 These are normative:
 
-- N.I.N.A. owns ATR585M for spectra;
+- the spectroscopy/master N.I.N.A. owns ATR585M for spectra and coordinates shared equipment;
 - PHD2 owns G3M2210M for the slit field and guiding;
-- the isolated `UvexAdv.Qhy.Service` owns QHYminiCam8M for GS350 coarse acquisition and simultaneous photometry;
+- under [ADR-0014](docs/adr/0014-dual-nina-coordinated-acquisition.md), a separate photometry N.I.N.A. owns QHYminiCam8M, its photometry filter wheel and GS350 focuser; it must not control any shared equipment;
 - `UvexAdv.Service` alone owns UVEX4 COM5.
+
+Since `0.4.0.139`, the source integrates this dual-instance route, a restricted native
+receiver sequence, and a prominent **Simultaneous photometry** switch in the
+master dock. The switch is frozen per run and leaves acquisition witnesses
+independent. [Implementation, configuration and limits](docs/dual-nina-implementation.md)
+describe the exact supported surface. Existing installed service configurations
+remain unchanged until an explicitly authorized idle handoff; the legacy QHY
+service must not run alongside the native worker. Source/offline checks are not
+dual-N.I.N.A. sky commissioning, arbitrary-template support, or unattended approval.
+
+Since `0.4.0.140`, the UI separates master and photometry-instance pairing into numbered
+steps with copy buttons, localized job states and collapsed technical details.
+Operator labels use **spectroscopy camera / photometry camera / spectrograph guide
+camera**; actual models, stable device IDs and historical protocol/evidence names
+are unchanged. Generic labels do not imply universal camera-driver support.
+Start with the [photometry pairing quick start](docs/photometry-collaboration-quick-start.md).
+
+The current spectroscopy preview uses a full-width image, collapsible display
+and manual controls, and an independent 1D diagnostic plot. Pixel stretch, zoom
+and display-only spectral-band fit do not transform UI text or rewrite FITS.
+Local release checks pass 1,398 .NET tests, 66 Python tests and 26 offline XAML
+scenes. Exact-version live dock/role checks and native worker commissioning remain
+separate pending gates; see the closeout report for branch-specific limits.
 
 The shared production runner now implements the ADR-0010 source path. Full
 unattended mode hash-locks and connects all four N.I.N.A. environment adapters,
@@ -209,7 +236,9 @@ ATR585M identity binding and one-frame extraction checks are integrated under
 `OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱`; there is no separate
 placeholder spectrum dock.
 
-The QHY service is installed separately and defaults to the synthetic simulator:
+The legacy QHY service is installed separately and defaults to the synthetic simulator.
+These commands are for the service/simulation route, not for simultaneous use with
+the dual-N.I.N.A. worker:
 
 ```powershell
 # Run from an elevated PowerShell after scripts\build.ps1.

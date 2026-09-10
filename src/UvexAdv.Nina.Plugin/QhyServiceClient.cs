@@ -15,11 +15,32 @@ internal sealed class QhyServiceClient : IDisposable
     private static readonly TimeSpan AmbiguousStartRecoveryTimeout = TimeSpan.FromSeconds(25);
     private readonly HttpClient http;
     private readonly ConcurrentDictionary<Guid, QhyOwnerSession> ownerSessions = new();
+    private readonly SemaphoreSlim jobStartGate = new(1, 1);
+    internal TimeSpan AcquisitionPriorityTimeout { get; init; } = TimeSpan.FromMinutes(3);
+    internal Action<string>? AcquisitionPriorityProgress { get; set; }
+    private readonly string? nativeNightSetupId;
+    private QhyFocusRunPolicy? nativeFocusPolicy;
+    internal void BindNativeFocusPolicy(QhyFocusRunPolicy policy)
+    {
+        if (nativeFocusPolicy is not null && nativeFocusPolicy != policy)
+            throw new InvalidOperationException("The frozen photometry focus policy changed during a run.");
+        nativeFocusPolicy = policy;
+    }
 
     public QhyServiceClient(string serviceUrl)
         : this(serviceUrl, handler: null)
     {
     }
+
+    public QhyServiceClient(string serviceUrl, Guid masterProfileId, string? nightSetupId = null)
+        : this(NinaInstancePolicy.TryWorkerEndpoint(serviceUrl, out _) ? "http://127.0.0.1/" : serviceUrl,
+            NinaInstancePolicy.TryWorkerEndpoint(serviceUrl, out var workerId)
+                ? new PhotometryPipeHttpHandler(workerId, masterProfileId) : null)
+    { nativeNightSetupId = nightSetupId; }
+
+    internal static bool IsSupportedEndpoint(string value) =>
+        NinaInstancePolicy.TryWorkerEndpoint(value, out _) ||
+        (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.IsLoopback);
 
     internal QhyServiceClient(string serviceUrl, HttpMessageHandler? handler)
     {
@@ -54,11 +75,87 @@ internal sealed class QhyServiceClient : IDisposable
             ?? throw new InvalidOperationException("QHY service returned no camera state after connect.");
     }
 
-    public Task<QhyJobSnapshot> StartAcquisitionAsync(AcquisitionJobRequest request, CancellationToken cancellationToken) =>
-        PostJobAsync("/api/v1/jobs/acquisition", request, cancellationToken);
+    public async Task<QhyJobSnapshot> StartAcquisitionAsync(AcquisitionJobRequest request, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeStart = null)
+    {
+        await jobStartGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await YieldPhotometryForAcquisitionAsync(request, cancellationToken).ConfigureAwait(false);
+            // A frame-boundary wait can be long. The production caller refreshes
+            // site/supervision gates and the mount binding here, not before it.
+            if (beforeStart is not null) await beforeStart(cancellationToken).ConfigureAwait(false);
+            return await PostJobAsync("/api/v1/jobs/acquisition", request, cancellationToken).ConfigureAwait(false);
+        }
+        finally { jobStartGate.Release(); }
+    }
 
-    public Task<QhyJobSnapshot> StartPhotometryAsync(PhotometryJobRequest request, CancellationToken cancellationToken) =>
-        PostJobAsync("/api/v1/jobs/photometry", request, cancellationToken);
+    public async Task<QhyJobSnapshot> StartPhotometryAsync(PhotometryJobRequest request, CancellationToken cancellationToken)
+    {
+        await jobStartGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await PostJobAsync("/api/v1/jobs/photometry", request, cancellationToken).ConfigureAwait(false); }
+        finally { jobStartGate.Release(); }
+    }
+
+    // The physical owner never changes. Finish the current photometry frame and
+    // its native save/focus readback, then retire that job before requesting a
+    // higher-priority witness. Never steal another run's or operator's job.
+    private async Task YieldPhotometryForAcquisitionAsync(AcquisitionJobRequest request, CancellationToken token)
+    {
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bounded.CancelAfter(AcquisitionPriorityTimeout);
+        try
+        {
+            foreach (var (id, owner) in ownerSessions.ToArray())
+            {
+                if (owner.Kind != QhyJobKind.Photometry) continue;
+                var announced = false;
+                while (true)
+                {
+                    var current = await GetJobAsync(id, bounded.Token).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("QHY_PRIORITY_JOB_LOST: Cannot confirm photometry released the camera.");
+                    if (current.OperatorInterventionRequired)
+                        throw new InvalidOperationException("PHOTOMETRY_OPERATOR_PAUSED: Acquisition priority cannot override manual pause or stop.");
+                    if (IsTerminal(current.State)) break;
+                    if (current.ObservationRunId != request.ObservationRunId || owner.ObservationRunId != request.ObservationRunId)
+                        throw new InvalidOperationException("QHY_PRIORITY_OTHER_RUN: Acquisition cannot take over another observation run.");
+                    if (!announced)
+                    {
+                        AcquisitionPriorityProgress?.Invoke("yield-requested");
+                        announced = true;
+                    }
+                    if (current.State is QhyJobState.Queued or QhyJobState.Running)
+                    {
+                        try { await PauseAsync(id, bounded.Token).ConfigureAwait(false); }
+                        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
+                        {
+                            // Natural completion may win the pause race. Only its
+                            // actual terminal readback permits us to continue.
+                            var raced = await GetJobAsync(id, bounded.Token).ConfigureAwait(false);
+                            if (raced is null || raced.OperatorInterventionRequired || !IsTerminal(raced.State)) throw;
+                        }
+                    }
+                    else if (current.State is QhyJobState.Paused or QhyJobState.PausedNeedsAttention)
+                    {
+                        await PostOwnedControlAsync(id, "cancel",
+                            new QhyOwnerControlRequest(owner.OwnerToken, AutomationActor, RequireClientRequestId(request.ClientRequestId)),
+                            owner, bounded.Token).ConfigureAwait(false);
+                    }
+                    // Pausing/Cancelling are not camera-release evidence.
+                    await Task.Delay(200, bounded.Token).ConfigureAwait(false);
+                }
+                if (announced) AcquisitionPriorityProgress?.Invoke("yield-confirmed");
+            }
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            throw new TimeoutException("QHY_PRIORITY_RELEASE_TIMEOUT: Photometry did not confirm a frame-boundary release within the bounded wait; no acquisition exposure was started.");
+        }
+    }
+
+    internal static bool IsAcquisitionPriorityYield(QhyJobSnapshot job) =>
+        job.Kind == QhyJobKind.Photometry && job.State == QhyJobState.Cancelled &&
+        !job.OperatorInterventionRequired && !string.IsNullOrWhiteSpace(job.YieldedToAcquisitionRequestId);
 
     public async Task<QhyJobSnapshot?> FindJobAsync(
         string observationRunId,
@@ -78,12 +175,13 @@ internal sealed class QhyServiceClient : IDisposable
 
     public async Task<QhyJobSnapshot> StartOrAdoptAcquisitionAsync(
         AcquisitionJobRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeStart = null)
     {
         ValidateIdempotencyKey(request.ClientRequestId, nameof(request));
         try
         {
-            return await StartAcquisitionAsync(request, cancellationToken).ConfigureAwait(false);
+            return await StartAcquisitionAsync(request, cancellationToken, beforeStart).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -94,7 +192,7 @@ internal sealed class QhyServiceClient : IDisposable
         {
             try
             {
-                return await StartAcquisitionAsync(request, cancellationToken).ConfigureAwait(false);
+                return await StartAcquisitionAsync(request, cancellationToken, beforeStart).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -341,7 +439,14 @@ internal sealed class QhyServiceClient : IDisposable
 
     private async Task<QhyJobSnapshot> PostJobAsync<T>(string path, T body, CancellationToken cancellationToken)
     {
-        using var response = await http.PostAsJsonAsync(path, body, cancellationToken).ConfigureAwait(false);
+        object? payload = body;
+        if (!string.IsNullOrWhiteSpace(nativeNightSetupId)) payload = body switch
+        {
+            AcquisitionJobRequest acquisition => acquisition with { NightSetupId = nativeNightSetupId, FocusPolicy = nativeFocusPolicy },
+            PhotometryJobRequest photometry => photometry with { NightSetupId = nativeNightSetupId, FocusPolicy = nativeFocusPolicy },
+            _ => body,
+        };
+        using var response = await http.PostAsJsonAsync(path, payload, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         QhyJobSnapshot snapshot;
         try
@@ -543,7 +648,7 @@ internal sealed class QhyServiceClient : IDisposable
         {
             throw new QhyAmbiguousStartException($"QHY accepted job {snapshot.Id:D} with invalid lease duration metadata.");
         }
-        return new QhyOwnerSession(tokens[0], headerExpiry, snapshot.ControlLeaseSeconds);
+        return new QhyOwnerSession(tokens[0], headerExpiry, snapshot.ControlLeaseSeconds, snapshot.Kind, snapshot.ObservationRunId);
     }
 
     private void ForgetOwnerIfTerminal(QhyJobSnapshot snapshot)
@@ -595,7 +700,9 @@ internal sealed class QhyServiceClient : IDisposable
 internal sealed record QhyOwnerSession(
     string OwnerToken,
     DateTimeOffset LeaseExpiresUtc,
-    int LeaseSeconds);
+    int LeaseSeconds,
+    QhyJobKind Kind,
+    string ObservationRunId);
 
 internal sealed class QhyAmbiguousStartException : InvalidOperationException
 {

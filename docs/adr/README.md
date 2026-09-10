@@ -24,3 +24,4 @@ Current accepted decisions:
 - [ADR-0011: One official QHY AllInOne installation and no private service SDK copy](0011-qhy-allinone-shared-sdk-installation.md)
 - [ADR-0012: Fresh QHY WCS as absolute coordinate authority for a no-home mount](0012-qhy-wcs-mount-coordinate-authority.md)
 - [ADR-0013: Explicit supervised ATR probing with slit-precision warnings](0013-supervised-slit-quality-warning-probe.md)
+- [ADR-0014: Dual N.I.N.A. acquisition with one observatory coordinator](0014-dual-nina-coordinated-acquisition.md)

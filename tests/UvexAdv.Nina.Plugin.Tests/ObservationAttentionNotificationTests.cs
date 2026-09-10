@@ -23,9 +23,9 @@ public sealed class ObservationAttentionNotificationTests
 
         Assert.NotNull(first.Notification);
         Assert.Equal(ObservationAttentionSeverity.Warning, first.Notification!.Severity);
-        Assert.Contains("G3 解算", first.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("光谱仪导星相机解算", first.Notification.Body, StringComparison.Ordinal);
         Assert.Contains("G3_MAIN_FOCUS_UNVERIFIED", first.Notification.Body, StringComparison.Ordinal);
-        Assert.Contains("G3/WCS 证据不足", first.Notification.Body, StringComparison.Ordinal);
+        Assert.Contains("光谱仪导星相机/WCS 证据不足", first.Notification.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("没有可靠的星核证据", first.Notification.Body, StringComparison.Ordinal);
         Assert.Contains("打开“诊断与证据”", first.Notification.Body, StringComparison.Ordinal);
         Assert.Null(duplicate.Notification);

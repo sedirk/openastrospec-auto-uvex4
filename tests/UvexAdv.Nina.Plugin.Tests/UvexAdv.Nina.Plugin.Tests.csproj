@@ -15,6 +15,9 @@
   <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="true" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="true" />
+    <Reference Include="NINA.Equipment" HintPath="$(NinaInstallDir)\NINA.Equipment.dll" Private="true" />
+    <Reference Include="NINA.WPF.Base" HintPath="$(NinaInstallDir)\NINA.WPF.Base.dll" Private="true" />
+    <Reference Include="CommunityToolkit.Mvvm" HintPath="$(NinaInstallDir)\CommunityToolkit.Mvvm.dll" Private="true" />
     <Reference Include="NINA.Image" HintPath="$(NinaInstallDir)\NINA.Image.dll" Private="true" />
     <Reference Include="NINA.PlateSolving" HintPath="$(NinaInstallDir)\NINA.PlateSolving.dll" Private="true" />
     <Reference Include="NINA.Profile" HintPath="$(NinaInstallDir)\NINA.Profile.dll" Private="true" />
@@ -38,6 +41,12 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.G3FieldMountBinding.cs"
           Link="Sources\RealObservationStageRunner.G3FieldMountBinding.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.GuidingRecovery.cs"
+          Link="Sources\RealObservationStageRunner.GuidingRecovery.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.ShortHandoff.cs"
+          Link="Sources\RealObservationStageRunner.ShortHandoff.cs"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.G3PlateSolveTransientRecovery.cs"
           Link="Sources\RealObservationStageRunner.G3PlateSolveTransientRecovery.cs"

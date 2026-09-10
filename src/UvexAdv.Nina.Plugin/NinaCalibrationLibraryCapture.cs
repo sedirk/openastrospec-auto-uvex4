@@ -54,6 +54,7 @@ internal sealed class NinaCalibrationLibraryCapture(
         IProgress<CalibrationCaptureProgress> progress,
         CancellationToken cancellationToken)
     {
+        NinaInstancePolicy.RequireMaster(new UvexPluginSettings(profileService));
         ValidateCamera(plan, requireIdle: true);
         await EnsureTemperatureAsync(plan, progress, cancellationToken).ConfigureAwait(false);
         ValidateTemperature(plan);

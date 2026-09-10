@@ -14,6 +14,7 @@ internal sealed class NinaSpectrumCapture(
 {
     public async Task<Spectrum1D> CaptureAsync(CancellationToken cancellationToken)
     {
+        NinaInstancePolicy.RequireMaster(settings);
         ValidateCamera();
         var sequence = new CaptureSequence
         {

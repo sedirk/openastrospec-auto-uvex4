@@ -20,6 +20,23 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         "RealObservationStageRunner.Phd2SlitPlacement.cs"));
 
     [Fact]
+    public void ExhaustedWcsReserveStopsAfterAttestedReturnBeforeAnyNewOriginCaptureOrSearch()
+    {
+        var body = MethodBody(
+            "private async Task<StageResult> RunG3WcsCenteringAsync(",
+            "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
+        var returnBlocked = body.IndexOf("if (!returned.ReturnedToOrigin)", StringComparison.Ordinal);
+        var reserveStopped = body.IndexOf("if (localSearchBudgetExhausted && exhaustedReserveGate is not null)", StringComparison.Ordinal);
+        var originCapture = body.IndexOf("var originField = await CaptureAndAnalyzeG3WithSolveLadderAsync", StringComparison.Ordinal);
+        Assert.True(returnBlocked >= 0 && reserveStopped > returnBlocked && originCapture > reserveStopped);
+        var stop = body[reserveStopped..originCapture];
+        Assert.Contains("G3WcsRecoveryPolicy.ExhaustedReturnedCode", stop);
+        Assert.Contains("BudgetExhaustedReturnedWithoutLocalSearch", stop);
+        Assert.Contains("[\"g3MotionBudgetReset\"] = bool.FalseString", stop);
+        Assert.DoesNotContain("RunBoundedG3LocalSearchAsync", stop);
+    }
+
+    [Fact]
     public void ProductionRouteKeepsQhyAsNoMotionWitnessAndHandsAcquisitionToFreshG3()
     {
         var body = MethodBody(
@@ -1165,11 +1182,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunG3WcsCenteringAsync(",
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
 
-        Assert.Contains("coarseResidualPixels > placementPreset.EffectiveAcquisitionResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("coarseResidualPixels > placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
         Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
         Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
         Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
-        Assert.Contains("placementPreset.EffectiveAcquisitionResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("targetToSlitResidualPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("currentResidual <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
         Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
     }
 

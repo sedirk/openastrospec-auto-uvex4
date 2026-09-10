@@ -20,6 +20,8 @@ public sealed record ScreenshotRenderResult(
     string Sha256)
 {
     public IReadOnlyList<string> VisibleTexts { get; init; } = [];
+    public double PreviewViewportWidth { get; init; }
+    public double PreviewViewportHeight { get; init; }
 }
 
 public static class ScreenshotRenderer
@@ -45,7 +47,8 @@ public static class ScreenshotRenderer
 
         try
         {
-            return scenarios.Select(scenario => Render(productionTemplate, scenario, outputDirectory)).ToArray();
+            return scenarios.Select(scenario => Render(scenario.TemplateKey == ProductionTemplateKey ? productionTemplate :
+                (DataTemplate)templates[scenario.TemplateKey], scenario, outputDirectory)).ToArray();
         }
         finally
         {
@@ -67,7 +70,7 @@ public static class ScreenshotRenderer
             Padding = new Thickness(8),
             Child = new ContentControl
             {
-                Content = scenario.ViewModel,
+                Content = scenario.AlternateViewModel ?? scenario.ViewModel,
                 ContentTemplate = template,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 VerticalContentAlignment = VerticalAlignment.Stretch
@@ -79,6 +82,7 @@ public static class ScreenshotRenderer
 
         BitmapSource bitmap;
         IReadOnlyList<string> visibleTexts = [];
+        double viewportWidth = 0, viewportHeight = 0;
         var window = new Window
         {
             Width = scenario.Width,
@@ -100,8 +104,22 @@ public static class ScreenshotRenderer
             // Keeping the window off-screen avoids flashing or activating it.
             window.Show();
             PumpLoadedAndRender(window.Dispatcher);
-            SelectScenarioTabs(host, scenario);
+            if (scenario.TemplateKey == ProductionTemplateKey) SelectScenarioTabs(host, scenario);
             PumpLoadedAndRender(window.Dispatcher);
+            if (scenario.Name == "atr-manual")
+            {
+                var inspector = Descendants<Expander>(host).First(e => e.Name == "ManualAtrInspector");
+                inspector.IsExpanded = true;
+            }
+            if (scenario.Name == "atr-levels")
+            {
+                var levels = Descendants<System.Windows.Controls.Primitives.ToggleButton>(host)
+                    .First(e => e.Name == "DisplayLevelsToggle");
+                levels.IsChecked = true;
+            }
+            PumpLoadedAndRender(window.Dispatcher);
+            var viewport = Descendants<ScrollViewer>(host).FirstOrDefault(e => e.Name == "ViewportScrollViewer" && e.IsVisible);
+            if (viewport is not null) { viewportWidth = viewport.ActualWidth; viewportHeight = viewport.ActualHeight; }
             if (string.Equals(scenario.Name, "advanced", StringComparison.OrdinalIgnoreCase))
             {
                 var algorithms = Descendants<Expander>(host).FirstOrDefault(expander =>
@@ -166,6 +184,8 @@ public static class ScreenshotRenderer
         return new(scenario.Name, scenario.Culture.Name, scenario.Width, scenario.Height, Path.GetFullPath(path), sha)
         {
             VisibleTexts = visibleTexts,
+            PreviewViewportWidth = viewportWidth,
+            PreviewViewportHeight = viewportHeight,
         };
     }
 

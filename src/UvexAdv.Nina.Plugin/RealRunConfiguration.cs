@@ -111,7 +111,8 @@ internal sealed record RealRunConfiguration(
                     settings.QhyCoarseMaximumCorrectionAttempts,
                     TimeSpan.FromMinutes(double.IsFinite(settings.QhyCoarseMaximumCenteringMinutes)
                         ? settings.QhyCoarseMaximumCenteringMinutes
-                        : 0))),
+                        : 0)),
+                settings.SynchronizedPhotometryEnabled),
             new G3RunConfiguration(
                 settings.G3ExposureMilliseconds,
                 settings.G3GainPercent,
@@ -594,7 +595,8 @@ internal sealed record QhyRunConfiguration(
     double PhotometryCadenceSeconds,
     IReadOnlyList<QhyPhotometryFilterStep> ParallelFilterSequence,
     QhyQualityThresholds QualityThresholds,
-    QhyCoarseCenteringLimits CoarseCenteringLimits);
+    QhyCoarseCenteringLimits CoarseCenteringLimits,
+    bool SynchronizedPhotometryEnabled = true);
 
 internal sealed record G3RunConfiguration(
     int ExposureMilliseconds,

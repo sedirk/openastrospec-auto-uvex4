@@ -32,22 +32,21 @@ public sealed class Phd2GuidingFrameEvidenceTests
                     AvgDist = 0.06,
                     ErrorCode = 0,
                 }, cancellationToken);
-                // The first event is intentionally allowed to race the fresh
-                // waiter. The next completed frame must still be accepted.
-                await Task.Delay(50, cancellationToken);
-                await session.SendEventAsync(new
+                // Under solution-wide CPU load BOTH of two fixed events can
+                // precede waiter registration. A real guide camera continues
+                // producing frames; model that bounded stream until save_image
+                // is requested instead of relying on a 50 ms scheduler race.
+                var saveRequest = session.ReadRequestAsync(cancellationToken);
+                for (var frame = 42; frame <= 121 && !saveRequest.IsCompleted; frame++)
                 {
-                    Event = "GuideStep",
-                    Frame = 42,
-                    dx = 0.04,
-                    dy = -0.01,
-                    SNR = 26.0,
-                    HFD = 2.4,
-                    AvgDist = 0.05,
-                    ErrorCode = 0,
-                }, cancellationToken);
-
-                var save = await session.ReadRequestAsync(cancellationToken);
+                    if (await Task.WhenAny(saveRequest, Task.Delay(50, cancellationToken)) == saveRequest) break;
+                    await session.SendEventAsync(new
+                    {
+                        Event = "GuideStep", Frame = frame, dx = 0.04, dy = -0.01,
+                        SNR = 26.0, HFD = 2.4, AvgDist = 0.05, ErrorCode = 0,
+                    }, cancellationToken);
+                }
+                var save = await saveRequest.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
                 Assert.Equal("save_image", save.GetProperty("method").GetString());
                 await session.ReplyResultAsync(save, new { filename = sourcePath }, cancellationToken);
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -62,7 +61,7 @@ public sealed class Phd2GuidingFrameEvidenceTests
                 new Phd2GuidingFrameRequest(destinationPath, TimeSpan.FromSeconds(5)),
                 CancellationToken.None);
 
-            Assert.Contains(result.TriggerGuideFrame, new long[] { 41, 42 });
+            Assert.InRange(result.TriggerGuideFrame, 41L, 121L);
             Assert.True(result.EventSequence > 0);
             Assert.Equal(destinationPath, result.Path);
             Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)), result.Sha256);

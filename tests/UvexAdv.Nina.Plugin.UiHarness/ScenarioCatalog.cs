@@ -12,6 +12,8 @@ public sealed record ScreenshotScenario(
     ObservationDockMockViewModel ViewModel)
 {
     public CultureInfo Culture { get; init; } = CultureInfo.GetCultureInfo("zh-CN");
+    public string TemplateKey { get; init; } = ScreenshotRenderer.ProductionTemplateKey;
+    public object? AlternateViewModel { get; init; }
 }
 
 public static class ScenarioCatalog
@@ -24,6 +26,9 @@ public static class ScenarioCatalog
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
         new("recovering", 1180, 800, ObservationDockMockViewModel.Recovering()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
+        new("atr-live", 1040, 700, ObservationDockMockViewModel.AtrLive()),
+        new("atr-levels", 1040, 700, ObservationDockMockViewModel.AtrLive()),
+        new("atr-narrow", 640, 800, ObservationDockMockViewModel.AtrLive()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
         new("failure-en", 1180, 800, ObservationDockMockViewModel.EnglishFailure())
         {
@@ -34,7 +39,48 @@ public static class ScenarioCatalog
         new("ghost-assistance", 1180, 900, ObservationDockMockViewModel.GhostAssistance()),
         new("qhy-g3-fast-pair", 1180, 900, ObservationDockMockViewModel.QhyG3FastPair()),
         new("narrow", 540, 900, ObservationDockMockViewModel.Narrow()),
-        new("advanced", 1180, 1000, ObservationDockMockViewModel.Advanced())
+        new("advanced", 1180, 1000, ObservationDockMockViewModel.Advanced()),
+        new("photometry-off", 1180, 800, new ObservationDockMockViewModel { SynchronizedPhotometryEnabled = false }),
+        new("photometry-worker", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel(),
+        },
+        new("photometry-worker-en", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel(), Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("photometry-master", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true },
+        },
+        new("photometry-master-en", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true }, Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("photometry-worker-running", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { Enabled = true, SelectedTabIndex = 1 },
+        },
+        new("photometry-worker-pausing", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { Enabled = true, SelectedTabIndex = 1, OperatorPaused = true, State = UvexAdv.Qhy.Core.QhyJobState.Pausing },
+        },
+        new("photometry-worker-narrow", 540, 900, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel(),
+        },
+        new("photometry-help", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { SelectedTabIndex = 2 },
+        },
     ];
 
     public static IReadOnlyCollection<string> Names => Scenarios.Select(item => item.Name).ToArray();
@@ -60,15 +106,24 @@ public sealed class ObservationDockMockViewModel
     }
 
     public string ModeText { get; init; } = "自动观测：模拟演练";
+    public bool SynchronizedPhotometryEnabled { get; init; } = true;
+    public bool CanEditSynchronizedPhotometry => !IsRunActive;
+    public string SynchronizedPhotometryStatus => ObservationUiPresentation.Text(
+        SynchronizedPhotometryEnabled ? "开启 · 与光谱同时拍摄" : "关闭 · 仅保留定位短曝",
+        SynchronizedPhotometryEnabled ? "ON · capture alongside spectra" : "OFF · acquisition witnesses only",
+        ObservationStaticTextLocalization.EffectiveCulture);
     public string ModeDescription { get; init; } = "只运行模拟状态机，不连接相机、赤道仪、PHD2 或 COM5。";
     public string RealModeStatus { get; init; } = "真实模式有 3 个启动阻断项；当前演练不受影响。";
     public string RealModeStatusSummary { get; init; } = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。";
     public string StartButtonText { get; init; } = "启动模拟演练（不连接设备）";
     public string StateText { get; init; } = "空闲";
-    public string StatusMessage { get; init; } = "尚未启动；可以先检查计划与运行模式。";
+    private string statusMessage = "尚未启动；可以先检查计划与运行模式。";
+    public string StatusMessage { get => RoleDescription(statusMessage); init => statusMessage = value; }
     public string PauseReason { get; init; } = string.Empty;
-    public string CurrentStageText { get; init; } = "尚未开始";
-    public string NextStageText { get; init; } = "锁定 Night Setup";
+    private string currentStageText = "尚未开始";
+    public string CurrentStageText { get => RoleDescription(currentStageText); init => currentStageText = value; }
+    private string nextStageText = "锁定 Night Setup";
+    public string NextStageText { get => RoleDescription(nextStageText); init => nextStageText = value; }
     public double ProgressPercent { get; init; }
     public string ProgressSummary { get; init; } = "总体阶段 0/11 · 0%";
     public string CurrentOperationText { get; init; } = string.Empty;
@@ -184,9 +239,13 @@ public sealed class ObservationDockMockViewModel
     public Visibility G3EmptyVisibility => HasG3Preview ? Visibility.Collapsed : Visibility.Visible;
     public Visibility AtrPreviewVisibility => HasAtrPreview ? Visibility.Visible : Visibility.Collapsed;
     public Visibility AtrEmptyVisibility => HasAtrPreview ? Visibility.Collapsed : Visibility.Visible;
-    public string QhyPreviewCaption { get; init; } = "尚无 QHY 预览：自动观测尚未启动；QHY 服务未请求帧。";
-    public string G3PreviewCaption { get; init; } = "尚无 G3 预览：PHD2 没有为本次运行提供帧。";
-    public string AtrPreviewCaption { get; init; } = "尚无 ATR 预览：尚未执行探测曝光。";
+    private string qhyPreviewCaption = "尚无测光相机预览：自动观测尚未启动；尚未请求定位或测光帧。";
+    public string QhyPreviewCaption { get => RoleDescription(qhyPreviewCaption); init => qhyPreviewCaption = value; }
+    private string g3PreviewCaption = "尚无光谱仪导星相机预览：PHD2 没有为本次运行提供帧。";
+    public string G3PreviewCaption { get => RoleDescription(g3PreviewCaption); init => g3PreviewCaption = value; }
+    private string atrPreviewCaption = "尚无光谱相机预览：尚未执行探测曝光。";
+    public string AtrPreviewCaption { get => RoleDescription(atrPreviewCaption); init => atrPreviewCaption = value; }
+    private static string RoleDescription(string text) => CameraRoleLabels.Description(text, ObservationStaticTextLocalization.EffectiveCulture);
     public string QhyPreviewMetadata { get; init; } = "最后一帧：无";
     public string G3PreviewMetadata { get; init; } = "最后一帧：无";
     public string AtrPreviewMetadata { get; init; } = "最后一帧：无";
@@ -200,6 +259,10 @@ public sealed class ObservationDockMockViewModel
     public bool HasAtrManualCaptureErrorTechnicalDetails => !string.IsNullOrWhiteSpace(AtrManualCaptureErrorTechnicalDetails);
     public string ManualSpectrumSummary { get; init; } = "尚未采集光谱";
     public PointCollection ManualSpectrumPoints { get; init; } = CreateEmptyManualSpectrumPoints();
+    public bool HasManualSpectrum => ManualSpectrumPoints.Count > 0;
+    public bool IsManualAtrToolsAvailable { get; init; } = true;
+    public string ManualAtrInspectionHeader => IsManualAtrToolsAvailable
+        ? "手动单帧检查 · 点击展开" : "自动观测占用光谱相机 · 手动检查暂不可用";
     public string ManualUvexServiceUrl { get; init; } = "http://127.0.0.1:47844";
     public IReadOnlyList<string> ManualUvexDeviceChoices { get; init; } = ["UVEX4 / COM5"];
     public string SelectedManualUvexDevice { get; init; } = "UVEX4 / COM5";
@@ -229,7 +292,7 @@ public sealed class ObservationDockMockViewModel
     ];
     public CommissioningProfileChoice? SelectedCommissioningProfile { get; set; }
     public string SelectedCommissioningProfileDescription => SelectedCommissioningProfile?.Description ?? "启动时从各设备所有者保存的配置读取候选；不连接设备。";
-    public string CommissioningProfileLoadStatus { get; init; } = "已发现 1 个台站方案、1 个赤道仪、1 个 ATR、1 个 G3/PHD2、1 个 QHY 候选；未连接任何设备。";
+    public string CommissioningProfileLoadStatus { get; init; } = "已发现 1 个台站方案、1 个赤道仪、1 个光谱相机、1 个光谱仪导星相机 / PHD2、1 个测光相机候选；未连接任何设备。";
     public IReadOnlyList<DeviceIdentityChoice> TelescopeCandidates { get; init; } = [new("ASCOM.OnStep.Telescope", "On-Step · N.I.N.A. 配置“光谱观测”", "N.I.N.A.")];
     public IReadOnlyList<DeviceIdentityChoice> AtrCameraCandidates { get; init; } = [new("ToupTek_ATR_STABLE", "ATR585M · 既有绑定", "N.I.N.A.")];
     public IReadOnlyList<DeviceIdentityChoice> G3CameraCandidates { get; init; } = [new("USB-G3-STABLE", "G3M2210M · PHD2 配置“c11+slit+2210”", "PHD2")];
@@ -587,6 +650,24 @@ public sealed class ObservationDockMockViewModel
         G3PreviewMetadata = "22:17:05 UTC · 2 s · four bounded selections",
     };
 
+    public static ObservationDockMockViewModel AtrLive() => new()
+    {
+        ModeText = "自动观测：真实设备 · 有人弱监督",
+        IsSimulationMode = false,
+        StateText = "自动推进",
+        CurrentStageText = "光谱相机科学曝光与健康监测",
+        NextStageText = "结束本轮观测",
+        ProgressPercent = 82,
+        ProgressSummary = "总体阶段 9/11 · 82%",
+        SelectedWorkspaceTabIndex = 4,
+        SelectedPreviewTabIndex = 2,
+        IsManualAtrToolsAvailable = false,
+        AtrPreviewImage = PreviewImageFactory.CreateAtrSpectrum(),
+        AtrPreviewCaption = "科学帧 1/3 · 60 s · 峰值 36,240 ADU · 截断 0.00% · 信号指标 114.7",
+        AtrManualCameraStatus = "已连接并匹配：光谱相机。",
+        OperatorNotice = "离线界面验收；没有连接设备或曝光。",
+    };
+
     public static ObservationDockMockViewModel AtrManual() => new()
     {
         ModeText = "自动观测：真实设备",
@@ -912,3 +993,48 @@ internal sealed class NoOpCommand(bool canExecute) : ICommand
 }
 
 public sealed record MockUvexSlitChoice(int Position, string DisplayName);
+
+public sealed class PhotometryWorkerMockViewModel
+{
+    private static CultureInfo Culture => ObservationStaticTextLocalization.EffectiveCulture;
+    private static string T(string zh, string en) => ObservationUiPresentation.Text(zh, en, Culture);
+    public bool IsSpectroscopyMaster { get; set; }
+    public bool IsPhotometryWorker { get => !IsSpectroscopyMaster; set { if (value) IsSpectroscopyMaster = false; } }
+    public bool Enabled { get; init; }
+    public bool OperatorPaused { get; init; }
+    public UvexAdv.Qhy.Core.QhyJobState State { get; init; } = UvexAdv.Qhy.Core.QhyJobState.Running;
+    public int SelectedTabIndex { get; set; }
+    public bool CanEditRole => !Enabled;
+    public string ProfileId => IsSpectroscopyMaster ? "11111111-2222-3333-4444-555555555555" : "22222222-3333-4444-5555-666666666666";
+    public string MasterProfileId { get; set; } = "11111111-2222-3333-4444-555555555555";
+    public string WorkerEndpoint => "nina://" + ProfileId;
+    public string MasterQhyEndpoint { get; set; } = "nina://22222222-3333-4444-5555-666666666666";
+    public string EndpointSummary => PhotometryUiPresentation.EndpointSummary(MasterQhyEndpoint, Culture);
+    public string DeviceSummary => T("测光相机 · 已记录设备身份（不代表已连接）\n测光滤镜轮 · 已记录设备身份（不代表已连接）\n测光电调焦 · 已记录设备身份（不代表已连接）",
+        "Photometry camera · identity recorded (not proof of connection)\nPhotometry filter wheel · identity recorded (not proof of connection)\nPhotometry focuser · identity recorded (not proof of connection)");
+    public string StatusTitle => IsSpectroscopyMaster ? T("本窗口：光谱主控", "This window: spectroscopy master") :
+        !Enabled ? T("本窗口：测光端 · 尚未开始接收", "This window: photometry instance · reception not enabled") :
+        OperatorPaused ? T("测光端：人工暂停/停止有效", "Photometry instance: operator pause/stop is active") : PhotometryUiPresentation.JobState(State, Culture);
+    public string NextAction => IsSpectroscopyMaster
+        ? T("先完成两端配对，再回到“自动观测”设置同步测光开关并启动。地址已保存不代表另一实例已连接。",
+            "Pair both instances, then use the simultaneous-photometry switch and Start in Automatic observation. A saved address does not prove a peer connection.")
+        : Enabled ? JobAdvice : T("本地配置检查通过。点击“开始接收主控任务”；主控下发经过检查的任务之前不会连接设备或曝光。",
+            "Local configuration checks passed. Enable reception; no equipment connects or exposes until the master submits a checked job.");
+    private UvexAdv.Qhy.Core.QhyJobSnapshot? Job => !Enabled ? null : new(
+        Guid.Parse("33333333-4444-5555-6666-777777777777"), "fixture-run", UvexAdv.Qhy.Core.QhyJobKind.Photometry, State,
+        new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero), null, null, "fixture-target", "fixture-QHYminiCam8M",
+        null, null, [], [], "fixture-manifest", TotalFrameCount: 12);
+    public string JobSummary => PhotometryUiPresentation.JobSummary(Job, Culture);
+    public string JobAdvice => PhotometryUiPresentation.JobAdvice(Job, OperatorPaused, Culture);
+    public string TechnicalDetails => "fixture-QHYminiCam8M / fixture-wheel / fixture-GS350\nfixture-manifest";
+    public string Error => "";
+    public string Notice => "";
+    public ICommand BindCommand => new NoOpCommand(!Enabled);
+    public ICommand EnableCommand => new NoOpCommand(!Enabled);
+    public ICommand PauseCommand => new NoOpCommand(Enabled && !OperatorPaused);
+    public ICommand StopCommand => new NoOpCommand(Enabled);
+    public ICommand AllowNewJobCommand => new NoOpCommand(false);
+    public ICommand CopyProfileIdCommand => new NoOpCommand(true);
+    public ICommand CopyWorkerEndpointCommand => new NoOpCommand(true);
+    public ICommand SaveEndpointCommand => new NoOpCommand(!Enabled);
+}

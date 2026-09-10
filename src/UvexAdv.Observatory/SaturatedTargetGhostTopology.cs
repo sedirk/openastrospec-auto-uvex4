@@ -62,7 +62,7 @@ public static class SaturatedTargetGhostTopologyAnalyzer
 
         var (background, sigma) = EstimateBackground(frame);
         var components = FindSaturatedComponents(frame);
-        var measured = components
+        var allMeasured = components
             .Where(component => component.Pixels.Count >= options.MinimumComponentPixels &&
                                 component.Pixels.Count <= options.MaximumComponentPixels)
             .Select(component => Measure(
@@ -73,6 +73,24 @@ public static class SaturatedTargetGhostTopologyAnalyzer
                 background,
                 sigma,
                 options))
+            .ToArray();
+        // A slit/diffraction structure can split a few clipped pixels off a
+        // much larger saturated core. Proximity to the prediction must not
+        // promote this small fragment into an independent stellar centre.
+        // Inspect neighbours BEFORE the WCS window cut: a core just outside
+        // that window still invalidates a fragment in its own measured halo,
+        // but is not thereby authorized as the target.
+        var measured = allMeasured
+            .Select(candidate => IsSmallHaloFragment(candidate, allMeasured)
+                ? candidate with
+                {
+                    Topology = SaturatedSourceTopology.Indeterminate,
+                    SelectionScore = 0,
+                    Gate = GateResult.Unknown("SATURATED_SOURCE_HALO_FRAGMENT",
+                        "A small clipped island lies inside the measured extent of a much larger saturated source; it is not an independent stellar centre.",
+                        candidate.Gate.Metrics),
+                }
+                : candidate)
             .Where(candidate => candidate.DistanceToPredictionPixels <= maximumPredictionResidualPixels)
             .ToArray();
         var ghosts = measured
@@ -134,6 +152,14 @@ public static class SaturatedTargetGhostTopologyAnalyzer
             background,
             sigma);
     }
+
+    private static bool IsSmallHaloFragment(
+        SaturatedSourceTopologyCandidate candidate,
+        IReadOnlyList<SaturatedSourceTopologyCandidate> neighbours) =>
+        candidate.Topology == SaturatedSourceTopology.SolidStellarCore &&
+        neighbours.Any(other => !ReferenceEquals(other, candidate) &&
+            other.SaturatedPixels >= 25L * candidate.SaturatedPixels &&
+            Distance(candidate.Centroid, other.Centroid) <= other.ExclusionRadiusPixels);
 
     private static SaturatedSourceTopologyCandidate Measure(
         MonochromeFrame frame,

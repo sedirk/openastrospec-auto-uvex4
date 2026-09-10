@@ -468,7 +468,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
         if (active)
         {
-            coordinator.RequestPause($"运行清单写入失败：{exception.Message}");
+            coordinator.RequestPause($"RUN_MANIFEST_WRITE_FAILED: Observation manifest persistence failed; this run cannot be resumed or finalized. Existing raw frames are retained. {exception.Message}");
         }
     }
 

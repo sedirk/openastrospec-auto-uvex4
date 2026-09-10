@@ -211,6 +211,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        NinaInstancePolicy.RequireMaster(settings);
         var authorization = ObservationAutomationPolicy.AuthorizeExecutionMode(
             UseRealMode,
             settings.ObservationUseRealMode,

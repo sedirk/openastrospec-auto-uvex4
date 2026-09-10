@@ -30,10 +30,15 @@ public abstract class UvexSequenceItemBase : SequenceItem
 
     private protected UvexPluginSettings Settings => new(ProfileService);
 
-    private protected UvexServiceClient CreateClient() => new(Settings.ServiceUrl);
+    private protected UvexServiceClient CreateClient()
+    {
+        NinaInstancePolicy.RequireMaster(Settings);
+        return new(Settings.ServiceUrl);
+    }
 
     private protected static void RequireStableAtrBinding(UvexPluginSettings settings)
     {
+        NinaInstancePolicy.RequireMaster(settings);
         if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
         {
             throw new InvalidOperationException(

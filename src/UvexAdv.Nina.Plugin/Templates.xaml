@@ -5,6 +5,207 @@
                     xmlns:seq="clr-namespace:UvexAdv.Nina.Plugin.SequenceItems"
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
+  <DataTemplate x:Key="UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable">
+    <Grid Margin="4" Background="#0B1220" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <Grid.Resources>
+        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E2E8F0" /></Style>
+        <Style TargetType="RadioButton">
+          <Setter Property="Foreground" Value="#E2E8F0" />
+          <Setter Property="Template"><Setter.Value>
+            <ControlTemplate TargetType="RadioButton">
+              <StackPanel Orientation="Horizontal">
+                <Grid Width="14" Height="14" Margin="0,0,6,0">
+                  <Ellipse Stroke="#94A3B8" Fill="#172033" />
+                  <Ellipse x:Name="Selection" Margin="3" Fill="#38BDF8" Visibility="Collapsed" />
+                </Grid>
+                <ContentPresenter RecognizesAccessKey="True" />
+              </StackPanel>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsChecked" Value="True"><Setter TargetName="Selection" Property="Visibility" Value="Visible" /></Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Foreground" Value="#FDE047" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="#94A3B8" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value></Setter>
+        </Style>
+        <Style TargetType="TextBox">
+          <Setter Property="Background" Value="#182532" /><Setter Property="Foreground" Value="#E2E8F0" />
+          <Setter Property="BorderBrush" Value="#506277" /><Setter Property="Padding" Value="5,3" /><Setter Property="MinHeight" Value="26" />
+        </Style>
+        <Style TargetType="Button">
+          <Setter Property="Background" Value="#21384A" /><Setter Property="Foreground" Value="#E2E8F0" />
+          <Setter Property="BorderBrush" Value="#53748B" /><Setter Property="Padding" Value="9,5" />
+          <Setter Property="BorderThickness" Value="1" />
+          <Setter Property="Template"><Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#BAE6FD" /></Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#FDE047" /></Trigger>
+                <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.75" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Background" Value="#172033" /><Setter Property="Foreground" Value="#94A3B8" />
+                  <Setter Property="BorderBrush" Value="#334155" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value></Setter>
+        </Style>
+
+        <BooleanToVisibilityConverter x:Key="PhotometryVisibility" />
+        <Style x:Key="PhotometryCard" TargetType="Border">
+          <Setter Property="Background" Value="#142132" /><Setter Property="BorderBrush" Value="#35465C" />
+          <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="5" />
+          <Setter Property="Padding" Value="12" /><Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+        <Style TargetType="TabItem">
+          <Setter Property="Foreground" Value="#CBD5E1" /><Setter Property="Background" Value="#172033" />
+          <Setter Property="Padding" Value="14,8" />
+          <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabItem">
+            <Border x:Name="TabBorder" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                    BorderBrush="#334155" BorderThickness="1" CornerRadius="4,4,0,0" Margin="0,0,4,0">
+              <ContentPresenter ContentSource="Header" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#1E4052" /><Setter Property="Foreground" Value="#F1F5F9" /></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TabBorder" Property="BorderBrush" Value="#FDE047" /></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate></Setter.Value></Setter>
+        </Style>
+      </Grid.Resources>
+      <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+      <StackPanel Margin="12,10">
+        <TextBlock Text="同步测光 · 两个 N.I.N.A. 协作" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
+        <TextBlock Margin="0,5,0,8" Foreground="#A9BBD0" TextWrapping="Wrap"
+                   Text="一个窗口调度光谱与整台设备，另一个窗口只执行测光。先选择本窗口的用途；两端必须使用不同的配置。" />
+        <WrapPanel IsEnabled="{Binding CanEditRole}">
+          <RadioButton Content="光谱主控" IsChecked="{Binding IsSpectroscopyMaster}" Margin="0,0,22,5" />
+          <RadioButton Content="测光端" IsChecked="{Binding IsPhotometryWorker}" Margin="0,0,0,5" />
+        </WrapPanel>
+      </StackPanel>
+      <Border Grid.Row="1" Background="#142A36" BorderBrush="#3C6478" BorderThickness="1" CornerRadius="4" Padding="10" Margin="12,0,12,10">
+        <StackPanel>
+          <TextBlock Text="{Binding StatusTitle}" FontWeight="Bold" Foreground="#A5DEF0" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding NextAction}" TextWrapping="Wrap" Margin="0,4,0,0" />
+        </StackPanel>
+      </Border>
+      <TabControl Grid.Row="2" Margin="12,0,12,4" Background="#0B1220" BorderBrush="#334155"
+                  SelectedIndex="{Binding SelectedTabIndex}">
+        <TabItem Header="连接设置">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="8,10,8,0">
+            <StackPanel>
+              <StackPanel Visibility="{Binding IsSpectroscopyMaster, Converter={StaticResource PhotometryVisibility}}">
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="1. 把本主控编号交给测光端" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="在另一窗口选择“测光端”，把下方编号粘贴到它的第 2 步。" TextWrapping="Wrap" Foreground="#A9BBD0" Margin="0,5,0,8" />
+                    <TextBox Text="{Binding ProfileId, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" />
+                    <Button Content="复制主控编号" Command="{Binding CopyProfileIdCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="2. 填入另一窗口的测光端地址" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="到测光端点击“复制测光端地址”，粘贴到这里后保存。保存不连接设备，也不会停止旧版服务。" TextWrapping="Wrap" Foreground="#A9BBD0" Margin="0,5,0,8" />
+                    <TextBox Text="{Binding MasterQhyEndpoint, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEditRole}" TextWrapping="Wrap" />
+                    <Button Content="保存测光端地址" Command="{Binding SaveEndpointCommand}" HorizontalAlignment="Left" Margin="0,6,0,8" />
+                    <TextBlock Text="{Binding EndpointSummary}" TextWrapping="Wrap" Foreground="#D5C497" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="3. 回到主控台开始观测" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="先让测光端开始接收，再到“自动观测”顶部设置“同步测光”并启动。关闭同步测光仅停止连续测光；定位需要的测光相机短曝光仍然保留。" TextWrapping="Wrap" Margin="0,5,0,0" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+              <StackPanel Visibility="{Binding IsPhotometryWorker, Converter={StaticResource PhotometryVisibility}}">
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="1. 只选择测光设备，再记录身份" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="在本 N.I.N.A. 的设备页选择测光相机、测光滤镜轮和测光电调焦。赤道仪、导星、屋顶等公共设备必须取消选择，而不只是断开。" TextWrapping="Wrap" Foreground="#A9BBD0" Margin="0,5,0,8" />
+                    <Button Content="记录所选设备（不连接）" Command="{Binding BindCommand}" HorizontalAlignment="Left" />
+                    <TextBlock Text="{Binding DeviceSummary}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="2. 与光谱主控互换配对信息" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="粘贴光谱主控第 1 步的编号：" Margin="0,6,0,4" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding MasterProfileId, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEditRole}" TextWrapping="Wrap" />
+                    <TextBlock Text="把本端地址复制回光谱主控的第 2 步：" Margin="0,10,0,4" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding WorkerEndpoint, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" />
+                    <Button Content="复制测光端地址" Command="{Binding CopyWorkerEndpointCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="3. 允许本次会话接收任务" FontWeight="Bold" TextWrapping="Wrap" />
+                    <TextBlock Text="开始接收本身不会连接设备或曝光。接下来由光谱主控发起已检查的任务；重启后需要重新允许。" TextWrapping="Wrap" Margin="0,5,0,8" />
+                    <Button Content="开始接收主控任务" Command="{Binding EnableCommand}" HorizontalAlignment="Left" Background="#225363" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+        <TabItem Header="运行状态">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="8,10">
+            <StackPanel>
+              <TextBlock Visibility="{Binding IsSpectroscopyMaster, Converter={StaticResource PhotometryVisibility}}"
+                         Text="本窗口是光谱主控。完整观测进度在“自动观测”面板；测光相机的执行状态请看另一窗口的本页。这里不会伪造远端已连接或正在曝光的状态。" TextWrapping="Wrap" />
+              <StackPanel Visibility="{Binding IsPhotometryWorker, Converter={StaticResource PhotometryVisibility}}">
+                <Border Style="{StaticResource PhotometryCard}">
+                  <StackPanel>
+                    <TextBlock Text="{Binding JobSummary}" FontSize="16" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding JobAdvice}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="#D5C497" />
+                  </StackPanel>
+                </Border>
+                <WrapPanel>
+                  <Button Content="暂停测光" Command="{Binding PauseCommand}" Margin="0,0,8,8" />
+                  <Button Content="停止当前任务" Command="{Binding StopCommand}" Margin="0,0,8,8" />
+                  <Button Content="允许接收新任务" Command="{Binding AllowNewJobCommand}" Margin="0,0,8,8" />
+                </WrapPanel>
+                <TextBlock Text="暂停不等于停止。暂停/停止请求会等待当前帧、保存和设备动作结束；人工停止后不会自动恢复旧任务。" TextWrapping="Wrap" Foreground="#A9BBD0" Margin="0,4,0,14" />
+              </StackPanel>
+              <Expander Header="技术详情：设备 ID、原始状态与文件" Foreground="#A9BBD0">
+                <TextBox Text="{Binding TechnicalDetails, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Margin="0,8,0,0" />
+              </Expander>
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+        <TabItem Header="使用说明">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="8,10">
+            <StackPanel>
+              <Border Style="{StaticResource PhotometryCard}"><StackPanel>
+                <TextBlock Text="三台相机，按职责命名" FontWeight="Bold" />
+                <TextBlock Text="光谱相机：记录光谱，由光谱 N.I.N.A. 控制。&#10;测光相机：广域定位和连续测光，由测光 N.I.N.A. 控制。&#10;光谱仪导星相机：观察狭缝并导星，由 PHD2 控制。" TextWrapping="Wrap" Margin="0,8,0,0" />
+              </StackPanel></Border>
+              <Border Style="{StaticResource PhotometryCard}"><StackPanel>
+                <TextBlock Text="光谱优先，测光配合" FontWeight="Bold" />
+                <TextBlock Text="光谱定位需要测光相机时，主控让连续测光在帧边界让路，确认曝光和保存结束后才拍定位帧。定位与导星恢复后再安排续测；同一相机不会被两个进程重复打开。" TextWrapping="Wrap" Margin="0,8,0,0" />
+              </StackPanel></Border>
+              <Border Style="{StaticResource PhotometryCard}"><StackPanel>
+                <TextBlock Text="首次部署与当前支持范围" FontWeight="Bold" />
+                <TextBlock Text="先备份配置，并在空闲时让旧采集服务释放设备。测光端保存格式需为未压缩 FITS；关闭“换滤镜时暂停导星”。本版测光适配器目前支持原生 QHYminiCam8M，其他型号尚未验证；界面通用命名不等于驱动已普遍兼容。" TextWrapping="Wrap" Margin="0,8,0,0" />
+              </StackPanel></Border>
+              <Border Style="{StaticResource PhotometryCard}"><StackPanel>
+                <TextBlock Text="高级序列是可选入口" FontWeight="Bold" />
+                <TextBlock Text="日常使用可直接在此开始接收，无需高级序列。若使用高级序列，本版只接收一个“测光协同接收”项及受限顺序容器；不支持任意深空模板、抖动、独立翻转或自动对焦扫描。" TextWrapping="Wrap" Margin="0,8,0,0" />
+              </StackPanel></Border>
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+      </TabControl>
+      <StackPanel Grid.Row="3" Margin="12,0,12,6">
+        <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" Foreground="#A5DEF0" />
+        <TextBlock Text="{Binding Error}" TextWrapping="Wrap" Foreground="#F0A5AC" />
+      </StackPanel>
+    </Grid>
+  </DataTemplate>
   <DataTemplate x:Key="OpenAstroSpec Auto — UVEX4_Options">
     <Grid Margin="8" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.RowDefinitions>
@@ -14,8 +215,8 @@
 
       <Border BorderBrush="#0EA5E9" BorderThickness="1" CornerRadius="3" Padding="9" Margin="0,0,0,8">
         <StackPanel>
-          <TextBlock Text="OpenAstroSpec Auto · ATR/UVEX4 光谱工具设置" FontWeight="Bold" FontSize="15" />
-          <TextBlock Text="这里只配置自动观测界面中的 ATR 单帧检查，以及 Advanced Sequencer 中的 UVEX4 M2 谱线对焦和光栅波长锁定。它不配置 C11 主镜对焦、G3 导星镜对焦、目标入缝或自动科学曝光计划。"
+          <TextBlock Text="OpenAstroSpec Auto · 光谱相机/UVEX4 光谱工具设置" FontWeight="Bold" FontSize="15" />
+          <TextBlock Text="这里只配置自动观测界面中的光谱相机单帧检查，以及 Advanced Sequencer 中的 UVEX4 M2 谱线对焦和光栅波长锁定。它不配置主镜对焦、光谱仪导星相机对焦、目标入缝或自动科学曝光计划。"
                      TextWrapping="Wrap" Margin="0,4,0,0" />
         </StackPanel>
       </Border>
@@ -33,17 +234,17 @@
                        TextWrapping="Wrap" Foreground="#7DD3FC" Margin="0,0,0,10" />
             <TextBlock Grid.Row="1" Grid.Column="0" Text="UVEX 服务 API 地址" VerticalAlignment="Center" />
             <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ServiceUrl, UpdateSourceTrigger=PropertyChanged}" Margin="5,2" />
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="ATR 型号名回退（仅影子检查）" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="光谱相机型号名回退（仅影子检查）" VerticalAlignment="Center" />
             <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ExpectedCameraName, UpdateSourceTrigger=PropertyChanged}" Margin="5,2" />
-            <TextBlock Grid.Row="3" Grid.Column="0" Text="已绑定 ATR DeviceId" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="已绑定光谱相机 DeviceId" VerticalAlignment="Center" />
             <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding BoundCameraId, Mode=OneWay}" IsReadOnly="True" Margin="5,2" />
             <TextBlock Grid.Row="4" Grid.ColumnSpan="2"
-                       Text="DeviceId 由“OpenAstroSpec 自动观测 → 实时图像 → ATR 二维/一维光谱”或校准库中的显式“绑定当前 ATR585M”按钮写入。绑定后闭环必须精确匹配 DeviceId；型号名称不能绕过绑定。"
+                       Text="DeviceId 由“OpenAstroSpec 自动观测 → 实时图像 → 光谱相机 · 光谱”或校准库中的显式“绑定当前光谱相机”按钮写入。绑定后闭环必须精确匹配 DeviceId；型号名称不能绕过绑定。"
                        TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,9,0,0" />
           </Grid>
         </TabItem>
 
-        <TabItem Header="ATR 提取">
+        <TabItem Header="光谱相机提取">
           <Grid Margin="10">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="170"/><ColumnDefinition Width="85"/><ColumnDefinition Width="18"/>
@@ -56,7 +257,7 @@
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.ColumnSpan="6"
-                       Text="这些值只用于光谱工具的 ATR 单帧测量。所谓“提取矩形”是在 N.I.N.A. 完整图像上做的软件裁切，不会改写相机驱动的硬件 ROI。"
+                       Text="这些值只用于光谱工具的光谱相机单帧测量。所谓“提取矩形”是在 N.I.N.A. 完整图像上做的软件裁切，不会改写相机驱动的硬件 ROI。"
                        TextWrapping="Wrap" Foreground="#7DD3FC" Margin="0,0,0,8" />
             <TextBlock Grid.Row="1" Grid.Column="0" Text="测量曝光（秒）" VerticalAlignment="Center" />
             <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ExposureSeconds}" Margin="5,2" />
@@ -105,7 +306,7 @@
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.ColumnSpan="6"
-                       Text="这里的“对焦”只指 UVEX 光谱仪内部 M2，通过多条谱线的 FWHM 做七点扫描。它与 C11 主镜、G3M2210M 导星模组小镜头和狭缝照明图像对焦无关。"
+                       Text="这里的“对焦”只指 UVEX 光谱仪内部 M2，通过多条谱线的 FWHM 做七点扫描。它与主镜、光谱仪导星相机模组小镜头和狭缝照明图像对焦无关。"
                        TextWrapping="Wrap" Foreground="#7DD3FC" Margin="0,0,0,9" />
             <StackPanel Grid.Row="1" Grid.ColumnSpan="6" Orientation="Horizontal" Margin="0,0,0,8">
               <TextBlock Text="本夜 M2 策略" VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -508,6 +709,15 @@
             </Border>
             <TextBlock Text="{Binding ProgressSummary}" Foreground="#94A3B8" FontWeight="SemiBold" VerticalAlignment="Center" />
           </WrapPanel>
+          <Border Background="#122D38" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="7,4" Margin="0,5,0,3">
+            <WrapPanel VerticalAlignment="Center">
+              <CheckBox Content="同步测光" FontWeight="Bold" Foreground="#F1F5F9" FontSize="14" Margin="0,0,12,0"
+                        IsChecked="{Binding SynchronizedPhotometryEnabled, Mode=TwoWay}"
+                        IsEnabled="{Binding CanEditSynchronizedPhotometry}"
+                        ToolTip="空闲时设置，启动后锁定到本轮结束。关闭仅停用并行测光，不禁用定位所需的测光相机短曝光；不会断开设备。" />
+              <TextBlock Text="{Binding SynchronizedPhotometryStatus}" Foreground="#BAE6FD" VerticalAlignment="Center" />
+            </WrapPanel>
+          </Border>
           <WrapPanel Margin="0,2,0,0">
             <TextBlock Text="当前：" FontWeight="Bold" Foreground="#7DD3FC" />
             <TextBlock Text="{Binding CurrentStageText}" Margin="0,0,10,0" />
@@ -543,10 +753,10 @@
             <Button Content="人工接管" Command="{Binding TakeoverCommand}" />
             <Button Content="新开一轮" Command="{Binding RestartWithCurrentConfigurationCommand}"
                     Background="#1D4ED8" BorderBrush="#60A5FA" FontWeight="Bold"
-                    ToolTip="按当前设置新开一轮。用于切换超亮目标等会改变动作哈希的分支：先结束旧运行并审计退役旧 G3 恢复链，再按当前表单捕获新哈希并启动。不会把新设置热替换进旧运行，也不要求把设置改回去。" />
-            <Button Content="清除 G3 状态" Command="{Binding ClearG3RecoveryStateCommand}"
+                    ToolTip="按当前设置新开一轮。用于切换超亮目标等会改变动作哈希的分支：先结束旧运行并审计退役旧光谱仪导星相机恢复链，再按当前表单捕获新哈希并启动。不会把新设置热替换进旧运行，也不要求把设置改回去。" />
+            <Button Content="清除导星相机旧状态" Command="{Binding ClearG3RecoveryStateCommand}"
                     Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
-                    ToolTip="清除旧 G3 状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的 G3 自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
+                    ToolTip="清除旧光谱仪导星相机状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的光谱仪导星相机自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
             <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="取消当前运行并执行安全收尾。" />
           </WrapPanel>
           <WrapPanel Margin="0,4,0,0">
@@ -564,7 +774,7 @@
             <Border Background="#0E2A1B" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="5" Padding="9" Margin="0,0,0,8">
               <StackPanel>
                 <TextBlock Text="自动流程（真实成功路线）" FontWeight="Bold" Foreground="#86EFAC" />
-                <TextBlock Text="目录转向 → QHY 广域见证 → G3 解算 / N.I.N.A. 大步修正 / 邻场搜索 → PHD2 入缝并导星 → ATR 自适应曝光 + QHY 同步测光"
+                <TextBlock Text="目录转向 → 测光相机广域见证 → 光谱仪导星相机解算 / N.I.N.A. 大步修正 / 邻场搜索 → PHD2 入缝并导星 → 光谱相机自适应曝光 + 可选测光相机同步测光"
                            Foreground="#D1FAE5" TextWrapping="Wrap" Margin="0,3,0,0" />
               </StackPanel>
             </Border>
@@ -634,7 +844,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                   <TextBlock Text="UVEX4 手动准备" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="用于观测前借天光选缝、开关狭缝灯和简单调整 M2。只经过 UvexAdv.Service → COM5；不要求本夜光学设置、PHD2、QHY、WCS 或完整自动观测标定。"
+                  <TextBlock Text="用于观测前借天光选缝、开关狭缝灯和简单调整 M2。只经过 UvexAdv.Service → COM5；不要求本夜光学设置、PHD2、测光相机、WCS 或完整自动观测标定。"
                              Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,10,0" />
                   <WrapPanel Margin="0,5,10,0">
                     <TextBlock Text="设备" Foreground="#CBD5E1" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -797,12 +1007,12 @@
                   <TextBlock Text="并行观测与初始地平线规划时长（分钟）" FontWeight="SemiBold" TextWrapping="Wrap" />
                   <TextBox Text="{Binding DurationMinutes, UpdateSourceTrigger=PropertyChanged}"
                            Margin="0,2,0,0"
-                           ToolTip="用于并行 QHY 任务长度及自动观测开始时的地平线保护估算；不是 ATR 单帧曝光的硬超时。" />
-                  <TextBlock Text="不是曝光倒计时：已开始的 ATR 曝光会完整结束；ATR 科学帧张数由高级设置控制。600 s 单帧不会在这里填 10 分钟时被中途截断。"
+                           ToolTip="用于并行测光相机任务长度及自动观测开始时的地平线保护估算；不是光谱相机单帧曝光的硬超时。" />
+                  <TextBlock Text="不是曝光倒计时：已开始的光谱相机曝光会完整结束；光谱相机科学帧张数由高级设置控制。600 s 单帧不会在这里填 10 分钟时被中途截断。"
                              Foreground="#93C5FD" TextWrapping="Wrap" Margin="0,3,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,7,0,0">
-                  <TextBlock Text="目标在 G3 中的可观测类型" FontWeight="SemiBold" />
+                  <TextBlock Text="目标在光谱仪导星相机中的可观测类型" FontWeight="SemiBold" />
                   <ComboBox ItemsSource="{Binding AvailableTargetObservabilityClasses}"
                             DisplayMemberPath="Label"
                             SelectedValuePath="Value"
@@ -842,7 +1052,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Margin="0,0,10,0">
                   <TextBlock Text="真实自动观测准备表" FontSize="15" FontWeight="Bold" Foreground="{StaticResource PreparationPrimaryTextBrush}" />
-                  <TextBlock Text="启动时自动恢复上次台站方案；设备候选来自 N.I.N.A.、PHD2 和 QHY 服务各自保存的配置。列出候选不会连接设备；左侧红色标记只表示真正缺少的资料。"
+                  <TextBlock Text="启动时恢复上次台站方案，并读取已保存的设备身份；不会因此连接设备。红色标记表示仍需补充或核对的资料。"
                              Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   <TextBlock Text="{Binding AutomaticPreparationSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0">
                     <TextBlock.Style>
@@ -898,14 +1108,14 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="赤道仪（N.I.N.A.）" VerticalAlignment="Center" />
                     <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding TelescopeCandidates}" SelectedItem="{Binding SelectedTelescopeCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱相机 ATR" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱相机" VerticalAlignment="Center" />
                     <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding AtrCameraCandidates}" SelectedItem="{Binding SelectedAtrCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="导星相机 G3 / PHD2" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="光谱仪导星相机（PHD2）" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0" />
                     <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding G3CameraCandidates}" SelectedItem="{Binding SelectedG3CameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="测光相机 QHY" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="测光相机" VerticalAlignment="Center" />
                     <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding QhyCameraCandidates}" SelectedItem="{Binding SelectedQhyCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
                   </Grid>
-                  <TextBlock Text="这里只选择期望身份：ATR 仍归 N.I.N.A.，G3 仍归 PHD2，QHY 仍归独立 QHY 服务。无需把三台相机轮流接进 N.I.N.A.。"
+                  <TextBlock Text="这里只选择期望设备，不会连接：光谱相机由光谱主控持有，光谱仪导星相机由 PHD2 持有；测光相机由所选测光端或旧版兼容服务持有，不能重复占用。"
                              Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
                 </StackPanel>
               </Grid>
@@ -989,48 +1199,60 @@
 
         <TabItem Header="实时图像">
           <TabControl Margin="3">
-            <TabItem Header="QHY 广域 / 解算">
+            <TabItem Header="测光相机 · 定位">
               <Grid Margin="3">
                 <local:EmbeddedImageViewer PreviewImage="{Binding QhyPreviewImage}"
                                            Caption="{Binding QhyPreviewCaption}"
-                                           EmptyTitle="尚无 QHY 广域图像"
-                                           EmptyDetails="尚未收到 QHY/GS350 取景帧。请查看固定运行状态、QHY 当前阶段和最近质量门；选择模式本身不会连接相机。"
+                                           EmptyTitle="尚无测光相机广域图像"
+                                           EmptyDetails="尚未收到测光相机取景帧。请查看固定运行状态、测光相机当前阶段和最近质量门；选择模式本身不会连接相机。"
                                            PopoutCommand="{Binding OpenQhyPreviewCommand}"
-                                           PopoutLabel="弹出 QHY 大图"
+                                           PopoutLabel="弹出大图"
                                            ShowPopoutButton="True"
                                            MinHeight="220" />
               </Grid>
             </TabItem>
-            <TabItem Header="G3 对焦 / 狭缝 / 导星">
+            <TabItem Header="光谱仪导星相机">
               <Grid Margin="3">
                 <local:EmbeddedImageViewer PreviewImage="{Binding G3PreviewImage}"
                                            Caption="{Binding G3PreviewCaption}"
-                                           EmptyTitle="尚无 G3 狭缝场图像"
-                                           EmptyDetails="尚未收到 PHD2/G3 全帧。请检查当前阶段和最近质量门；G3 仍只由 PHD2 持有。"
+                                           EmptyTitle="尚无光谱仪导星相机狭缝场图像"
+                                           EmptyDetails="尚未收到 PHD2/光谱仪导星相机全帧。请检查当前阶段和最近质量门；光谱仪导星相机仍只由 PHD2 持有。"
                                            PopoutCommand="{Binding OpenG3PreviewCommand}"
-                                           PopoutLabel="弹出 G3 大图"
+                                           PopoutLabel="弹出大图"
                                            ShowPopoutButton="True"
                                            MinHeight="220" />
               </Grid>
             </TabItem>
-            <TabItem Header="ATR 二维 / 一维光谱">
+            <TabItem Header="光谱相机 · 光谱">
               <Grid Margin="3">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="3*" />
-                  <ColumnDefinition Width="8" />
-                  <ColumnDefinition Width="2*" />
-                </Grid.ColumnDefinitions>
-                <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="*" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0">
                   <local:EmbeddedImageViewer PreviewImage="{Binding AtrPreviewImage}"
                                              Caption="{Binding AtrPreviewCaption}"
-                                             EmptyTitle="尚无自动观测 ATR 图像"
-                                             EmptyDetails="自动流程尚未收到 N.I.N.A./ATR585M 探测或科学帧。右侧单帧检查不会启动整套自动观测。"
+                                             EmptyTitle="尚无自动观测光谱相机图像"
+                                             EmptyDetails="自动流程的最新试拍与科学帧会显示在这里。下方可展开独立的手动单帧检查。"
                                              PopoutCommand="{Binding OpenAtrPreviewCommand}"
-                                             PopoutLabel="弹出 ATR 大图"
+                                             PopoutLabel="弹出大图"
                                              ShowPopoutButton="True"
-                                             MinHeight="220" />
+                                             MinHeight="140" />
                 </Grid>
-                <Border Grid.Column="2" Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="9">
+                <Expander Grid.Row="1" x:Name="ManualAtrInspector" Header="{Binding ManualAtrInspectionHeader}" Margin="0,6,0,0">
+                  <Expander.Style>
+                    <Style TargetType="Expander" BasedOn="{StaticResource ObservationSettingsExpander}">
+                      <Setter Property="IsExpanded" Value="False" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsManualAtrToolsAvailable}" Value="False">
+                          <Setter Property="IsExpanded" Value="False" />
+                          <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Expander.Style>
+                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="9">
                   <Grid>
                     <Grid.RowDefinitions>
                       <RowDefinition Height="Auto" />
@@ -1041,7 +1263,7 @@
                       <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0">
-                      <TextBlock Text="ATR 单帧检查" FontWeight="Bold" FontSize="14" />
+                      <TextBlock Text="光谱相机单帧检查" FontWeight="Bold" FontSize="14" />
                       <TextBlock Text="用于绑定相机和检查提取结果；不会启动入缝、导星、UVEX 运动或自动科学序列。"
                                  TextWrapping="Wrap" Opacity="0.78" Margin="0,2,0,6" />
                       <TextBlock Text="{Binding AtrManualCameraStatus}" TextWrapping="Wrap" />
@@ -1049,12 +1271,13 @@
                       <TextBlock Text="{Binding AtrManualCapturePresetText, StringFormat=单帧设置：{0}}" TextWrapping="Wrap" Opacity="0.72" />
                     </StackPanel>
                     <WrapPanel Grid.Row="1" Margin="0,6,0,4">
-                      <Button Content="绑定当前 ATR585M" Command="{Binding BindCurrentAtrCameraCommand}" />
+                      <Button Content="绑定当前光谱相机" Command="{Binding BindCurrentAtrCameraCommand}" />
                       <Button Content="刷新相机状态" Command="{Binding RefreshAtrManualStatusCommand}" />
                       <Button Content="采集一帧检查光谱" Command="{Binding CaptureManualAtrSpectrumCommand}" Background="#166534" BorderBrush="#22C55E" />
                     </WrapPanel>
                     <TextBlock Grid.Row="2" Text="{Binding AtrManualCaptureStatus}" TextWrapping="Wrap" Margin="0,2,0,5" />
-                    <Border Grid.Row="3" BorderBrush="#475569" BorderThickness="1" MinHeight="150" Background="#08111F">
+                    <Border Grid.Row="3" BorderBrush="#475569" BorderThickness="1" Height="110" Background="#08111F"
+                            Visibility="{Binding HasManualSpectrum, Converter={StaticResource ObservationBoolToVisibility}}">
                       <Viewbox Stretch="Fill">
                         <Canvas Width="1" Height="1">
                           <Polyline Points="{Binding ManualSpectrumPoints}" Stroke="#38BDF8" StrokeThickness="0.005" />
@@ -1074,6 +1297,8 @@
                     </Border>
                   </Grid>
                 </Border>
+                </ScrollViewer>
+                </Expander>
               </Grid>
             </TabItem>
           </TabControl>
@@ -1201,7 +1426,7 @@
                     <Button Content="恢复严格入缝验收" Command="{Binding DisarmSlitQualityWarningCommand}" Margin="8,0,0,0" />
                   </WrapPanel>
                   <TextBlock Text="{Binding SupervisedSlitQualityWarningStatusText}" TextWrapping="Wrap" Foreground="#FDE68A" />
-                  <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除 G3 状态、修改设置或删除证据。"
+                  <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除导星相机旧状态、修改设置或删除证据。"
                              Foreground="#CFFAFE" TextWrapping="Wrap" Margin="0,4,0,7" />
                   <CheckBox Content="启用本机当前用户的 LLM 后台命名管道"
                             IsChecked="{Binding ModelAutomationBridgeEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -1248,7 +1473,7 @@
               <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="N.I.N.A. 原生目标归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="ATR585M 仍由 N.I.N.A. 保存。模板必须包含目标名；推荐值还会按夜晚、目标和官方图像类型分目录。插件不会在启动时静默修改 Profile。"
+                  <TextBlock Text="光谱相机仍由 N.I.N.A. 保存。模板必须包含目标名；推荐值还会按夜晚、目标和官方图像类型分目录。插件不会在启动时静默修改 Profile。"
                              Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
                   <TextBlock Text="当前 Profile 模板" FontWeight="SemiBold" />
                   <TextBox Text="{Binding NinaImageFilePatternCurrent, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,2,0,6" />
@@ -1283,7 +1508,7 @@
                 </Border>
               </Expander>
               <TextBlock Text="并行观测与站点" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
-              <Expander Header="ATR 长曝光期间的 QHY 并行成像" Style="{StaticResource ObservationSettingsExpander}">
+              <Expander Header="光谱相机长曝光期间的测光相机并行成像" Style="{StaticResource ObservationSettingsExpander}">
                 <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
                   <StackPanel>
                     <TextBlock Text="滤镜循环（Filter:秒，逗号分隔）" FontWeight="Bold" Foreground="#7DD3FC" />
@@ -1297,7 +1522,7 @@
                       <TextBlock Grid.Column="3" Text="最低透明度" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding QhyMinimumTransparency}" Margin="5,0" ToolTip="0 = 仅记录，不阻断"/>
                       <TextBlock Grid.Column="6" Text="最大饱和比例" VerticalAlignment="Center"/><TextBox Grid.Column="7" Text="{Binding QhyMaximumSaturatedFraction}" Margin="5,0"/>
                     </Grid>
-                    <TextBlock Text="它与 ATR 光谱曝光并行，不借用 ATR 或 G3 相机；若 QHY 支路被设为严格质量门，失败仍会暂停主流程。"
+                    <TextBlock Text="测光与光谱曝光并行，各自使用独立相机。测光支路若被设为严格质量门，失败仍会暂停主流程。"
                                Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
                 </Border>
@@ -1343,7 +1568,7 @@
                   <TextBlock Text="{Binding WideToSlitTransferModeText, StringFormat=WideToSlitTransferMode：{0}}" FontFamily="Consolas" Margin="0,3,0,0" />
                   <TextBlock Text="{Binding WideToSlitTransferStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,0" />
                   <Separator Margin="0,7,0,6" />
-                  <CheckBox Content="G3 一旦解算成功，立即建立 QHY/G3 快速双解算候选"
+                  <CheckBox Content="光谱仪导星相机一旦解算成功，立即建立测光相机/光谱仪导星相机快速双解算候选"
                             IsChecked="{Binding QhyG3FastPairEnabled}" />
                   <TextBlock Text="{Binding QhyG3FastPairStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,4,0,6" />
                   <Grid>
@@ -1351,7 +1576,7 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="配对 schema" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding QhyG3FastPairSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
                     <TextBlock Grid.Row="0" Grid.Column="3" Text="Policy ID" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding QhyG3FastPairPolicyId, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="单张 QHY 曝光 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding QhyG3FastPairExposureSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="单张测光相机曝光 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding QhyG3FastPairExposureSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                     <TextBlock Grid.Row="1" Grid.Column="3" Text="缓存最长年龄 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding QhyG3FastPairMaximumCachedAgeSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="两帧中点差 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding QhyG3FastPairMaximumMidpointSeparationSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                     <TextBlock Grid.Row="2" Grid.Column="3" Text="整组时限 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding QhyG3FastPairMaximumWallClockSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
@@ -1381,8 +1606,8 @@
                   <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,2,0,0" />
                 </StackPanel>
               </Border>
-              <TextBlock Text="旧版 QHY 广域运动门（仅保留兼容/取证，不是当前生产路线）" FontWeight="Bold" Margin="0,0,0,4" />
-              <TextBlock Text="当前前端只接受 QHY 正式 WCS 作为广域见证，不依据它移动赤道仪；大步运动交给 fresh G3 WCS + N.I.N.A.。以下 schema 1 参数只供旧运行记录重放和工程诊断，不再作为当前路线的启动阻断项。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
+              <TextBlock Text="旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）" FontWeight="Bold" Margin="0,0,0,4" />
+              <TextBlock Text="当前前端只接受测光相机正式 WCS 作为广域见证，不依据它移动赤道仪；大步运动交给 fresh 光谱仪导星相机 WCS + N.I.N.A.。以下 schema 1 参数只供旧运行记录重放和工程诊断，不再作为当前路线的启动阻断项。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
               <Grid Margin="0,0,0,8">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -1394,9 +1619,9 @@
               </Grid>
               <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                 <StackPanel>
-                  <TextBlock Text="G3 长曝光解算与 WCS 居中" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占 G3 拍一张新全帧。若同一指向已有本轮新鲜 QHY/PL3 正式解，G3 优先以它作为真实天空提示；当无机械零位赤道仪的自报坐标偏差超过此处可信范围时，每轮最多用该 QHY 真值 Sync 一次并验证读回，绝不反复同步或发 Slew。G3 正式解在像元尺度合理、数值有限且位于提示可达范围内时直接信任；源数和匹配数只作遥测。目标/赤道仪与 QHY 的大残差不再误写成两镜光轴差。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新 G3 解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
-                  <TextBlock Text="判据分离：2″只约束静态 frame/mount 绑定和小步搜索稳定性；大步实报终点在完整运动预算内即可拍验证帧，光学到位必须由移动后的 fresh G3 WCS 证明。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="0,0,0,6" />
+                  <TextBlock Text="光谱仪导星相机长曝光解算与 WCS 居中" FontWeight="Bold" Foreground="#7DD3FC" />
+                  <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占光谱仪导星相机拍一张新全帧。若同一指向已有本轮新鲜测光相机/PL3 正式解，光谱仪导星相机优先以它作为真实天空提示；当无机械零位赤道仪的自报坐标偏差超过此处可信范围时，每轮最多用该测光相机真值 Sync 一次并验证读回，绝不反复同步或发 Slew。光谱仪导星相机正式解在像元尺度合理、数值有限且位于提示可达范围内时直接信任；源数和匹配数只作遥测。目标/赤道仪与测光相机的大残差不再误写成两镜光轴差。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新光谱仪导星相机解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
+                  <TextBlock Text="判据分离：2″只约束静态 frame/mount 绑定和小步搜索稳定性；大步实报终点在完整运动预算内即可拍验证帧，光学到位必须由移动后的 fresh 光谱仪导星相机 WCS 证明。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="0,0,0,6" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -1414,14 +1639,14 @@
                     </StackPanel>
                     <TextBlock Grid.Row="5" Grid.Column="0" Text="单动作最坏时长 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding G3MotionWorstCaseActionSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                     <TextBlock Grid.Row="5" Grid.Column="3" Text="移动后稳定等待 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="4" Text="{Binding G3MotionPostSlewSettleSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="G3 相对天空提示可信范围 (deg)" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="3" Grid.ColumnSpan="2" Text="默认 5°；优先相对新鲜 QHY/PL3 WCS 检验，并作为无机械零位赤道仪的一次性 Sync 触发阈值。不会自动扩大此值，也不授权同等幅度 Slew" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="光谱仪导星相机相对天空提示可信范围 (deg)" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                    <TextBlock Grid.Row="6" Grid.Column="3" Grid.ColumnSpan="2" Text="默认 5°；优先相对新鲜测光相机/PL3 WCS 检验，并作为无机械零位赤道仪的一次性 Sync 触发阈值。不会自动扩大此值，也不授权同等幅度 Slew" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
                     <TextBlock Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Text="大步后允许拍 fresh 验证帧的最大实报终点残差 (arcsec)" TextWrapping="Wrap" VerticalAlignment="Center"/>
                     <TextBox Grid.Row="7" Grid.Column="4" Text="{Binding G3WcsFreshSolveAuthorizationResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                   </Grid>
                 </StackPanel>
               </Border>
-              <TextBlock Text="G3 直接解算失败后的有界方形螺旋搜索" FontWeight="Bold" Margin="0,0,0,4" />
+              <TextBlock Text="光谱仪导星相机直接解算失败后的有界方形螺旋搜索" FontWeight="Bold" Margin="0,0,0,4" />
               <TextBlock Text="这些数值由所选台站配置方案加载，且不得超过设备标定的运动上限；0 表示未调试并会阻断真实模式。每步均重新检查暂停、安全、屋顶、天气、地平线和赤道仪状态，失败时按小步安全返回搜索原点。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
               <Grid Margin="0,0,0,8">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
@@ -1447,27 +1672,27 @@
               <Grid Margin="0,0,0,8">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Grid.Column="0" Text="G3 曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding G3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Column="3" Text="G3 增益 (%)" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding G3GainPercent, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="G3 驱动恢复 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                <TextBlock Grid.Column="0" Text="光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding G3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                <TextBlock Grid.Column="3" Text="光谱仪导星相机增益 (%)" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding G3GainPercent, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱仪导星相机驱动恢复 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                 <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Text="连续全幅之间；本机实测 3000 ms" Foreground="#94A3B8" VerticalAlignment="Center" Margin="5,2"/>
               </Grid>
               <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
                 <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
                   <StackPanel>
-                    <TextBlock Text="只适用于目标身份已由本轮新鲜 QHY WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光 G3 帧即使能用翼部求质心，也永远不能参与对焦；G3 解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />
+                    <TextBlock Text="只适用于目标身份已由本轮新鲜测光相机 WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光光谱仪导星相机帧即使能用翼部求质心，也永远不能参与对焦；光谱仪导星相机解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />
                     <CheckBox Content="显式启用超亮目标翼部质心分支" IsChecked="{Binding BrightTargetWingCentroidEnabled}" Margin="0,0,0,6" />
-                    <TextBlock Text="启用前必须填写最短曝光、证据新鲜度和 QHY 残差；0 表示未配置并阻断。这里没有目标名、目标坐标、两镜光轴偏移或固定 500 ms。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,0,0,5" />
+                    <TextBlock Text="启用前必须填写最短曝光、证据新鲜度和测光相机残差；0 表示未配置并阻断。这里没有目标名、目标坐标、两镜光轴偏移或固定 500 ms。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,0,0,5" />
                     <Grid>
                       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
                       <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                       </Grid.RowDefinitions>
-                      <TextBlock Grid.Row="0" Grid.Column="0" Text="最短 G3 曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding BrightTargetMinimumG3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="0" Grid.Column="3" Text="QHY WCS 最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyWcsAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="1" Grid.Column="0" Text="G3 帧最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BrightTargetMaximumG3FrameAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="1" Grid.Column="3" Text="QHY 目标残差上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      <TextBlock Grid.Row="0" Grid.Column="0" Text="最短光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding BrightTargetMinimumG3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      <TextBlock Grid.Row="0" Grid.Column="3" Text="测光相机 WCS 最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyWcsAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱仪导星相机帧最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BrightTargetMaximumG3FrameAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      <TextBlock Grid.Row="1" Grid.Column="3" Text="测光相机目标残差上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                       <TextBlock Grid.Row="2" Grid.Column="0" Text="目录坐标差上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding BrightTargetMaximumCatalogMismatchArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                       <TextBlock Grid.Row="2" Grid.Column="3" Text="C11 焦点置信度下限" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding BrightTargetMinimumC11FocusConfidence, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
                       <TextBlock Grid.Row="3" Grid.Column="0" Text="饱和核最少像素" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding BrightTargetMinimumSaturatedCorePixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
@@ -1500,10 +1725,10 @@
               <TextBlock Text="本夜光学设置快照文件"/><TextBox Text="{Binding NightSetupSnapshotPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="本夜光学设置 SHA-256"/><TextBox Text="{Binding NightSetupSnapshotSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="赤道仪 DeviceId"/><TextBox Text="{Binding ExpectedTelescopeId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="ATR585M DeviceId"/><TextBox Text="{Binding ExpectedAtrCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="PHD2 / G3 Profile"/><TextBox Text="{Binding ExpectedG3ProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+              <TextBlock Text="光谱相机 DeviceId"/><TextBox Text="{Binding ExpectedAtrCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+              <TextBlock Text="PHD2 / 光谱仪导星相机 Profile"/><TextBox Text="{Binding ExpectedG3ProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
               <TextBlock Text="PHD2 registry evidence SHA-256"/><TextBox Text="{Binding Phd2ProfileEvidenceSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="QHY service CameraId"/><TextBox Text="{Binding ExpectedQhyCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+              <TextBlock Text="测光相机 service CameraId"/><TextBox Text="{Binding ExpectedQhyCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
                 </StackPanel>
               </Expander>
             </StackPanel>
@@ -1552,12 +1777,12 @@
 
         <Border Grid.Row="0" BorderBrush="#4B5563" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
           <StackPanel>
-            <TextBlock Text="ATR585M 校准库" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="光谱相机校准库" FontSize="16" FontWeight="SemiBold" />
             <TextBlock Text="曝光由 N.I.N.A. 执行；插件不会直接加载 ToupTek SDK，也不会打开导星相机。"
                        TextWrapping="Wrap" Opacity="0.8" Margin="0,3,0,7" />
             <TextBlock Text="{Binding CameraStatus}" TextWrapping="Wrap" FontWeight="SemiBold" />
             <TextBlock Text="{Binding BoundCameraId, StringFormat=绑定 DeviceId：{0}}" TextWrapping="Wrap" Opacity="0.75" />
-            <Button Content="绑定当前 ATR585M" Command="{Binding BindCurrentCameraCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+            <Button Content="绑定当前光谱相机" Command="{Binding BindCurrentCameraCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
           </StackPanel>
         </Border>
 

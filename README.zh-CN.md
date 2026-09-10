@@ -20,18 +20,20 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/commissioning-night-2026-09-07.md) ·
+[最新软件/实机收口](docs/closeout-2026-09-10.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
 [0.4.0.80 界面/双语/恢复收口](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-09-07 收口记录](docs/commissioning-night-2026-09-07.md)确认：已安装的 **0.4.0.137
-通过真实前台 11/11 流程，接受 3 张 3 s 天津四 Deneb 光谱**，保留有人监督和入缝精度警告。
-本轮同时收口图像/界面图层分离与 FITS 溯源，并增加 **0.4.0.138 微调后只读导星检查**，
-避免每步重复发起原生稳定等待；.138 尚未安装或实测。QHY 测光质量和稳定通光量仍待改善，
-这次成功不代表无人值守科学验收。
+[2026-09-10 收口说明](docs/closeout-2026-09-10.md)汇总 **0.4.0.167** 与
+[多类型目标前台实测](docs/commissioning-multitarget-2026-09-09.md)：天津四、Gamma Cas、
+Scheat、Almach 和 10 Lac 分别在记录所列版本完成真实 **11/11** 流程。最终 `.167`
+接受 Almach 的 3 张 60 s 光谱、10 Lac 的 3 张 120 s 光谱，同步测光分别接受 37、75 张。
+这些是不同版本的独立监督运行，不是一次连续多目标长序列；入缝质量警告全部保留，
+采集接受不等于精密测光、定标光谱或无人值守验收。现场仍使用旧 QHY 服务，
+**不能将这些结果算作新双 N.I.N.A. 测光端的实机验收**。
 
 本仓库包含两个面向用户、均采用 GPL-3.0-only 许可的软件产品：
 
@@ -58,10 +60,23 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 
 下一阶段采集自动化的冻结设计基线位于 [`docs/design/observatory-automation-baseline.md`](docs/design/observatory-automation-baseline.md)。各设备的单一所有权决策记录在 [`ADR-0001`](docs/adr/0001-single-owner-device-orchestration.md)，两个光学视场之间可选且版本化的交接规则记录在 [`ADR-0004`](docs/adr/0004-optional-versioned-wide-to-slit-field-transfer.md)。后端/field harness 的成功必须先并入 Dockable 与 Advanced Sequencer 共同使用的生产 runner，并从正式前端重新验收，才能称为产品成功；该规则记录在 [`ADR-0009`](docs/adr/0009-single-production-observation-route.md)。N.I.N.A. Safety Monitor、天气、主光路镜盖和 RRCI 平移顶的两种监督模式及开关顶生命周期记录在 [`ADR-0010`](docs/adr/0010-nina-environment-supervision-and-rolloff-roof.md)。以下规则具有规范性：
 
-- N.I.N.A. 独占 ATR585M，用于光谱采集；
+- 光谱主控 N.I.N.A. 独占 ATR585M，并协调公共设备和全台流程；
 - PHD2 独占 G3M2210M，用于狭缝视场与导星；
-- 隔离的 `UvexAdv.Qhy.Service` 独占 QHYminiCam8M，用于 GS350 粗采集和同步测光；
+- 按 [ADR-0014](docs/adr/0014-dual-nina-coordinated-acquisition.md)，独立测光 N.I.N.A. 拥有 QHYminiCam8M、测光滤镜轮和 GS350 电调焦，不得控制其他公共设备；
 - 只有 `UvexAdv.Service` 可以独占 UVEX4 COM5。
+
+从 `.139` 起，源码已接入双实例、受限原生高级序列接收项，以及主控顶部的“同步测光”
+总开关。关闭总开关不影响定位所需的广域帧；光谱定位优先，连续测光在曝光、保存和
+设备动作完成的边界让路。同一物理相机始终由同一拥有者持有。现有安装必须在明确授权的
+空闲边界释放旧服务后才能迁移，不会运行中热切换。配置和限制见
+[双实例实现说明](docs/dual-nina-implementation.md)。
+
+从 `.140` 起，测光协同按主控/测光端分步配对；日常名称采用“光谱相机 / 测光相机 /
+光谱仪导星相机”，实际型号、稳定身份和历史协议字段不变。通用名称不代表所有型号已
+兼容；第一次使用请看[同步测光快速开始](docs/photometry-collaboration-quick-start.md)。
+当前光谱页提供全宽预览、折叠显示调节和手动工具，独立一维曲线不随图像拉伸或缩放。
+本地检查通过 1,398 项 .NET 测试、66 项 Python 测试及 26 个离线 XAML 场景；
+真实停靠区域逐一实例化和双实例硬件验收仍分开标记为待完成。
 
 共享生产 runner 已实现 ADR-0010 的源码路线：全无人监管会锁定并自动连接四类 N.I.N.A.
 环境适配器，只在新鲜安全/天气/身份/地平线门和赤道仪停放均通过后开顶，并在正常结束或

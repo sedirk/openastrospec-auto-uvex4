@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace UvexAdv.Observatory;
 
@@ -211,7 +212,11 @@ public sealed record G3AcquisitionMotionState(
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
     string DeclaredEvidencePath,
-    string? LastReason = null)
+    string? LastReason = null,
+    // Search diversification only, never movement/identity authority. Omitting
+    // zero preserves the canonical SHA of older schema-2 ledger payloads.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    int FailedNeighbourApproaches = 0)
 {
     // Schema 2 changes persisted offsets to the versioned TAN projection.
     // Older outstanding ledgers fail closed instead of being geometrically
@@ -280,6 +285,8 @@ public sealed record G3AcquisitionMotionState(
             issues.Add("Consumed cumulative motion is outside the declared limit.");
         }
         if (CorrectionAttempts < 0 || CorrectionAttempts > MaximumCorrectionAttempts) issues.Add("Consumed correction attempts are outside the declared limit.");
+        if (FailedNeighbourApproaches < 0 || FailedNeighbourApproaches > CorrectionAttempts)
+            issues.Add("Failed neighbour approaches must be bounded by already charged correction attempts.");
         if (Phase != G3AcquisitionMotionPhase.SettledBudgetLedger &&
             (!Positive(CommandMagnitudeArcseconds) || CommandMagnitudeArcseconds > MaximumSingleCorrectionArcseconds + 1e-9))
         {
@@ -471,6 +478,24 @@ public static class G3AcquisitionMotionPlanner
                 elapsedCeilingSeconds,
                 checked(consumedElapsedSeconds + additionalElapsed.TotalSeconds));
         }
+        // A solved search endpoint may hand off away from the unchanged
+        // lineage origin. Raising its single-step ceiling also raises the
+        // full crash-safe return precharge. If that increase alone would make
+        // the existing return unaffordable, keep the already reserved smaller
+        // segments. Subsequent WCS moves still pass the usual outbound AND
+        // segmented-return checks; no spent charge is refunded or enlarged.
+        var inheritedRadius = state.CurrentRadiusArcseconds;
+        if (inheritedRadius > state.ArrivalToleranceArcseconds &&
+            double.IsFinite(maximumSingle) && maximumSingle > state.MaximumSingleCorrectionArcseconds &&
+            double.IsFinite(maximumCumulative))
+        {
+            var proposedReturnSegments = Math.Ceiling(
+                (inheritedRadius + 2 * state.ArrivalToleranceArcseconds) /
+                (maximumSingle - 2 * state.ArrivalToleranceArcseconds));
+            if (state.CumulativeMotionArcseconds + proposedReturnSegments * maximumSingle > maximumCumulative + 1e-9)
+                maximumSingle = state.MaximumSingleCorrectionArcseconds;
+        }
+
         if (!double.IsFinite(maximumSingle) || !double.IsFinite(maximumRadius) ||
             maximumSingle <= 0 || maximumRadius <= 0 || maximumSingle > maximumRadius ||
             2 * state.ArrivalToleranceArcseconds >= maximumSingle ||

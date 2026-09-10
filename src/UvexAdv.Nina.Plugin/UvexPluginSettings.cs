@@ -144,6 +144,12 @@ internal sealed class UvexPluginSettings
     public double AtrTargetTemperatureC { get => values.GetValueDouble(nameof(AtrTargetTemperatureC), -10); set => values.SetValueDouble(nameof(AtrTargetTemperatureC), value); }
     public short AtrReadoutModeIndex { get => values.GetValueInt16(nameof(AtrReadoutModeIndex), 1); set => values.SetValueInt16(nameof(AtrReadoutModeIndex), value); }
     public string QhyServiceUrl { get => GetString(nameof(QhyServiceUrl), "http://127.0.0.1:47845"); set => values.SetValueString(nameof(QhyServiceUrl), value); }
+
+    public NinaInstanceRole InstanceRole { get => Enum.TryParse<NinaInstanceRole>(GetString(nameof(InstanceRole), nameof(NinaInstanceRole.SpectroscopyMaster)), out var role) ? role : NinaInstanceRole.PhotometryWorker; set => values.SetValueString(nameof(InstanceRole), value.ToString()); }
+    public string PhotometryMasterProfileId { get => GetString(nameof(PhotometryMasterProfileId), ""); set => values.SetValueString(nameof(PhotometryMasterProfileId), value); }
+    public string PhotometryCameraId { get => GetString(nameof(PhotometryCameraId), ""); set => values.SetValueString(nameof(PhotometryCameraId), value); }
+    public string PhotometryFilterWheelId { get => GetString(nameof(PhotometryFilterWheelId), ""); set => values.SetValueString(nameof(PhotometryFilterWheelId), value); }
+    public string PhotometryFocuserId { get => GetString(nameof(PhotometryFocuserId), ""); set => values.SetValueString(nameof(PhotometryFocuserId), value); }
     public string QhyAcquisitionExposureLadderCsv { get => GetString(nameof(QhyAcquisitionExposureLadderCsv), "0.5,1,2,5"); set => values.SetValueString(nameof(QhyAcquisitionExposureLadderCsv), value); }
     public int QhyGain { get => values.GetValueInt32(nameof(QhyGain), 20); set => values.SetValueInt32(nameof(QhyGain), value); }
     public int QhyOffset { get => values.GetValueInt32(nameof(QhyOffset), 20); set => values.SetValueInt32(nameof(QhyOffset), value); }
@@ -158,6 +164,7 @@ internal sealed class UvexPluginSettings
     public double QhyFocalLengthMillimeters { get => values.GetValueDouble(nameof(QhyFocalLengthMillimeters), 0); set => values.SetValueDouble(nameof(QhyFocalLengthMillimeters), value); }
     public double QhyPixelSizeMicrometers { get => values.GetValueDouble(nameof(QhyPixelSizeMicrometers), 0); set => values.SetValueDouble(nameof(QhyPixelSizeMicrometers), value); }
     public double QhyCenteringToleranceArcseconds { get => values.GetValueDouble(nameof(QhyCenteringToleranceArcseconds), 20); set => values.SetValueDouble(nameof(QhyCenteringToleranceArcseconds), value); }
+    public bool SynchronizedPhotometryEnabled { get => values.GetValueBoolean(nameof(SynchronizedPhotometryEnabled), true); set => values.SetValueBoolean(nameof(SynchronizedPhotometryEnabled), value); }
     public double QhyPhotometryExposureSeconds { get => values.GetValueDouble(nameof(QhyPhotometryExposureSeconds), 5); set => values.SetValueDouble(nameof(QhyPhotometryExposureSeconds), value); }
     public double QhyPhotometryCadenceSeconds { get => values.GetValueDouble(nameof(QhyPhotometryCadenceSeconds), 8); set => values.SetValueDouble(nameof(QhyPhotometryCadenceSeconds), value); }
     public string QhyParallelFilterSequenceCsv { get => GetString(nameof(QhyParallelFilterSequenceCsv), string.Empty); set => values.SetValueString(nameof(QhyParallelFilterSequenceCsv), value); }

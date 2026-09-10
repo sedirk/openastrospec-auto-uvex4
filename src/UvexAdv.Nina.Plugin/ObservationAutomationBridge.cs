@@ -159,13 +159,16 @@ internal sealed class ObservationAutomationBridge : IDisposable
     private int enabled;
     private int realControlArmed;
     private bool disposed;
+    private readonly Func<bool> roleAllowed;
 
     public ObservationAutomationBridge(
         Func<long, ObservationAutomationSnapshot> snapshotFactory,
         Func<string, string?, ObservationTargetDraft?, ObservationAutomationInvocationResult> commandInvoker,
         Action<ObservationAutomationActivity> activitySink,
-        bool initiallyEnabled)
+        bool initiallyEnabled,
+        Func<bool>? roleAllowed = null)
     {
+        this.roleAllowed = roleAllowed ?? (() => true);
         this.snapshotFactory = snapshotFactory ?? throw new ArgumentNullException(nameof(snapshotFactory));
         this.commandInvoker = commandInvoker ?? throw new ArgumentNullException(nameof(commandInvoker));
         this.activitySink = activitySink ?? throw new ArgumentNullException(nameof(activitySink));
@@ -184,7 +187,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
         serverTask = Task.Run(RunServerAsync);
     }
 
-    public bool Enabled => Volatile.Read(ref enabled) != 0;
+    public bool Enabled => roleAllowed() && Volatile.Read(ref enabled) != 0;
     public bool RealControlArmed => Volatile.Read(ref realControlArmed) != 0;
     public long Revision => Interlocked.Read(ref revision);
     public string InstanceId => instanceId;
@@ -218,6 +221,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
         {
             try
             {
+                if (!roleAllowed()) { await Task.Delay(500, lifetime.Token); continue; }
                 await using var pipe = new NamedPipeServerStream(
                     PipeName,
                     PipeDirection.InOut,
@@ -448,6 +452,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
 
     private void WriteDescriptorBestEffort(bool online)
     {
+        if (!roleAllowed()) return;
         try
         {
             var descriptor = JsonSerializer.Serialize(new

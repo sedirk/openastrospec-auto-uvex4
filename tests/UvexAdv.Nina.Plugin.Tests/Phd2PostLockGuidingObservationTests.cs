@@ -7,6 +7,106 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2PostLockGuidingObservationTests
 {
     [Fact]
+    public void DirectOpticalWindowDoesNotDiscardAnExtraExposureOrGrantAuthorityEarly()
+    {
+        var (client, proxy) = Client();
+        var native = proxy.State.LastSettle!;
+        var result = Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 2, 0.1, supervised: true, default);
+        Assert.True(result.YieldedToFreshResiduals);
+        Assert.False(result.TrackingWithinTolerance);
+        Assert.Equal(10, result.AfterEventSequence);
+        Assert.Equal(0, result.ObservedGuideFrames);
+        Assert.False(result.HasAcceptedWindow(proxy.State));
+        Assert.Throws<Phd2Exception>(() => result.AcceptResiduals(Frames(result)[..2], proxy.State));
+        var accepted = result.AcceptResiduals(Frames(result), proxy.State);
+        Assert.True(accepted.HasAcceptedWindow(proxy.State));
+        Assert.False(accepted.HasAcceptedWindow(proxy.State with { GuideEpoch = 3 }));
+        Assert.Same(native, accepted.ToCalibrationEvidence(native, proxy.State).Result);
+        Assert.False(native.Succeeded);
+        Assert.Equal(0, proxy.SubscriberCount);
+    }
+
+    [Fact]
+    public void DirectOpticalWindowRejectsOldFramesAndChangedEpoch()
+    {
+        var (client, proxy) = Client();
+        var result = Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 2, 0.1, supervised: true, default);
+        var frames = Frames(result);
+        frames[0] = frames[0] with { EventSequence = result.AfterEventSequence };
+        Assert.Throws<Phd2Exception>(() => result.AcceptResiduals(frames, proxy.State));
+        Assert.Throws<Phd2Exception>(() => result.AcceptResiduals(
+            Frames(result), proxy.State with { GuideEpoch = 3 }));
+        Assert.Throws<Phd2Exception>(() => Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 3, 0.1, supervised: true, default));
+        Assert.Throws<Phd2Exception>(() => Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 2, 0.1, supervised: false, default));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 2, 0.1, supervised: true, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task SupervisedLongExposureYieldsAfterFirstValidStepWithoutClaimingSettled()
+    {
+        var (client, proxy) = Client();
+        var native = proxy.State.LastSettle!;
+        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
+            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
+            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
+        proxy.Publish(proxy.State with { EventSequence = 11, LastGuideStep = Step(11, 5) });
+        var result = await observation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(result.YieldedToFreshResiduals);
+        Assert.False(result.TrackingWithinTolerance);
+        Assert.Equal(11, result.AfterEventSequence);
+        Assert.Equal(1, result.ObservedGuideFrames);
+        Assert.False(result.HasAcceptedWindow(proxy.State));
+        Assert.Throws<Phd2Exception>(() => result.AcceptResiduals(Frames(result)[..2], proxy.State));
+        Assert.True(result.AcceptResiduals(Frames(result), proxy.State).HasAcceptedWindow(proxy.State));
+        Assert.Same(native, proxy.State.LastSettle);
+        Assert.False(native.Succeeded);
+        Assert.Equal(0, proxy.SubscriberCount);
+    }
+
+    [Theory]
+    [InlineData(double.NaN, 0)]
+    [InlineData(1, 2)]
+    public async Task InvalidGuideSampleCannotYieldToOpticalWindow(double offset, int error)
+    {
+        var (client, proxy) = Client();
+        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
+            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
+            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
+        proxy.Publish(proxy.State with
+        {
+            EventSequence = 11, LastGuideStep = Step(11, offset) with { ErrorCode = error },
+        });
+        Assert.False(observation.IsCompleted);
+        proxy.Publish(proxy.State with { EventSequence = 12, LastGuideStep = Step(12, 3) });
+        var result = await observation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(result.YieldedToFreshResiduals);
+        Assert.Equal(12, result.AfterEventSequence);
+        Assert.False(result.TrackingWithinTolerance);
+        Assert.Equal(0, proxy.SubscriberCount);
+    }
+
+    [Fact]
+    public async Task EarlyYieldStillRejectsLostLockRatherThanAcceptingLaterGuiding()
+    {
+        var (client, proxy) = Client();
+        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
+            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
+            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
+        var initial = proxy.State;
+        proxy.Publish(initial with { AppState = Phd2AppState.LostLock, EventSequence = 11 });
+        proxy.Publish(initial with { EventSequence = 12, LastGuideStep = Step(12, 0) });
+        await Assert.ThrowsAsync<Phd2Exception>(() => observation);
+        Assert.Equal(0, proxy.SubscriberCount);
+    }
+
+    [Fact]
     public async Task VerifiedShiftObservesExistingStreamWithoutAnyRpcOrSyntheticSettle()
     {
         var (client, proxy) = Client();
@@ -171,12 +271,14 @@ public sealed class Phd2PostLockGuidingObservationTests
         Assert.True(start >= 0);
         var end = source.IndexOf("else", start, StringComparison.Ordinal);
         var supervised = source[start..end];
-        Assert.Contains("Phd2PostLockGuidingObservation.ObserveAsync", supervised);
+        Assert.Contains("Phd2PostLockGuidingObservation.BeginFreshResidualObservation", supervised);
+        Assert.DoesNotContain("ObserveAsync", supervised);
         Assert.Contains("stageSettle = session.Settle", supervised);
         Assert.DoesNotContain("GuideAndSettleAsync", supervised);
         Assert.Contains("GuideAndSettleAsync", source[end..(end + 850)]);
         Assert.Contains("stageReadOnlyObservation.AcceptResiduals", source);
         Assert.Contains("stageReadOnlyObservation?.ToCalibrationEvidence", source);
+        Assert.Contains("PHD2_FRESH_GUIDE_WINDOW_DEADLINE", source);
     }
 
     private static Task<Phd2PostLockGuidingObservation> Observe(IPhd2Client client, CancellationToken token = default) =>

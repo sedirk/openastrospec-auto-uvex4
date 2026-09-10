@@ -304,6 +304,7 @@ public sealed class G3AcquisitionRecoveryTests
         {
             var state = State(DateTimeOffset.Parse("2026-08-19T00:00:00Z"));
             await G3AcquisitionMotionStore.WriteAtomicAsync(path, state);
+            Assert.DoesNotContain("failedNeighbourApproaches", await File.ReadAllTextAsync(path));
 
             var loaded = await G3AcquisitionMotionStore.LoadAsync(path);
             var discovered = await G3AcquisitionMotionStore.DiscoverAsync(root);
@@ -319,6 +320,35 @@ public sealed class G3AcquisitionRecoveryTests
 
             Assert.Null(tampered.State);
             Assert.Contains("SHA-256", tampered.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FailedNeighbourMemoryRoundTripsWithoutReissuingAnyBudget()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "uvex-g3-neighbour-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, "control", "g3-acquisition-motion.json");
+        try
+        {
+            var original = State(DateTimeOffset.Parse("2026-08-19T00:00:00Z")) with
+            {
+                CorrectionAttempts = 1,
+                CumulativeMotionArcseconds = 30,
+            };
+            var retained = original with { FailedNeighbourApproaches = 1 };
+            Assert.Empty(retained.Validate());
+            await G3AcquisitionMotionStore.WriteAtomicAsync(path, retained);
+            var loaded = await G3AcquisitionMotionStore.LoadAsync(path);
+            Assert.Null(loaded.Error);
+            Assert.Equal(retained, loaded.State);
+            Assert.Equal(original, loaded.State! with { FailedNeighbourApproaches = 0 });
+            Assert.Contains("failedNeighbourApproaches", await File.ReadAllTextAsync(path));
+            Assert.NotEmpty((original with { FailedNeighbourApproaches = -1 }).Validate());
+            Assert.NotEmpty((original with { FailedNeighbourApproaches = original.CorrectionAttempts + 1 }).Validate());
         }
         finally
         {
@@ -519,6 +549,38 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Fact]
+    public void LargerWcsHandoffCannotPriceAnAlreadyReservedSearchReturnOutOfItsBudget()
+    {
+        var started = DateTimeOffset.UtcNow;
+        var prior = State(started) with
+        {
+            MaximumSingleCorrectionArcseconds = 420,
+            MaximumRadiusArcseconds = 900,
+            MaximumCumulativeMotionArcseconds = 21600,
+            MaximumCorrectionAttempts = 12,
+            MaximumElapsedSeconds = 1200,
+            CurrentRaTangentOffsetArcseconds = 300,
+            CumulativeMotionArcseconds = 18631.22771520692,
+            CorrectionAttempts = 9,
+        };
+        var continued = G3AcquisitionMotionPlanner.ContinueSettledLedger(prior, "run-a",
+            G3AcquisitionMotionKind.WcsCentering, "evidence/wcs.json", started.AddSeconds(10),
+            familyMaximumSingleCorrectionArcseconds: 5400,
+            familyMaximumRadiusArcseconds: 18000,
+            attestedLineageMaximumSingleCorrectionArcseconds: 5400,
+            attestedLineageMaximumRadiusArcseconds: 18000);
+        Assert.Equal(420, continued.MaximumSingleCorrectionArcseconds);
+        Assert.Equal(prior.CumulativeMotionArcseconds, continued.CumulativeMotionArcseconds);
+        Assert.Equal(prior.CorrectionAttempts, continued.CorrectionAttempts);
+        Assert.Equal(prior.StartedUtc, continued.StartedUtc);
+        Assert.True(continued.CumulativeMotionArcseconds + continued.MaximumSingleCorrectionArcseconds < continued.MaximumCumulativeMotionArcseconds);
+        var point = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(prior.OriginRaDegrees, prior.OriginDeclinationDegrees, 300, 0);
+        var next = G3AcquisitionMotionPlanner.PlanNextReturnStep(continued, point.RaDegrees, point.DecDegrees, 10, started.AddSeconds(10));
+        Assert.Equal(GateDisposition.Passed, next.Gate.Disposition);
+        Assert.Empty(continued.Validate());
+    }
+
+    [Fact]
     public void ReattestedLargeWcsFamilyIsNotPermanentlyTruncatedByPriorLocalSearchLimits()
     {
         var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
@@ -672,6 +734,84 @@ public sealed class G3AcquisitionRecoveryTests
         Assert.False(away.AlreadyAtOrigin);
         Assert.Equal(started, state.StartedUtc);
         Assert.Equal(30, state.CumulativeMotionArcseconds);
+    }
+
+    [Fact]
+    public void WorkTimeFenceLeavesInitialAndSettledAcquisitionUnchanged()
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.Null(G3AcquisitionReturnTimePolicy.Plan(null, now).OperationTimeout);
+        Assert.Null(G3AcquisitionReturnTimePolicy.Plan(State(now.AddMinutes(-10)), now).OperationTimeout);
+    }
+
+    [Fact]
+    public void EachCaptureAndSolveReservesSegmentedReturnBeforeStarting()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = State(now) with
+        {
+            Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve,
+            CurrentRaTangentOffsetArcseconds = 60, CommandMagnitudeArcseconds = 20,
+            CorrectionAttempts = 3, CumulativeMotionArcseconds = 70,
+        };
+        var allowed = G3AcquisitionReturnTimePolicy.Plan(state, now.AddSeconds(229));
+        Assert.Equal(GateDisposition.Passed, allowed.Gate.Disposition);
+        Assert.Equal(3, allowed.Gate.Metrics!["returnSegments"]);
+        Assert.Equal(TimeSpan.FromSeconds(10), allowed.OperationTimeout);
+        var reserved = G3AcquisitionReturnTimePolicy.Plan(state, now.AddSeconds(231));
+        Assert.Equal(G3AcquisitionReturnTimePolicy.ReserveCode, reserved.Gate.Code);
+        Assert.Null(reserved.OperationTimeout);
+        Assert.Equal(70, state.CumulativeMotionArcseconds);
+        Assert.Equal(3, state.CorrectionAttempts);
+        Assert.Equal(now, state.StartedUtc);
+    }
+
+    [Theory]
+    [InlineData(G3AcquisitionMotionPhase.OutboundIntent)]
+    [InlineData(G3AcquisitionMotionPhase.ReturnIntent)]
+    public void WorkTimeFenceDoesNotAuthorizeWorkDuringUnconfirmedMotion(G3AcquisitionMotionPhase phase)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = State(now) with { Phase = phase, CommandMagnitudeArcseconds = 10, CumulativeMotionArcseconds = 10, CorrectionAttempts = 1 };
+        Assert.Equal("G3_WORK_RETURN_STATE_INVALID", G3AcquisitionReturnTimePolicy.Plan(state, now).Gate.Code);
+    }
+
+    [Fact]
+    public async Task ReservedTimeStartsNoWorkAndDoesNotResetAnyBudget()
+    {
+        var called = false;
+        var plan = new G3AcquisitionWorkTimePlan(GateResult.Unknown(G3AcquisitionReturnTimePolicy.ReserveCode, "return first"), null);
+        var ex = await Assert.ThrowsAsync<G3ReturnTimeReserveException>(() => G3AcquisitionReturnTimePolicy.ExecuteAsync(plan,
+            _ => { called = true; return Task.FromResult(1); }, CancellationToken.None));
+        Assert.False(called);
+        Assert.False(ex.OperationStarted);
+    }
+
+    [Fact]
+    public async Task TimeFenceWaitsForOwnerCleanupBeforeReportingReturnRequired()
+    {
+        var cleaned = false;
+        var plan = new G3AcquisitionWorkTimePlan(GateResult.Pass("reserved", "bounded"), TimeSpan.FromMilliseconds(20));
+        var ex = await Assert.ThrowsAsync<G3ReturnTimeReserveException>(() => G3AcquisitionReturnTimePolicy.ExecuteAsync(plan,
+            async token =>
+            {
+                try { await Task.Delay(10000, token); return 1; }
+                finally { await Task.Yield(); cleaned = true; }
+            }, CancellationToken.None));
+        Assert.True(cleaned);
+        Assert.True(ex.OperationStarted);
+        Assert.Equal(G3AcquisitionReturnTimePolicy.ReserveCode, ex.Gate.Code);
+    }
+
+    [Fact]
+    public async Task CallerCancellationAndIndependentOwnerCancellationAreNotReclassified()
+    {
+        var plan = new G3AcquisitionWorkTimePlan(GateResult.Pass("reserved", "bounded"), TimeSpan.FromSeconds(60));
+        using var caller = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => G3AcquisitionReturnTimePolicy.ExecuteAsync<int>(plan,
+            token => { caller.Cancel(); token.ThrowIfCancellationRequested(); return Task.FromResult(1); }, caller.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => G3AcquisitionReturnTimePolicy.ExecuteAsync<int>(plan,
+            _ => throw new OperationCanceledException("independent owner cancellation"), CancellationToken.None));
     }
 
     private static G3AcquisitionMotionState State(DateTimeOffset started) => new(

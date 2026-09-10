@@ -82,7 +82,8 @@ public sealed record LiveFocusDomainState(
     string LogicalDeviceId,
     FocusPhysicalBinding PhysicalBinding,
     int? PositionSteps,
-    LiveFocusMetricState? Metric = null);
+    LiveFocusMetricState? Metric = null,
+    bool NativePositionVerified = false);
 
 /// <summary>
 /// A metric evaluated from a current frame by the camera owner. ValidUntilUtc
@@ -103,10 +104,10 @@ public static class FocusDomainConventions
 
     public const string Gs350LogicalDeviceId = "ASCOM.ToupTek.AAF";
     public const string Gs350ConnectionEndpoint = "AUTOFOCUSER";
-    // The current release deliberately does not open or move the GS350 AAF.
-    // Its truthful runtime owner is therefore the versioned manual-lock
-    // contract below; the current QHY frame must independently attest focus.
+    // Legacy service installations retain the versioned manual-lock contract.
+    // ADR-0014 uses the separate native worker owner only after explicit migration.
     public const string Gs350Owner = "ManualOperator";
+    public const string Gs350NinaWorkerOwner = "N.I.N.A.PhotometryWorker";
 
     public const string UvexOwner = "UvexAdv.Service";
     public const string UvexLogicalDeviceId = "UVEX4.M2";
@@ -269,7 +270,8 @@ public static class FocusDomainConventions
                 {
                     issues.Add($"{label} requires an explicit dedicated or manual wide-field owner; the C11 or UVEX owner cannot be substituted.");
                 }
-                RequireIdentity(label, binding.LogicalDeviceId, Gs350LogicalDeviceId, "logical device", issues);
+                if (!string.Equals(binding.Owner, Gs350NinaWorkerOwner, StringComparison.Ordinal))
+                    RequireIdentity(label, binding.LogicalDeviceId, Gs350LogicalDeviceId, "logical device", issues);
                 RequireMechanism(label, physical.Mechanism, FocusMechanism.ToupTekAaf, issues);
                 RequireIdentity(label, physical.ConnectionEndpoint, Gs350ConnectionEndpoint, "connection endpoint", issues);
                 RequireVidPid(label, physical.HardwareInstanceId, ToupTekVidPid, "ToupTek AAF", issues);

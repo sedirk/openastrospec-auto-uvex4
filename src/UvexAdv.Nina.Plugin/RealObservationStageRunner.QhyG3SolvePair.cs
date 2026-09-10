@@ -978,7 +978,12 @@ internal sealed partial class RealObservationStageRunner
         QhyJobSnapshot job;
         try
         {
-            job = await qhy.StartOrAdoptAcquisitionAsync(request, cancellationToken).ConfigureAwait(false);
+            job = await qhy.StartOrAdoptAcquisitionAsync(request, cancellationToken, async token =>
+            {
+                await CheckpointAndRejectStaleStageStackAsync(context, token).ConfigureAwait(false);
+                await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+                before = CaptureG3FrameMountReadback();
+            }).ConfigureAwait(false);
         }
         finally
         {

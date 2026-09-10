@@ -48,14 +48,18 @@ public sealed class ObservationUiPresentationTests
 
     [Theory]
     [InlineData("PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED", "撞到探测器边缘")]
-    [InlineData("G3_FRAME_REUSED", "拒绝复用旧 G3")]
+    [InlineData("G3_FRAME_REUSED", "拒绝复用旧光谱仪导星相机")]
     [InlineData("G3_CATALOG_WCS_AUTHORITY_INVALID", "目录/WCS 目标几何证据格式无效")]
     [InlineData("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", "饱和目标的目录身份")]
     [InlineData("PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED", "有界补拍次数已经用尽")]
+    [InlineData("PHD2_FRESH_GUIDE_WINDOW_DEADLINE", "剩余时间不足以取得完整")]
     [InlineData("SLIT_LOCUS_LOW_CONFIDENCE", "物理狭缝对比度不足")]
     [InlineData("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", "观测计划明确声明目标")]
     [InlineData("G3_SOLVE_PROBE_OVEREXPOSED", "曝光或天光过亮")]
     [InlineData("G3_CLOUD_OR_TRANSPARENCY_INVALID", "云层或透明度突变")]
+    [InlineData("G3_GUIDING_RECOVERY_STOP_CHANGED", "停止证明缺失或已失效")]
+    [InlineData("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", "完整回程超出原剩余预算")]
+    [InlineData("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", "没有取得到位确认")]
     [InlineData("QHY_MOUNT_COORDINATE_SYNC_READBACK_FAILED", "同步赤道仪坐标后")]
     [InlineData("UVEX_NOT_READY", "UVEX4 服务未返回 Ready")]
     [InlineData("UVEX_SLIT_ILLUMINATION_OFF_UNVERIFIED", "关闭状态未得到完整确认")]
@@ -87,7 +91,7 @@ public sealed class ObservationUiPresentationTests
             gate,
             Chinese);
 
-        Assert.Contains("拒绝复用旧 G3", presentation.Summary, StringComparison.Ordinal);
+        Assert.Contains("拒绝复用旧光谱仪导星相机", presentation.Summary, StringComparison.Ordinal);
         Assert.Contains("内部代码 G3_FRAME_REUSED", presentation.Summary, StringComparison.Ordinal);
         Assert.StartsWith("PHD2_SLIT_PLACEMENT_FAILED_SAFE:", presentation.TechnicalDetails, StringComparison.Ordinal);
         Assert.Equal("PHD2_SLIT_PLACEMENT_FAILED_SAFE", gate.Code);
@@ -103,7 +107,7 @@ public sealed class ObservationUiPresentationTests
                 "Fresh reacquisition returned G3_STAR_FIELD_SPARSE_VALID_EXPOSURE."),
             Chinese);
 
-        Assert.Contains("正式 G3/PL3", presentation.Summary, StringComparison.Ordinal);
+        Assert.Contains("正式光谱仪导星相机/PL3", presentation.Summary, StringComparison.Ordinal);
         Assert.DoesNotContain("屋顶", presentation.Summary, StringComparison.Ordinal);
         Assert.DoesNotContain("盖板", presentation.Summary, StringComparison.Ordinal);
     }
@@ -139,6 +143,18 @@ public sealed class ObservationUiPresentationTests
         Assert.Contains("当前质量门未通过", presentation.Summary, StringComparison.Ordinal);
         Assert.DoesNotContain("complete English sentence", presentation.Summary, StringComparison.Ordinal);
         Assert.Contains("complete English sentence", presentation.TechnicalDetails, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ManifestWriteFailureExplainsPersistenceInsteadOfGenericQualityFailure()
+    {
+        var presentation = ObservationUiPresentation.Present(
+            ObservationStage.RunScienceBlock,
+            GateResult.Unknown("RUN_MANIFEST_WRITE_FAILED", "Observation manifest persistence failed: file in use."),
+            Chinese);
+        Assert.Contains("运行清单写入失败", presentation.Summary, StringComparison.Ordinal);
+        Assert.Contains("本轮不能恢复或记为完成", presentation.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("当前质量门未通过", presentation.Summary, StringComparison.Ordinal);
     }
 
     [Fact]

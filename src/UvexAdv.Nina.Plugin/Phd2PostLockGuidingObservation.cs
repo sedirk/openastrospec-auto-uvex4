@@ -18,7 +18,8 @@ internal sealed record Phd2PostLockGuidingObservation(
     bool TrackingWithinTolerance = false,
     int ObservedGuideFrames = 0,
     int AcceptedResidualFrames = 0,
-    DateTimeOffset? ResidualsCompletedUtc = null)
+    DateTimeOffset? ResidualsCompletedUtc = null,
+    bool YieldedToFreshResiduals = false)
 {
     internal bool IsCurrent(Phd2StateSnapshot state) =>
         state.IsConnected && !state.AutomationPaused && !state.Phd2Paused &&
@@ -67,10 +68,10 @@ internal sealed record Phd2PostLockGuidingObservation(
         ExactLockReadbackVerified: IsCurrent(state),
         FreshGuidingWindowCompletedUtc: ResidualsCompletedUtc);
 
-    internal static async Task<Phd2PostLockGuidingObservation> ObserveAsync(
+    internal static Phd2PostLockGuidingObservation BeginFreshResidualObservation(
         IPhd2Client client, Phd2ExactLockPositionResult exact,
         long connectionEpoch, long guideEpoch, double lockTolerancePixels,
-        Phd2SettleCriteria criteria, bool supervised, CancellationToken cancellationToken)
+        bool supervised, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!supervised || !exact.Exact || exact.RegistryProfileMutated ||
@@ -79,9 +80,7 @@ internal sealed record Phd2PostLockGuidingObservation(
             exact.VerificationErrorPixels > lockTolerancePixels ||
             !double.IsFinite(Distance(exact.Requested, exact.Verified)) ||
             Distance(exact.Requested, exact.Verified) > lockTolerancePixels ||
-            exact.CompletedUtc > DateTimeOffset.UtcNow ||
-            !double.IsFinite(criteria.Pixels) || criteria.Pixels <= 0 ||
-            criteria.StableTimeSeconds < 0 || criteria.TimeoutSeconds <= 0)
+            exact.CompletedUtc > DateTimeOffset.UtcNow)
             throw new Phd2Exception("A supervised, verified exact-lock operation is required for read-only tracking observation.");
 
         var initial = client.Snapshot;
@@ -89,6 +88,26 @@ internal sealed record Phd2PostLockGuidingObservation(
             "post-lock-window-" + Guid.NewGuid().ToString("N"), connectionEpoch, guideEpoch,
             initial.EventSequence, exact.Verified, lockTolerancePixels, exact.CompletedUtc);
         if (!proof.IsCurrent(initial)) throw new Phd2Exception("The verified lock/guide epoch changed before read-only observation.");
+        // This is only an unaccepted continuity baseline. SaveCurrentGuidingFrameAsync
+        // already waits for a newer GuideStep and binds its immutable FITS to the
+        // same epoch/lock. Waiting for an extra unsaved frame here consumes a full
+        // exposure without adding evidence to the mandatory three-frame window.
+        return proof with { YieldedToFreshResiduals = true };
+    }
+
+    internal static async Task<Phd2PostLockGuidingObservation> ObserveAsync(
+        IPhd2Client client, Phd2ExactLockPositionResult exact,
+        long connectionEpoch, long guideEpoch, double lockTolerancePixels,
+        Phd2SettleCriteria criteria, bool supervised, CancellationToken cancellationToken,
+        bool yieldToFreshResidualsAfterFirstGuideStep = false)
+    {
+        if (!double.IsFinite(criteria.Pixels) || criteria.Pixels <= 0 ||
+            criteria.StableTimeSeconds < 0 || criteria.TimeoutSeconds <= 0)
+            throw new Phd2Exception("Valid tracking criteria are required for read-only observation.");
+        var proof = BeginFreshResidualObservation(
+            client, exact, connectionEpoch, guideEpoch, lockTolerancePixels, supervised, cancellationToken)
+            with { YieldedToFreshResiduals = false };
+        var initial = client.Snapshot;
 
         // Preserve every state transition during this bounded wait; a LostLock
         // followed by Guiding must not be coalesced into an apparently good state.
@@ -112,10 +131,32 @@ internal sealed record Phd2PostLockGuidingObservation(
                     state.LastGuideStep is not { Frame: { } frame } step || frame <= lastFrame) continue;
                 lastFrame = frame;
                 proof = proof with { ObservedGuideFrames = proof.ObservedGuideFrames + 1 };
-                var inRange = step.ErrorCode is null or 0 or 1 &&
+                var measuredOffset =
                     step.DxPixels is { } dx && step.DyPixels is { } dy &&
-                    double.IsFinite(dx) && double.IsFinite(dy) &&
-                    Math.Sqrt(dx * dx + dy * dy) <= criteria.Pixels;
+                    double.IsFinite(dx) && double.IsFinite(dy)
+                    ? Math.Sqrt(dx * dx + dy * dy) : double.NaN;
+                var validSample = step.ErrorCode is null or 0 or 1 && double.IsFinite(measuredOffset);
+                var inRange = validSample && measuredOffset <= criteria.Pixels;
+                if (yieldToFreshResidualsAfterFirstGuideStep && validSample)
+                {
+                    // A supervised stage needs real optical residuals, not a
+                    // second settle-sized wait before starting those exposures.
+                    // At a 4 s cadence that redundant wait can consume half of
+                    // the unchanged 30 s stage deadline. This confirms only
+                    // continuity; three newer immutable frames are still required.
+                    while (updates.Reader.TryRead(out var queued))
+                        if (!proof.IsCurrent(queued))
+                            throw new Phd2Exception("Guide/lock continuity was lost before the fresh residual window.");
+                    var current = client.Snapshot;
+                    if (!proof.IsCurrent(current))
+                        throw new Phd2Exception("Guide/lock continuity changed before the fresh residual window.");
+                    return proof with
+                    {
+                        AfterEventSequence = Math.Max(state.EventSequence, current.EventSequence),
+                        YieldedToFreshResiduals = true,
+                        TrackingWithinTolerance = false,
+                    };
+                }
                 if (!inRange) { inRangeSince = null; continue; }
                 var now = DateTimeOffset.UtcNow;
                 inRangeSince ??= now;

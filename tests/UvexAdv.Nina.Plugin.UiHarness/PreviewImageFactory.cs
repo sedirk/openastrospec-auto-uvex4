@@ -74,7 +74,8 @@ internal static class PreviewImageFactory
             context.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), null, new Rect(0, 0, Width, 160));
             context.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(56, 189, 248)), 2), spectrum);
         }
-        return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new DrawingImage(plot));
+        return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new DrawingImage(plot),
+            focusRegion: new Rect(0, Height * 0.35, Width, Height * 0.3));
     }
 
     private static DrawingVisual CreateStarField(int seed, bool defocused, out DrawingContext context)

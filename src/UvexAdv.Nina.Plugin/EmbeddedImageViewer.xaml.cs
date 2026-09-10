@@ -273,6 +273,14 @@ public partial class EmbeddedImageViewer : UserControl
         }
 
         viewMode = ViewMode.Fit;
+        if (SpectralRegionToggle.IsChecked == true && ObservationPreviewLayers.For(PreviewImage)?.FocusRegion is { } region)
+        {
+            SetZoom(EmbeddedImageViewportMath.CalculateFitZoom(viewportWidth, viewportHeight, region.Width, region.Height));
+            ScrollToOffsetsAfterLayout(new ViewportOffsets(
+                Math.Max(0, (region.Left + region.Width / 2) * zoom - viewportWidth / 2),
+                Math.Max(0, (region.Top + region.Height / 2) * zoom - viewportHeight / 2)));
+            return;
+        }
         SetZoom(EmbeddedImageViewportMath.CalculateFitZoom(
             viewportWidth,
             viewportHeight,
@@ -320,6 +328,7 @@ public partial class EmbeddedImageViewer : UserControl
         EmptyStatePanel.Visibility = hasImage ? Visibility.Collapsed : Visibility.Visible;
         PreviewImageElement.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
         var layers = ObservationPreviewLayers.For(PreviewImage);
+        SpectralRegionToggle.Visibility = layers?.FocusRegion is null ? Visibility.Collapsed : Visibility.Visible;
         AnnotationImageElement.Source = layers?.Overlay;
         SpectrumImageElement.Source = layers?.Spectrum;
         SpectrumPanel.Visibility = layers?.Spectrum is null ? Visibility.Collapsed : Visibility.Visible;
@@ -481,9 +490,8 @@ public partial class EmbeddedImageViewer : UserControl
                 ? T("自动拉伸：开", "Auto stretch: on")
                 : T("自动拉伸：关", "Auto stretch: off");
             AutoStretchButton.BorderBrush = automaticStretch ? Brushes.DeepSkyBlue : new SolidColorBrush(Color.FromRgb(82, 100, 122));
-            SpectrumTitle.Text = T("即时 1D 光谱（空间方向抽样平均，仅诊断）", "Live 1D spectrum (spatially sampled mean; diagnostic only)");
-            SpectrumOrientationNote.Text = T("横轴：像素；蓝端/红端方向以 Night Setup 为准。图像拉伸不改变此曲线。",
-                "X axis: pixel; blue/red orientation follows Night Setup. Image stretch does not alter this curve.");
+            SpectrumTitle.Text = T("即时 1D 光谱 · 仅诊断", "Live 1D spectrum · diagnostic only");
+            SpectrumOrientationNote.Text = T("横轴：像素 · 未标定", "X: pixel · uncalibrated");
         }
         finally
         {
@@ -622,6 +630,7 @@ public partial class EmbeddedImageViewer : UserControl
     private void OnZoomInClick(object sender, RoutedEventArgs args) => ZoomBy(ButtonZoomFactor);
 
     private void OnFitClick(object sender, RoutedEventArgs args) => FitToViewport();
+    private void OnSpectralRegionClick(object sender, RoutedEventArgs args) => FitToViewport();
 
     private void OnActualSizeClick(object sender, RoutedEventArgs args) => ShowActualSize();
 
@@ -718,6 +727,10 @@ public partial class EmbeddedImageViewer : UserControl
             // Fit synchronously so the first painted frame (and offline screenshot)
             // never flashes or captures a clipped 100% image.
             FitToViewport();
+            // ScrollViewer publishes its final ViewportHeight after SizeChanged.
+            // Recenter once after layout too, especially when an inspector opens
+            // or display controls expand while the spectral strip is selected.
+            ScheduleFitToViewport();
         }
     }
 

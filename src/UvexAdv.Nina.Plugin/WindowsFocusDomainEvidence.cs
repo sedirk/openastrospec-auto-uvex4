@@ -20,7 +20,8 @@ public sealed record WindowsFocusDomainEvidenceInput(
     string? Gs350LogicalDeviceId,
     int? Gs350PositionSteps,
     LiveFocusMetricState? CurrentQhyMetric,
-    int? UvexM2PositionSteps);
+    int? UvexM2PositionSteps,
+    bool Gs350NativePositionVerified = false);
 
 /// <summary>
 /// A fail-closed focus identity snapshot. A missing or ambiguous PnP role is
@@ -163,7 +164,8 @@ public sealed class WindowsFocusDomainEvidence
                 device.InstanceId,
                 device.TopologyPath.Trim()),
             input.Gs350PositionSteps,
-            input.CurrentQhyMetric));
+            input.CurrentQhyMetric,
+            input.Gs350NativePositionVerified));
     }
 
     private static void AddUvexState(

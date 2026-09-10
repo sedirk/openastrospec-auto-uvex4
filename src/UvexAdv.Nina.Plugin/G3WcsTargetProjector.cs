@@ -86,7 +86,7 @@ internal static class G3WcsTargetProjector
         string solverIdentity,
         PixelPoint desiredTargetPixel) => SolveCenterCore(
             target, solve, imageWidth, imageHeight, solverIdentity, desiredTargetPixel,
-            G3WcsApproachPolicy.NeighbourClearancePixels);
+            G3WcsApproachPolicy.GetNeighbourClearancePixels(imageWidth, imageHeight));
 
     private static G3WcsInverseSolution SolveCenterCore(
         Coordinates target,

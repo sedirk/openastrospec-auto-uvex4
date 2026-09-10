@@ -36,6 +36,16 @@ All fields below are copied into `RealRunConfiguration`, included in its action 
 - `G3PlateSolveExposurePresetSchemaVersion`, `G3PlateSolveExposurePresetId`, and `G3PlateSolveExposureMillisecondsCsv` define a versioned, strictly increasing exposure ladder. The current Dafeng site template is `5000,10000,15000`. The 2 s opening tier was removed because current real-hardware sessions observed no accepted G3 WCS solution at that tier and it only added capture/solver latency; the earlier 30 s terminal tier had already been retired because a 15 s frame plus PL3 was the better latency/solve tradeoff. The program still contains no generic site exposure fallback: only exact retired site ladders are migrated, while operator-authored ladders are preserved.
 - G3 acquisition remains at the commissioned hardware `1x1` binning because PHD2 owns G3M2210M and the slit geometry, guide calibration and detector coordinates are all defined at 1920×1080. For roles beginning `PHD2/G3`, the N.I.N.A. plate-solver input uses a minimum software downsample factor of 2. QHY/GS350 centering keeps the active N.I.N.A. profile value unchanged.
 - `G3Wcs*` values define independent single-command, radius, cumulative-motion, action-count, elapsed-time, and usable-field-margin limits.
+- Coarse G3-to-PHD2 handoff is distinct from the PHD2 target-recognition window.
+  `CoarseHandoffResidualPixels` is capped by the commissioned acquisition radius
+  and by a complete fine approach plus reserved exact-lock return, including
+  degraded segment size, action/time limits and existing uncertainty allowances.
+  A 100 px cumulative lock-shift budget is not a 100 px one-way reach. With the
+  current 20 px commissioned coarse radius, a fresh 71 px residual therefore
+  continues through the existing bounded WCS-to-slit correction instead of
+  starting a PHD2 approach that would have to turn back part-way. Recognition
+  windows, per-stage/cumulative movement ceilings and strict slit tolerance are
+  unchanged; every actual motion still needs the normal live authority gates.
 - `G3MotionWorstCaseActionSeconds` is the conservative duration charged for every outbound or return action. It must exceed the post-slew settle duration.
 - `G3MotionPostSlewSettleSeconds` is a positive commissioned wait between a completed tiny slew and fresh G3 evidence. It is deliberately not hard-coded to a value observed on one installation.
 - A failed large WCS correction that is returning to its saved origin no longer aborts merely because the first return readback is slightly outside the strict 2 arcsec frame/mount-binding tolerance. The return command must first remain stable for the commissioned post-slew interval. A stable readback may then use a near-origin envelope capped by both the existing fresh-solve authorization limit and five times the strict ledger tolerance (10 arcsec for the current 2 arcsec commissioning). If it remains outside that envelope but is stable, the persisted cumulative-motion, attempt and elapsed-time budgets authorize another small return correction; unstable or non-finite readback still blocks motion.
@@ -78,7 +88,7 @@ steps, and the official PHD2 slit-overlay limitation are recorded in
 6. If WCS succeeds but the target projects outside, compute the fresh solved-field-center to catalog-target tangent correction. Reserve both the outbound correction and an adversarial segmented return, atomically persist the precharged intent, then send the bounded absolute coordinate through N.I.N.A.
 7. After `WaitForSlew`, verify reported epoch, pier side, horizon, and command residual. Wait the commissioned settle interval, repeat all immediate physical-action gates, read the mount again, and reject excess drift or arrival residual. Only then may a fresh G3 ladder be captured.
 8. If every ladder tier fails WCS, run the full deterministic bright/sparse analysis. A stable Night-Setup-bound Star Focuser position, valid immutable captures, independently measured paired-LED slit geometry, and either structured ladder content or an explicitly invisible-target plan may enter the bounded local search. Each search point repeats the same durable intent, settle, fresh-position, and fresh-frame rules.
-9. If WCS centering stops, fails to improve target-center residual, or exhausts its limits, return to its saved reported origin before local search. A blocked return pauses automation.
+9. If WCS centering stops, fails to improve target-center residual, or exhausts its limits, return to its saved reported origin before local search. A blocked return pauses automation. After a WCS reserve failure, if the unchanged commissioning-wide remaining motion, action count or time cannot fit even the first local-search round trip, stop with `G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED` before another origin capture. Preserve the original reserve code and actual WCS/ledger counters instead of masking it as a zero-attempt search failure. Failure to reserve a large WCS step alone does not prohibit a smaller search: when global budget remains, fresh-origin capture and the normal exact local-search reserve checks still apply.
 
 Once PlateSolve3 has formally solved a fresh G3 frame and projected the catalog target inside the usable detector area, that result is carried through the immediately following no-motion LED slit sequence. Carry-forward is allowed only while the solve FITS and WCS evidence retain their recorded SHA-256, detector dimensions are unchanged, coordinate epoch and pier side are unchanged, and the LED reference remains within the commissioned mount-arrival tolerance of the solved frame. The 10–20 ms LED frames then provide slit geometry and short-exposure telemetry only: a low source count in those frames cannot demote the already accepted PlateSolve3 WCS or trigger a return/search route. This is trust in a specific immutable formal solve, not a relaxation of solver success, source binding, topology, or mount-continuity checks.
 
@@ -88,9 +98,26 @@ The plugin's local G3 FWHM/ellipticity/core-coherence calculation is likewise di
 
 A fresh WCS that improves the target-center residual but still leaves the target outside, and every local-search frame that does not identify the target, remain `AwaitingFreshSolve`. They do not settle the ledger. Thus a crash or cancellation retains the obligation to return to the durable origin; only positive target identification or an attested return may write `SettledBudgetLedger`.
 
-`PlateSolveEvidence.ResidualArcseconds` is the catalog-target to solved-field-center separation, not solver RMS. Evidence labels use “target-center residual” to avoid confusing those quantities.
+`PlateSolveEvidence.ResidualArcseconds` is the supplied solver-hint to solved-field-center separation, not solver RMS. It equals target-center separation only when the supplied hint is the catalog target. With a fresh QHY or measured-arrival hint, inspect `requestedRaDegrees`/`requestedDecDegrees` and the separately recorded projected target or target residual; a small hint residual does not prove the target is centered.
 
 ## Durable motion ledger
+
+### Solver hints are not acquisition metadata
+
+Starting with 0.4.0.143, every configured N.I.N.A. solver receives an isolated
+pixel/metadata copy. Both its temporary FITS target and telescope coordinates
+use the requested J2000 hint; the copy deliberately excludes old WCS and generic
+coordinate cards and is marked `HINTONLY`. PlateSolve3 3.80 prefers coordinates
+already present in FITS over its command-line hint, so supplying fresh QHY or
+post-move coordinates only in `PlateSolveParameter` was insufficient when PHD2's
+original header retained a different mount report.
+
+The original FITS and in-memory metadata remain unchanged. The source SHA-256 is
+checked before and after solving, and `plate-solve-evidence.solverInputHint`
+records the original coordinates, applied header hint and hash. These fields are
+search inputs only (`motionAuthority=false`), not target identity or formal WCS.
+All existing solution plausibility, target projection, mount binding and motion
+gates still apply. No Sync threshold or motion/time budget is changed by this fix.
 
 The canonical file is `%LOCALAPPDATA%\UVEX-ADV\observations\<run>\control\g3-acquisition-motion.json`. Its envelope includes a SHA-256 of the canonical state and is replaced atomically with write-through semantics.
 
@@ -118,6 +145,36 @@ The exposure-ladder payload remains schema 1 because its exposure-only semantics
 If an outbound call is rejected or the process exits after intent persistence, the conservative charge remains. Automatic recovery returns from fresh reported coordinates; it never assumes whether a prior asynchronous command executed.
 
 ## Evidence and operator diagnosis
+
+### Owned guide-loss recovery: return before reacquisition (.154)
+
+After an owned PHD2 guide session has stopped for an automatic dependency
+rebuild, its reported endpoint can legitimately be outside the earlier G3
+coarse-position continuity envelope. A fresh image alone does not account for
+that displacement. Version .154 handles this **before** the next G3 capture:
+
+- Require the immutable checked-stop receipt from this recovery, unchanged
+  PHD2 connection/guide epochs and native `Stopped`, matching camera identity,
+  and an exact match with the canonical settled G3 motion ledger. The receipt
+  is single-use and is not restored across process restart or reconnection.
+- If the endpoint is still inside the existing continuity envelope, continue
+  normally. Otherwise charge the endpoint displacement and one accounting
+  action, and reserve every full return segment against the original distance,
+  action and elapsed-time limits. This accounting does not claim an extra slew
+  occurred or turn an unverified endpoint into search authority.
+- Persist the charge, return through the existing N.I.N.A. durable-return
+  implementation, and confirm the actual origin readback before reacquiring
+  target/slit evidence. Check the stopped-guide proof again before each return
+  dispatch. In-memory cumulative counters retain the same conservative charges.
+- Do not widen the independent handoff tolerance, reset the original clock or
+  origin, resume a foreign guide session, or accept old science/target evidence.
+  Identity, pier side, physical safety and full-return budget failures still
+  withhold motion, with specific Chinese diagnostic summaries.
+
+Immutable `g3-guiding-recovery-return-reserved` and
+`g3-guiding-recovery-return-result` evidence distinguish a planned recovery
+from a confirmed physical return. The 2026-09-08 numerical replay covers the
+measured 94.80 arcsecond mismatch; it is not an on-sky acceptance claim.
 
 The run evidence directory contains the original immutable FITS plus JSON records for each ladder tier, content assessment, WCS result, projected target, centering declaration, precharged motion ledger, post-slew settle/drift result, fresh validation, local-search point, return, and final summary. Content evidence includes coherent/usable source counts, median SNR, robust background/noise, dynamic range, and sampled saturation fraction. UI preview text distinguishes solved-inside, solved-outside, structured-no-WCS, and cloud/transparency-invalid states.
 

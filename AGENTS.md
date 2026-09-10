@@ -14,9 +14,10 @@ The first two files are frozen design records. `scripts/verify-design-baseline.p
 
 ## Frozen invariants
 
-- N.I.N.A. is the sole owner of ATR585M.
+- The spectroscopy/master N.I.N.A. instance is the sole owner of ATR585M and coordinates all shared observatory equipment.
 - PHD2 is the sole owner of G3M2210M and must not be used as the QHYminiCam8M acquisition service.
-- The planned QHY acquisition/photometry service is the sole owner of QHYminiCam8M.
+- Under ADR-0014, a separate photometry/worker N.I.N.A. instance is the sole production owner of QHYminiCam8M, its photometry filter wheel and GS350 photometry focuser. Its Profile and plugin control surface must exclude all other device categories; future photometry accessories require explicit, bounded integration, not generic device-command access.
+- The legacy QHY service remains for simulation, historical compatibility and explicit idle-boundary rollback; it must be stopped/released before the worker can connect. Never hot-switch owners within an active run.
 - `UvexAdv.Service` is the sole owner of UVEX4 COM5 and must never scan other serial ports.
 - Different physical cameras may operate concurrently; the prohibition is duplicate ownership of the same physical device.
 - Raw observations are immutable inputs. Never rewrite, rename, move, or delete them as part of source-code work.

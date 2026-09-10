@@ -5,6 +5,22 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class NightSetupTests
 {
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void NativeWorkerFocusOffsetRequiresVerifiedOwnerReadback(bool verified, bool passes)
+    {
+        var setup = CreateSetup();
+        setup = setup with { FocusDomains = setup.FocusDomains!.Select(f => f.Role == FocusDomainRole.Gs350WideField
+            ? f with { Owner = FocusDomainConventions.Gs350NinaWorkerOwner, LogicalDeviceId = "fixture-native-gs350" }
+            : f).ToArray() };
+        var live = CreateLiveFocusStates(setup).Select(f => f.Role == FocusDomainRole.Gs350WideField
+            ? f with { PositionSteps = f.PositionSteps + 1, NativePositionVerified = verified } : f).ToArray();
+        var gate = NightSetupCompatibility.Evaluate(setup, CreateLiveSetup(live), evaluatedUtc: setup.LockedUtc.AddHours(1))
+            .Single(g => g.Code == "FOCUS_GS350_WIDE_FIELD_POSITION");
+        Assert.Equal(passes, gate.Disposition == GateDisposition.Passed);
+    }
+
     [Fact]
     public void SetupRejectsWrongPhysicalSlitWidthAndLegacyAtrOffset()
     {

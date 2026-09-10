@@ -1,13 +1,16 @@
 # Known issues
 
-## Current closeout boundary (2026-09-07)
+## Current closeout boundary (2026-09-10, 0.4.0.167)
 
-Installed .137 completed a supervised **real frontend 11/11** Deneb run with three
-accepted 3 s spectra; the [closeout report](commissioning-night-2026-09-07.md)
-separates this evidence from historical backend tests. QHY photometry accepted
-zero of seven retained frames, slit precision warnings remain, and throughput is
-not stable. Older entries below retain their dated verification scope: one
-successful run does not exercise every fault/recovery branch.
+Deneb, Gamma Cas, Scheat, Almach and 10 Lac each completed a supervised **real
+frontend 11/11** run on the versions listed in the
+[latest closeout](closeout-2026-09-10.md). The final .167 Almach and 10 Lac runs
+accepted three 60 s and three 120 s science frames, plus 37/37 and 75/75
+photometry frames. Slit-precision warnings and throughput variability remain;
+file acceptance is not scientific reduction or unattended qualification. The
+station still used the legacy QHY service, not the new native photometry worker.
+Older entries below retain their dated scope; one successful run does not exercise
+every fault/recovery branch or certify every live dock.
 
 - **UX-007 — fixed in .137:** ATR labels/curve were rasterized with pixels, so
   stretch and image zoom also transformed interface content. Raw pixels, vector
@@ -20,12 +23,45 @@ successful run does not exercise every fault/recovery branch.
   Chinese text, truncated long identifiers and represented SNAPSHOT as LIGHT.
   Schema 2 uses verified ASCII aliases, reversible UTF-8 chunks and distinct
   requested type/stage fields. Historical raw files remain unchanged.
-- **OBS-024 — fixed in .138 source; installation/sky replay pending:** redundant
+- **OBS-024 — .138 implementation, later supervised frontend replay completed:** redundant
   native guide/settle requests after every fine lock shift generated repeated
   timeout notifications in PHD2/NINA. The supervised outbound path now observes
   the existing guide stream and three fresh optical frames without another guide
   RPC. Evidence stays supervised/degraded; initial/strict/return native settling
-  and real fault notifications remain. No installed device settings were changed.
+  and real fault notifications remain. Later .165/.167 runs retain
+  `READONLY-WINDOW` rather than claiming native settle success.
+
+- **OBS-025 — LED slit geometry and bounded acquisition recovery implemented:**
+  current-run LED evidence supplies the physical slit; fresh guide frames measure
+  target residuals without requiring faint stars to illuminate a dark slit.
+  Reacquisition retains charged motion/return obligations and diversifies failed
+  neighbour approaches. Low-gain short confirmation passed on .167 10 Lac;
+  an ambiguous Almach candidate was correctly rejected. This does not authorize
+  motion from an old image, an unverified return or a predicted target alone.
+- **OBS-026 — precise camera-timeout diagnosis fixed in .165; underlying fault open:**
+  the PHD2/ToupTek capture path timed out and native reconnection failed. Typed
+  `PHD2_GUIDING_FRAME_TIMEOUT` / `PHD2_OWNER_STATUS_TIMEOUT` now preserve that
+  distinction and the owner evidence. Subsequent runs passed after an authorized
+  idle-boundary owner restart; USB, power, SDK and adapter root cause is not yet
+  isolated. Do not label it a faint-target failure or proven vendor defect.
+- **OBS-027 — exposure backoff dead end fixed in .167; specific sky trigger pending:**
+  a normal 60→120→60 s probe sequence was rejected as `ATR_PROBE_TIER_CYCLE`.
+  One explicitly justified lower-tier fresh reprobe is now allowed, with total
+  attempts bounded by configured tiers plus one. Bright tiers remain excluded and
+  a new quality result is mandatory. Recorded-metric regression passes; the two
+  later complete .167 runs did not need this backoff branch.
+- **OBS-028 — dual-N.I.N.A. source delivered; live worker commissioning pending:**
+  profile/role isolation, native camera locks and saving, spectroscopy-priority
+  yielding, expiring permission, operator pause and durable focus budgets are
+  implemented and offline-tested. The old owner must be released at an explicitly
+  authorized idle boundary. Arbitrary templates, autonomous autofocus scans,
+  cross-instance flip acceptance and unattended operation are not delivered.
+- **UX-008 — role-based pairing and spectroscopy layout improved; live UI gate open:**
+  pairing is numbered and localized; role names replace camera model shorthand in
+  routine controls. The spectroscopy image is full-width, its controls collapse,
+  and its independent curve is not stretched. All 26 offline XAML scenes pass;
+  exact-version live dock instantiation and both-role checks remain separately
+  pending under the [UI release checklist](nina-plugin-ui-release-checks.md).
 
 ## OBS-020 — PHD2 selection-loop configuration event cleared calibration attestation before guide
 

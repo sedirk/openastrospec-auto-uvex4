@@ -5,6 +5,56 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class SlitFieldAnalysisTests
 {
+    [Theory]
+    [InlineData(80, true)]
+    [InlineData(20, false)]
+    public void AClippedIslandInTheLargerCoreHaloCannotWinByBeingCloserToTheWcsPrediction(
+        double window, bool coreInsideWindow)
+    {
+        const int width = 250, height = 230;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddClippedDisk(100, 130, 35);
+        AddClippedDisk(103, 91, 2); // Disconnected fragment near a slit/diffraction edge.
+        var frame = new MonochromeFrame(width, height, pixels, 65520);
+        var prediction = new PixelPoint(103, 91);
+        var result = SaturatedTargetGhostTopologyAnalyzer.Analyze(frame, prediction, window);
+        Assert.Contains(result.Candidates, c => c.Gate.Code == "SATURATED_SOURCE_HALO_FRAGMENT");
+        if (coreInsideWindow)
+        {
+            Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+            Assert.InRange(result.Target!.Centroid.Y, 129, 131);
+            Assert.True(result.Target.DistanceToPredictionPixels > 20); // Cannot short-circuit coarse centering.
+        }
+        else
+        {
+            Assert.Null(result.Target); // Do not expand WCS identity authority to the outside core.
+            var fragment = new StarCandidate(prediction, 65520, 500000, 50, 5, 0, 1, 90);
+            Assert.Null(SlitTargetIdentifier.Identify(frame, [fragment], prediction, window).Target);
+        }
+
+        void AddClippedDisk(int cx, int cy, int radius)
+        {
+            for (var y = cy - radius; y <= cy + radius; y++)
+            for (var x = cx - radius; x <= cx + radius; x++)
+                if ((x-cx)*(x-cx) + (y-cy)*(y-cy) <= radius*radius) pixels[y*width+x] = 65535;
+        }
+    }
+
+    [Fact]
+    public void AnIsolatedSmallSaturatedStarIsNotRejectedBecauseAnotherStarIsLarger()
+    {
+        const int width = 300, height = 200;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddGaussian(pixels, width, height, 60, 80, 3, 150000);
+        var smallStar = pixels.ToArray();
+        AddGaussian(pixels, width, height, 225, 120, 18, 150000);
+        for (var i = 0; i < pixels.Length; i++) pixels[i] = Math.Max(pixels[i], smallStar[i]);
+        var result = SaturatedTargetGhostTopologyAnalyzer.Analyze(
+            new MonochromeFrame(width, height, pixels, 65520), new(60,80), 20);
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.InRange(result.Target!.Centroid.X, 59, 61);
+    }
+
     [Fact]
     public void DetectorFindsBroadDefocusedStar()
     {

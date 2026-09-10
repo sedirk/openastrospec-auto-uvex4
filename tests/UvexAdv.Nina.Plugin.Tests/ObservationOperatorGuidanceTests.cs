@@ -27,7 +27,7 @@ public sealed class ObservationOperatorGuidanceTests
             GateResult.Unknown("GS350_FOCUS_METRIC_UNAVAILABLE", "no finite FWHM"));
 
         Assert.Equal(ObservationPreviewChannel.QhyWideField, guidance.PreviewChannel);
-        Assert.Contains("GS350", guidance.PreviewLabel, StringComparison.Ordinal);
+        Assert.Contains("测光相机", guidance.PreviewLabel, StringComparison.Ordinal);
         Assert.Contains("ToupTek AAF", guidance.Recommendation, StringComparison.Ordinal);
         Assert.Contains("不要用 C11/Star Focuser Pro", guidance.Recommendation, StringComparison.Ordinal);
         Assert.Contains("UVEX M2", guidance.Recommendation, StringComparison.Ordinal);

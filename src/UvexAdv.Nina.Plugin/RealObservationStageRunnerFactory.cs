@@ -98,6 +98,7 @@ public sealed class RealObservationStageRunnerFactory
 
     internal RealRunConfiguration CaptureConfiguration(UvexPluginSettings settings)
     {
+        NinaInstancePolicy.RequireMaster(settings);
         var plateSettings = profileService.ActiveProfile.PlateSolveSettings;
         var primarySolver = plateSolverFactory.GetPlateSolver(plateSettings);
         var blindSolver = plateSolverFactory.GetBlindSolver(plateSettings);

@@ -20,6 +20,22 @@ public static class ObservationOperatorGuidance
         ArgumentNullException.ThrowIfNull(gate);
         var code = gate.Code.ToUpperInvariant();
 
+        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
+            return new ObservationFailureGuidance(
+                ObservationPreviewChannel.G3SlitField,
+                T("PHD2 导星相机取图与连接", "PHD2 guide-camera delivery and connection", culture),
+                T("检查 PHD2 原始日志中的曝光超时、相机重连和驱动错误。先确认采集和导星停止，再恢复唯一所有者连接并重新取得目标/狭缝证据；不要用旧帧放行，也不要将取图超时解释为普通恒星不合格。",
+                  "Inspect PHD2 capture timeouts, camera reconnection and driver errors. Confirm capture/guiding stopped before restoring the sole owner and reacquiring target/slit evidence; do not authorize exposures with old frames or interpret a delivery timeout as an unsuitable ordinary star.", culture));
+
+        if (code == G3WcsRecoveryPolicy.ExhaustedReturnedCode)
+        {
+            return new ObservationFailureGuidance(
+                ObservationPreviewChannel.G3SlitField,
+                T("导星相机 WCS 粗居中预算", "Guide-camera WCS centering budget", culture),
+                T("查看本轮 WCS 指向偏差、已用累计运动量、动作次数和回程预留。赤道仪已返回保存的起点；换成邻场搜索也不会获得新预算。先排查指向偏差，或由操作员审核下一轮的粗居中配置；不要删除账本、放宽精入缝门或反复点击恢复。",
+                  "Inspect this run's WCS pointing offset, charged motion, action count and return reserve. The mount has returned to its saved origin; local search cannot replenish the budget. Investigate the pointing error or have the operator review the next run's coarse-centering configuration. Do not delete ledgers, loosen fine-placement gates or repeatedly Resume.", culture));
+        }
+
         if (code.StartsWith("GS350_FOCUS", StringComparison.Ordinal) ||
             (stage == ObservationStage.AcquireQhyWideField &&
              code.Contains("FOCUS", StringComparison.Ordinal)))
@@ -132,7 +148,7 @@ public static class ObservationOperatorGuidance
     };
 
     private static string T(string chinese, string english, CultureInfo culture) =>
-        ObservationUiPresentation.Text(chinese, english, culture);
+        CameraRoleLabels.Description(ObservationUiPresentation.Text(chinese, english, culture), culture);
 }
 
 public sealed record ObservationFailureGuidance(

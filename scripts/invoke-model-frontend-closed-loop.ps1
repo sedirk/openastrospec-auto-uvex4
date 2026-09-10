@@ -346,7 +346,13 @@ function Read-VerifiedCompletionManifest([object]$Snapshot, [string]$ExpectedObs
     do {
         try {
             if (-not [IO.File]::Exists($path)) { throw "manifest does not exist: $path" }
-            $manifest = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            $stream = [IO.FileStream]::new($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+                try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json }
+                finally { $reader.Dispose() }
+            }
+            finally { $stream.Dispose() }
             $manifestRunId = [string](Get-OptionalValue $manifest 'observationRunId')
             $plan = Get-OptionalValue $manifest 'plan'
             $planRunId = [string](Get-OptionalValue $plan 'observationRunId')

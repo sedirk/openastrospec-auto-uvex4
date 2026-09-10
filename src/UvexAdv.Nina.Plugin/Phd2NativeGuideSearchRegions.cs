@@ -9,7 +9,8 @@ internal static class Phd2NativeGuideSearchRegions
     public static IReadOnlyList<Phd2Rectangle> Build(
         int width, int height, PixelPoint target, double targetGuard,
         SlitGeometry slit, double edgeGuard, double slitGuard,
-        IReadOnlyList<PixelPoint> rejectedPoints, IReadOnlyList<Phd2Rectangle> searchedRegions)
+        IReadOnlyList<PixelPoint> rejectedPoints, IReadOnlyList<Phd2Rectangle> searchedRegions,
+        IReadOnlyList<Phd2Rectangle>? saturatedStructureExclusions = null)
     {
         if (width <= 0 || height <= 0 ||
             new[] { target.X, target.Y, targetGuard, edgeGuard, slitGuard, slit.AcquisitionPoint.X,
@@ -32,6 +33,7 @@ internal static class Phd2NativeGuideSearchRegions
             Box(slit.AcquisitionPoint, halfX, halfY),
         };
         exclusions.AddRange(rejectedPoints.Select(p => Box(p, Math.Max(edgeGuard, 20), Math.Max(edgeGuard, 20))));
+        if (saturatedStructureExclusions is not null) exclusions.AddRange(saturatedStructureExclusions);
         exclusions.AddRange(searchedRegions);
         foreach (var exclusion in exclusions)
             regions = regions.SelectMany(region => Subtract(region, exclusion)).ToList();

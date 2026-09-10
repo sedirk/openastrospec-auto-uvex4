@@ -321,13 +321,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             RestartWithCurrentConfigurationAsync,
             CanRestartWithCurrentConfiguration);
         openQhyPreviewCommand = new SimpleCommand(
-            () => OpenPreview("GS350 / QHY 广域取景与测光", QhyPreviewImage, QhyPreviewCaption),
+            () => OpenPreview(ObservationUiPresentation.Text("测光相机 · 广域定位与测光", "Photometry camera · acquisition and photometry", UiCulture), QhyPreviewImage, QhyPreviewCaption),
             () => QhyPreviewImage is not null);
         openG3PreviewCommand = new SimpleCommand(
-            () => OpenPreview("PHD2 / G3 狭缝、目标与导星", G3PreviewImage, G3PreviewCaption),
+            () => OpenPreview(ObservationUiPresentation.Text("光谱仪导星相机 · 狭缝与导星", "Spectrograph guide camera · slit and guiding", UiCulture), G3PreviewImage, G3PreviewCaption),
             () => G3PreviewImage is not null);
         openAtrPreviewCommand = new SimpleCommand(
-            () => OpenPreview("ATR585M 2D 光谱与即时 1D", AtrPreviewImage, AtrPreviewCaption),
+            () => OpenPreview(ObservationUiPresentation.Text("光谱相机 · 二维光谱与即时一维提取", "Spectroscopy camera · 2D spectrum and live 1D extraction", UiCulture), AtrPreviewImage, AtrPreviewCaption),
             () => AtrPreviewImage is not null);
         openFailurePreviewCommand = new SimpleCommand(OpenFailurePreview, FailurePreviewAvailable);
         openFailureEvidenceDirectoryCommand = new SimpleCommand(
@@ -414,7 +414,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             CreateAutomationSnapshot,
             InvokeAutomationCommand,
             OnAutomationBridgeActivity,
-            settings.ModelAutomationBridgeEnabled);
+            settings.ModelAutomationBridgeEnabled,
+            () => NinaInstancePolicy.IsMaster(settings));
 
         LoadTargetImportDisplay();
         RefreshCommissioningProfileCatalog(applySelected: true);
@@ -975,6 +976,23 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ? "自动预定位仍为 Skip：只使用 G3 直接解算/有界搜索。可另行启用下方“快速双解算配对”来生成不可自动移动的版本化候选；绝不复用入缝用的 G3 像素→赤道仪矩阵。"
         : $"当前选择 {settings.WideToSlitTransferMode}，但 runner 尚无 Verified/Active 记录导入与适用性执行路径，真实模式将在任何预置运动前阻断。";
 
+    public bool SynchronizedPhotometryEnabled
+    {
+        get => settings.SynchronizedPhotometryEnabled;
+        set
+        {
+            if (!CanEditSynchronizedPhotometry) return;
+            settings.SynchronizedPhotometryEnabled = value;
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(SynchronizedPhotometryStatus));
+            RaisePropertyChanged(nameof(RealModeStatus));
+        }
+    }
+    public bool CanEditSynchronizedPhotometry => NinaInstancePolicy.IsMaster(settings) && CanEditTargetPlan();
+    public string SynchronizedPhotometryStatus => ObservationUiPresentation.Text(
+        settings.SynchronizedPhotometryEnabled ? "开启 · 与光谱同时拍摄" : "关闭 · 仅保留定位短曝",
+        settings.SynchronizedPhotometryEnabled ? "ON · capture alongside spectra" : "OFF · acquisition witnesses only", UiCulture);
+
     public bool QhyG3FastPairEnabled
     {
         get => settings.QhyG3FastPairEnabled;
@@ -1062,7 +1080,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public string QhyParallelFilterSequenceStatus => string.IsNullOrWhiteSpace(settings.QhyParallelFilterSequenceCsv)
         ? $"单滤镜同步测光：{settings.QhyFilterName}，{settings.QhyPhotometryExposureSeconds:G4}s。"
-        : $"并行循环：{settings.QhyParallelFilterSequenceCsv}。滤镜轮与 QHYminiCam8M 始终由 QHY 服务单一持有；每个滤镜分别建立质量基线。";
+        : $"并行循环：{settings.QhyParallelFilterSequenceCsv}。使用已绑定的 QHY 采集端（双实例时为测光 N.I.N.A.）；每个滤镜分别建立质量基线。";
 
     public int QhyMinimumDetectedStars
     {
@@ -1497,12 +1515,12 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string.IsNullOrWhiteSpace(settings.Phd2CameraStableId);
     public string DevicePreparationStatus => IsDevicePreparationMissing
         ? ObservationUiPresentation.Text(
-            "未完成：请从下拉候选选择设备；候选来自 N.I.N.A.、PHD2 与 QHY 服务保存的配置，不需要先连接。",
-            "Incomplete: select devices from the saved N.I.N.A., PHD2 and QHY-service candidates; no connection is required to list them.",
+            "未完成：请从已保存的配置候选中选择设备；这里只记录身份，不会连接设备。",
+            "Incomplete: select devices from the saved configuration candidates. This records identity without connecting equipment.",
             UiCulture)
         : ObservationUiPresentation.Text(
-            $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
-            $"Bound: mount {settings.ExpectedTelescopeId} · ATR {settings.ObservationExpectedAtrCameraId} · QHY {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
+            $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · 光谱相机 {settings.ObservationExpectedAtrCameraId} · 测光相机 {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
+            $"Bound: mount {settings.ExpectedTelescopeId} · spectroscopy camera {settings.ObservationExpectedAtrCameraId} · photometry camera {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
             UiCulture);
     public bool IsCommissioningPreparationMissing =>
         !settings.RealModeCommissioned ||
@@ -1815,6 +1833,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         $"{settings.ExposureSeconds:G6} s · Gain {settings.Gain} · Offset {settings.Offset} · {settings.Binning}×{settings.Binning}";
     public string ManualSpectrumSummary => UvexRuntimeState.MetricSummary;
     public PointCollection ManualSpectrumPoints => UvexRuntimeState.SpectrumPoints;
+    public bool HasManualSpectrum => ManualSpectrumPoints.Count > 0;
+    public bool IsManualAtrToolsAvailable => CanUseManualAtrTools();
+    public string ManualAtrInspectionHeader => IsManualAtrToolsAvailable
+        ? ObservationUiPresentation.Text("手动单帧检查 · 点击展开", "Manual single-frame inspection · expand", UiCulture)
+        : ObservationUiPresentation.Text("自动观测占用光谱相机 · 手动检查暂不可用", "Spectroscopy camera in use by automation · manual inspection unavailable", UiCulture);
     public string ManualUvexServiceUrl => settings.ServiceUrl;
     public IReadOnlyList<string> ManualUvexDeviceChoices => ManualUvexDevices;
     public string SelectedManualUvexDevice
@@ -2157,7 +2180,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             MatchSelectedDeviceCandidates();
 
             CommissioningProfileLoadStatus =
-                $"已发现 {commissioningProfiles.Count} 个台站方案、{telescopeCandidates.Count} 个赤道仪、{atrCameraCandidates.Count} 个 ATR、{g3CameraCandidates.Count} 个 G3/PHD2、{qhyCameraCandidates.Count} 个 QHY 候选；未连接任何设备。";
+                ObservationUiPresentation.Text(
+                    $"已发现 {commissioningProfiles.Count} 个台站方案、{telescopeCandidates.Count} 个赤道仪、{atrCameraCandidates.Count} 个光谱相机、{g3CameraCandidates.Count} 个光谱仪导星相机、{qhyCameraCandidates.Count} 个测光相机候选；未连接设备。",
+                    $"Found {commissioningProfiles.Count} station setups, {telescopeCandidates.Count} mounts, {atrCameraCandidates.Count} spectroscopy cameras, {g3CameraCandidates.Count} spectrograph guide cameras and {qhyCameraCandidates.Count} photometry cameras; no devices connected.", UiCulture);
             if (applySelected) ApplySelectedCommissioningProfile(startup: true);
             else RaiseCommandStates();
         }
@@ -2949,13 +2974,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    private bool CanStart() => !IsTargetImportBusy && CanEditTargetPlan();
+    private bool CanStart() => NinaInstancePolicy.IsMaster(settings) && !IsTargetImportBusy && CanEditTargetPlan();
 
     private bool CanImportTarget() => !IsTargetImportBusy && CanEditTargetPlan();
 
-    private bool CanUseManualAtrTools() => !IsTargetImportBusy && CanEditTargetPlan();
+    private bool CanUseManualAtrTools() => NinaInstancePolicy.IsMaster(settings) && !IsTargetImportBusy && CanEditTargetPlan();
 
-    private bool CanManageManualUvexConnection() => !IsManualUvexBusy && CanEditTargetPlan();
+    private bool CanManageManualUvexConnection() => NinaInstancePolicy.IsMaster(settings) && !IsManualUvexBusy && CanEditTargetPlan();
 
     private bool CanConnectManualUvex() =>
         CanManageManualUvexConnection() &&
@@ -3027,19 +3052,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         var info = cameraMediator.GetInfo();
         if (!info.Connected)
         {
-            AtrManualCameraStatus = "N.I.N.A. 当前没有连接相机。";
+            AtrManualCameraStatus = ObservationUiPresentation.Text("N.I.N.A. 当前未连接光谱相机。", "N.I.N.A. spectroscopy camera is disconnected.", UiCulture);
         }
         else if (string.IsNullOrWhiteSpace(settings.BoundCameraId))
         {
-            AtrManualCameraStatus = $"已连接 {info.DisplayName ?? info.Name}；尚未绑定稳定 DeviceId。";
+            AtrManualCameraStatus = ObservationUiPresentation.Text($"已连接 {info.DisplayName ?? info.Name}；尚未绑定设备身份。", $"Connected: {info.DisplayName ?? info.Name}; device identity is not bound.", UiCulture);
         }
         else if (string.Equals(info.DeviceId, settings.BoundCameraId, StringComparison.Ordinal))
         {
-            AtrManualCameraStatus = $"已连接并匹配：{info.DisplayName ?? info.Name}。";
+            AtrManualCameraStatus = ObservationUiPresentation.Text($"已连接并匹配：{info.DisplayName ?? info.Name}。", $"Connected and matched: {info.DisplayName ?? info.Name}.", UiCulture);
         }
         else
         {
-            AtrManualCameraStatus = $"当前相机 {info.DisplayName ?? info.Name} 与已绑定 ATR585M 不匹配。";
+            AtrManualCameraStatus = ObservationUiPresentation.Text($"当前相机 {info.DisplayName ?? info.Name} 与已绑定光谱相机不匹配。", $"Current camera {info.DisplayName ?? info.Name} does not match the bound spectroscopy camera.", UiCulture);
         }
 
         RaisePropertyChanged(nameof(BoundAtrCameraId));
@@ -3081,6 +3106,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             RaisePropertyChanged(nameof(ManualSpectrumSummary));
             RaisePropertyChanged(nameof(ManualSpectrumPoints));
+            RaisePropertyChanged(nameof(HasManualSpectrum));
         }
         else
         {
@@ -3088,6 +3114,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             {
                 RaisePropertyChanged(nameof(ManualSpectrumSummary));
                 RaisePropertyChanged(nameof(ManualSpectrumPoints));
+                RaisePropertyChanged(nameof(HasManualSpectrum));
             });
         }
     }
@@ -3299,6 +3326,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private void ApplyDashboard(ObservationDashboardSnapshot dashboard, bool notifyBridge = true)
     {
+        // Cached owner telemetry only: a frame/status update must not leave the
+        // inspector displaying the disconnected snapshot captured at startup.
+        // This does not connect, expose or create another camera owner.
+        RefreshAtrManualStatus();
         var run = dashboard.Run;
         var culture = UiCulture;
         GateResult? currentGate = null;
@@ -3574,6 +3605,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string? operatorAttestation,
         ObservationTargetDraft? targetDraft)
     {
+        if (!NinaInstancePolicy.IsMaster(settings))
+            return new(false, "PHOTOMETRY_ROLE_FORBIDDEN", "The photometry worker does not expose spectroscopy or shared-equipment commands.", false);
         var binding = AutomationCommandBindings().FirstOrDefault(item =>
             string.Equals(item.Name, commandName, StringComparison.OrdinalIgnoreCase));
         if (binding is null)
@@ -3766,6 +3799,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private void RaiseCommandStates()
     {
+        RaisePropertyChanged(nameof(IsManualAtrToolsAvailable));
+        RaisePropertyChanged(nameof(ManualAtrInspectionHeader));
+        RaisePropertyChanged(nameof(CanEditSynchronizedPhotometry));
+        RaisePropertyChanged(nameof(SynchronizedPhotometryEnabled));
+        RaisePropertyChanged(nameof(SynchronizedPhotometryStatus));
         RaisePropertyChanged(nameof(IsTargetPlanEditable));
         RaisePropertyChanged(nameof(RealModeStatusSummary));
         RaisePreparationProperties();

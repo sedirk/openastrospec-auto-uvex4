@@ -31,7 +31,7 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             throw new ArgumentException("QHY ExpectedModel must be configured.", nameof(options));
         }
 
-        store = new QhyRunStore(options.DataRoot);
+        store = new QhyRunStore(options.DataRoot, adapter as IQhyNativeFramePersistence);
     }
 
     public event Action<QhyJobSnapshot>? JobChanged;
@@ -63,7 +63,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             request.TargetRightAscensionDegrees,
             request.TargetDeclinationDegrees,
             request.CoordinateEpoch,
-            request.ControlLeaseSeconds);
+            request.ControlLeaseSeconds,
+            request.NightSetupId);
         if (created)
         {
             execution.Worker = RunJobAsync(execution, cancellationToken => RunAcquisitionAsync(execution, request, cancellationToken));
@@ -83,7 +84,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             request.TargetRightAscensionDegrees,
             request.TargetDeclinationDegrees,
             request.CoordinateEpoch,
-            request.ControlLeaseSeconds);
+            request.ControlLeaseSeconds,
+            request.NightSetupId);
         if (created)
         {
             execution.Worker = RunJobAsync(execution, cancellationToken => RunPhotometryAsync(execution, request, cancellationToken));
@@ -113,7 +115,7 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         await DemandOwnerAsync(execution, request.OwnerToken, "pause").ConfigureAwait(false);
         var snapshot = execution.MutateAuthorized(request.OwnerToken, current =>
         {
-            if (current.State == QhyJobState.Running)
+            if (current.State is QhyJobState.Queued or QhyJobState.Running)
             {
                 // Close the gate while holding the same lock that protects state. A
                 // checkpoint can therefore never observe Pausing with an open gate.
@@ -224,12 +226,18 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         {
             if (IsTerminal(current.State)) return current;
             if (current.State == QhyJobState.Cancelling) return current;
+            if (request.YieldToAcquisitionRequestId is { } acquisitionRequest &&
+                (string.IsNullOrWhiteSpace(acquisitionRequest) || acquisitionRequest.Length > 256 ||
+                 current.Kind != QhyJobKind.Photometry ||
+                 current.State is not (QhyJobState.Paused or QhyJobState.PausedNeedsAttention)))
+                throw new InvalidOperationException("QHY_PRIORITY_YIELD_NOT_QUIESCENT: Only confirmed frame-boundary paused photometry may yield to acquisition.");
             shouldCancel = true;
             execution.PauseGate.Set();
             return WithEvent(
-                current with { State = QhyJobState.Cancelling },
-                "owner.cancel",
-                $"Owner '{request.Actor}' requested cancellation.");
+                current with { State = QhyJobState.Cancelling, YieldedToAcquisitionRequestId = request.YieldToAcquisitionRequestId },
+                request.YieldToAcquisitionRequestId is null ? "owner.cancel" : "owner.yield-to-acquisition",
+                request.YieldToAcquisitionRequestId is null ? $"Owner '{request.Actor}' requested cancellation." :
+                    $"Photometry yields at a confirmed frame boundary to acquisition '{request.YieldToAcquisitionRequestId}'; saved frames and focus budgets are retained.");
         });
         if (shouldCancel) execution.Cancellation.Cancel();
         // Device-control semantics must not depend on whether the HTTP caller remains
@@ -395,7 +403,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         double? targetRightAscensionDegrees,
         double? targetDeclinationDegrees,
         string coordinateEpoch,
-        int controlLeaseSeconds)
+        int controlLeaseSeconds,
+        string? nightSetupId)
     {
         lock (activeGate)
         {
@@ -449,7 +458,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
                 CoordinateEpoch: coordinateEpoch,
                 ControlLeaseId: null,
                 LeaseExpiresUtc: createdUtc.AddSeconds(controlLeaseSeconds),
-                ControlLeaseSeconds: controlLeaseSeconds);
+                ControlLeaseSeconds: controlLeaseSeconds,
+                NightSetupId: nightSetupId);
             var execution = new JobExecution(snapshot, ownerToken);
             jobs[id] = execution;
             if (requestKey is not null) requestIndex[requestKey] = id;
@@ -464,6 +474,12 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         try
         {
             await execution.InitialPersistence.ConfigureAwait(false);
+            execution.Cancellation.Token.ThrowIfCancellationRequested();
+            if (execution.GetSnapshot().State is QhyJobState.Pausing or QhyJobState.Paused)
+                await CheckpointAsync(execution, execution.Cancellation.Token).ConfigureAwait(false);
+            if (execution.GetSnapshot().LeaseExpiresUtc is not { } initialExpiry || initialExpiry <= UtcNow)
+                await PauseForAttentionAsync(execution, "Control lease expired before camera preparation; renew and explicitly resume.",
+                    execution.Cancellation.Token).ConfigureAwait(false);
             await EnsureCameraConnectedWithRecoveryAsync(execution, execution.Cancellation.Token).ConfigureAwait(false);
             await SetStateAsync(execution, QhyJobState.Running, "job.started", "Camera identity verified; automatic progression started.")
                 .ConfigureAwait(false);
@@ -610,7 +626,10 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         {
             try
             {
-                var frame = await adapter.CaptureSingleFrameAsync(settings, cancellationToken).ConfigureAwait(false);
+                var frame = adapter is IQhyCheckpointCameraAdapter controlled
+                    ? await controlled.CaptureWithCheckpointAsync(settings,
+                        token => CheckpointAsync(execution, token), cancellationToken).ConfigureAwait(false)
+                    : await adapter.CaptureSingleFrameAsync(settings, cancellationToken).ConfigureAwait(false);
                 var metrics = QhyFrameAnalyzer.Analyze(frame, thresholds, baselineStarFlux);
                 return (frame, metrics);
             }
@@ -634,6 +653,9 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var before = execution.GetSnapshot();
+        // Once the native owner acquired the frame, cancellation must not orphan
+        // an already saved raw file by skipping its immutable index/manifest.
+        if (adapter is IQhyNativeFramePersistence) cancellationToken = CancellationToken.None;
         var stored = await store.StoreFrameAsync(before, frame, metrics, sequence, role, cancellationToken).ConfigureAwait(false);
         latestPreviews[before.Id] = stored.Preview;
         var passedQualityGate = stored.Record.Metrics.QualityFlags.Count == 0;
@@ -784,6 +806,9 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
                 throw new OperationCanceledException(execution.Cancellation.Token);
             }
             if (IsTerminal(current.State)) return current;
+            // A pause may arrive during native connection. Initialization must
+            // not overwrite it with Running and reopen the first shutter.
+            if (current.State is QhyJobState.Pausing or QhyJobState.Paused) return current;
             return WithEvent(
                 current with { State = state, StartedUtc = current.StartedUtc ?? UtcNow },
                 eventKind,

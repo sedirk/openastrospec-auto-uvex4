@@ -75,15 +75,15 @@ public sealed class XamlBindingSafetyTests
         Assert.True(start >= 0 && end > start);
         var options = xaml[start..end];
 
-        Assert.Contains("OpenAstroSpec Auto · ATR/UVEX4 光谱工具设置", options, StringComparison.Ordinal);
+        Assert.Contains("OpenAstroSpec Auto · 光谱相机/UVEX4 光谱工具设置", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"范围与连接\"", options, StringComparison.Ordinal);
-        Assert.Contains("Header=\"ATR 提取\"", options, StringComparison.Ordinal);
+        Assert.Contains("Header=\"光谱相机提取\"", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"M2 对焦\"", options, StringComparison.Ordinal);
         Assert.Contains("Header=\"光栅锁定\"", options, StringComparison.Ordinal);
-        Assert.Contains("配置自动观测界面中的 ATR 单帧检查", options, StringComparison.Ordinal);
-        Assert.Contains("不配置 C11 主镜对焦、G3 导星镜对焦", options, StringComparison.Ordinal);
+        Assert.Contains("配置自动观测界面中的光谱相机单帧检查", options, StringComparison.Ordinal);
+        Assert.Contains("不配置主镜对焦、光谱仪导星相机对焦", options, StringComparison.Ordinal);
         Assert.Contains("软件提取矩形（原始全帧像素）", options, StringComparison.Ordinal);
-        Assert.Contains("它与 C11 主镜、G3M2210M 导星模组小镜头", options, StringComparison.Ordinal);
+        Assert.Contains("它与主镜、光谱仪导星相机模组小镜头", options, StringComparison.Ordinal);
         Assert.Contains("SelectedValue=\"{Binding M2FocusMode, Mode=TwoWay}\"", options, StringComparison.Ordinal);
         Assert.Contains("保持当前位置（默认，不移动 M2）", options, StringComparison.Ordinal);
         Assert.Contains("CommissionedSpectralAutofocus", options, StringComparison.Ordinal);
@@ -203,7 +203,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("自动流程（真实成功路线）", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("G3WcsFreshSolveAuthorizationResidualArcseconds", dock, StringComparison.Ordinal);
         Assert.Contains("大步后允许拍 fresh 验证帧的最大实报终点残差", dock, StringComparison.Ordinal);
-        Assert.Contains("QHY 广域见证", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.Contains("测光相机广域见证", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("N.I.N.A. 大步修正", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewGradeText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
@@ -225,7 +225,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
         Assert.Contains("<ScrollViewer", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("Header=\"PHD2 与目标定位策略详情\"", dock[advancedTabStart..], StringComparison.Ordinal);
-        Assert.Contains("旧版 QHY 广域运动门（仅保留兼容/取证，不是当前生产路线）", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("2″只约束静态 frame/mount 绑定", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("Phd2CalibrationPolicyText", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("GhostCalibrationSummaryText", dock[advancedTabStart..], StringComparison.Ordinal);
@@ -252,14 +252,14 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("当前没有错误或待处理证据门", dock, StringComparison.Ordinal);
         Assert.Contains("TargetType=\"ListBox\"", dock, StringComparison.Ordinal);
         Assert.Contains("Value=\"#0F172A\"", dock, StringComparison.Ordinal);
-        Assert.Contains("QHY 广域 / 解算", dock, StringComparison.Ordinal);
-        Assert.Contains("G3 对焦 / 狭缝 / 导星", dock, StringComparison.Ordinal);
-        Assert.Contains("ATR 二维 / 一维光谱", dock, StringComparison.Ordinal);
+        Assert.Contains("测光相机 · 定位", dock, StringComparison.Ordinal);
+        Assert.Contains("光谱仪导星相机", dock, StringComparison.Ordinal);
+        Assert.Contains("光谱相机 · 光谱", dock, StringComparison.Ordinal);
         Assert.Equal(3, Regex.Matches(dock, "<local:EmbeddedImageViewer\\b", RegexOptions.CultureInvariant).Count);
         Assert.Equal(3, Regex.Matches(dock, "PopoutCommand=", RegexOptions.CultureInvariant).Count);
         Assert.DoesNotContain("<Button Grid.Row=\"1\" Content=\"弹出", dock, StringComparison.Ordinal);
-        Assert.Contains("Text=\"ATR 单帧检查\"", dock, StringComparison.Ordinal);
-        Assert.Contains("Content=\"绑定当前 ATR585M\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Text=\"光谱相机单帧检查\"", dock, StringComparison.Ordinal);
+        Assert.Contains("Content=\"绑定当前光谱相机\"", dock, StringComparison.Ordinal);
         Assert.Contains("Content=\"采集一帧检查光谱\"", dock, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding SelectManualSlit1Command}\"", dock[manualTabStart..planTabStart], StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding MoveManualM2PositiveCommand}\"", dock[manualTabStart..planTabStart], StringComparison.Ordinal);

@@ -668,31 +668,54 @@ public sealed class ObservationRunJournalStore
                 stream.Flush(flushToDisk: true);
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(ManifestPath))
+            await RetryTransientSharingAsync(() =>
             {
-                File.Replace(temporaryPath, ManifestPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
-            }
-            else
-            {
-                File.Move(temporaryPath, ManifestPath);
-            }
+                if (File.Exists(ManifestPath))
+                    File.Replace(temporaryPath, ManifestPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                else
+                    File.Move(temporaryPath, ManifestPath);
+            }, cancellationToken).ConfigureAwait(false);
 
             // The temp file was flushed before the atomic rename/replace. Flush
             // the committed path as well so successful return is an explicit
             // durability acknowledgement, not merely a page-cache acknowledgement.
-            using var committed = new FileStream(
-                ManifestPath,
-                FileMode.Open,
-                FileAccess.ReadWrite,
-                FileShare.Read,
-                1,
-                FileOptions.WriteThrough);
-            committed.Flush(flushToDisk: true);
+            // Retry only this acknowledgement after replacement: the temporary
+            // path no longer exists and the committed revision must not advance twice.
+            await RetryTransientSharingAsync(() =>
+            {
+                using var committed = new FileStream(
+                    ManifestPath,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.Read,
+                    1,
+                    FileOptions.WriteThrough);
+                committed.Flush(flushToDisk: true);
+            }, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
+    }
+
+    private static async Task RetryTransientSharingAsync(Action action, CancellationToken cancellationToken)
+    {
+        // A read-only observer/antivirus can briefly deny rename or write sharing
+        // on Windows. Preserve atomicity and the same serialized revision; never
+        // swallow persistent contention, access denial, disk errors or cancellation.
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                action();
+                return;
+            }
+            catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33 && attempt < 40)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
