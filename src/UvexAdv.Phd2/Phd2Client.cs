@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 
 namespace UvexAdv.Phd2;
 
-public sealed class Phd2Client : IPhd2Client
+public sealed partial class Phd2Client : IPhd2Client
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -139,6 +139,7 @@ public sealed class Phd2Client : IPhd2Client
                 lock (stateGate)
                 {
                     approvedIdentityValidation = null;
+                    configurationFingerprint = ReadStableConfigurationFingerprint();
                 }
                 startReader.TrySetResult(true);
             }
@@ -995,6 +996,7 @@ public sealed class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
+            ThrowIfGuideOutputFailed();
             var destinationPath = Path.GetFullPath(request.DestinationPath);
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
             if (appState != Phd2AppState.Guiding)
@@ -1038,6 +1040,7 @@ public sealed class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
             EnsureSameGuidingEpoch(baseline, "after immutable evidence copy");
+            ThrowIfGuideOutputFailed();
             var afterSave = Snapshot;
             var nativeFrameBound = beforeSave.LastGuideStep?.Frame == guideFrame &&
                                    afterSave.LastGuideStep?.Frame == guideFrame &&
@@ -1157,6 +1160,7 @@ public sealed class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
+            ThrowIfGuideOutputFailed();
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
             if (appState != Phd2AppState.Guiding)
             {
@@ -1202,6 +1206,7 @@ public sealed class Phd2Client : IPhd2Client
             // and the durable staged-motion ledger before deciding recovery.
             // Invalidate any previous settle before crossing the mutation
             // boundary even if PHD2 does not emit LockPositionSet.
+            ThrowIfGuideOutputFailed();
             UpdateSnapshot(InvalidateSettle);
             try
             {
@@ -1337,6 +1342,7 @@ public sealed class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
+            ThrowIfGuideOutputFailed();
             if (forceRecalibration)
             {
                 await EnsureForcedRecalibrationPrerequisitesAsync(cancellationToken).ConfigureAwait(false);
@@ -2006,15 +2012,7 @@ public sealed class Phd2Client : IPhd2Client
         var sequence = Interlocked.Increment(ref nextEventSequence);
         var message = new Phd2EventMessage(name, sequence, receivedUtc, payload);
 
-        UpdateSnapshot(current =>
-        {
-            if (message.Name == "ConfigurationChange")
-            {
-                approvedIdentityValidation = null;
-            }
-
-            return ApplyEvent(current, message);
-        });
+        UpdateSnapshot(current => ApplyEvent(current, message));
         CompleteMatchingEventWaiters(message);
         InvokeEventHandlersSafely(EventReceived, message);
     }
@@ -2075,16 +2073,19 @@ public sealed class Phd2Client : IPhd2Client
             {
                 AppState = Phd2AppState.Stopped,
                 Phd2Paused = false,
+                GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
             }),
             "Paused" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.Paused,
                 Phd2Paused = true,
+                GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
             }),
             "Resumed" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.Guiding,
                 Phd2Paused = false,
+                GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
             }),
             // PHD2 may announce its exposure loop while a guide/settle RPC is
             // already pending.  In that interval this is transport progress,
@@ -2129,11 +2130,13 @@ public sealed class Phd2Client : IPhd2Client
             "StarLost" when IsPendingSettleOperationCurrent(next) => next with
             {
                 AppState = Phd2AppState.LostLock,
+                GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
                 LastGuideStep = ParseGuideStep(message.Payload),
             },
             "StarLost" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.LostLock,
+                GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
                 LastGuideStep = ParseGuideStep(message.Payload),
             }),
             "Alert" => next with
@@ -2143,19 +2146,7 @@ public sealed class Phd2Client : IPhd2Client
             "StartCalibration" => ApplyStartCalibration(next, message),
             "CalibrationComplete" or "CalibrationFailed" =>
                 ApplyCalibrationTerminal(next, message),
-            // PHD2 emits ConfigurationChange while persisting a freshly
-            // completed calibration, including after StartGuiding/SettleBegin.
-            // That does not begin a new guide epoch and must not erase the
-            // pending settle attestation.  Calibration authority is still
-            // invalidated and must be re-read after SettleDone.
-            "ConfigurationChange" when IsPendingSettleOperationCurrent(next) => next with
-            {
-                CalibrationValidation = null,
-            },
-            "ConfigurationChange" => InvalidateSettle(next with
-            {
-                CalibrationValidation = null,
-            }),
+            "ConfigurationChange" => ApplyConfigurationChange(next, message),
             _ => next,
         };
     }
@@ -2173,6 +2164,7 @@ public sealed class Phd2Client : IPhd2Client
         {
             AppState = Phd2AppState.Guiding,
             Phd2Paused = false,
+            GuideOutput = current.GuideOutput?.Failed == true ? current.GuideOutput : null,
         });
         return preservePending ? RestorePendingSettle(current, next) : next;
     }
@@ -2238,6 +2230,11 @@ public sealed class Phd2Client : IPhd2Client
         JsonElement payload)
     {
         var step = ParseGuideStep(payload);
+        current = current with
+        {
+            GuideOutput = Phd2GuideOutputStatus.Observe(current.GuideOutput, step,
+                current.LastEventUtc ?? DateTimeOffset.UtcNow),
+        };
         if (!IsPendingSettleOperationCurrent(current))
         {
             return ApplyObservedAppState(
@@ -2862,7 +2859,12 @@ public sealed class Phd2Client : IPhd2Client
             GetOptionalDouble(element, "SNR"),
             GetOptionalDouble(element, "HFD"),
             GetOptionalDouble(element, "AvgDist"),
-            GetOptionalInt32(element, "ErrorCode"));
+            GetOptionalInt32(element, "ErrorCode"),
+            GetOptionalString(element, "Mount"),
+            GetOptionalDouble(element, "RADistanceGuide"),
+            GetOptionalDouble(element, "DECDistanceGuide"),
+            GetOptionalInt32(element, "RADuration"),
+            GetOptionalInt32(element, "DECDuration"));
     }
 
     private static string? BuildVersion(JsonElement element)

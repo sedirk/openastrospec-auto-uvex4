@@ -709,13 +709,20 @@
             </Border>
             <TextBlock Text="{Binding ProgressSummary}" Foreground="#94A3B8" FontWeight="SemiBold" VerticalAlignment="Center" />
           </WrapPanel>
-          <Border Background="#122D38" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="7,4" Margin="0,5,0,3">
+          <Border Background="#122D38" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="7,1" Margin="0,3,0,1">
             <WrapPanel VerticalAlignment="Center">
               <CheckBox Content="同步测光" FontWeight="Bold" Foreground="#F1F5F9" FontSize="14" Margin="0,0,12,0"
                         IsChecked="{Binding SynchronizedPhotometryEnabled, Mode=TwoWay}"
                         IsEnabled="{Binding CanEditSynchronizedPhotometry}"
                         ToolTip="空闲时设置，启动后锁定到本轮结束。关闭仅停用并行测光，不禁用定位所需的测光相机短曝光；不会断开设备。" />
               <TextBlock Text="{Binding SynchronizedPhotometryStatus}" Foreground="#BAE6FD" VerticalAlignment="Center" />
+              <WrapPanel Margin="14,0,0,0" AutomationProperties.AutomationId="OpenAstroSpec.SlitQualityPolicy">
+            <TextBlock Text="{Binding SupervisedSlitQualityWarningStatusText}" Foreground="#FDE68A" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <Button Content="允许警告后试拍" Command="{Binding ArmSlitQualityWarningCommand}" FontSize="11" Padding="4,1" Height="22"
+                    AutomationProperties.AutomationId="OpenAstroSpec.ArmSlitQualityWarning"
+                    ToolTip="保存到当前配置，重启后保留；只允许有人监督下以实际光谱判定质量，不授予设备运动或无人值守权限。" />
+            <Button Content="严格验收" Command="{Binding DisarmSlitQualityWarningCommand}" FontSize="11" Padding="4,1" Height="22" Margin="5,0,0,0" />
+              </WrapPanel>
             </WrapPanel>
           </Border>
           <WrapPanel Margin="0,2,0,0">
@@ -791,6 +798,7 @@
                 </StackPanel>
                 <WrapPanel Grid.Column="1" VerticalAlignment="Center">
                   <Button Content="编辑观测计划" Command="{Binding ShowObservationPlanCommand}" />
+                  <Button Content="采集计划（曝光预算）" Command="{Binding ShowAcquisitionPlanCommand}" />
                   <Button Content="填写自动准备表单" Command="{Binding ShowStartupRequirementsCommand}" />
                 </WrapPanel>
               </Grid>
@@ -930,12 +938,12 @@
         </TabItem>
 
         <TabItem Header="观测计划">
-          <ScrollViewer x:Name="ObservationPlanScrollViewer"
-                        VerticalScrollBarVisibility="Auto"
-                        HorizontalScrollBarVisibility="Disabled"
-                        CanContentScroll="False"
-                        PanningMode="VerticalOnly">
-          <Grid Margin="9">
+          <TabControl x:Name="ObservationPlanTabs" SelectedIndex="{Binding SelectedPlanTabIndex, Mode=TwoWay}" Margin="5">
+          <TabItem Header="目标与导入">
+          <ScrollViewer x:Name="ObservationTargetPlanScrollViewer"
+                        VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                        CanContentScroll="False" PanningMode="VerticalOnly">
+          <Grid Margin="6">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
@@ -945,6 +953,7 @@
               <StackPanel>
                 <TextBlock Text="目标导入" FontSize="15" FontWeight="Bold" />
                 <TextBlock Text="从 N.I.N.A. 构图或第三方星图读取目标草稿；只更新目标字段，不连接设备或启动观测。"
+                           ToolTip="导入不会改变本夜光学设置、设备标定、安全限制、运行模式或已创建的高级序列；入缝前仍需复核目录身份与 J2000 坐标。站点、地平线和模拟速度已移到“高级设置”。"
                            Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,3,0,5" />
                 <WrapPanel>
                   <Button x:Name="ImportFramingAssistantButton"
@@ -1001,19 +1010,15 @@
                 </StackPanel>
                 <StackPanel Grid.Row="2" Grid.Column="0">
                   <TextBlock Text="本夜光学设置 ID" FontWeight="SemiBold" />
-                  <TextBox Text="{Binding NightSetupId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0" />
+                  <TextBox Text="{Binding NightSetupId, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsTargetPlanEditable}" Margin="0,2,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Row="2" Grid.Column="2">
-                  <TextBlock Text="并行观测与初始地平线规划时长（分钟）" FontWeight="SemiBold" TextWrapping="Wrap" />
-                  <TextBox Text="{Binding DurationMinutes, UpdateSourceTrigger=PropertyChanged}"
-                           Margin="0,2,0,0"
-                           ToolTip="用于并行测光相机任务长度及自动观测开始时的地平线保护估算；不是光谱相机单帧曝光的硬超时。" />
-                  <TextBlock Text="不是曝光倒计时：已开始的光谱相机曝光会完整结束；光谱相机科学帧张数由高级设置控制。600 s 单帧不会在这里填 10 分钟时被中途截断。"
+                  <TextBlock Text="拍摄张数、自动曝光档位和规划窗口请在相邻的“采集计划（曝光预算）”页设置。"
                              Foreground="#93C5FD" TextWrapping="Wrap" Margin="0,3,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,7,0,0">
                   <TextBlock Text="目标在光谱仪导星相机中的可观测类型" FontWeight="SemiBold" />
-                  <ComboBox ItemsSource="{Binding AvailableTargetObservabilityClasses}"
+                  <ComboBox x:Name="TargetObservabilityInput" ItemsSource="{Binding AvailableTargetObservabilityClasses}"
                             DisplayMemberPath="Label"
                             SelectedValuePath="Value"
                             SelectedValue="{Binding TargetObservability, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -1023,11 +1028,63 @@
                 </StackPanel>
               </Grid>
             </Border>
-            <TextBlock Grid.Row="2"
-                       Text="导入不会改变本夜光学设置、设备标定、安全限制、运行模式或已创建的高级序列；入缝前仍需复核目录身份与 J2000 坐标。站点、地平线和模拟速度已移到“高级设置”。"
-                       Foreground="#FDE68A" TextWrapping="Wrap" Margin="3,7,3,0" />
           </Grid>
           </ScrollViewer>
+          </TabItem>
+          <TabItem Header="采集计划（曝光预算）">
+            <ScrollViewer x:Name="ObservationAcquisitionPlanScrollViewer"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False" PanningMode="VerticalOnly">
+            <StackPanel DataContext="{Binding AcquisitionPlan}" Margin="8">
+              <TextBlock Text="光谱采集计划" FontSize="16" FontWeight="Bold" />
+              <TextBlock Text="拍够合格科学帧后结束；先试拍自动选档，失败帧保留但不凑数。" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,3,0,8" />
+              <Border Background="#132238" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="7" Margin="0,0,0,8">
+                <TextBlock Text="{Binding SavedSummary}" Foreground="#7DD3FC" FontWeight="SemiBold" TextWrapping="Wrap" />
+              </Border>
+              <Grid IsEnabled="{Binding IsEditable}">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,8">
+                  <TextBlock Text="合格科学帧数（张）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBox x:Name="ScienceFrameBudgetInput" Text="{Binding ScienceFrames, UpdateSourceTrigger=PropertyChanged}" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,8">
+                  <TextBlock Text="最大正式尝试次数（含失败帧）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding MaximumAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8">
+                  <TextBlock Text="自动曝光档位（秒，逗号分隔）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding ExposureLadderSeconds, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" Margin="0,3,0,0"
+                           ToolTip="只允许在这些档位间自动选档；使用小数点表示小数，例如 0.1,1,3,10,30,120,600。" />
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="0">
+                  <TextBlock Text="起始试拍曝光（秒）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding ProbeSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,3,0,0"
+                           ToolTip="必须是上面档位中的一档；它是选档的起点，不是固定科学曝光。" />
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="2">
+                  <TextBlock Text="并行观测与初始地平线规划时长（分钟）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding PlanningMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="0,3,0,0" />
+                </StackPanel>
+              </Grid>
+              <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,10,0,8">
+                <StackPanel>
+                  <TextBlock Text="{Binding BudgetSummary}" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding PlanningWarning}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="不是曝光倒计时：规划时长用于地平线检查与同步测光，不按时长掐断已开始的光谱曝光。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,4,0,0" />
+                </StackPanel>
+              </Border>
+              <TextBlock Text="{Binding ValidationMessage}" Foreground="#FDA4AF" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"
+                         Visibility="{Binding HasValidationError, Converter={StaticResource ObservationBoolToVisibility}}" />
+              <WrapPanel>
+                <Button x:Name="SaveAcquisitionPlanButton" Content="保存采集计划" Command="{Binding SaveCommand}" AutomationProperties.AutomationId="OpenAstroSpec.SaveAcquisitionPlan" />
+                <Button Content="还原当前计划" Command="{Binding ReloadCommand}" />
+              </WrapPanel>
+              <TextBlock x:Name="AcquisitionPlanStateText" Text="{Binding StateText}" Foreground="#93C5FD" TextWrapping="Wrap" Margin="2,5,0,0" />
+            </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+          </TabControl>
         </TabItem>
 
         <TabItem Header="自动准备">
@@ -1420,12 +1477,6 @@
               <Border Background="#10243B" BorderBrush="#22D3EE" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
                 <StackPanel>
                   <TextBlock Text="大模型前端闭环桥" FontSize="15" FontWeight="Bold" Foreground="#67E8F9" />
-                  <WrapPanel Margin="0,5,0,5">
-                    <Button Content="本次会话允许入缝精度警告后试拍" Command="{Binding ArmSlitQualityWarningCommand}"
-                            AutomationProperties.AutomationId="OpenAstroSpec.ArmSlitQualityWarning" />
-                    <Button Content="恢复严格入缝验收" Command="{Binding DisarmSlitQualityWarningCommand}" Margin="8,0,0,0" />
-                  </WrapPanel>
-                  <TextBlock Text="{Binding SupervisedSlitQualityWarningStatusText}" TextWrapping="Wrap" Foreground="#FDE68A" />
                   <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除导星相机旧状态、修改设置或删除证据。"
                              Foreground="#CFFAFE" TextWrapping="Wrap" Margin="0,4,0,7" />
                   <CheckBox Content="启用本机当前用户的 LLM 后台命名管道"

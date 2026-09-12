@@ -30,6 +30,24 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
     }
 
     [Fact]
+    public void CompletionTimeoutReturnPreservesRootCauseWithoutAutomaticFullRebuild()
+    {
+        AssertOrdered(Source,
+            "PHD2_COMPLETION_WINDOW_RETURN_RESERVE:",
+            "var completionFailureMetrics = new Dictionary<string, double>",
+            "cancellationToken, completionFailureMetrics)");
+        AssertOrdered(Source,
+            "var stopFailure = await StopPhdAfterOriginReachedWithRetryAsync()",
+            "if (completionFailureMetrics is not null)",
+            "\"PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED\"",
+            "\"PHD2_LOCK_FAILURE_RETURNED\"");
+        var plan = UvexAdv.Observatory.ObservationAutomaticRecoveryPolicy.For(
+            UvexAdv.Observatory.ObservationStage.PlaceTargetOnSlit,
+            UvexAdv.Observatory.GateResult.Unknown("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED", "timeout"));
+        Assert.False(plan.IsRecoverable);
+    }
+
+    [Fact]
     public void ReadOnlyCompletionWindowsRetainWorstCaseReturnTime()
     {
         AssertOrdered(Source,

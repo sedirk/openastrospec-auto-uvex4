@@ -25,23 +25,26 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-10.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-12.md) ·
+[acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
 [0.4.0.80 UI/localization/recovery closeout](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-10 closeout](docs/closeout-2026-09-10.md) covers **0.4.0.167** and the
-[multi-target frontend commissioning](docs/commissioning-multitarget-2026-09-09.md).
-Deneb, Gamma Cas, Scheat, Almach and 10 Lac each completed a real **11/11** run on
-the versions recorded in that report. The final .167 runs accepted three 60 s
-Almach spectra and three 120 s 10 Lac spectra, with 37 and 75 accepted photometry
-frames respectively. These were separate supervised runs, not one uninterrupted
-multi-target sequence. Slit-quality warnings remain; acquisition acceptance is
-not calibrated spectroscopy, precision photometry or unattended certification.
-The tested station still used the legacy QHY service: this is **not** real-sky
-acceptance of the newly implemented dual-N.I.N.A. worker.
+The [2026-09-12 closeout](docs/closeout-2026-09-12.md) covers **0.4.0.176**:
+visible acquisition budgets, a saved supervised quality policy, WCS/guide handoff,
+post-save temperature validation and PHD2 spectrum-continuity fixes. On
+[September 11](docs/commissioning-multitarget-2026-09-11.md), 10 Lac, Deneb, Scheat
+and Gamma Cas each completed a real **11/11** run on .168–.171, with 12 independently
+checked science spectra in total. Later TRN 29 attempts did not complete;
+**.176 is installed but still awaits a complete real-frontend sky replay**.
+These are separate supervised runs, not one uninterrupted multi-target sequence.
+Slit-quality warnings remain; acceptance is not calibrated spectroscopy, precision
+photometry or unattended certification. The tested station still used the legacy
+QHY service, **not** the newly implemented dual-N.I.N.A. worker. Earlier results
+retain their original boundaries in the [September 10 report](docs/closeout-2026-09-10.md).
 
 The repository contains two user-facing GPL-3.0-only software products:
 
@@ -121,9 +124,9 @@ Start with the [photometry pairing quick start](docs/photometry-collaboration-qu
 The current spectroscopy preview uses a full-width image, collapsible display
 and manual controls, and an independent 1D diagnostic plot. Pixel stretch, zoom
 and display-only spectral-band fit do not transform UI text or rewrite FITS.
-Local release checks pass 1,398 .NET tests, 66 Python tests and 26 offline XAML
+The .176 validation includes 1,537 .NET tests, 66 Python tests and 38 offline XAML
 scenes. Exact-version live dock/role checks and native worker commissioning remain
-separate pending gates; see the closeout report for branch-specific limits.
+separate pending gates; see the closeout report for rerun results and limits.
 
 The shared production runner now implements the ADR-0010 source path. Full
 unattended mode hash-locks and connects all four N.I.N.A. environment adapters,

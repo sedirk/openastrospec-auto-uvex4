@@ -12,7 +12,8 @@ public sealed class G3NeighbourRecoverySourceTests
         Assert.True(start >= 0);
         var method = source[start..];
         Assert.Contains("var failedNeighbourApproachesBefore = state.FailedNeighbourApproaches", method);
-        Assert.Contains("currentField.Image.Properties.Height,\n                failedNeighbourApproachesBefore)", method.Replace("\r\n", "\n"));
+        Assert.Contains("currentField.Image.Properties.Height,\n                failedNeighbourApproachesBefore, neighbourArrivalTolerancePixels)", method.Replace("\r\n", "\n"));
+        Assert.Contains("state.ArrivalToleranceArcseconds / currentField.Solve.Result.Pixscale", method);
         var completedFailure = method.IndexOf("if (isSolvedNeighbourApproach && currentField.Solve?.Result.Success != true", StringComparison.Ordinal);
         Assert.True(completedFailure > 0);
         var failureEnd = method.IndexOf("var currentResidual =", completedFailure, StringComparison.Ordinal);

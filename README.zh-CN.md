@@ -20,20 +20,23 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-09-10.md) ·
+[最新软件/实机收口](docs/closeout-2026-09-12.md) ·
+[采集计划／曝光预算](docs/acquisition-plan.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
 [0.4.0.80 界面/双语/恢复收口](docs/ui-presentation-localization-and-recovery-2026-08-30.md) ·
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-09-10 收口说明](docs/closeout-2026-09-10.md)汇总 **0.4.0.167** 与
-[多类型目标前台实测](docs/commissioning-multitarget-2026-09-09.md)：天津四、Gamma Cas、
-Scheat、Almach 和 10 Lac 分别在记录所列版本完成真实 **11/11** 流程。最终 `.167`
-接受 Almach 的 3 张 60 s 光谱、10 Lac 的 3 张 120 s 光谱，同步测光分别接受 37、75 张。
-这些是不同版本的独立监督运行，不是一次连续多目标长序列；入缝质量警告全部保留，
+[2026-09-12 收口说明](docs/closeout-2026-09-12.md)汇总 **0.4.0.176**：可见采集预算、
+质量策略保存、WCS／导星交接、保存后温度检查及光谱试拍连续性修复。
+[9 月 11 日实测](docs/commissioning-multitarget-2026-09-11.md)中，10 Lac、天津四、
+Scheat 和 Gamma Cas 分别在 .168–.171 完成真实 **11/11**，合计 12 张独立核对的
+合格科学光谱。后续 TRN 29 尝试未完成，**最新 .176 已安装，但完整正式前台天空验收仍待进行**。
+这些是不同版本的独立监督运行，不是一次连续多目标长序列；入缝质量警告保留，
 采集接受不等于精密测光、定标光谱或无人值守验收。现场仍使用旧 QHY 服务，
-**不能将这些结果算作新双 N.I.N.A. 测光端的实机验收**。
+不能算作双 N.I.N.A. 测光端实机验收。更早结果保留在
+[9 月 10 日历史收口](docs/closeout-2026-09-10.md)中。
 
 本仓库包含两个面向用户、均采用 GPL-3.0-only 许可的软件产品：
 
@@ -75,8 +78,8 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 光谱仪导星相机”，实际型号、稳定身份和历史协议字段不变。通用名称不代表所有型号已
 兼容；第一次使用请看[同步测光快速开始](docs/photometry-collaboration-quick-start.md)。
 当前光谱页提供全宽预览、折叠显示调节和手动工具，独立一维曲线不随图像拉伸或缩放。
-本地检查通过 1,398 项 .NET 测试、66 项 Python 测试及 26 个离线 XAML 场景；
-真实停靠区域逐一实例化和双实例硬件验收仍分开标记为待完成。
+.176 的验证覆盖 1,537 项 .NET 测试、66 项 Python 测试及 38 个离线 XAML 场景；
+本次重跑结果和限制见收口说明，真实停靠区域逐一实例化和双实例硬件验收仍单列待完成。
 
 共享生产 runner 已实现 ADR-0010 的源码路线：全无人监管会锁定并自动连接四类 N.I.N.A.
 环境适配器，只在新鲜安全/天气/身份/地平线门和赤道仪停放均通过后开顶，并在正常结束或

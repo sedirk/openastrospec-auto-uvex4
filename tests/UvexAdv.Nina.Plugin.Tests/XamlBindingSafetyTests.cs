@@ -219,10 +219,26 @@ public sealed class XamlBindingSafetyTests
         Assert.DoesNotContain("GhostApplicabilityText", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.DoesNotContain("GhostDecisionText", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("x:Name=\"ManualUvexControlScrollViewer\"", dock[manualTabStart..planTabStart], StringComparison.Ordinal);
-        Assert.Contains("x:Name=\"ObservationPlanScrollViewer\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"ObservationPlanTabs\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
+        var planTabs = System.Xml.Linq.XDocument.Parse(xaml).Descendants()
+            .Single(element => element.Name.LocalName == "TabControl" &&
+                element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "ObservationPlanTabs"));
+        Assert.DoesNotContain(planTabs.Ancestors(), element => element.Name.LocalName == "ScrollViewer");
+        var planPages = planTabs.Elements().Where(element => element.Name.LocalName == "TabItem").ToArray();
+        Assert.Equal(2, planPages.Length);
+        foreach (var page in planPages)
+        {
+            var scroll = Assert.Single(page.Elements());
+            Assert.Equal("ScrollViewer", scroll.Name.LocalName);
+            Assert.Equal("Auto", scroll.Attribute("VerticalScrollBarVisibility")?.Value);
+            Assert.Equal("Disabled", scroll.Attribute("HorizontalScrollBarVisibility")?.Value);
+            Assert.Equal("False", scroll.Attribute("CanContentScroll")?.Value);
+            Assert.Equal("VerticalOnly", scroll.Attribute("PanningMode")?.Value);
+        }
+        Assert.Contains("Header=\"采集计划（曝光预算）\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
+        Assert.Contains("DataContext=\"{Binding AcquisitionPlan}\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding SaveCommand}\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
         Assert.Contains("x:Name=\"AutomaticPreparationScrollViewer\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
-        Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
         Assert.Contains("<ScrollViewer", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("Header=\"PHD2 与目标定位策略详情\"", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）", dock[advancedTabStart..], StringComparison.Ordinal);

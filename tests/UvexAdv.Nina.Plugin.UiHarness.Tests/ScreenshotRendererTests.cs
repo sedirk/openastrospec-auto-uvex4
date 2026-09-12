@@ -7,6 +7,58 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScreenshotRendererTests
 {
+    [Theory]
+    [InlineData("plan-target-short-bottom")]
+    [InlineData("plan-budget-short-bottom")]
+    [InlineData("plan-budget-small-bottom")]
+    [InlineData("plan-budget-short-bottom-en")]
+    public void ShortPlanPagesScrollToTheirLastControlsWithoutMovingTabs(string scenario)
+    {
+        var result = RenderPhotometry(scenario);
+        var scroll = Assert.IsType<PlanScrollDiagnostics>(result.PlanScroll);
+        Assert.True(scroll.ViewportHeight > 0 && double.IsFinite(scroll.ViewportHeight));
+        Assert.True(scroll.ScrollableHeight > 0);
+        Assert.True(scroll.VerticalBarVisible);
+        Assert.False(scroll.BottomInitiallyVisible);
+        Assert.True(scroll.WheelScrolled, "Wheel events on content must scroll the page.");
+        Assert.True(scroll.InputWheelScrolled, "Single-line text inputs must not trap the page's wheel events.");
+        Assert.Equal(scroll.ScrollableHeight, scroll.FinalOffset, 1);
+        Assert.True(scroll.BottomFinallyVisible, "Last control must be inside the actual clipped viewport.");
+        Assert.True(scroll.ActionFinallyVisible, "Save action must be reachable, not just IsVisible.");
+        Assert.True(scroll.TabsRemainVisible);
+        if (scenario.EndsWith("-en", StringComparison.Ordinal))
+            Assert.DoesNotContain(result.VisibleTexts, text => Regex.IsMatch(text, "[\\u3400-\\u9fff]"));
+    }
+
+    [Theory]
+    [InlineData("plan-target")]
+    [InlineData("plan-budget")]
+    public void TallPlanPagesDoNotShowAnUnnecessaryScrollBar(string scenario)
+    {
+        var scroll = Assert.IsType<PlanScrollDiagnostics>(RenderPhotometry(scenario).PlanScroll);
+        Assert.Equal(0, scroll.ScrollableHeight);
+        Assert.False(scroll.VerticalBarVisible);
+        Assert.True(scroll.BottomFinallyVisible);
+        Assert.True(scroll.ActionFinallyVisible);
+    }
+
+    [Theory]
+    [InlineData("plan-budget", "保存采集计划")]
+    [InlineData("plan-budget-narrow", "保存采集计划")]
+    [InlineData("plan-budget-en", "Save acquisition plan")]
+    public void ExposureBudgetMaterializesFromTheProductionTemplate(string scenario, string action)
+    {
+        var result = RenderPhotometry(scenario);
+        Assert.Contains(action, result.VisibleTexts);
+        if (scenario.EndsWith("-en", StringComparison.Ordinal))
+        {
+            Assert.Contains(result.VisibleTexts, text => text.Contains("Accepted science integration", StringComparison.Ordinal));
+            Assert.DoesNotContain(result.VisibleTexts, text => Regex.IsMatch(text, "[\\u3400-\\u9fff]"));
+        }
+        else
+            Assert.Contains(result.VisibleTexts, text => text.Contains("合格科学累计", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void LiveSpectrumGetsFullWidthAndManualInspectorIsCollapsed()
     {

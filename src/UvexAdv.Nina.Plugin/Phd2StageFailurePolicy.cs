@@ -14,6 +14,7 @@ internal static class Phd2StageFailurePolicy
 
     internal static string? CodeFor(Exception failure) => failure switch
     {
+        Phd2GuideOutputException => Phd2GuideOutputStatus.FailureCode,
         Phd2CommandTimeoutException { Operation: "fresh guiding-frame evidence" } => FrameTimeout,
         Phd2CommandTimeoutException { Operation: "get_app_state" } => StatusTimeout,
         _ => null,

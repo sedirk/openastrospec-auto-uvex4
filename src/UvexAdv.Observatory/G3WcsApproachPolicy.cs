@@ -16,11 +16,12 @@ public static class G3WcsApproachPolicy
         return Math.Max(NeighbourClearancePixels, Math.Min(width, height) / 2d);
     }
     public static PixelPoint ChooseTargetPixel(PixelPoint currentTarget, PixelPoint slit, int width, int height,
-        int failedNeighbourApproaches = 0)
+        int failedNeighbourApproaches = 0, double arrivalTolerancePixels = 0)
     {
         ArgumentNullException.ThrowIfNull(currentTarget);
         ArgumentNullException.ThrowIfNull(slit);
         if (width <= 0 || height <= 0 || failedNeighbourApproaches < 0 ||
+            !double.IsFinite(arrivalTolerancePixels) || arrivalTolerancePixels < 0 ||
             !double.IsFinite(currentTarget.X) || !double.IsFinite(currentTarget.Y) ||
             !double.IsFinite(slit.X) || !double.IsFinite(slit.Y) ||
             slit.X < 0 || slit.X >= width || slit.Y < 0 || slit.Y >= height)
@@ -31,6 +32,19 @@ public static class G3WcsApproachPolicy
         // This is one point on the existing outbound path, not another search
         // budget. The next formally solved frame can make the final short move.
         var clearancePixels = GetNeighbourClearancePixels(width, height);
+        // A fresh WCS on 2026-09-11 placed Deneb at y=1621.4 after an
+        // intended y=1620 neighbour arrival. Requiring mathematical equality
+        // repeated that waypoint and then triggered the no-improvement return.
+        // Use the existing command-arrival uncertainty ONLY to choose the next
+        // waypoint. This is not target identity, slit acceptance, or permission
+        // to move; the final leg still uses fresh WCS and the original budgets.
+        // Cap pathological uncertainties well below the halo clearance.
+        var stagingTolerance = Math.Min(arrivalTolerancePixels, clearancePixels / 4d);
+        if (currentTarget.X >= -clearancePixels - stagingTolerance &&
+            currentTarget.X <= width + clearancePixels + stagingTolerance &&
+            currentTarget.Y >= -clearancePixels - stagingTolerance &&
+            currentTarget.Y <= height + clearancePixels + stagingTolerance)
+            return slit;
         var tx = dx > 0 ? (width + clearancePixels - slit.X) / dx :
             dx < 0 ? (-clearancePixels - slit.X) / dx : double.PositiveInfinity;
         var ty = dy > 0 ? (height + clearancePixels - slit.Y) / dy :

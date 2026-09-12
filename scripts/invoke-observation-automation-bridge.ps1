@@ -5,7 +5,7 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Wait')][long]$AfterRevision,
     [Parameter(ParameterSetName = 'Wait')][ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 30000,
     [Parameter(Mandatory, ParameterSetName = 'Invoke')][switch]$Invoke,
-    [Parameter(Mandatory, ParameterSetName = 'Invoke')][ValidateSet('enable-bridge','arm-real-control','disarm-real-control','arm-slit-quality-warning','disarm-slit-quality-warning','select-simulation','select-real','apply-target-draft','import-planetarium-target','import-framing-target','start-selected','restart-real-run','pause','resume','takeover','cancel')][string]$Command,
+    [Parameter(Mandatory, ParameterSetName = 'Invoke')][ValidateSet('enable-bridge','arm-real-control','disarm-real-control','arm-slit-quality-warning','disarm-slit-quality-warning','select-simulation','select-real','show-acquisition-plan','apply-target-draft','import-planetarium-target','import-framing-target','start-selected','restart-real-run','pause','resume','takeover','cancel')][string]$Command,
     [Parameter(Mandatory, ParameterSetName = 'Invoke')][long]$ExpectedRevision,
     [Parameter(ParameterSetName = 'Invoke')][string]$OperatorAttestation = '',
     [Parameter(ParameterSetName = 'Invoke')][hashtable]$TargetDraft,

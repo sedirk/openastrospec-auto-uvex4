@@ -111,6 +111,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand openLatestEvidenceDirectoryCommand;
     private readonly SimpleCommand openRunDirectoryCommand;
     private readonly SimpleCommand showObservationPlanCommand;
+    private readonly SimpleCommand showAcquisitionPlanCommand;
     private readonly SimpleCommand showStartupRequirementsCommand;
     private readonly SimpleCommand showManualUvexControlCommand;
     private readonly SimpleCommand showAdvancedSettingsCommand;
@@ -341,6 +342,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             () => PathExists(RunManifestPath));
         showManualUvexControlCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
         showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 2);
+        showAcquisitionPlanCommand = new SimpleCommand(() =>
+        {
+            SelectedWorkspaceTabIndex = 2;
+            SelectedPlanTabIndex = 1;
+        });
         showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 3);
         showAdvancedSettingsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 6);
         saveAdvancedSettingsCommand = new SimpleCommand(SaveAdvancedSettings);
@@ -417,8 +423,19 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             settings.ModelAutomationBridgeEnabled,
             () => NinaInstancePolicy.IsMaster(settings));
 
+        AcquisitionPlan = new AcquisitionPlanEditor(
+            () => AcquisitionPlanValues.Read(settings), SaveAcquisitionPlan,
+            () => NinaInstancePolicy.IsMaster(settings) && IsTargetPlanEditable, () => UiCulture);
+        AcquisitionPlan.PropertyChanged += (_, _) =>
+        {
+            startSelectedModeCommand.RaiseCanExecuteChanged();
+            startSimulationCommand.RaiseCanExecuteChanged();
+            startRealCommand.RaiseCanExecuteChanged();
+            restartWithCurrentConfigurationCommand.RaiseCanExecuteChanged();
+        };
         LoadTargetImportDisplay();
         RefreshCommissioningProfileCatalog(applySelected: true);
+        AcquisitionPlan.Reload();
         RefreshGhostCommissioningSummary();
         RefreshSlitIdentitySummary();
         RefreshAtrManualStatus();
@@ -449,7 +466,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.AllowSupervisedSlitQualityWarning;
         private set
         {
+            if (IsControllable) return; // Never hot-change the locked run policy.
+            var previous = settings.AllowSupervisedSlitQualityWarning;
             settings.AllowSupervisedSlitQualityWarning = value;
+            try { activeProfileService.ActiveProfile.Save(); }
+            catch (Exception ex)
+            {
+                settings.AllowSupervisedSlitQualityWarning = previous;
+                Error = ObservationUiPresentation.Text(
+                    $"入缝质量策略保存失败，仍使用原设置：{ex.Message}",
+                    $"Slit-quality policy could not be saved; the previous choice remains active: {ex.Message}", UiCulture);
+            }
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(SupervisedSlitQualityWarningStatusText));
             RaiseCommandStates();
@@ -458,11 +485,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     }
     public string SupervisedSlitQualityWarningStatusText => ObservationUiPresentation.Text(
         SupervisedSlitQualityWarningAuthorized
-            ? "本次会话已允许：入缝精度未达标时警告后 ATR 试拍；实际光谱质量独立判定，不表示精确入缝。"
-            : "严格入缝验收；尚未授权精度警告后的 ATR 试拍。",
+            ? "入缝策略：警告后试拍 · 已保存"
+            : "入缝策略：严格验收 · 未启用警告后试拍",
         SupervisedSlitQualityWarningAuthorized
-            ? "Session consent active: supervised ATR probing with slit-precision warnings; spectral quality is evaluated independently. This is not exact placement."
-            : "Strict slit acceptance; no consent for ATR probing with slit-precision warnings.", UiCulture);
+            ? "Slit policy: supervised probing with precision warnings · saved"
+            : "Slit policy: strict acceptance · warning-based probing disabled", UiCulture);
     public ICommand ClearG3RecoveryStateCommand => clearG3RecoveryStateCommand;
     public ICommand RestartWithCurrentConfigurationCommand => restartWithCurrentConfigurationCommand;
     public ICommand OpenQhyPreviewCommand => openQhyPreviewCommand;
@@ -473,6 +500,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand OpenLatestEvidenceDirectoryCommand => openLatestEvidenceDirectoryCommand;
     public ICommand OpenRunDirectoryCommand => openRunDirectoryCommand;
     public ICommand ShowObservationPlanCommand => showObservationPlanCommand;
+    public ICommand ShowAcquisitionPlanCommand => showAcquisitionPlanCommand;
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
     public ICommand ShowManualUvexControlCommand => showManualUvexControlCommand;
     public ICommand ShowAdvancedSettingsCommand => showAdvancedSettingsCommand;
@@ -756,6 +784,34 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         get => settings.ObservationDurationMinutes;
         set { settings.ObservationDurationMinutes = value; RaisePropertyChanged(); }
+    }
+
+    public AcquisitionPlanEditor AcquisitionPlan { get; }
+    private int selectedPlanTabIndex;
+    public int SelectedPlanTabIndex
+    {
+        get => selectedPlanTabIndex;
+        set { selectedPlanTabIndex = value; RaisePropertyChanged(); }
+    }
+
+    private void SaveAcquisitionPlan(AcquisitionPlanValues plan)
+    {
+        if (!NinaInstancePolicy.IsMaster(settings) || !IsTargetPlanEditable)
+            throw new InvalidOperationException(ObservationUiPresentation.Text(
+                "只能在光谱主控的空闲边界保存采集计划。", "Save acquisition plans only at an idle spectroscopy-master boundary.", UiCulture));
+        var previous = AcquisitionPlanValues.Read(settings);
+        try
+        {
+            plan.Apply(settings);
+            activeProfileService.ActiveProfile.Save();
+        }
+        catch
+        {
+            previous.Apply(settings);
+            throw;
+        }
+        RaisePropertyChanged(nameof(DurationMinutes));
+        RaisePropertyChanged(nameof(RealModeStatus));
     }
 
     public string NightSetupId
@@ -2974,7 +3030,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    private bool CanStart() => NinaInstancePolicy.IsMaster(settings) && !IsTargetImportBusy && CanEditTargetPlan();
+    private bool CanStart() => NinaInstancePolicy.IsMaster(settings) && !IsTargetImportBusy &&
+        AcquisitionPlan?.HasPendingChanges != true && CanEditTargetPlan();
 
     private bool CanImportTarget() => !IsTargetImportBusy && CanEditTargetPlan();
 
@@ -3009,7 +3066,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private bool CanStartReal() => CanStart();
 
     private bool CanRestartWithCurrentConfiguration() =>
-        !IsTargetImportBusy && RunState is
+        AcquisitionPlan?.HasPendingChanges != true && !IsTargetImportBusy && RunState is
             ObservationRunState.Idle or
             ObservationRunState.Paused or
             ObservationRunState.PausedNeedsAttention or
@@ -3458,11 +3515,12 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         [
             new("enable-bridge", enableModelAutomationBridgeCommand, true, false, false, false, "Enable the persisted local bridge; this command cannot operate equipment."),
             new("arm-real-control", armModelAutomationRealControlCommand, false, false, true, false, "Arm real Start/Resume for this N.I.N.A. process after explicit operator attestation."),
-            new("arm-slit-quality-warning", armSlitQualityWarningCommand, false, true, true, false, "Authorize this session's supervised ATR probe with measured slit-precision warnings; no new motion authority."),
-            new("disarm-slit-quality-warning", disarmSlitQualityWarningCommand, false, false, false, false, "Restore strict slit acceptance for subsequent runs in this session."),
+            new("arm-slit-quality-warning", armSlitQualityWarningCommand, false, true, true, false, "Save this profile's supervised probing policy with measured slit-precision warnings; no new motion authority."),
+            new("disarm-slit-quality-warning", disarmSlitQualityWarningCommand, false, false, false, false, "Save strict slit acceptance for subsequent runs in this profile."),
             new("disarm-real-control", disarmModelAutomationRealControlCommand, false, false, false, false, "Remove this process-local real Start/Resume authorization."),
             new("select-simulation", selectSimulationModeCommand, false, false, false, false, "Select the simulation mode without starting it."),
             new("select-real", selectRealModeCommand, false, false, false, false, "Select the real-equipment mode without connecting or moving equipment."),
+            new("show-acquisition-plan", showAcquisitionPlanCommand, false, false, false, false, "Show the visible acquisition-plan tab only; no settings or equipment changes."),
             new("apply-target-draft", applyTargetDraftCommand, false, false, false, false, "Apply only the visible J2000 target fields while the run is inactive; no equipment operation."),
             new("import-planetarium-target", importFromPlanetariumCommand, false, false, false, false, "Import the current planetarium selection using the visible import button."),
             new("import-framing-target", importFromFramingAssistantCommand, false, false, false, false, "Import the current framing selection using the visible import button."),
@@ -3799,6 +3857,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private void RaiseCommandStates()
     {
+        AcquisitionPlan?.NotifyState();
+        RaisePropertyChanged(nameof(SupervisedSlitQualityWarningAuthorized));
+        RaisePropertyChanged(nameof(SupervisedSlitQualityWarningStatusText));
         RaisePropertyChanged(nameof(IsManualAtrToolsAvailable));
         RaisePropertyChanged(nameof(ManualAtrInspectionHeader));
         RaisePropertyChanged(nameof(CanEditSynchronizedPhotometry));
@@ -4012,6 +4073,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             LoadNativeTargetDraftFromSettings();
             RefreshCommissioningProfileCatalog(applySelected: true);
+            AcquisitionPlan.Reload();
             RefreshImageFilePatternDisplay();
             RefreshProfileOwnership();
         }
@@ -4021,6 +4083,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             {
                 LoadNativeTargetDraftFromSettings();
                 RefreshCommissioningProfileCatalog(applySelected: true);
+                AcquisitionPlan.Reload();
                 RefreshImageFilePatternDisplay();
                 RefreshProfileOwnership();
             });

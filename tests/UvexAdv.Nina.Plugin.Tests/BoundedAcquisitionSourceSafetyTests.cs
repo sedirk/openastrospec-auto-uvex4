@@ -17,7 +17,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     private static readonly string Phd2SlitPlacementSource = File.ReadAllText(Path.Combine(
         AppContext.BaseDirectory,
         "Sources",
-        "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        "RealObservationStageRunner.Phd2SlitPlacement.cs")).ReplaceLineEndings("\n");
 
     [Fact]
     public void ExhaustedWcsReserveStopsAfterAttestedReturnBeforeAnyNewOriginCaptureOrSearch()
@@ -434,11 +434,16 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var invalidate = body.IndexOf("lastG3Field = null", stop, StringComparison.Ordinal);
         var reacquire = body.IndexOf("AcquireG3SlitFieldAsync", invalidate, StringComparison.Ordinal);
         var recurse = body.IndexOf("postCalibrationReacquisitionDepth + 1", reacquire, StringComparison.Ordinal);
-        var firstLockRead = body.IndexOf("GetLockPositionAsync", StringComparison.Ordinal);
+        // A previously completed same-epoch ledger now has an earlier read-only
+        // continuation check. Fresh calibration must still precede the NEW
+        // placement's lock read and every exact-lock command.
+        var firstLockRead = body.IndexOf("GetLockPositionAsync", recurse, StringComparison.Ordinal);
+        var firstExactLock = body.IndexOf("SetExactLockPositionAsync", StringComparison.Ordinal);
 
         Assert.True(guide >= 0 && forceBranch > guide && stop > forceBranch);
         Assert.True(invalidate > stop && reacquire > invalidate && recurse > reacquire);
         Assert.True(firstLockRead > recurse);
+        Assert.True(firstExactLock > firstLockRead);
         Assert.Contains("exactLockCommandIssued = false", body, StringComparison.Ordinal);
         Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body, StringComparison.Ordinal);
         Assert.True(CountOccurrences(
@@ -1134,7 +1139,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private bool IsGuidingStable()",
             "private bool IsDegradedSupervisedScience()");
         var atrSave = MethodBody(
-            "private async Task<string> SaveAtrImageAsync(",
+            "private async Task<GateResult> SaveAtrImageAsync(",
             "private SpectralProbeMetrics MeasureSpectralProbe(");
 
         Assert.Contains("RealSlitPlacementAuthority.IndependentMountTransform", start, StringComparison.Ordinal);
@@ -1156,7 +1161,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     public void WindSampledScienceRequiresFreshGuidingWindowBeforeEveryAtrCapture()
     {
         var capture = MethodBody("private async Task<AtrCapture> CaptureAtrImageAsync(",
-            "private async Task<string> SaveAtrImageAsync(");
+            "private async Task<GateResult> SaveAtrImageAsync(");
         Assert.True(capture.IndexOf("VerifyWindSampledGuidingBeforeAtrAsync", StringComparison.Ordinal) <
             capture.IndexOf("imagingMediator.CaptureImage", StringComparison.Ordinal));
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", capture, StringComparison.Ordinal);
@@ -1182,13 +1187,24 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunG3WcsCenteringAsync(",
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
 
-        Assert.Contains("coarseResidualPixels > placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("G3WcsRecoveryPolicy.NeedsCoarseCentering", acquire, StringComparison.Ordinal);
+        Assert.Contains("coarseResidualPixels, placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
         Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
         Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
         Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
         Assert.Contains("targetToSlitResidualPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
         Assert.Contains("currentResidual <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
         Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
+        Assert.Contains("G3CatalogTargetPositionPolicy.ProjectionDestination", wcs, StringComparison.Ordinal);
+        Assert.Contains("PixelDistance(adoptedTargetPixel, desiredTargetPixel)", wcs, StringComparison.Ordinal);
+        var search = MethodBody("private async Task<StageResult> RunBoundedG3LocalSearchAsync(",
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(");
+        Assert.Contains("TargetInsideHandedToWcsCentering", search, StringComparison.Ordinal);
+        Assert.Contains("if (NeedsG3CoarseCentering(lastG3Field))", search, StringComparison.Ordinal);
+        Assert.Contains("allowChargedCurrentPositionHandoff: true", search, StringComparison.Ordinal);
+        var boundary = MethodBody("private StageResult G3FieldPassed(",
+            "private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(");
+        Assert.Contains("G3_COARSE_HANDOFF_REQUIRED", boundary, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -7,6 +7,74 @@ public sealed class Phd2SlitLockShiftPlannerTests
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void Trn29WholeCorrectionIsRejectedBeforeSpendingThreeUnfinishableStages()
+    {
+        var f = CreateFixture();
+        var quality = f.Qualification with { MaximumLockShiftScale = 0.5 };
+        var limits = f.MotionLimits with { MaximumStagePixels = 25, MaximumAttempts = 8, MaximumAcquisitionResidualPixels = 100 };
+        var measurement = Measurement(new(100, 100), new(767.72, 477), new(817.54, 428.86));
+        Assert.True(Phd2SlitLockShiftPlanner.PlanOutboundStage(quality, Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement, f.Ledger, f.Safety, f.Topology, limits, Now).IsAllowed);
+        var result = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(quality, Phd2SlitGuideMode.OffSlitGuideStar,
+            measurement, f.Ledger, f.Safety, f.Topology, limits, Now);
+        Assert.False(result.IsAllowed);
+        Assert.Equal("SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE", result.Code);
+        Assert.True(result.TotalCumulativePixels > 100);
+        Assert.Equal(6, result.RequiredOutboundAttempts);
+        Assert.Equal(0, f.Ledger.AttemptsUsed);
+        Assert.Equal(0, f.Ledger.CumulativeCommandedPixels);
+    }
+
+    [Theory]
+    [InlineData(7.18)]
+    [InlineData(13.59)]
+    [InlineData(18.04)]
+    [InlineData(25.94)]
+    public void PreviousSuccessfulTargetHandoffsFitTheUnchangedWholeTripBudget(double residual)
+    {
+        var f = CreateFixture();
+        var result = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(
+            f.Qualification with { MaximumLockShiftScale = 0.5 }, Phd2SlitGuideMode.OffSlitGuideStar,
+            Measurement(new(100,100), new(200,200), new(200+residual,200)), f.Ledger, f.Safety, f.Topology,
+            f.MotionLimits with { MaximumStagePixels = 25, MaximumAttempts = 8, MaximumAcquisitionResidualPixels = 100 }, Now);
+        Assert.True(result.IsAllowed, result.Message);
+        Assert.InRange(result.TotalCumulativePixels, 0, 100);
+        Assert.InRange(result.TotalAttempts, 0, 8);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 298, "SLIT_LOCK_RETURN_TIME_RESERVE")]
+    [InlineData(6, 0, 1, "SLIT_LOCK_ACQUISITION_ATTEMPT_RESERVE")]
+    [InlineData(0, 60, 1, "SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE")]
+    public void InheritedAttemptsPixelsAndClockAreIncluded(int attempts, double cumulative, double seconds, string code)
+    {
+        var f = CreateFixture(attempts: attempts, cumulative: cumulative);
+        var ledger = f.Ledger with { StartedUtc = Now - TimeSpan.FromSeconds(seconds) };
+        var result = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, Measurement(new(100,100), new(200,200), new(225,200)),
+            ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.False(result.IsAllowed);
+        Assert.Equal(code, result.Code);
+        Assert.Equal(attempts, ledger.AttemptsUsed);
+        Assert.Equal(cumulative, ledger.CumulativeCommandedPixels);
+        Assert.Equal(Now - TimeSpan.FromSeconds(seconds), ledger.StartedUtc);
+    }
+
+    [Fact]
+    public void FullBudgetPreflightNeverBypassesReusedFramesOrTheSearchWindow()
+    {
+        var f = CreateFixture();
+        var measured = Measurement(new(100,100), new(200,200), new(710,200));
+        var result = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, measured, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.Equal("SLIT_RESIDUAL_SEARCH_WINDOW", result.Code);
+        result = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, measured, f.Ledger with { LastAcceptedFrameSha256 = measured.FrameSha256 },
+            f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.Equal("G3_FRAME_REUSED", result.Code);
+    }
+
+    [Fact]
     public void SupervisedMeasuredGuideOffsetUsesActualStarAndStillRequiresFrameProof()
     {
         var fixture = CreateFixture();

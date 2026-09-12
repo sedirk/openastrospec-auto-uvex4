@@ -123,12 +123,16 @@ public sealed class ProductionRouteParitySourceTests
     }
 
     [Fact]
-    public void SlitQualityWarningRequiresSeparateSessionConsentThroughTheVisibleCommand()
+    public void SlitQualityWarningIsAnExplicitSavedProfileChoiceThroughTheVisibleCommand()
     {
         var settings = ReadSource("UvexPluginSettings.cs");
         var configuration = ReadSource("RealRunConfiguration.cs");
         var template = ReadSource("Templates.xaml");
-        Assert.Contains("public bool AllowSupervisedSlitQualityWarning { get; set; }", settings, StringComparison.Ordinal);
+        Assert.Contains("values.GetValueBoolean(nameof(AllowSupervisedSlitQualityWarning), false)", settings, StringComparison.Ordinal);
+        Assert.Contains("values.SetValueBoolean(nameof(AllowSupervisedSlitQualityWarning), value)", settings, StringComparison.Ordinal);
+        Assert.Contains("OpenAstroSpec.SlitQualityPolicy", template, StringComparison.Ordinal);
+        Assert.True(template.IndexOf("OpenAstroSpec.SlitQualityPolicy", StringComparison.Ordinal) <
+            template.IndexOf("Command=\"{Binding StartSelectedModeCommand}\"", StringComparison.Ordinal));
         Assert.Contains("bool AllowSupervisedSlitQualityWarning = false)", configuration, StringComparison.Ordinal);
         Assert.Contains("settings.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);
         Assert.Contains("payload.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);

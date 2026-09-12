@@ -8,6 +8,47 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2StageFailurePolicyTests
 {
     [Theory]
+    [InlineData("PHD2_GUIDE_OUTPUT_UNAVAILABLE")]
+    [InlineData("PHD2_GUIDE_OUTPUT_RETURN_PENDING")]
+    [InlineData("PHD2_GUIDE_OUTPUT_STOP_UNCONFIRMED")]
+    [InlineData("PHD2_GUIDE_OUTPUT_RECOVERY_EXHAUSTED")]
+    [InlineData("PHD2_GUIDE_OUTPUT_RECONNECT_FAILED")]
+    public void OutputFailureRemainsSpecificAndCannotGrantGenericRebuild(string code)
+    {
+        var gate = GateResult.Unknown(code, "native guide output unavailable");
+        Assert.False(ObservationAutomaticRecoveryPolicy.For(ObservationStage.PlaceTargetOnSlit, gate).IsRecoverable);
+        var chinese = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, new CultureInfo("zh-CN"));
+        var english = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, new CultureInfo("en-US"));
+        Assert.DoesNotContain("当前质量门", chinese.Summary);
+        Assert.Contains("输出", chinese.Summary);
+        Assert.Contains("脉冲", chinese.Recommendation);
+        Assert.Contains("不是精度", chinese.AutomaticRecovery);
+        Assert.False(ObservationUiPresentation.ContainsCjk(english.Summary));
+        Assert.False(ObservationUiPresentation.ContainsCjk(english.Recommendation));
+    }
+
+    [Fact]
+    public void SharedOutputRecoveryRetainsReturnDebtAndDoesNotLoopCoarseBudget()
+    {
+        var placement = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var recovery = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.GuideOutput.cs"));
+        var check = placement.IndexOf("if (phd2.Snapshot.GuideOutput?.Failed == true)", placement.IndexOf("catch (Exception ex)", placement.IndexOf("var lockOrigin =", StringComparison.Ordinal), StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.True(check >= 0);
+        Assert.Contains("RecoverPhd2GuideOutputBeforeMotionAsync", placement[check..]);
+        Assert.True(check < placement.IndexOf("IsStructuredPhd2GuideSessionLoss(ex)", check, StringComparison.Ordinal));
+        Assert.Contains("Math.Max(3, policy.RequiredFreshResidualsPerLockShiftStage)", placement);
+        Assert.Contains("Phase = Phd2LockShiftPendingPhase.ReturnRequired", recovery);
+        Assert.Contains("if (halted.Gate.Code != Phd2GuideOutputStatus.FailureCode) return halted", recovery);
+        Assert.Contains("phd2OutputReconnectAttempts >= 1", recovery);
+        Assert.Contains("ReconnectEquipmentAfterOutputFailureAsync", recovery);
+        Assert.Contains("allowChargedCurrentPositionHandoff: true", recovery);
+        Assert.Contains("actualPulseResponseValidated = false", recovery);
+        Assert.DoesNotContain("SetExactLockPositionAsync", recovery);
+        Assert.DoesNotContain("Slew", recovery);
+        Assert.DoesNotContain("pendingPhd2LockShift = null", recovery);
+    }
+
+    [Theory]
     [InlineData("fresh guiding-frame evidence", Phd2StageFailurePolicy.FrameTimeout)]
     [InlineData("get_app_state", Phd2StageFailurePolicy.StatusTimeout)]
     public void TypedTimeoutHasSpecificPresentationButNeverGrantsRestart(string operation, string code)

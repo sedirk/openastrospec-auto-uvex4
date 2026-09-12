@@ -8,6 +8,31 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(700, 600, 2, true)] // A 100 arcsec neighbour step still leaves 600 arcsec.
+    [InlineData(700, 699, 2, false)]
+    [InlineData(700, 698, 2, false)]
+    [InlineData(700, 701, 2, false)]
+    [InlineData(700, double.NaN, 2, false)]
+    [InlineData(double.NaN, 600, 2, false)]
+    [InlineData(700, -1, 2, false)]
+    [InlineData(700, 600, -1, false)]
+    public void NeighbourProgressComparesTotalRemainingTravelNotTheLastShortStep(
+        double prior, double fresh, double tolerance, bool expected) =>
+        Assert.Equal(expected, G3WcsRecoveryPolicy.HasMeasuredApproachProgress(prior, fresh, tolerance));
+
+    [Fact]
+    public void TotalRemainingMotionIsCapturedBeforeTheInverseIsReplacedByANeighbour()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var prior = source.IndexOf("var priorDirectCorrection =", StringComparison.Ordinal);
+        var neighbour = source.IndexOf("var approachTargetPixel =", prior, StringComparison.Ordinal);
+        Assert.True(prior > 0 && neighbour > prior);
+        Assert.Contains("inverse.DesiredG3Center", source[prior..neighbour]);
+        Assert.Contains("priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, state.ArrivalToleranceArcseconds", source);
+        Assert.DoesNotContain("nextRequiredMotionArcseconds < fullMagnitude", source);
+    }
+
+    [Theory]
     [InlineData(17.2, true, true)]
     [InlineData(20, true, true)]
     [InlineData(20.01, true, false)]

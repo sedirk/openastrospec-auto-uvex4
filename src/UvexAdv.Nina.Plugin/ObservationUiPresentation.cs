@@ -370,10 +370,26 @@ public static partial class ObservationUiPresentation
             "PHD2_GUIDING_FRAME_TIMEOUT" => "PHD2 未在有界等待内交付新的导星帧，不能确认当前目标位置；这不是目标太暗或导星精度不合格的判定",
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
+            "PHD2_GUIDE_OUTPUT_UNAVAILABLE" => "PHD2 连续请求修正但没有导星脉冲输出；连接标志和星点位置不代表赤道仪连接有效",
+            "PHD2_GUIDE_OUTPUT_RETURN_PENDING" => "PHD2 导星脉冲输出失效，已停止；仍有未结精调责任，未伪报物理回程或重置预算",
+            "PHD2_GUIDE_OUTPUT_STOP_UNCONFIRMED" => "PHD2 导星输出失效且本轮停止未获确认；未重连、未发送新的移动或曝光",
+            "PHD2_GUIDE_OUTPUT_RECOVERY_EXHAUSTED" => "已原生重连一次，导星脉冲输出仍失效；已停止，不再循环消耗粗定位预算",
+            "PHD2_GUIDE_OUTPUT_RECONNECT_FAILED" => "PHD2 导星输出故障后的原生重连或身份复核失败；未继续曝光或重置预算",
+            "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED" => "入缝新帧未在本轮时限内达到所选质量策略；已保留回程时间，没有重新解算或追加运动",
+            "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED" => "入缝新帧未在本轮时限内达到所选质量策略；已确认返回原锁点并停止导星，没有再做无预算的全场重建",
+            "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" => "本轮入缝账本的剩余预算不足；请查看实际次数、位移、已用时间和原始原因，不代表继承了前夜用量",
+            "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星证据需要重建，但原精调预算不能授权新的移动；未启动回退定位，已保存光谱保留",
             "PHD2_LOCK_RECOVERY_FRESH_FIELD_REQUIRED" => "PHD2 旧锁点账本恢复时未取得新的正式 G3/PL3 目标与狭缝联合证据",
             "PHD2_LOCK_RECOVERY_FOREIGN_ENDPOINT_UNPROVEN" => "旧观测留下的 PHD2 锁点端点无法由持久化读回唯一确认；没有发送返回命令",
             "PHD2_LOCK_RECOVERY_SLIT_STATE_CHANGED" => "同一目标的锁点恢复中，fresh 物理狭缝位置与原账本不一致",
             "SLIT_LOCK_RETURN_TIME_RESERVE" => "PHD2 锁点返程所需的最坏耗时无法装入当前活动恢复时窗；没有发送锁点命令",
+            "SLIT_LOCK_RETURN_CUMULATIVE_RESERVE" => "当前精调下一步与返回原锁点所需的总位移超过剩余预算；未追加精调，原账本与回程责任保留",
+            "SLIT_RESIDUAL_SEARCH_WINDOW" => "实测目标离狭缝太远，超出精调接管范围；需要先重新完成 WCS 粗居中，不是导星精度警告",
+            "G3_COARSE_HANDOFF_REQUIRED" => "目标虽已入画，但尚未进入狭缝附近的精调交接范围；未跳过 WCS 粗居中",
+            "PHD2_WCS_TAKEOVER_POSITION_CHANGED" => "导星接管新帧的目标位置与 WCS 交接位置差异过大；先重建定位，未盲目追加精调",
+            "SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE" or "SLIT_LOCK_ACQUISITION_ATTEMPT_RESERVE" or "SLIT_LOCK_ACQUISITION_TIME_RESERVE" => "完整精调及安全回程无法装入当前剩余预算；在第一步锁点微调前发现，先尝试有界 WCS 重新居中",
+            "PHD2_COARSE_HANDOFF_RECOVERY_EXHAUSTED" => "已自动重建一次 WCS／导星交接，位置或完整精调预算仍未满足；停止追加动作并保留原始测量与账本",
+            "PHD2_COARSE_HANDOFF_RETURN_REQUIRED" => "交接重建前仍有未结精调动作，须先核验原锁点回程；未重置预算或启动新的粗定位",
             "PHD2_LOCK_RESTART_RETURN_RESIDUAL_MISMATCH" => "PHD2 锁点已经返回恢复原点，但 fresh G3 星场尚未证明本次光学响应；流程保持停止且不会重复发送锁点命令",
             "PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED" => "旧 PHD2 锁点债务已经安全结清，但自动重建 fresh G3/PL3/狭缝证据未通过；没有复用不稳定旧场",
             "PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED" => "PHD2 选中的导星星撞到探测器边缘、目标光晕或狭缝保护区",
@@ -429,6 +445,7 @@ public static partial class ObservationUiPresentation
             "TELESCOPE_TRACKING_ENABLE_FAILED" => "恒星时跟踪启用失败，目录转向尚未开始",
             "FINALIZE_INCOMPLETE" => "安全收尾仍有终态未确认；不会把本轮标记为完整结束",
             "ATR_TIER_NOT_SELECTED" => "ATR 探测曝光尚未选出合格档位，科学曝光不会开始",
+            "ATR_SAVED_FRAME_TEMPERATURE_INVALID" => "光谱原始 FITS 的温度或保存后相机读回不合格；文件已保留，但未计入合格帧，后续曝光已停止",
             "HORIZON_BLOCKED" => "目标高度或预计运行时段触及本地地平线/围墙限制",
             "RAIN_DETECTED" => "安全链报告降雨，新的运动和曝光已被禁止",
             "REAL_PROFILE_DRIFT" => "当前 N.I.N.A. Profile 与本轮锁定的真实设备配置不一致",
@@ -458,6 +475,8 @@ public static partial class ObservationUiPresentation
 
     private static string EnglishIssueSummary(string outerCode, string effectiveCode, string raw)
     {
+        if (effectiveCode == "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE")
+            return "Guiding evidence requires reacquisition, but the original fine-motion budget cannot authorize replacement. No fallback repositioning was started; saved spectra retain their quality flags.";
         if (!string.IsNullOrWhiteSpace(raw) && !ContainsCjk(raw)) return raw.Trim();
         var nested = !string.Equals(outerCode, effectiveCode, StringComparison.Ordinal)
             ? $" Inner code: {effectiveCode}."
@@ -518,6 +537,10 @@ public static partial class ObservationUiPresentation
 
     private static string HardStopReason(string code, bool chinese)
     {
+        if (code.StartsWith("PHD2_GUIDE_OUTPUT_", StringComparison.Ordinal))
+            return chinese
+                ? "这是导星输出链故障，不是精度警告；未发出精调时最多自动重连一次，已有精调则保留未结责任。详见本轮停止/重连证据，不以重复粗定位代替修复连接。"
+                : "This is a guide-output failure, not a precision warning. One reconnect is permitted before exact-lock motion; outstanding motion responsibility is retained. Stop/reconnect evidence records the actual outcome; repeated coarse centering is not connection repair.";
         if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
             return chinese
                 ? "当前缺少新的取图或所有者状态证据；需先确认停止并恢复 PHD2/相机连接，随后重新定位，不能复用旧帧或在曝光中重启设备。"
@@ -548,6 +571,10 @@ public static partial class ObservationUiPresentation
     private static string Recommendation(ObservationStage stage, string outerCode, string effectiveCode, bool chinese)
     {
         var code = effectiveCode;
+        if (code.StartsWith("PHD2_GUIDE_OUTPUT_", StringComparison.Ordinal))
+            return chinese
+                ? "检查 PHD2 原生导星日志的修正请求与 RA/DEC 脉冲时长，以及 ASCOM/RPC 错误；在无曝光、导星已停止的边界恢复原设备连接。存在未结精调时先核验其责任，不能只清状态或放宽导星精度。"
+                : "Compare requested corrections with native RA/DEC pulse durations and inspect ASCOM/RPC errors. Restore the bound equipment only with exposures idle and guiding stopped. Reconcile outstanding lock motion; do not merely clear state or relax precision.";
         if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
             return chinese
                 ? "检查同一时刻的 PHD2 原始日志、相机曝光超时/重连记录和 USB/供电。先结束本轮并确认停止，再由 PHD2 唯一所有者恢复连接；从前台重新定位、找缝、导星后重拍。旧 FITS 和运动账本保留，单凭超时不能归因于云或相机厂商。"

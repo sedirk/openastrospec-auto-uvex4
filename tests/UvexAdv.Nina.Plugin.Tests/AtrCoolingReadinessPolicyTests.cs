@@ -7,6 +7,60 @@ public sealed class AtrCoolingReadinessPolicyTests
 {
     private const string CameraId = "ATR585M-EXACT-ID";
 
+    [Theory]
+    [InlineData("-9.9", "-10", true)]
+    [InlineData("-9.5", "-10", true)]
+    [InlineData("-9.49", "-10", false)]
+    [InlineData("0", "-10", false)]
+    [InlineData("NaN", "-10", false)]
+    [InlineData("Infinity", "-10", false)]
+    [InlineData("-10", "0", false)]
+    [InlineData("unavailable", "-10", false)]
+    public void SavedFitsMustIndependentlyCarryTheLockedTemperature(string temperature, string setPoint, bool passed)
+    {
+        var headers = new Dictionary<string, string> { ["CCD-TEMP"] = temperature, ["SET-TEMP"] = setPoint };
+        var gate = AtrCoolingReadinessPolicy.EvaluateSavedFrame(headers, -10, GateResult.Pass("OWNER", "Fresh readback"));
+        Assert.Equal(passed, gate.Disposition == GateDisposition.Passed);
+        if (!passed) Assert.Equal(AtrCoolingReadinessPolicy.SavedFrameInvalidCode, gate.Code);
+        Assert.Equal(temperature, headers["CCD-TEMP"]); // Never repair a saved header.
+        Assert.All(gate.Metrics!.Values, value => Assert.True(double.IsFinite(value)));
+    }
+
+    [Fact]
+    public void HeaderCannotSubstituteForBadPostSaveOwnerReadbackAndMissingHeaderCannotUseCachedTemperature()
+    {
+        var headers = new Dictionary<string, string> { ["CCD-TEMP"] = "-10", ["SET-TEMP"] = "-10" };
+        Assert.NotEqual(GateDisposition.Passed, AtrCoolingReadinessPolicy.EvaluateSavedFrame(headers, -10,
+            GateResult.Unknown("ATR_PRECOOLING_IN_PROGRESS", "0 C readback")).Disposition);
+        headers.Remove("CCD-TEMP");
+        Assert.NotEqual(GateDisposition.Passed, AtrCoolingReadinessPolicy.EvaluateSavedFrame(headers, -10,
+            GateResult.Pass("OWNER", "-10 C readback")).Disposition);
+        headers["CCD-TEMP"] = "0";
+        headers["SET-TEMP"] = "0";
+        Assert.Equal(GateDisposition.Passed, AtrCoolingReadinessPolicy.EvaluateSavedFrame(headers, 0,
+            GateResult.Pass("OWNER", "Explicit 0 C target reached")).Disposition);
+    }
+
+    [Fact]
+    public void BothProductionFrameKindsCheckSavedTemperatureBeforeAcceptanceCounters()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        foreach (var pair in new[] { ("retainedAtrProbeFrames++;", "acceptedAtrProbeFrames++;"),
+                                     ("retainedAtrScienceFrames++;", "savedAtrFrames++;" ) })
+        {
+            var retained = source.IndexOf(pair.Item1, StringComparison.Ordinal);
+            var accepted = source.IndexOf(pair.Item2, retained, StringComparison.Ordinal);
+            Assert.True(retained > 0 && accepted > retained);
+            Assert.Contains("savedTemperature.Disposition != GateDisposition.Passed", source[retained..accepted]);
+            Assert.Contains("return new StageResult(savedTemperature)", source[retained..accepted]);
+        }
+        var verification = source.IndexOf("var temperatureGate = AtrCoolingReadinessPolicy.EvaluateSavedFrame(", StringComparison.Ordinal);
+        var publish = source.IndexOf("host.PublishEvidence(", verification, StringComparison.Ordinal);
+        Assert.Contains("qualityAccepted = false;", source[verification..publish]);
+        Assert.Contains("provenance.Headers", source[verification..publish]);
+        Assert.DoesNotContain("WriteAll", source[verification..publish]);
+    }
+
     [Fact]
     public void ReadyRequiresMeasuredTemperatureSetPointCoolerAndPower()
     {

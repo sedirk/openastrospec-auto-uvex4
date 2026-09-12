@@ -7,6 +7,20 @@ public static class G3WcsRecoveryPolicy
 {
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
 
+    public static bool NeedsCoarseCentering(GateResult fieldGate, bool hasFreshFormalSolve,
+        double adoptedResidualPixels, double coarseHandoffPixels) =>
+        fieldGate.Disposition == GateDisposition.Passed && hasFreshFormalSolve &&
+        double.IsFinite(adoptedResidualPixels) && adoptedResidualPixels >= 0 &&
+        double.IsFinite(coarseHandoffPixels) && coarseHandoffPixels > 0 &&
+        adoptedResidualPixels > coarseHandoffPixels;
+
+    public static bool HasMeasuredApproachProgress(
+        double priorRemainingArcseconds, double freshRemainingArcseconds, double arrivalToleranceArcseconds) =>
+        double.IsFinite(priorRemainingArcseconds) && priorRemainingArcseconds > 0 &&
+        double.IsFinite(freshRemainingArcseconds) && freshRemainingArcseconds >= 0 &&
+        double.IsFinite(arrivalToleranceArcseconds) && arrivalToleranceArcseconds >= 0 &&
+        freshRemainingArcseconds < priorRemainingArcseconds - arrivalToleranceArcseconds;
+
     public static bool RecheckExistingCoarseHandoffBeforeImprovement(
         GateResult freshFieldGate, bool hasFreshFormalSolve,
         double catalogResidualPixels, double coarseHandoffPixels) =>

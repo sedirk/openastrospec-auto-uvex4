@@ -5,6 +5,34 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3WcsApproachPolicyTests
 {
     [Theory]
+    [InlineData(1776.5, 1621.4)]
+    [InlineData(817, -541.4)]
+    [InlineData(-541.4, 426)]
+    [InlineData(2461.4, 426)]
+    public void FreshNeighbourWithinExistingArrivalUncertaintyTakesFinalLeg(double x, double y)
+    {
+        var slit = new PixelPoint(817.473, 426.867);
+        const double arrivalTolerancePixels = 2d / 0.38d;
+        Assert.NotEqual(slit, G3WcsApproachPolicy.ChooseTargetPixel(new(x, y), slit, 1920, 1080));
+        Assert.Equal(slit, G3WcsApproachPolicy.ChooseTargetPixel(new(x, y), slit, 1920, 1080,
+            arrivalTolerancePixels: arrivalTolerancePixels));
+    }
+
+    [Fact]
+    public void StagingToleranceDoesNotMakeDistantOrUnknownGeometryAFinalArrival()
+    {
+        var slit = new PixelPoint(817, 426);
+        Assert.NotEqual(slit, G3WcsApproachPolicy.ChooseTargetPixel(new(1781.4, 1628), slit, 1920, 1080,
+            arrivalTolerancePixels: 2d / 0.38d));
+        Assert.NotEqual(slit, G3WcsApproachPolicy.ChooseTargetPixel(new(817, 3000), slit, 1920, 1080,
+            arrivalTolerancePixels: 10000));
+        Assert.Throws<ArgumentException>(() => G3WcsApproachPolicy.ChooseTargetPixel(new(817, 1621), slit,
+            1920, 1080, arrivalTolerancePixels: double.NaN));
+        Assert.Throws<ArgumentException>(() => G3WcsApproachPolicy.ChooseTargetPixel(new(817, 1621), slit,
+            1920, 1080, arrivalTolerancePixels: -1));
+    }
+
+    [Theory]
     [InlineData(700, 12000)]
     [InlineData(700, -12000)]
     [InlineData(12000, 500)]

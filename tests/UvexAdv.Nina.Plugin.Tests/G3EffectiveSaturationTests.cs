@@ -9,6 +9,34 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3EffectiveSaturationTests
 {
     [Fact]
+    public void SlitQualityChoiceSurvivesSettingsRecreationButIsStrictForANewProfile()
+    {
+        var values = new Dictionary<string, object?>();
+        var accessor = CreateProxy<IPluginOptionsAccessor>((method, arguments) =>
+        {
+            var name = (string)arguments[0]!;
+            if (method.Name.StartsWith("GetValue", StringComparison.Ordinal))
+                return values.TryGetValue(name, out var value) ? value : arguments[1];
+            if (method.Name.StartsWith("SetValue", StringComparison.Ordinal))
+            {
+                values[name] = arguments[1];
+                return null;
+            }
+            return Default(method.ReturnType);
+        });
+        var service = CreateProxy<IProfileService>((method, _) => Default(method.ReturnType));
+        var first = new UvexPluginSettings(service, accessor);
+        Assert.False(first.AllowSupervisedSlitQualityWarning);
+        first.AllowSupervisedSlitQualityWarning = true;
+        var restarted = new UvexPluginSettings(service, accessor);
+        Assert.True(restarted.AllowSupervisedSlitQualityWarning);
+        restarted.AllowSupervisedSlitQualityWarning = false;
+        Assert.False(new UvexPluginSettings(service, accessor).AllowSupervisedSlitQualityWarning);
+        values.Clear(); // A distinct Profile must not inherit another Profile's choice.
+        Assert.False(new UvexPluginSettings(service, accessor).AllowSupervisedSlitQualityWarning);
+    }
+
+    [Fact]
     public void NativeTwelveBitPlateauIsRejectedAsSaturated()
     {
         const int width = 96;

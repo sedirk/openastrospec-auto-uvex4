@@ -13,6 +13,23 @@ internal static partial class ObservationStaticTextCatalog
     private static readonly IReadOnlyDictionary<string, string> English =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["允许警告后试拍"] = "Allow warning-based probing",
+            ["目标与导入"] = "Target and import",
+            ["采集计划（曝光预算）"] = "Acquisition plan (exposure budget)",
+            ["光谱采集计划"] = "Spectroscopy acquisition plan",
+            ["拍够合格科学帧后结束；先试拍自动选档，失败帧保留但不凑数。"] = "Finish after the requested accepted science frames. Probe first to select a tier; rejected frames are retained but do not count toward completion.",
+            ["合格科学帧数（张）"] = "Accepted science frames",
+            ["最大正式尝试次数（含失败帧）"] = "Maximum science attempts (including rejected frames)",
+            ["自动曝光档位（秒，逗号分隔）"] = "Automatic exposure tiers (seconds, comma-separated)",
+            ["起始试拍曝光（秒）"] = "Initial probe exposure (seconds)",
+            ["只允许在这些档位间自动选档；使用小数点表示小数，例如 0.1,1,3,10,30,120,600。"] = "Automatic selection uses only these tiers. Use a decimal point, for example 0.1,1,3,10,30,120,600.",
+            ["必须是上面档位中的一档；它是选档的起点，不是固定科学曝光。"] = "Must be one of the tiers above. This starts tier selection; it is not a fixed science exposure.",
+            ["不是曝光倒计时：规划时长用于地平线检查与同步测光，不按时长掐断已开始的光谱曝光。"] = "Not an exposure countdown: the planning duration is used for horizon checks and photometry, not to cut short a spectroscopy exposure already in progress.",
+            ["保存采集计划"] = "Save acquisition plan",
+            ["还原当前计划"] = "Restore current plan",
+            ["拍摄张数、自动曝光档位和规划窗口请在相邻的“采集计划（曝光预算）”页设置。"] = "Set frame counts, automatic exposure tiers and the planning window in the adjacent Acquisition plan (exposure budget) tab.",
+            ["严格验收"] = "Strict acceptance",
+            ["保存到当前配置，重启后保留；只允许有人监督下以实际光谱判定质量，不授予设备运动或无人值守权限。"] = "Saved in this profile across restarts; permits supervised spectrum-quality evaluation only, not device movement or unattended operation.",
             ["显示调节"] = "Levels",
             ["弹出大图"] = "Pop out",
             ["谱带"] = "Trace",

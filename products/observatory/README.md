@@ -7,10 +7,18 @@ must have exactly one owner:
 - the N.I.N.A. plugin owns the operator workflow and requests ATR585M exposures
   through N.I.N.A.;
 - `UvexAdv.Service` exclusively owns UVEX4 COM5;
-- `UvexAdv.Qhy.Service` exclusively owns QHYminiCam8M;
+- under ADR-0014, a separate photometry N.I.N.A. exclusively owns the photometry
+  camera, filter wheel and focuser; the legacy `UvexAdv.Qhy.Service` must be
+  released at an explicitly authorized idle boundary before migration;
 - PHD2 owns G3M2210M, while the plugin communicates through PHD2's event API;
 - `UvexAdv.Phd2.Watchdog` provides the independent guiding safety lease;
 - `UvexAdv.Admin` is the standalone UVEX manager.
+
+The recent sky tests still used the legacy QHY service, not the native photometry
+worker. Never run both owners against the same physical camera. See the
+[dual-instance implementation](../../docs/dual-nina-implementation.md) and
+[latest software/sky closeout](../../docs/closeout-2026-09-12.md) for deployment
+and acceptance boundaries.
 
 ## Human entry points
 
@@ -25,6 +33,13 @@ must have exactly one owner:
 Selecting real mode alone performs no device operation. Physical work begins only
 after the operator presses the start button and every immutable and live interlock
 passes.
+
+The **Observation plan → Acquisition plan (exposure budget)** subtab holds the
+science-frame goal, attempt cap and probe ladder. Save or restore drafts before
+starting; plan editing is locked during active/paused runs. See the
+[field definitions and examples](../../docs/acquisition-plan.md). The saved
+supervised slit-quality policy is visible in the run header and does not grant
+real-device control authority.
 
 ## Source boundary
 

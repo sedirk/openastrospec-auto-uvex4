@@ -8,6 +8,11 @@ Coastal wind and image motion can make individual guide frames exceed a 2 px tar
 
 ## Decision
 
+**2026-09-11 amendment:** [ADR-0015](0015-persistent-supervised-slit-quality-policy.md)
+supersedes the process-local lifetime described below for the scientific-quality
+choice only. Hardware control arming remains per-session. The original decision
+is retained here as history; all other quality and safety constraints remain.
+
 - Strict acceptance remains the default. A separate process-local consent, visible in N.I.N.A., permits supervised probing with slit-precision warnings. It resets on restart, is frozen into the run configuration hash, and cannot be changed on an active run. The backend invokes the same visible command and must supply the separate scientific-quality attestation. A general equipment-motion attestation is insufficient.
 - Native guide/settle timeouts and measured tracking excursions are quality warnings when fresh, immutable, same-epoch target/slit/guide evidence remains valid. Preserve the native failed result. Do not tighten the physical slit tolerance merely because of that warning.
 - Normal bounded placement still approaches the fresh slit midpoint. Probe entry requires at least three actually measured frames, confirmed identity/topology, an authorized current guide/lock state, all samples within the commissioned acquisition envelope, and a median residual within the original target tolerance plus original residual-growth allowance. This is a **probe eligibility envelope**, not a new definition of exact placement. A denied safety/identity/epoch plan cannot become probe authority.

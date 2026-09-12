@@ -1,6 +1,23 @@
 # 大模型前端闭环接口
 
-**当前版本：0.4.0.138；最近真实前台验收版本：0.4.0.137。**
+**当前源码/本机安装：0.4.0.174；安装收据见 [WCS／PHD2 交接修复](wcs-phd2-handoff-2026-09-11.md)。**
+`.172` 新增前台采集计划（曝光预算）；`.173` 修正计划子页在矮窗口中的滚动可达性，
+于 2026-09-11 22:24 正常安装重启并读回新版本；本轮仅修复 UI，不表示 TRN 29 的
+WCS/导星接管位置证据差异与精调返程预算衔接问题已解决。`.174` 随后将这两个问题和
+邻场搜索成功后跳过粗居中的漏分支纳入共享生产修复；原始证据回放与全量软件回归通过，
+新版本正式前台天空闭环仍待复测，详见上方修复记录。
+入口、保存/锁定与时长含义见 [采集计划说明](acquisition-plan.md)。后台新增
+`show-acquisition-plan`，仅打开与概览直达按钮相同的页面，不保存参数或操作设备。
+此前四类目标的真实前台光谱工程测试已完成：
+结果见 [2026-09-11 多目标测试](commissioning-multitarget-2026-09-11.md)：
+10 Lac、Deneb、Scheat、Gamma Cas 分别在 .168/.169/.170/.171 完成 11/11，
+合计 12 张科学 FITS 经独立温度、身份和哈希核对；不能表述为四个目标均在 .171 重跑。
+Deneb 同步测光质量未通过；未验证双 N.I.N.A. 或无人值守。Gamma Cas 的旧 .170
+运行虽显示完成，但因一张 FITS 温度异常不计为完整成功，原记录保留，.171 修复后复测通过。
+上一轮完成记录见 [0.4.0.167 收口](closeout-2026-09-10.md)。
+自 .168 起，明确选择过的入缝质量策略按当前 Profile 保存，并移到页首运行控制区；
+新配置默认严格，真实设备后台控制仍需每次启动重新授权。详见
+[ADR-0015](adr/0015-persistent-supervised-slit-quality-policy.md)。下文会话策略为旧版本历史。
 文末按版本保留了失败、修复和实测历史，不应把旧版本的“四组窗口后停止”或
 “所有残差必须通过缩放后的容差”当成当前有人监督策略。当前监督质量例外见
 [ADR-0013](adr/0013-supervised-slit-quality-warning-probe.md)，本轮结果与剩余边界见
@@ -38,7 +55,7 @@
 
 白名单包含：`enable-bridge`、`arm-real-control`、`disarm-real-control`、`arm-slit-quality-warning`、`disarm-slit-quality-warning`、`select-simulation`、`select-real`、`apply-target-draft`、`import-planetarium-target`、`import-framing-target`、`start-selected`、`restart-real-run`、`pause`、`resume`、`takeover`、`cancel`。其中 `enable-bridge` 只改变持久化接口开关，`arm-real-control` 只改变当前进程内授权并要求精确操作员证明，`select-real` 和 `select-simulation` 只改变模式选择；这些动作本身都不连接或移动设备。`start-selected` 与界面页首“启动”按钮完全同源，并按界面已经选择的模式启动；真实 `start` 与 `resume` 仍必须具备本次进程授权。`restart-real-run` 与界面“新开一轮”按钮完全同源，要求本次真实授权和同一份操作员证明；它按照正式产品逻辑安全关闭旧运行边界、审计退役可识别的旧 G3 恢复状态，然后建立新运行。
 
-`arm-slit-quality-warning` 另需 `OPERATOR-ACCEPTS-SLIT-PRECISION-WARNING-SUPERVISED-ATR-PROBE`，不是常规设备运动授权的附带效果。对应的取消命令恢复严格精度策略；两者均只能在计划可编辑时修改本进程授权，不能改变活动运行已冻结的动作配置。
+`arm-slit-quality-warning` 另需 `OPERATOR-ACCEPTS-SLIT-PRECISION-WARNING-SUPERVISED-ATR-PROBE`，不是常规设备运动授权的附带效果。对应的取消命令保存严格精度策略；两者均只能在计划可编辑时修改并保存当前 Profile 的科学质量选择，不能改变活动运行已冻结的动作配置。`supervisedSlitQualityWarningAuthorized` 保留兼容字段名，.168 起表示当前 Profile 选择，不表示真实设备已授权。
 
 `apply-target-draft` 调用观测计划中“确认 J2000 目标草稿”的同一个 `ICommand`。可选 `targetDraft` 对象（PowerShell 客户端 `-TargetDraft` 哈希表）只能包含 `targetName`、`catalogId`、`rightAscensionDegrees`、`declinationDegrees`；坐标必须显式给出、有限且处于 J2000 度数范围。未提供参数时确认当前可见草稿。两个导入命令分别调用原有星图／构图导入按钮。三者均只在目标计划可编辑时执行，不修改运行中的目标，不改变设备、地平线、安全门、时长或光学设置，也不会启动观测。选定目标后正式启动仍会检查整个计划时段的地平线；不应通过降低门限来解决不适合当前时段的目标。
 

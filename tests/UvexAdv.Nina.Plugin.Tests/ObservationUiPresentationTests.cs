@@ -48,6 +48,9 @@ public sealed class ObservationUiPresentationTests
 
     [Theory]
     [InlineData("PHD2_NATIVE_GUIDE_GEOMETRY_REJECTED", "撞到探测器边缘")]
+    [InlineData("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED", "已确认返回原锁点")]
+    [InlineData("ATR_SAVED_FRAME_TEMPERATURE_INVALID", "未计入合格帧")]
+    [InlineData("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", "实际次数、位移、已用时间")]
     [InlineData("G3_FRAME_REUSED", "拒绝复用旧光谱仪导星相机")]
     [InlineData("G3_CATALOG_WCS_AUTHORITY_INVALID", "目录/WCS 目标几何证据格式无效")]
     [InlineData("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", "饱和目标的目录身份")]

@@ -281,6 +281,12 @@ public sealed record Phd2LockShiftLedger(
     DateTimeOffset StartedUtc,
     string? LastAcceptedFrameSha256);
 
+public sealed record Phd2LockShiftAcquisitionBudget(
+    bool IsAllowed, string Code, string Message,
+    double RemainingOutboundPixels, int RequiredOutboundAttempts,
+    double ReservedReturnPixels, int ReservedReturnAttempts,
+    double TotalCumulativePixels, int TotalAttempts, double TotalElapsedSeconds);
+
 public sealed record Phd2LockShiftStagePlan(
     Phd2LockShiftStageKind Kind,
     SlitPlacementMappingAuthority Authority,
@@ -517,6 +523,47 @@ public static class Phd2SlitLockShiftPlanner
             stagePixels,
             residual,
             requiresFreshG3: true);
+    }
+
+    /// <summary>
+    /// Preflight the complete current correction, not merely its first segment.
+    /// This predicts a straight correction to the measured destination and the
+    /// SAME conservative origin-return reserve as BuildStage. It grants no
+    /// motion and never changes the ledger. Every actual segment still needs
+    /// fresh measurement and its normal per-stage checks.
+    /// </summary>
+    public static Phd2LockShiftAcquisitionBudget EvaluateAcquisitionBudget(
+        Phd2LockShiftQualification qualification, Phd2SlitGuideMode guideMode,
+        Phd2SlitFieldMeasurement measurement, Phd2LockShiftLedger ledger,
+        Phd2LockShiftSafetySnapshot safety, Phd2SensorTopology topology,
+        Phd2LockShiftLimits limits, DateTimeOffset now)
+    {
+        var first = PlanOutboundStage(qualification, guideMode, measurement, ledger, safety, topology, limits, now);
+        if (!first.IsAllowed || first.IsComplete)
+            return new(first.IsAllowed, first.Code, first.Message, 0, 0, 0, 0,
+                ledger.CumulativeCommandedPixels, ledger.AttemptsUsed, (now - ledger.StartedUtc).TotalSeconds);
+
+        var destination = first.Stage!.FullDesiredLockPosition;
+        var outbound = Distance(ledger.CurrentLockPosition, destination);
+        var outboundAttempts = Math.Ceiling(outbound / (limits.MaximumStagePixels * qualification.MaximumLockShiftScale));
+        var returnDistanceUpper = Distance(ledger.OriginLockPosition, destination) + limits.LockVerificationTolerancePixels;
+        var returnAttempts = Math.Ceiling(returnDistanceUpper / (limits.MaximumStagePixels - limits.LockVerificationTolerancePixels));
+        var returnPixels = returnDistanceUpper + 2 * limits.LockVerificationTolerancePixels * returnAttempts;
+        var totalPixels = ledger.CumulativeCommandedPixels + outbound + returnPixels;
+        var totalAttempts = ledger.AttemptsUsed + outboundAttempts + returnAttempts;
+        var totalSeconds = (now - ledger.StartedUtc).TotalSeconds +
+            limits.MaximumStageDuration.TotalSeconds * (outboundAttempts + returnAttempts);
+        var code = totalPixels > limits.MaximumCumulativePixels ? "SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE" :
+            totalAttempts > limits.MaximumAttempts ? "SLIT_LOCK_ACQUISITION_ATTEMPT_RESERVE" :
+            totalSeconds > limits.MaximumElapsed.TotalSeconds ? "SLIT_LOCK_ACQUISITION_TIME_RESERVE" :
+            "SLIT_LOCK_ACQUISITION_BUDGET_READY";
+        var allowed = code == "SLIT_LOCK_ACQUISITION_BUDGET_READY";
+        return new(allowed, code,
+            $"完整精调及回程预检：预计出站 {outbound:F2}px / {outboundAttempts:F0} 次，预留回程 {returnPixels:F2}px / {returnAttempts:F0} 次；" +
+            $"计入旧账后共 {totalPixels:F2}/{limits.MaximumCumulativePixels:F2}px、{totalAttempts:F0}/{limits.MaximumAttempts} 次、" +
+            $"{totalSeconds:F1}/{limits.MaximumElapsed.TotalSeconds:F1}s。未发出锁点运动，未重置预算。",
+            outbound, (int)Math.Min(int.MaxValue, outboundAttempts), returnPixels, (int)Math.Min(int.MaxValue, returnAttempts),
+            totalPixels, (int)Math.Min(int.MaxValue, totalAttempts), totalSeconds);
     }
 
     public static Phd2LockShiftPlanResult PlanRecoveryStage(

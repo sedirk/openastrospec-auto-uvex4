@@ -180,7 +180,12 @@ public sealed record Phd2GuideStep(
     double? Snr,
     double? HfdPixels,
     double? AverageDistancePixels,
-    int? ErrorCode);
+    int? ErrorCode,
+    string? Mount = null,
+    double? RaGuideDistancePixels = null,
+    double? DecGuideDistancePixels = null,
+    int? RaDurationMilliseconds = null,
+    int? DecDurationMilliseconds = null);
 
 public sealed record Phd2EventMessage(
     string Name,
@@ -223,12 +228,15 @@ public sealed record Phd2StateSnapshot(
     long? LastSettleConnectionEpoch,
     long? LastSettleGuideEpoch,
     long EventSequence,
-    DateTimeOffset? LastEventUtc)
+    DateTimeOffset? LastEventUtc,
+    Phd2GuideOutputStatus? GuideOutput = null,
+    Phd2ConfigurationChangeEvidence? LastConfigurationChange = null)
 {
     public bool HasCurrentSuccessfulSettle =>
         IsConnected &&
         !AutomationPaused &&
         !Phd2Paused &&
+        GuideOutput?.Failed != true &&
         AppState == Phd2AppState.Guiding &&
         LastSettle?.Succeeded == true &&
         LastSettleOperationId.HasValue &&

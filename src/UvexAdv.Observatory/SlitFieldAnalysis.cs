@@ -255,7 +255,8 @@ public sealed record TargetIdentification(
     PixelPoint PredictedPoint,
     double PredictionResidualPixels,
     double UniquenessRatio,
-    TargetIdentificationAuthority Authority = TargetIdentificationAuthority.StellarCentroid)
+    TargetIdentificationAuthority Authority = TargetIdentificationAuthority.StellarCentroid,
+    bool CatalogPositionRefinedFromSameFrame = false)
 {
     public static TargetIdentification FromCatalogWcs(
         PixelPoint predictedPoint,

@@ -10,7 +10,7 @@ public sealed class ScenarioCatalogTests
     {
         var scenarios = ScenarioCatalog.Select(null);
 
-        Assert.Equal(["idle", "uvex-manual", "startup-requirements", "running", "recovering", "atr-manual", "atr-live", "atr-levels", "atr-narrow", "failure", "failure-en", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced", "photometry-off", "photometry-worker", "photometry-worker-en", "photometry-master", "photometry-master-en", "photometry-worker-running", "photometry-worker-pausing", "photometry-worker-narrow", "photometry-help"], scenarios.Select(item => item.Name));
+        Assert.Equal(["idle", "plan-target", "plan-budget", "plan-budget-narrow", "plan-budget-invalid", "plan-budget-locked", "plan-budget-en", "plan-target-short", "plan-target-short-bottom", "plan-budget-short", "plan-budget-short-bottom", "plan-budget-small-bottom", "plan-budget-short-bottom-en", "uvex-manual", "startup-requirements", "running", "recovering", "atr-manual", "atr-live", "atr-levels", "atr-narrow", "failure", "failure-en", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced", "photometry-off", "photometry-worker", "photometry-worker-en", "photometry-master", "photometry-master-en", "photometry-worker-running", "photometry-worker-pausing", "photometry-worker-narrow", "photometry-help"], scenarios.Select(item => item.Name));
         Assert.Equal("zh-CN", scenarios.Single(item => item.Name == "failure").Culture.Name);
         Assert.Equal("en-US", scenarios.Single(item => item.Name == "failure-en").Culture.Name);
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);

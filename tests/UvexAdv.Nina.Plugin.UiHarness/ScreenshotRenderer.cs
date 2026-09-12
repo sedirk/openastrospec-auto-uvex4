@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -22,7 +23,13 @@ public sealed record ScreenshotRenderResult(
     public IReadOnlyList<string> VisibleTexts { get; init; } = [];
     public double PreviewViewportWidth { get; init; }
     public double PreviewViewportHeight { get; init; }
+    public PlanScrollDiagnostics? PlanScroll { get; init; }
 }
+
+public sealed record PlanScrollDiagnostics(
+    double ViewportHeight, double ScrollableHeight, bool VerticalBarVisible,
+    bool BottomInitiallyVisible, bool WheelScrolled, bool InputWheelScrolled,
+    double FinalOffset, bool BottomFinallyVisible, bool ActionFinallyVisible, bool TabsRemainVisible);
 
 public static class ScreenshotRenderer
 {
@@ -83,6 +90,7 @@ public static class ScreenshotRenderer
         BitmapSource bitmap;
         IReadOnlyList<string> visibleTexts = [];
         double viewportWidth = 0, viewportHeight = 0;
+        PlanScrollDiagnostics? planScroll = null;
         var window = new Window
         {
             Width = scenario.Width,
@@ -152,6 +160,8 @@ public static class ScreenshotRenderer
             host.UpdateLayout();
             PumpLoadedAndRender(window.Dispatcher);
 
+            planScroll = InspectPlanScrolling(host, scenario);
+
             var target = new RenderTargetBitmap(
                 scenario.Width,
                 scenario.Height,
@@ -186,7 +196,57 @@ public static class ScreenshotRenderer
             VisibleTexts = visibleTexts,
             PreviewViewportWidth = viewportWidth,
             PreviewViewportHeight = viewportHeight,
+            PlanScroll = planScroll,
         };
+    }
+
+    private static PlanScrollDiagnostics? InspectPlanScrolling(FrameworkElement host, ScreenshotScenario scenario)
+    {
+        if (scenario.TemplateKey != ProductionTemplateKey || scenario.ViewModel.SelectedWorkspaceTabIndex != 2)
+            return null;
+        var scroll = Descendants<ScrollViewer>(host).Single(control => control.IsVisible &&
+            control.Name is "ObservationTargetPlanScrollViewer" or "ObservationAcquisitionPlanScrollViewer");
+        var viewport = Descendants<ScrollContentPresenter>(scroll).First();
+        var bottom = Descendants<FrameworkElement>(scroll).Single(control => control.Name ==
+            (scenario.ViewModel.SelectedPlanTabIndex == 1 ? "AcquisitionPlanStateText" : "TargetObservabilityInput"));
+        var action = Descendants<Button>(scroll).FirstOrDefault(control => control.Name == "SaveAcquisitionPlanButton");
+        var tabs = Descendants<TabControl>(host).Single(control => control.Name == "ObservationPlanTabs");
+        var headers = Descendants<TabItem>(tabs).Where(control => control.IsVisible).ToArray();
+        var headerPositions = headers.Select(header => header.TransformToAncestor(host).Transform(new Point())).ToArray();
+        var initiallyVisible = IsFullyInside(bottom, viewport);
+        var wheelScrolled = false;
+        var inputWheelScrolled = false;
+        if (scenario.ExercisePlanScrolling)
+        {
+            // Routed WPF events exercise the same scrolling handlers without desktop input or hardware.
+            var label = Descendants<TextBlock>(scroll).First(control => control.IsVisible);
+            label.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = Mouse.MouseWheelEvent });
+            PumpLoadedAndRender(host.Dispatcher);
+            wheelScrolled = scroll.VerticalOffset > 0;
+            scroll.ScrollToTop();
+            PumpLoadedAndRender(host.Dispatcher);
+            var input = Descendants<TextBox>(scroll).First(control => control.IsVisible);
+            input.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = Mouse.MouseWheelEvent });
+            PumpLoadedAndRender(host.Dispatcher);
+            inputWheelScrolled = scroll.VerticalOffset > 0;
+            scroll.ScrollToEnd();
+            PumpLoadedAndRender(host.Dispatcher);
+        }
+        return new(scroll.ViewportHeight, scroll.ScrollableHeight,
+            scroll.ComputedVerticalScrollBarVisibility == Visibility.Visible, initiallyVisible,
+            wheelScrolled, inputWheelScrolled, scroll.VerticalOffset, IsFullyInside(bottom, viewport),
+            action is null || IsFullyInside(action, viewport),
+            headers.Length == 2 && headers.Select((header, index) => IsFullyInside(header, host) &&
+                header.TransformToAncestor(host).Transform(new Point()) == headerPositions[index]).All(visible => visible));
+    }
+
+    private static bool IsFullyInside(FrameworkElement element, FrameworkElement viewport)
+    {
+        if (!element.IsVisible || element.ActualWidth <= 0 || element.ActualHeight <= 0) return false;
+        var bounds = element.TransformToAncestor(viewport).TransformBounds(new Rect(element.RenderSize));
+        // IsVisible alone also returns true for content clipped outside a ScrollViewer.
+        return bounds.Left >= -0.5 && bounds.Top >= -0.5 &&
+            bounds.Right <= viewport.ActualWidth + 0.5 && bounds.Bottom <= viewport.ActualHeight + 0.5;
     }
 
     private static void PumpLoadedAndRender(Dispatcher dispatcher)

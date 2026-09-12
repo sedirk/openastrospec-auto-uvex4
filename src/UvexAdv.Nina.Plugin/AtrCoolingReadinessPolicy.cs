@@ -1,3 +1,4 @@
+using System.Globalization;
 using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
@@ -20,6 +21,32 @@ internal static class AtrCoolingReadinessPolicy
     public const double TemperatureToleranceC = 0.5;
     public const double SetPointToleranceC = 0.1;
     public const int RequiredStableSamples = 3;
+    public const string SavedFrameInvalidCode = "ATR_SAVED_FRAME_TEMPERATURE_INVALID";
+
+    public static GateResult EvaluateSavedFrame(
+        IReadOnlyDictionary<string, string> headers, double targetTemperatureC, GateResult ownerReadback)
+    {
+        static double Read(IReadOnlyDictionary<string, string> values, string key) =>
+            values.TryGetValue(key, out var text) &&
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+                ? number : double.NaN;
+        var temperature = Read(headers, "CCD-TEMP");
+        var setPoint = Read(headers, "SET-TEMP");
+        var metrics = new Dictionary<string, double>();
+        if (double.IsFinite(temperature)) metrics["fitsTemperatureC"] = temperature;
+        if (double.IsFinite(setPoint)) metrics["fitsSetPointC"] = setPoint;
+        if (double.IsFinite(targetTemperatureC)) metrics["targetTemperatureC"] = targetTemperatureC;
+        if (double.IsFinite(targetTemperatureC) && double.IsFinite(temperature) && double.IsFinite(setPoint) &&
+            Math.Abs(temperature - targetTemperatureC) <= TemperatureToleranceC &&
+            Math.Abs(setPoint - targetTemperatureC) <= SetPointToleranceC &&
+            ownerReadback.Disposition == GateDisposition.Passed)
+            return GateResult.Pass("ATR_SAVED_FRAME_TEMPERATURE_VERIFIED",
+                "Saved FITS temperature/set-point and post-save exact-owner cooling readback passed.", metrics);
+        return GateResult.Unknown(SavedFrameInvalidCode,
+            $"Saved FITS CCD-TEMP={temperature:G6} C, SET-TEMP={setPoint:G6} C, expected {targetTemperatureC:G6} C. " +
+            $"Post-save owner readback: {ownerReadback.Code}: {ownerReadback.Message} " +
+            "The immutable frame is retained but not accepted; no old temperature is substituted and no further exposure is authorized.", metrics);
+    }
 
     public static GateResult Evaluate(
         AtrCoolingTelemetry telemetry,

@@ -1,10 +1,54 @@
 # Known issues
 
-## Current closeout boundary (2026-09-10, 0.4.0.167)
+## Current closeout boundary (2026-09-12, 0.4.0.176)
+
+The [latest closeout](closeout-2026-09-12.md) separates source, installation,
+offline checks and actual sky acceptance. 10 Lac, Deneb, Scheat and Gamma Cas
+passed separate .168–.171 frontend runs; later TRN 29 attempts remained failures.
+**.176 is installed but has no completed real-frontend sky replay.** Three-panel
+live UI checks, native photometry-worker commissioning and unattended acceptance
+remain open. Earlier results below keep their original version boundaries.
+
+- **UX-009 — acquisition-plan access/scrolling fixed in .172/.173:** the normal
+  plan tab exposes science counts, attempt caps and probe tiers, with validated
+  save/restore and active-run locks. Short/narrow viewport tests now verify
+  actual scrolling and bottom controls, not just `IsVisible`. See the
+  [acquisition-plan guide](acquisition-plan.md); live dock acceptance is separate.
+- **OBS-029 — explicit quality policy persists under ADR-0015:** a saved warning-
+  probe choice no longer silently reverts to strict 2 px acceptance after restart.
+  New profiles remain strict and hardware arming remains per-session. Four
+  supervised .168–.171 targets passed with measured warnings retained.
+- **OBS-030 — post-save temperature omission fixed in .171; adapter cause open:**
+  FITS temperature/set point and exact-owner readback gate acceptance after saving.
+  The first Gamma Cas run's invalid-temperature frame is not retroactively repaired
+  or counted as qualified; its .171 repeat passed. Underlying SDK failure is not proven.
+- **OBS-031 — WCS/guide position and whole-correction budget checks in .174:**
+  same-frame measured stellar positions align coarse centering with guide takeover;
+  every successful field exit must satisfy handoff distance, with complete fine/return
+  preflight and one bounded repair. TRN 29 reached 7.40 px before a separate output fault;
+  this was not an end-to-end success. See [handoff evidence](wcs-phd2-handoff-2026-09-11.md).
+- **OBS-032 — no-output guiding is not an accuracy warning:** .175 detects sustained
+  correction requests with no reported pulses and permits narrowly gated native
+  reconnection only before unresolved fine motion. Reconnection is not optical
+  return proof; the actual fault/recovery branch still needs a complete frontend
+  replay. See [output-recovery boundaries](phd2-guide-output-recovery-2026-09-12.md).
+- **OBS-033 — display configuration and settled-lock continuity fixed in .176:**
+  verified screen-Gamma-only changes preserve guide evidence; real state/configuration
+  changes do not. Fresh same-lock verification can continue without issuing new motion
+  after the old fine-motion clock expires. A needed rebuild is preflighted before
+  moving away; no budget is reset. [Sky replay remains pending](phd2-spectral-continuity-2026-09-12.md).
+- **TEST-001 — short protocol-test scheduling remains timing-sensitive:** the
+  pre-commit full build once exceeded the existing 240 ms wait in
+  `CaptureFullFrameDiscardsFirstPipelineFrameAfterExposureChange`. Its isolated
+  rerun and subsequent full 1,537-test build passed without changes. This is not
+  evidence that the scheduling sensitivity is fixed; retain failed-run logs and
+  inspect the exact failing assertion rather than increasing hardware timeouts.
+
+## Previous closeout boundary (2026-09-10, 0.4.0.167)
 
 Deneb, Gamma Cas, Scheat, Almach and 10 Lac each completed a supervised **real
 frontend 11/11** run on the versions listed in the
-[latest closeout](closeout-2026-09-10.md). The final .167 Almach and 10 Lac runs
+[September 10 closeout](closeout-2026-09-10.md). The final .167 Almach and 10 Lac runs
 accepted three 60 s and three 120 s science frames, plus 37/37 and 75/75
 photometry frames. Slit-precision warnings and throughput variability remain;
 file acceptance is not scientific reduction or unattended qualification. The

@@ -54,6 +54,9 @@
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.Phd2SlitPlacement.cs"
           Link="Sources\RealObservationStageRunner.Phd2SlitPlacement.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.GuideOutput.cs"
+          Link="Sources\RealObservationStageRunner.GuideOutput.cs"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.GhostAssistance.cs"
           Link="Sources\RealObservationStageRunner.GhostAssistance.cs"
           CopyToOutputDirectory="PreserveNewest" />

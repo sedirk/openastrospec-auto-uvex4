@@ -14,6 +14,7 @@ public sealed record ScreenshotScenario(
     public CultureInfo Culture { get; init; } = CultureInfo.GetCultureInfo("zh-CN");
     public string TemplateKey { get; init; } = ScreenshotRenderer.ProductionTemplateKey;
     public object? AlternateViewModel { get; init; }
+    public bool ExercisePlanScrolling { get; init; }
 }
 
 public static class ScenarioCatalog
@@ -21,6 +22,33 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("plan-target", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 }),
+        new("plan-budget", 1040, 800, ObservationDockMockViewModel.ExposureBudget()),
+        new("plan-budget-narrow", 540, 900, ObservationDockMockViewModel.ExposureBudget()),
+        new("plan-budget-invalid", 1040, 800, ObservationDockMockViewModel.ExposureBudget(invalid: true)),
+        new("plan-budget-locked", 1040, 800, ObservationDockMockViewModel.ExposureBudget(locked: true)),
+        new("plan-budget-en", 1040, 850, ObservationDockMockViewModel.ExposureBudget(english: true))
+        {
+            Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("plan-target-short", 760, 560, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 }),
+        new("plan-target-short-bottom", 760, 560, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 })
+        {
+            ExercisePlanScrolling = true,
+        },
+        new("plan-budget-short", 760, 560, ObservationDockMockViewModel.ExposureBudget()),
+        new("plan-budget-short-bottom", 760, 560, ObservationDockMockViewModel.ExposureBudget())
+        {
+            ExercisePlanScrolling = true,
+        },
+        new("plan-budget-small-bottom", 540, 700, ObservationDockMockViewModel.ExposureBudget(invalid: true))
+        {
+            ExercisePlanScrolling = true,
+        },
+        new("plan-budget-short-bottom-en", 760, 560, ObservationDockMockViewModel.ExposureBudget(english: true))
+        {
+            Culture = CultureInfo.GetCultureInfo("en-US"), ExercisePlanScrolling = true,
+        },
         new("uvex-manual", 1180, 800, ObservationDockMockViewModel.UvexManual()),
         new("startup-requirements", 1180, 900, ObservationDockMockViewModel.StartupRequirements()),
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
@@ -108,6 +136,11 @@ public sealed class ObservationDockMockViewModel
     public string ModeText { get; init; } = "自动观测：模拟演练";
     public bool SynchronizedPhotometryEnabled { get; init; } = true;
     public bool CanEditSynchronizedPhotometry => !IsRunActive;
+    public string SupervisedSlitQualityWarningStatusText => ObservationUiPresentation.Text(
+        "入缝策略：警告后试拍 · 已保存", "Slit policy: supervised probing with precision warnings · saved",
+        ObservationStaticTextLocalization.EffectiveCulture);
+    public ICommand ArmSlitQualityWarningCommand => DisabledCommand;
+    public ICommand DisarmSlitQualityWarningCommand => IsRunActive ? DisabledCommand : EnabledCommand;
     public string SynchronizedPhotometryStatus => ObservationUiPresentation.Text(
         SynchronizedPhotometryEnabled ? "开启 · 与光谱同时拍摄" : "关闭 · 仅保留定位短曝",
         SynchronizedPhotometryEnabled ? "ON · capture alongside spectra" : "OFF · acquisition witnesses only",
@@ -183,6 +216,31 @@ public sealed class ObservationDockMockViewModel
     public Visibility FailurePanelVisibility => FailureVisibility;
     public Visibility IdlePanelVisibility => NoFailureVisibility;
     public int SelectedWorkspaceTabIndex { get; init; }
+    public int SelectedPlanTabIndex { get; init; }
+    public AcquisitionPlanEditor AcquisitionPlan { get; init; } = BudgetEditor(false);
+    private static AcquisitionPlanEditor BudgetEditor(bool locked)
+    {
+        var saved = new AcquisitionPlanValues(3, 6, "0.01,0.03,0.1,0.3,1,3,10,15,30,60,120,300,600", 0.1, 60);
+        return new(() => saved, value => saved = value, () => !locked, () => ObservationStaticTextLocalization.EffectiveCulture);
+    }
+    public static ObservationDockMockViewModel ExposureBudget(bool invalid = false, bool locked = false, bool english = false)
+    {
+        var editor = BudgetEditor(locked);
+        if (invalid) editor.ScienceFrames = "12";
+        return new()
+        {
+            SelectedWorkspaceTabIndex = 2, SelectedPlanTabIndex = 1, AcquisitionPlan = editor,
+            ModeText = english ? "Automation: simulation" : "自动观测：模拟演练",
+            StateText = english ? "Idle" : "空闲",
+            CurrentStageText = english ? "Not started" : "尚未开始",
+            NextStageText = english ? "Lock Night Setup" : "锁定 Night Setup",
+            StatusMessage = english ? "Check the target and acquisition plan before starting." : "尚未启动；可以先检查计划与运行模式。",
+            ProgressSummary = english ? "Overall stages 0/11 · 0%" : "总体阶段 0/11 · 0%",
+            OperatorNotice = english ? "Offline UI verification; no device control objects were loaded." : "离线截图数据；没有加载任何设备控制对象。",
+            ModelAutomationBridgeStatusText = english ? "Backend bridge disabled; no commands can be invoked." : "后台自动化桥已关闭；只读端点可报告关闭状态，不能触发按钮。",
+            ModelAutomationLastActivity = english ? "No backend command has been invoked." : "尚无后台按钮调用。",
+        };
+    }
     public int SelectedMainTabIndex => SelectedWorkspaceTabIndex;
     public int SelectedPreviewTabIndex { get; init; }
 
@@ -426,6 +484,7 @@ public sealed class ObservationDockMockViewModel
     public ICommand RefreshCommissioningProfilesCommand => EnabledCommand;
     public ICommand ApplySelectedCommissioningProfileCommand => EnabledCommand;
     public ICommand ShowObservationPlanCommand => EnabledCommand;
+    public ICommand ShowAcquisitionPlanCommand => EnabledCommand;
     public ICommand ShowStartupRequirementsCommand => EnabledCommand;
     public ICommand ShowManualUvexControlCommand => EnabledCommand;
     public ICommand ShowAdvancedSettingsCommand => EnabledCommand;
