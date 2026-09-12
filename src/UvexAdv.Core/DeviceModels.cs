@@ -54,6 +54,8 @@ public sealed record UvexDeviceStatus
 {
     public DeviceConnectionState ConnectionState { get; init; } = DeviceConnectionState.Disconnected;
     public string PortName { get; init; } = "COM5";
+    public string? UsbInstanceId { get; init; }
+    public bool SerialIdentityVerified { get; init; }
     public string? FirmwareVersion { get; init; }
     public string? Description { get; init; }
     public UvexCapabilities Capabilities { get; init; }
@@ -88,6 +90,8 @@ public sealed class UvexSafetyOptions
     public string PortName { get; set; } = "COM5";
     public string ExpectedUsbVid { get; set; } = "1A86";
     public string ExpectedUsbPid { get; set; } = "7523";
+    public string ExpectedUsbInstanceId { get; set; } = string.Empty;
+    public string[] ReservedSerialPorts { get; set; } = [];
     public int ExpectedGratingLinesPerMm { get; set; } = 300;
     public bool HardwareIdentityVerified { get; set; }
     public bool Simulator { get; set; } = true;
@@ -115,9 +119,15 @@ public sealed class UvexSafetyOptions
                 $"Motion is blocked until {PortName} identity matches VID_{ExpectedUsbVid}&PID_{ExpectedUsbPid} and HardwareIdentityVerified is enabled.");
         }
 
-        if (!PortName.Equals("COM5", StringComparison.OrdinalIgnoreCase))
+        ValidatePortName();
+    }
+
+    public void ValidatePortName()
+    {
+        if (PortName is null || !System.Text.RegularExpressions.Regex.IsMatch(
+                PortName, @"\ACOM[1-9][0-9]{0,3}\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
-            throw new InvalidOperationException("This installation is safety-locked to COM5. Edit and revalidate the deployment configuration to change it.");
+            throw new InvalidOperationException("UVEX_SERIAL_PORT_INVALID: Configure one explicit COM port; paths and automatic scanning are not connection settings.");
         }
     }
 }

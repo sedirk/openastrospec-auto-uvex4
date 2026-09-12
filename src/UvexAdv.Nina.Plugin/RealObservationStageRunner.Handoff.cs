@@ -13,7 +13,37 @@ internal sealed partial class RealObservationStageRunner
         field.SlitDetection.Gate.Disposition == GateDisposition.Passed &&
         G3WcsRecoveryPolicy.NeedsCoarseCentering(field.Gate,
             field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null,
-            PixelDistance(target.Centroid, field.SlitDetection.Geometry.AcquisitionPoint), preset.CoarseHandoffResidualPixels);
+            PixelDistance(target.Centroid, field.SlitDetection.Geometry.AcquisitionPoint) +
+            field.TargetIdentification.CatalogPositionSpreadPixels, preset.CoarseHandoffResidualPixels);
+
+    private async Task<StageResult> HandleDeniedPhd2AcquisitionBudgetAsync(
+        ObservationContext context, Phd2SlitPlacementSession session,
+        Phd2SlitPlacementCommissioningPreset preset, Phd2LockShiftAcquisitionBudget budget,
+        int postCalibrationReacquisitionDepth, int lostLockReacquisitionDepth,
+        CancellationToken cancellationToken)
+    {
+        // This gate runs only after existing read-only completion and explicit
+        // quality-warning paths. A denial cannot dispatch another exact lock.
+        // A non-settled lineage still owns its original return before any
+        // coarse handoff, while an accepted historical endpoint is not debt.
+        if (pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } outstanding)
+            return await ReturnPhd2LockToOriginAsync(context, session,
+                outstanding with { Phase = Phd2LockShiftPendingPhase.ReturnRequired },
+                $"{budget.Code}: {budget.Message}", cancellationToken).ConfigureAwait(false);
+        var residual = PointDistance(session.LastMeasurement.Measurement.TargetCentroid,
+            session.LastMeasurement.Measurement.RecognizedSlitAcquisitionPoint);
+        if (Phd2HandoffRecoveryPolicy.ShouldReacquire(budget, residual,
+            preset.BuildMotionLimits().TargetOnSlitTolerancePixels * session.Quality.RequiredResidualToleranceScale +
+            preset.MaximumResidualGrowthPixels))
+            return await ReacquireG3ForPhd2HandoffAsync(context, budget.Code, budget.Message,
+                postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken).ConfigureAwait(false);
+        var stopped = await EnsurePhdStoppedForAutomaticRebuildAsync(
+            ObservationStage.PlaceTargetOnSlit, budget.Code, cancellationToken).ConfigureAwait(false);
+        if (stopped.Disposition != GateDisposition.Passed) return new StageResult(stopped, session.LastMeasurement.Frame.Path);
+        return new StageResult(GateResult.Unknown(budget.Code,
+            $"{budget.Message} No new exact-lock command was issued; the existing ledger and limits were retained."),
+            session.LastMeasurement.Frame.Path);
+    }
 
     private async Task<StageResult> ReacquireG3ForPhd2HandoffAsync(
         ObservationContext context, string sourceCode, string reason,

@@ -1,0 +1,55 @@
+<UserControl x:Class="UvexAdv.Nina.Plugin.SepMainFocusView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Foreground="#DDEAF4">
+ <Border Background="#112636" BorderBrush="#3389A5" BorderThickness="1" CornerRadius="4" Padding="10">
+  <StackPanel>
+   <Expander Header="主镜 SEP 对焦 · 不规则星像" Foreground="#DDEAF4" IsExpanded="{Binding IsExpanded, Mode=TwoWay}">
+    <StackPanel Margin="0,8,0,0">
+     <TextBlock Text="使用主控 N.I.N.A. 电调焦和 PHD2 导星相机；不是 UVEX M2，也不是测光镜对焦。按星光集中程度评价，不要求星点变圆。" TextWrapping="Wrap" />
+     <StackPanel IsEnabled="{Binding CanEdit}" Margin="0,6">
+      <WrapPanel>
+       <StackPanel Width="135" Margin="0,0,8,6"><TextBlock Text="软限位下限（步）"/><TextBox Text="{Binding MinimumPosition, Mode=TwoWay}" /></StackPanel>
+       <StackPanel Width="135" Margin="0,0,8,6"><TextBlock Text="软限位上限（步）"/><TextBox Text="{Binding MaximumPosition, Mode=TwoWay}" /></StackPanel>
+       <StackPanel Width="115" Margin="0,0,8,6"><TextBlock Text="采样步长（步）"/><TextBox Text="{Binding Step, Mode=TwoWay}" /></StackPanel>
+       <StackPanel Width="115" Margin="0,0,8,6"><TextBlock Text="每侧焦位数"/><TextBox Text="{Binding HalfPoints, Mode=TwoWay}" /></StackPanel>
+      </WrapPanel>
+      <WrapPanel>
+       <StackPanel Width="135" Margin="0,0,8,6"><TextBlock Text="曝光（毫秒）"/><TextBox Text="{Binding ExposureMilliseconds, Mode=TwoWay}" /></StackPanel>
+       <StackPanel Width="135" Margin="0,0,8,6"><TextBlock Text="每焦位帧数"/><TextBox Text="{Binding Frames, Mode=TwoWay}" /></StackPanel>
+       <StackPanel Width="115" Margin="0,0,8,6"><TextBlock Text="导星相机增益 %"/><TextBox Text="{Binding GainPercent, Mode=TwoWay}" /></StackPanel>
+      </WrapPanel>
+      <Expander Header="传感器与现场边界" Foreground="#DDEAF4">
+       <WrapPanel>
+        <StackPanel Width="155" Margin="0,0,8,6"><TextBlock Text="原始帧饱和值（ADU）"/><TextBox Text="{Binding Saturation, Mode=TwoWay}" /></StackPanel>
+        <StackPanel Width="155" Margin="0,0,8,6"><TextBlock Text="最低目标高度（度）"/><TextBox Text="{Binding MinimumAltitude, Mode=TwoWay}" /></StackPanel>
+       </WrapPanel>
+      </Expander>
+     </StackPanel>
+     <TextBlock Text="请先手动开顶、打开镜盖并将目标置于安全高度；PHD2 须停止。扫描保留原位，候选点须往返验证；不会自动开始观测或改写旧 Night Setup。" TextWrapping="Wrap" Foreground="#AACBD8" />
+     <WrapPanel Margin="0,8,0,6">
+      <Button Content="保存对焦参数" Command="{Binding SaveCommand}" Margin="0,0,6,4" Padding="9,5" />
+      <Button Content="开始主镜对焦" Command="{Binding StartCommand}" Margin="0,0,6,4" Padding="9,5" />
+      <Button Content="取消并安全回位" Command="{Binding CancelCommand}" Margin="0,0,6,4" Padding="9,5" />
+      <Button Content="打开对焦记录" Command="{Binding OpenEvidenceCommand}" Margin="0,0,6,4" Padding="9,5" />
+     </WrapPanel>
+     <TextBlock Text="上次完成的曲线：横轴焦位，纵轴 R50（越低越集中）；扫描中的文字状态另行显示。" TextWrapping="Wrap" Foreground="#AACBD8" />
+     <Viewbox Height="100" Stretch="Uniform"><Canvas Width="350" Height="105" Background="#091520"><Polyline Points="{Binding CurvePoints, Mode=OneWay}" Stroke="#31D8CA" StrokeThickness="2" /></Canvas></Viewbox>
+     <DataGrid ItemsSource="{Binding Curve}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" MaxHeight="130" Margin="0,5,0,5">
+      <DataGrid.Resources>
+       <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#234453"/><Setter Property="Foreground" Value="#DDEAF4"/><Setter Property="Padding" Value="4"/></Style>
+       <Style TargetType="DataGridRow"><Setter Property="Background" Value="#122838"/><Setter Property="Foreground" Value="#DDEAF4"/></Style>
+      </DataGrid.Resources>
+      <DataGrid.Columns>
+       <DataGridTextColumn Header="焦位" Binding="{Binding Position, Mode=OneWay}" Width="*"/>
+       <DataGridTextColumn Header="R50 / px" Binding="{Binding R50, Mode=OneWay, StringFormat=F2}" Width="*"/>
+       <DataGridTextColumn Header="R80 / px" Binding="{Binding R80, Mode=OneWay, StringFormat=F2}" Width="*"/>
+       <DataGridTextColumn Header="有效帧" Binding="{Binding Frames, Mode=OneWay}" Width="*"/>
+      </DataGrid.Columns>
+     </DataGrid>
+    </StackPanel>
+   </Expander>
+   <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="#A9DFED" Margin="0,5,0,0" />
+  </StackPanel>
+ </Border>
+</UserControl>

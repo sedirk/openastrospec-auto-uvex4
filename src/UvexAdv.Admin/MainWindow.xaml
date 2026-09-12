@@ -109,7 +109,7 @@
             <TextBox Width="70" Text="{Binding SlitOffsetSteps, UpdateSourceTrigger=PropertyChanged}" />
             <Button Content="写入偏移 steps" Command="{Binding CalibrateSlitOffsetCommand}" />
           </StackPanel>
-          <Button Content="释放 COM5 给旧 Manager" Command="{Binding EnterMaintenanceCommand}" />
+          <Button Content="释放 已绑定串口 给旧 Manager" Command="{Binding EnterMaintenanceCommand}" />
           <Button Content="退出维护并重连" Command="{Binding ExitMaintenanceCommand}" />
         </StackPanel>
       </GroupBox>

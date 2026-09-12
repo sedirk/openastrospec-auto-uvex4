@@ -56,6 +56,52 @@ public static partial class ObservationUiPresentation
             ["attempt"] = "尝试次数",
             ["attempts"] = "尝试次数",
             ["searchAttempts"] = "搜索次数",
+            ["saturatedCorePixels"] = "星核饱和像素数",
+            ["shortWingPixels"] = "可用内翼像素数",
+            ["shortWingSnr"] = "内翼信噪比",
+            ["shortWingSectors"] = "内翼覆盖扇区数（共8区）",
+            ["shortContourSpreadPixels"] = "多层轮廓位置分散（像素）",
+            ["shortPositionSpreadPixels"] = "粗定位位置分散尺度（像素）",
+            ["shortRepeatSeparationPixels"] = "两张短帧位置差（像素）",
+            ["maximumShortRepeatSeparationPixels"] = "短帧一致性上限（像素）",
+            ["shortPositionFrames"] = "短曝光复核帧数",
+            ["maximumShortPositionFrames"] = "短曝光复核帧数上限",
+            ["maximumShortContourSpreadPixels"] = "轮廓一致性上限（像素）",
+            ["maximumShortCoreDiameterPixels"] = "饱和星核尺寸上限（像素）",
+            ["shortSolidCoreCount"] = "实心星核候选数",
+            ["shortCoreWidthPixels"] = "饱和星核宽（像素）",
+            ["shortCoreHeightPixels"] = "饱和星核高（像素）",
+            ["shortContourAspectRatio"] = "轮廓长短轴比",
+            ["shortOuterContourExtentPixels"] = "外层轮廓尺寸（像素）",
+            ["shortInnerContourExtentPixels"] = "内层轮廓尺寸（像素）",
+            ["maximumShortOuterContourExtentPixels"] = "外层轮廓尺寸上限（像素）",
+            ["shortCoreContourOffsetPixels"] = "削顶中心偏移（仅诊断，像素）",
+            ["shortSaturatedPixels"] = "短帧识别区饱和像素数",
+            ["shortLocalSeedCount"] = "去重后的局部峰数",
+            ["shortValidPsfCount"] = "独立有效星像数",
+            ["catalogCompanionExpectedSeparationPixels"] = "目录伴星预期间距（像素）",
+            ["catalogCompanionVectorResidualPixels"] = "主伴星方向与间距偏差（像素）",
+            ["maximumCatalogCompanionVectorResidualPixels"] = "主伴星几何偏差上限（像素）",
+            ["shortMaximumLocalPeakSigma"] = "最大局部峰显著性（σ）",
+            ["shortMaximumPeakAdu"] = "局部峰值（ADU）",
+            ["minimumShortUnsaturatedContourPixels"] = "未饱和轮廓最少像素数",
+            ["shortShapeRejectedCount"] = "轮廓未通过数",
+            ["shortSecondaryPeakRejectedCount"] = "多峰混合未通过数",
+            ["shortContourPixelRejectedCount"] = "轮廓像素支撑不足数",
+            ["shortContourBoundaryRejectedCount"] = "轮廓触及测量边界数",
+            ["shortContourAspectRejectedCount"] = "轮廓长短轴比异常数",
+            ["shortContourHollowRejectedCount"] = "轮廓中心空心数",
+            ["shortContourExtentRejectedCount"] = "内外轮廓尺寸不符数",
+            ["shortMiddleContourPixels"] = "中层轮廓像素数",
+            ["shortInnerContourPixels"] = "内层轮廓像素数",
+            ["shortInnerSamplingAllowancePixels"] = "内层采样边界余量（像素）",
+            ["shortSupportRejectedCount"] = "像素或信号不足数",
+            ["shortLocalBackgroundAdu"] = "星像周围背景（ADU）",
+            ["shortLocalBackgroundSigmaAdu"] = "星像周围背景波动（ADU）",
+            ["shortLocalPeakSigma"] = "星像局部峰显著性（σ）",
+            ["shortPsfSnr"] = "未饱和星像信噪比",
+            ["shortPsfPixels"] = "未饱和星像轮廓像素数",
+            ["shortPsfSectors"] = "未饱和星像覆盖扇区数（共8区）",
             ["searchCumulativeMotionArcseconds"] = "搜索累计运动",
             ["residualArcseconds"] = "残差",
             ["targetSlitResidualPixels"] = "目标到狭缝残差",
@@ -220,7 +266,7 @@ public static partial class ObservationUiPresentation
         }
         var effectiveCode = EffectiveCode(gate.Code, gate.Message);
         var summary = chinese
-            ? ChineseIssueSummary(gate.Code, effectiveCode, gate.Message)
+            ? DescribeSerialBindingIssue(gate.Code + ": " + gate.Message) ?? ChineseIssueSummary(gate.Code, effectiveCode, gate.Message)
             : EnglishIssueSummary(gate.Code, effectiveCode, gate.Message);
         var impact = Impact(stage, chinese);
         var recovery = Recovery(stage, gate, chinese);
@@ -326,6 +372,8 @@ public static partial class ObservationUiPresentation
                 raw);
         }
 
+        if (DescribeSerialBindingIssue(raw) is { } serialIssue)
+            return new ObservationUiOperationError(serialIssue, raw);
         if (!ContainsEnglishSentence(raw)) return new ObservationUiOperationError(NormalizeChineseTerminology(raw), string.Empty);
 
         var match = EnglishSentenceRegex().Match(raw);
@@ -362,6 +410,24 @@ public static partial class ObservationUiPresentation
         return new ObservationUiOperationError(translated, raw);
     }
 
+    private static string? DescribeSerialBindingIssue(string raw)
+    {
+        var code = Regex.Match(raw, @"\bUVEX_SERIAL_[A-Z_]+\b").Value;
+        var port = Regex.Match(raw, @"\bCOM[1-9][0-9]*\b", RegexOptions.IgnoreCase).Value;
+        var endpoint = string.IsNullOrEmpty(port) ? "已保存串口" : port;
+        return code switch
+        {
+            "UVEX_SERIAL_PORT_RESERVED" => $"UVEX 的 {endpoint} 已配置给其他设备，未打开该端口；请重新辨认并绑定 UVEX，不要断开屋顶等设备来抢占串口。",
+            "UVEX_SERIAL_PORT_NOT_PRESENT" => $"未找到 {endpoint} 对应的唯一在线 USB 设备；USB 换口后需重新辨认并保存 UVEX 绑定。",
+            "UVEX_SERIAL_BINDING_REQUIRED" => $"{endpoint} 尚未保存经辨认的 UVEX USB 实例；仅有 CH340 型号不能确认设备身份。",
+            "UVEX_SERIAL_BINDING_CHANGED" => $"{endpoint} 的 USB 实例与保存绑定不符；已停止连接，请在空闲状态重新辨认 UVEX。",
+            "UVEX_SERIAL_IDENTITY_MISMATCH" => $"{endpoint} 未返回有效的 UVEX4 固件版本与设备描述，未授权机构控制。",
+            "UVEX_SERIAL_IDENTITY_UNVERIFIED" => $"{endpoint} 尚无本次连接的 USB 与 UVEX4 协议身份确认；请更新并重新连接 UVEX 服务。",
+            "UVEX_SERIAL_PORT_INVALID" => "UVEX 串口设置无效；必须指定单个明确的 COM 端口，不能用自动扫描或路径代替。",
+            _ => null,
+        };
+    }
+
     private static string ChineseIssueSummary(string outerCode, string effectiveCode, string raw)
     {
         var description = effectiveCode switch
@@ -379,6 +445,9 @@ public static partial class ObservationUiPresentation
             "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED" => "入缝新帧未在本轮时限内达到所选质量策略；已确认返回原锁点并停止导星，没有再做无预算的全场重建",
             "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" => "本轮入缝账本的剩余预算不足；请查看实际次数、位移、已用时间和原始原因，不代表继承了前夜用量",
             "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星证据需要重建，但原精调预算不能授权新的移动；未启动回退定位，已保存光谱保留",
+            "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED" => "试拍前的导星会话或狭缝证据已失效；需要有界复核，不能用旧证据开始下一帧",
+            "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；没有追加移动或曝光",
+            "PHD2_SCIENCE_IN_PLACE_CHECK_FAILED" => "原位复核导星与狭缝证据时发生异常；已保留原始原因，没有因此重建定位或追加移动",
             "PHD2_LOCK_RECOVERY_FRESH_FIELD_REQUIRED" => "PHD2 旧锁点账本恢复时未取得新的正式 G3/PL3 目标与狭缝联合证据",
             "PHD2_LOCK_RECOVERY_FOREIGN_ENDPOINT_UNPROVEN" => "旧观测留下的 PHD2 锁点端点无法由持久化读回唯一确认；没有发送返回命令",
             "PHD2_LOCK_RECOVERY_SLIT_STATE_CHANGED" => "同一目标的锁点恢复中，fresh 物理狭缝位置与原账本不一致",
@@ -407,9 +476,24 @@ public static partial class ObservationUiPresentation
             "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE" => "已执行一次强制校准，但 PHD2 仍未报告可用的当前校准",
             "PHD2_POST_CALIBRATION_SETTLE_FAILED" => "PHD2 重新校准后未在规定时间内取得稳定证据",
             "PHD2_GUIDING_SUPERVISED_ONLY" => "当前 PHD2 校准只允许有人监督运行，未授予无人值守科学曝光权限",
-            "GUIDING_LOST" => "PHD2 已确认脱锁，新的科学曝光已被禁止",
-            "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" => "PHD2 仍在导星，但稳定性未达到本轮科学曝光门限",
+            "GUIDING_LOST" => "当前导星会话或有效证据已丢失，新的科学曝光暂未获准；不单凭此代码判断云或设备故障",
+            "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" => "当前导星连续性或稳定证据不足；已保存的光谱保留，复核通过后才能继续，不是单指超出 2 像素",
             "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" => "G3 邻场搜索未找到可接受目标，赤道仪已返回保存的搜索起点",
+            "G3_SEARCH_NOT_STARTED_RETURNED" => "邻场搜索尚未执行：首步前置检查未通过，赤道仪已确认返回保存的起点；请查看预算数值与原始原因，不是已搜索但未找到目标",
+            "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" => ShortPositionIssue(raw),
+            "G3_MOTION_CRASH_RETURN_BLOCKED" => raw.Contains("G3_SEARCH_PIER_SIDE_CHANGED", StringComparison.Ordinal)
+                ? "上轮回程记录与赤道仪当前侧别不同；不能执行跨侧旧位移，尚未确认旧回程到位。不是哈希不一致或星点识别失败"
+                : "上轮回程尚未取得到位确认；请查看原始回程原因，不能通过重启直接视为完成",
+            "G3_MOTION_CROSS_PIER_ORIGIN_UNCONFIRMED" => "上轮最后回程已跨侧，但只读坐标核验未确认稳定到位；请查看起点残差、读回漂移和原始原因。未执行旧位移，旧记录保留",
+            "G3_WCS_CENTERING_RETURN_BLOCKED" => raw.Contains("G3_SEARCH_PIER_SIDE_CHANGED", StringComparison.Ordinal)
+                ? "WCS 居中回程期间赤道仪报告侧别改变；未确认返回起点，旧回程账本保留，不能跨侧继续执行旧位移"
+                : raw.Contains("G3_DESTINATION_PIER_SIDE_CHANGE", StringComparison.Ordinal)
+                    ? "驱动预测 WCS 回程会改变赤道仪侧别，已在发令前停止；未确认返回起点，旧回程账本保留"
+                    : raw.Contains("G3_DESTINATION_PIER_SIDE_QUERY_FAILED", StringComparison.Ordinal)
+                        ? "赤道仪驱动的目的地侧别查询失败，WCS 回程未完成；请查看驱动原始异常。不是星点识别或哈希错误，旧运动账本保留"
+                        : "WCS 居中后的回程未取得安全到位确认；不是单纯未找到星点，请查看原始回程原因，旧运动账本保留",
+            "G3_DESTINATION_PIER_SIDE_CHANGE" => "驱动预测目的地会改变赤道仪侧别；未发送跨侧转向，旧运动账本保留",
+            "G3_DESTINATION_PIER_SIDE_QUERY_FAILED" => "赤道仪目的地侧别查询失败；尚未发送本次转向，请查看驱动原始错误",
             "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已返回起点，没有继续邻场搜索",
             "G3_MOTION_RETURN_INTERMEDIATE_RESIDUAL_LIMIT" => "G3 回原中间段未进入严格 2″ 命令包络；已保存 fresh 读回并停止后续回程段",
             "G3_GUIDING_RECOVERY_STOP_CHANGED" or "G3_GUIDING_RECOVERY_STOP_REQUIRED" => "导星中断后的停止证明缺失或已失效；为避免与 PHD2 同时驱动赤道仪，没有发送回程",
@@ -435,7 +519,7 @@ public static partial class ObservationUiPresentation
             "QHY_COARSE_SOURCE_FRAME_MISSING" or "QHY_NATIVE_CENTER_SOURCE_FRAME_MISSING" => "粗定位所需的 QHY 原始帧缺失",
             "QHY_NATIVE_CENTER_FRESH_SOURCE_REQUIRED" => "粗定位只拿到旧 QHY 帧，必须重新采集新鲜见证帧",
             "UVEX_NOT_READY" => "UVEX4 服务未返回 Ready 和可信位置，机构动作被禁止",
-            "UVEX_AUTO_CONNECT_FAILED" => "未能通过固定 COM5 配置连接并验证 UVEX4",
+            "UVEX_AUTO_CONNECT_FAILED" => "未能通过服务保存的串口绑定连接并验证 UVEX4",
             "UVEX_SLIT_ILLUMINATION_OFF_UNVERIFIED" => "狭缝定位 LED 的关闭命令或关闭状态未得到完整确认，流程已按安全规则停止",
             "UVEX_SLIT_ILLUMINATION_ON_UNVERIFIED" => "狭缝定位 LED 的开启命令已经完成，但有界状态回读仍未确认开启；未采集任何 ON 帧",
             "NINA_EQUIPMENT_CONNECT_EXCEPTION" => "N.I.N.A. 设备连接阶段发生异常，尚未取得完整身份读回",
@@ -503,6 +587,14 @@ public static partial class ObservationUiPresentation
 
     private static string Recovery(ObservationStage stage, GateResult gate, bool chinese)
     {
+        if (gate.Code == "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" &&
+            gate.Metrics?.TryGetValue("shortPositionFrames", out var frames) == true)
+        {
+            var used = frames.ToString("0", CultureInfo.InvariantCulture);
+            return chinese
+                ? $"本阶段已记录 {used}/{G3ShortPositionMeasurementPolicy.MaximumFrames} 张短曝光复核帧；单帧图像不足允许在此上限内补拍，多颗独立恒星歧义不会自动选星。此次仍未获可靠位置，已停止；未移动、未重新解算、未重置预算。"
+                : $"This stage recorded {used}/{G3ShortPositionMeasurementPolicy.MaximumFrames} short confirmation frames; single-frame shape failures can retry within this cap. No reliable position was confirmed, so it stopped without motion, repeat solving or budget reset.";
+        }
         var plan = ObservationAutomaticRecoveryPolicy.For(stage, gate);
         if (plan.IsRecoverable)
         {
@@ -533,6 +625,35 @@ public static partial class ObservationUiPresentation
         return chinese
             ? $"未自动重试：{hardReason}"
             : $"No automatic retry: {hardReason}";
+    }
+
+    private static string ShortPositionIssue(string raw)
+    {
+        var reason = raw switch
+        {
+            _ when raw.Contains("G3_SEP_RUNTIME_UNAVAILABLE", StringComparison.Ordinal) => "SEP 运行环境未就绪，请安装与插件版本匹配的图像检测环境",
+            _ when raw.Contains("G3_SEP_CATALOG_REFERENCE_UNAVAILABLE", StringComparison.Ordinal) => "同一目录 ID 的标准坐标及自行未能取得；未使用分裂光斑猜测主星",
+            _ when raw.Contains("G3_SEP_CATALOG_PRIMARY_UNMEASURED", StringComparison.Ordinal) => "完整星像尚未唯一对应标准目录主星位置；未用光翼碎片或伴星替代",
+            _ when raw.Contains("G3_SEP_WORKER_FAILED", StringComparison.Ordinal) => "SEP 图像测量失败；没有回退到旧检测算法",
+            _ when raw.Contains("G3_SEP_INPUT_CHANGED", StringComparison.Ordinal) => "SEP 程序或原始帧在测量期间发生变化",
+            _ when raw.Contains("G3_SEP_INVALID_COVERAGE", StringComparison.Ordinal) => "SEP 候选列表不完整，不能据此确认目标唯一性",
+            _ when raw.Contains("G3_SEP_UNMEASURED", StringComparison.Ordinal) => "SEP 尚未提取到信号与像素支撑充分的未饱和星像",
+            _ when raw.Contains("G3_SEP_AMBIGUOUS", StringComparison.Ordinal) => "SEP 星像分量尚不能唯一关联到目录目标",
+            _ when raw.Contains("G3_SHORT_UNSATURATED_UNMEASURED", StringComparison.Ordinal) => "尚未在未饱和短帧中测出符合轮廓和局部信噪比要求的星像",
+            _ when raw.Contains("G3_SHORT_UNSATURATED_AMBIGUOUS", StringComparison.Ordinal) => "短帧中仍有多颗独立恒星候选，不能唯一对应目标",
+            _ when raw.Contains("G3_SHORT_CONTOUR_BLENDED", StringComparison.Ordinal) => "内外层轮廓尺寸或长短轴比异常，不能确认独立星点",
+            _ when raw.Contains("G3_SHORT_CONTOURS_DISAGREE", StringComparison.Ordinal) => "同一短帧的多层轮廓中心不一致",
+            _ when raw.Contains("G3_SHORT_REPEAT_DISAGREES", StringComparison.Ordinal) => "不同有效短帧的位置差超过一致性上限",
+            _ when raw.Contains("G3_SHORT_CATALOG_PRIMARY_NOT_MEASURED", StringComparison.Ordinal) => "本帧尚未测到目录配对确认的同一主星；不会用伴星替代目标",
+            _ when raw.Contains("G3_SHORT_REPEAT_REQUIRED", StringComparison.Ordinal) => "尚未取得第二张位置一致的有效短帧",
+            _ when raw.Contains("G3_SHORT_WINGS_INCOMPLETE", StringComparison.Ordinal) => "未饱和内翼的覆盖或信噪比不足",
+            _ when raw.Contains("G3_SHORT_CORE_TOO_LARGE", StringComparison.Ordinal) => "短帧削顶区域过大，仍不能可靠定位星核",
+            _ when raw.Contains("G3_SHORT_CORE_NOT_UNIQUE", StringComparison.Ordinal) => "短帧中没有唯一可识别的实心星核",
+            _ when raw.Contains("G3_SHORT_FRAME_REUSED", StringComparison.Ordinal) => "收到重复图像或非递增拍摄时间，不能作为独立新帧",
+            _ when raw.Contains("G3_SHORT_POSITION_OUTSIDE", StringComparison.Ordinal) => "实测位置连同分散范围超出本轮目标识别窗口",
+            _ => "低增益短曝光位置复核未通过；请查看具体轮廓、新帧位置和绑定证据",
+        };
+        return $"WCS 已确认目标在视场内，但{reason}；尚未授权后续定位";
     }
 
     private static string HardStopReason(string code, bool chinese)
@@ -571,6 +692,10 @@ public static partial class ObservationUiPresentation
     private static string Recommendation(ObservationStage stage, string outerCode, string effectiveCode, bool chinese)
     {
         var code = effectiveCode;
+        if (code is "G3_MOTION_CRASH_RETURN_BLOCKED" or "G3_MOTION_CROSS_PIER_ORIGIN_UNCONFIRMED")
+            return chinese
+                ? "查看上轮回程原始原因，以及当前侧别、起点残差和读回漂移。新一轮启动只在最后绝对回程已稳定到位时自动结束旧记录；否则需要人工确认设备位置并选择恢复方式，不能靠重启或删除账本绕过，也不需要为此重调星点检测。"
+                : "Inspect the prior return cause, current pier side, origin residual and readback drift. A new run closes only a final absolute return already proven stable at its origin. Otherwise confirm the physical position and choose recovery explicitly; restarting, deleting the ledger or retuning star detection is not a position proof.";
         if (code.StartsWith("PHD2_GUIDE_OUTPUT_", StringComparison.Ordinal))
             return chinese
                 ? "检查 PHD2 原生导星日志的修正请求与 RA/DEC 脉冲时长，以及 ASCOM/RPC 错误；在无曝光、导星已停止的边界恢复原设备连接。存在未结精调时先核验其责任，不能只清状态或放宽导星精度。"

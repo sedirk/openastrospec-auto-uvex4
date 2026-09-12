@@ -256,8 +256,12 @@ public sealed record TargetIdentification(
     double PredictionResidualPixels,
     double UniquenessRatio,
     TargetIdentificationAuthority Authority = TargetIdentificationAuthority.StellarCentroid,
-    bool CatalogPositionRefinedFromSameFrame = false)
+    bool CatalogPositionRefinedFromSameFrame = false,
+    string? BoundShortPositionEvidencePath = null,
+    double CatalogPositionSpreadPixels = 0)
 {
+    public bool HasCatalogPositionRefinement => CatalogPositionRefinedFromSameFrame ||
+        !string.IsNullOrWhiteSpace(BoundShortPositionEvidencePath);
     public static TargetIdentification FromCatalogWcs(
         PixelPoint predictedPoint,
         int imageWidth,
@@ -346,7 +350,7 @@ public static class SlitTargetIdentifier
         }
 
         var excludedFeatures = topology.Ghosts.Concat(topology.Candidates.Where(candidate =>
-            candidate.Gate.Code == "SATURATED_SOURCE_HALO_FRAGMENT")).ToArray();
+            candidate.Gate.Code is "SATURATED_SOURCE_HALO_FRAGMENT" or "SATURATED_SOURCE_OVERSIZED")).ToArray();
         var ghostFiltered = excludedFeatures.Length == 0
             ? candidates
             : candidates

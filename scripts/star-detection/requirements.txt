@@ -1,0 +1,8 @@
+# Isolated analysis runtime; NEVER install into reduction/.venv.
+numpy==2.2.6
+sep==1.4.1
+scipy==1.15.3
+astropy==7.1.0
+photutils==2.3.0
+matplotlib==3.10.3
+pytest==8.4.1

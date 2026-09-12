@@ -4,6 +4,8 @@
     "PortName": "COM5",
     "ExpectedUsbVid": "1A86",
     "ExpectedUsbPid": "7523",
+    "ExpectedUsbInstanceId": "",
+    "ReservedSerialPorts": [],
     "ExpectedGratingLinesPerMm": 300,
     "HardwareIdentityVerified": false,
     "GratingMinimumSteps": -250000,

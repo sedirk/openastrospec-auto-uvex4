@@ -8,6 +8,34 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationUiPresentationTests
 {
     [Fact]
+    public void PriorCrossPierReturnIsNotPresentedAsHashOrStarDetectionFailure()
+    {
+        var issue = ObservationUiPresentation.Present(ObservationStage.ValidateNightSetup,
+            GateResult.Unknown("G3_MOTION_CRASH_RETURN_BLOCKED",
+                "Durable G3 motion recovery could not return: G3_SEARCH_PIER_SIDE_CHANGED: pierWest to pierEast."),
+            new CultureInfo("zh-CN"));
+        Assert.Contains("不是哈希不一致或星点识别失败", issue.Summary);
+        Assert.Contains("起点残差", issue.Recommendation);
+        Assert.Contains("G3_SEARCH_PIER_SIDE_CHANGED", issue.TechnicalDetails);
+    }
+
+    [Fact]
+    public void SerialConflictNamesThePortAndKeepsTechnicalEvidence()
+    {
+        const string raw = "UVEX_SERIAL_PORT_RESERVED: COM5 is configured for Dome Drivers/RRCI.Dome; it will not be opened.";
+        var chinese = ObservationUiPresentation.PresentUiOperationError(raw, new CultureInfo("zh-CN"));
+        Assert.Contains("COM5", chinese.Message);
+        Assert.Contains("不要断开屋顶", chinese.Message);
+        Assert.Equal(raw, chinese.TechnicalDetails);
+        var english = ObservationUiPresentation.PresentUiOperationError(raw, new CultureInfo("en-US"));
+        Assert.Equal(raw, english.Message);
+        Assert.False(ObservationUiPresentation.ContainsCjk(english.Message));
+        var issue = ObservationUiPresentation.Present(ObservationStage.ValidateNightSetup,
+            GateResult.Fail("UVEX_AUTO_CONNECT_FAILED", raw), new CultureInfo("zh-CN"));
+        Assert.Contains("已配置给其他设备", issue.Summary);
+    }
+
+    [Fact]
     public void ReadOnlyPostLockProgressIsLocalizedWithoutHidingTechnicalIdentity()
     {
         var chinese = ObservationUiPresentation.PresentUiNotice("PHD2_POST_LOCK_OBSERVING", new CultureInfo("zh-CN"));
@@ -51,7 +79,17 @@ public sealed class ObservationUiPresentationTests
     [InlineData("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED", "已确认返回原锁点")]
     [InlineData("ATR_SAVED_FRAME_TEMPERATURE_INVALID", "未计入合格帧")]
     [InlineData("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", "实际次数、位移、已用时间")]
+    [InlineData("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", "导星会话或狭缝证据已失效")]
+    [InlineData("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED", "同时确认目标身份")]
+    [InlineData("PHD2_SCIENCE_IN_PLACE_CHECK_FAILED", "没有因此重建定位")]
+    [InlineData("GUIDING_UNSTABLE", "不是单指超出 2 像素")]
     [InlineData("G3_FRAME_REUSED", "拒绝复用旧光谱仪导星相机")]
+    [InlineData("G3_SEARCH_NOT_STARTED_RETURNED", "邻场搜索尚未执行")]
+    [InlineData("G3_WCS_CENTERING_RETURN_BLOCKED", "回程未取得安全到位确认")]
+    [InlineData("G3_MOTION_CRASH_RETURN_BLOCKED", "上轮回程尚未取得到位确认")]
+    [InlineData("G3_MOTION_CROSS_PIER_ORIGIN_UNCONFIRMED", "只读坐标核验未确认稳定到位")]
+    [InlineData("G3_DESTINATION_PIER_SIDE_CHANGE", "未发送跨侧转向")]
+    [InlineData("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", "低增益短曝光")]
     [InlineData("G3_CATALOG_WCS_AUTHORITY_INVALID", "目录/WCS 目标几何证据格式无效")]
     [InlineData("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", "饱和目标的目录身份")]
     [InlineData("PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED", "有界补拍次数已经用尽")]
@@ -80,6 +118,18 @@ public sealed class ObservationUiPresentationTests
         Assert.True(ObservationUiPresentation.ContainsCjk(presentation.Impact));
         Assert.True(ObservationUiPresentation.ContainsCjk(presentation.AutomaticRecovery));
         Assert.True(ObservationUiPresentation.ContainsCjk(presentation.Recommendation));
+    }
+
+    [Fact]
+    public void WcsReturnDriverQueryErrorDoesNotMasqueradeAsStarDetectionOrHashFailure()
+    {
+        var raw = "G3_DESTINATION_PIER_SIDE_QUERY_FAILED: ASCOM.NotConnectedException (0x80040407): disconnected";
+        var presentation = ObservationUiPresentation.Present(
+            ObservationStage.AcquireG3SlitField,
+            GateResult.Unknown("G3_WCS_CENTERING_RETURN_BLOCKED", raw), Chinese);
+        Assert.Contains("赤道仪驱动的目的地侧别查询失败", presentation.Summary);
+        Assert.Contains("不是星点识别或哈希错误", presentation.Summary);
+        Assert.Contains(raw, presentation.TechnicalDetails);
     }
 
     [Fact]
@@ -239,6 +289,39 @@ public sealed class ObservationUiPresentationTests
         Assert.Contains("目标到狭缝残差=4.125", chinese, StringComparison.Ordinal);
         Assert.Contains("检测星数=17", chinese, StringComparison.Ordinal);
         Assert.Contains("targetSlitResidualPixels=4.125", english, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShortPositionFailureReportsActualFramesShapeAndLocalizedMetrics()
+    {
+        var metrics = new Dictionary<string, double>
+        {
+            ["shortPositionFrames"] = 3,
+            ["maximumShortPositionFrames"] = 3,
+            ["shortOuterContourExtentPixels"] = 14,
+            ["shortCoreContourOffsetPixels"] = 3.72,
+        };
+        var gate = GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED",
+            "Short position confirmation failed: G3_SHORT_CONTOUR_BLENDED: shape", metrics);
+        var chinese = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, gate, Chinese);
+        Assert.Contains("内外层轮廓", chinese.Summary);
+        Assert.Contains("3/3", chinese.AutomaticRecovery);
+        Assert.DoesNotContain("未自动重试", chinese.AutomaticRecovery);
+        Assert.Contains("外层轮廓尺寸（像素）=14", ObservationUiPresentation.FormatMetrics(metrics, Chinese));
+        var english = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, gate, English);
+        Assert.False(ObservationUiPresentation.ContainsCjk(english.AutomaticRecovery));
+        Assert.Contains("3/3", english.AutomaticRecovery);
+    }
+
+    [Theory]
+    [InlineData("G3_SHORT_UNSATURATED_UNMEASURED", "未饱和短帧")]
+    [InlineData("G3_SHORT_UNSATURATED_AMBIGUOUS", "多颗独立恒星")]
+    public void UnsaturatedShortFrameFailureDoesNotDemandASaturatedCore(string code, string expected)
+    {
+        var gate = GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", $"Short position confirmation failed: {code}");
+        var result = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, gate, Chinese);
+        Assert.Contains(expected, result.Summary);
+        Assert.DoesNotContain("实心星核", result.Summary);
     }
 
     [Fact]

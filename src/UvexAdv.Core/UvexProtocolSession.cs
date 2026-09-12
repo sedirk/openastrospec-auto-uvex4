@@ -28,18 +28,22 @@ public sealed class UvexProtocolSession(IUvexTransport transport, TimeSpan comma
     public async Task CloseAsync(CancellationToken cancellationToken)
     {
         readCts?.Cancel();
-        if (readTask is not null)
+        try
         {
-            try
+            if (readTask is not null)
             {
-                await readTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
+                try { await readTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
             }
         }
-
-        await transport.CloseAsync(cancellationToken).ConfigureAwait(false);
+        finally
+        {
+            readTask = null;
+            readCts?.Dispose();
+            readCts = null;
+            // A failing read loop must never skip release of a candidate port.
+            await transport.CloseAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<UvexFrame?> SendAsync(UvexCommand command, CancellationToken cancellationToken)

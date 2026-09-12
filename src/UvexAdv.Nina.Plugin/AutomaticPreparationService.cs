@@ -187,7 +187,7 @@ internal static class AutomaticPreparationService
                 Atr585m = new { Owner = "N.I.N.A.", StableId = input.AtrCameraId },
                 G3M2210m = new { Owner = "PHD2", StableId = input.G3CameraId, input.Phd2ProfileName },
                 QhyMiniCam8m = new { Owner = "QHY acquisition service", StableId = input.QhyCameraId },
-                Uvex4 = new { Owner = "UvexAdv.Service", Endpoint = "COM5 only" },
+                Uvex4 = new { Owner = "UvexAdv.Service", Endpoint = "Explicit verified service binding" },
             },
             new
             {

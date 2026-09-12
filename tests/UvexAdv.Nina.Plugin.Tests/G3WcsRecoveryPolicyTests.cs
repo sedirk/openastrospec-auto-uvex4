@@ -8,6 +8,33 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(2483.907, 723.311, 1109.418, 650.0697)]
+    [InlineData(2496.0975, 281.3333, 1059.4627, 642.0132)]
+    public void RecordedAlmachNeighbourSuccessAdvancesRatherThanChasingOutsideAnchor(
+        double x, double y, double prior, double fresh)
+    {
+        var slit = new PixelPoint(817.473, 426.867);
+        var target = new PixelPoint(x, y);
+        var oldChoice = G3WcsApproachPolicy.ChooseTargetPixel(target, slit, 1920, 1080,
+            arrivalTolerancePixels: 2 / .38);
+        Assert.Equal(2460, oldChoice.X, 6);
+        var completed = G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(true, 1, true, prior, fresh, 2);
+        Assert.True(completed);
+        Assert.Equal(slit, G3WcsApproachPolicy.ChooseTargetPixel(target, slit, 1920, 1080,
+            arrivalTolerancePixels: 2 / .38, completedSolvedNeighbourApproach: completed));
+    }
+
+    [Theory]
+    [InlineData(false, 1, true, 642)]
+    [InlineData(true, .5, true, 642)]
+    [InlineData(true, double.NaN, true, 642)]
+    [InlineData(true, 1, false, 642)]
+    [InlineData(true, 1, true, 1058)]
+    [InlineData(true, 1, true, double.NaN)]
+    public void PartialFailedOrNonImprovingLegDoesNotCompleteStaging(bool neighbour, double scale, bool solved, double fresh) =>
+        Assert.False(G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(neighbour, scale, solved, 1059.4627, fresh, 2));
+
+    [Theory]
     [InlineData(700, 600, 2, true)] // A 100 arcsec neighbour step still leaves 600 arcsec.
     [InlineData(700, 699, 2, false)]
     [InlineData(700, 698, 2, false)]

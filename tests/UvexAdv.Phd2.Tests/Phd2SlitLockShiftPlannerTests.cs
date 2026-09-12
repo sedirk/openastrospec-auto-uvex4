@@ -7,6 +7,47 @@ public sealed class Phd2SlitLockShiftPlannerTests
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void WholeCorrectionEndingAtExistingOriginUsesTheLastAvailableAttempt()
+    {
+        var f = CreateFixture(currentLock: new(109, 100), attempts: 9, cumulative: 40);
+        var measurement = Measurement(new(109, 100), new(209, 200), new(200, 200));
+        var first = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, measurement, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.True(first.IsAllowed, first.Message);
+        Assert.Equal(f.Ledger.OriginLockPosition, first.Stage!.RequestedLockPosition);
+        Assert.Equal(0, first.Stage.ReservedRecoveryAttempts);
+
+        var budget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, measurement, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.True(budget.IsAllowed, budget.Message);
+        Assert.Equal(1, budget.RequiredOutboundAttempts);
+        Assert.Equal(0, budget.ReservedReturnAttempts);
+        Assert.Equal(10, budget.TotalAttempts);
+        Assert.Equal(first.Stage.CumulativeAfterStageUpperPixels, budget.TotalCumulativePixels);
+        Assert.Equal(9, f.Ledger.AttemptsUsed);
+        Assert.Equal(40, f.Ledger.CumulativeCommandedPixels);
+    }
+
+    [Fact]
+    public void NearSlitResidualDoesNotMakeAnUnfinishableInheritedWholeTripAffordable()
+    {
+        var f = CreateFixture(attempts: 8);
+        var quality = f.Qualification with { MaximumLockShiftScale = 0.5 };
+        var limits = f.MotionLimits with { MaximumStagePixels = 2 };
+        var measured = Measurement(new(100, 100), new(200, 200), new(203, 200));
+        var first = Phd2SlitLockShiftPlanner.PlanOutboundStage(quality, Phd2SlitGuideMode.OffSlitGuideStar,
+            measured, f.Ledger, f.Safety, f.Topology, limits, Now);
+        Assert.True(first.IsAllowed, first.Message);
+        var budget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(quality,
+            Phd2SlitGuideMode.OffSlitGuideStar, measured, f.Ledger, f.Safety, f.Topology, limits, Now);
+        Assert.False(budget.IsAllowed);
+        Assert.Equal("SLIT_LOCK_ACQUISITION_ATTEMPT_RESERVE", budget.Code);
+        Assert.Equal(3, budget.RemainingOutboundPixels);
+        Assert.Equal(13, budget.TotalAttempts);
+        Assert.Equal(8, f.Ledger.AttemptsUsed);
+    }
+
+    [Fact]
     public void Trn29WholeCorrectionIsRejectedBeforeSpendingThreeUnfinishableStages()
     {
         var f = CreateFixture();

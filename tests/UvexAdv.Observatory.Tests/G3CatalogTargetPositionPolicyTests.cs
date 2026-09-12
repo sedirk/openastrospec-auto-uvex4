@@ -13,9 +13,10 @@ public sealed class G3CatalogTargetPositionPolicyTests
         var pixels = Enumerable.Repeat((ushort)1000, 1920 * 1080).ToArray();
         for (var y = 472; y <= 486; y++)
         for (var x = 764; x <= 778; x++)
-            if ((x - 771) * (x - 771) + (y - 479) * (y - 479) < 49) pixels[y * 1920 + x] = 65520;
+            if ((x - 771) * (x - 771) + (y - 479) * (y - 479) < 49) pixels[y * 1920 + x] = 40000;
         var frame = new MonochromeFrame(1920, 1080, pixels, 65520);
-        var identified = G3CatalogTargetPositionPolicy.Identify(frame, [], prediction, false, 100);
+        var identified = G3CatalogTargetPositionPolicy.Identify(frame,
+            [new StarCandidate(new(771, 479), 40000, 100000, 80, 4, 0, 0, 400)], prediction, false, 100);
         Assert.True(identified.CatalogPositionRefinedFromSameFrame);
         Assert.Equal(TargetIdentificationAuthority.CatalogWcsProjection, identified.Authority);
         Assert.InRange(identified.PredictionResidualPixels, 55, 60);
@@ -67,4 +68,59 @@ public sealed class G3CatalogTargetPositionPolicyTests
     }
 
     private static double Distance(PixelPoint a, PixelPoint b) => Math.Sqrt(Math.Pow(a.X-b.X, 2) + Math.Pow(a.Y-b.Y, 2));
+
+    [Fact]
+    public void ClippedRecognitionRegionCannotRefineCatalogPositionFromAHaloFragment()
+    {
+        var pixels = new ushort[400 * 400];
+        pixels[190 * 400 + 190] = 65520;
+        var frame = new MonochromeFrame(400, 400, pixels, 65520);
+        var projection = new PixelPoint(200, 200);
+        var fragment = new StarCandidate(new(220, 220), 65520, 10000, 30, 3, 0, .5, 50);
+        var identified = G3CatalogTargetPositionPolicy.Identify(frame, [fragment], projection, false, 100);
+        Assert.True(G3CatalogTargetPositionPolicy.NeedsShortPositionCheck(frame, projection, 100));
+        Assert.False(identified.HasCatalogPositionRefinement);
+        Assert.Equal(projection, identified.Target!.Centroid);
+        Assert.Contains("short-exposure", identified.Gate.Message);
+    }
+
+    [Fact]
+    public void SeparatelyAttestedShortPositionUsesMeasuredOffsetButDoesNotClaimSameFrame()
+    {
+        var frame = new MonochromeFrame(400, 400, new ushort[160000], 65520);
+        var projection = new PixelPoint(200, 200);
+        var candidate = new StarCandidate(new(150, 210), 40000, 100000, 80, 4, 0, 0, 100);
+        var measured = SlitTargetIdentifier.Identify(frame, [candidate], projection, 100);
+        Assert.True(G3CatalogTargetPositionPolicy.CanUseShortMeasurement(frame, measured));
+        var refined = measured with { Authority = TargetIdentificationAuthority.CatalogWcsProjection,
+            BoundShortPositionEvidencePath = "bound-short-confirmation.json" };
+        Assert.False(refined.CatalogPositionRefinedFromSameFrame);
+        Assert.True(refined.HasCatalogPositionRefinement);
+        Assert.Equal(new PixelPoint(250,190), G3CatalogTargetPositionPolicy.ProjectionDestination(refined, projection, 100));
+        Assert.False(G3CatalogTargetPositionPolicy.CanUseShortMeasurement(frame, refined));
+        Assert.False(G3CatalogTargetPositionPolicy.CanUseShortMeasurement(frame,
+            measured with { Target = candidate with { SaturatedFraction = .01 } }));
+        Assert.False(G3CatalogTargetPositionPolicy.CanUseShortMeasurement(frame,
+            measured with { Gate = GateResult.Unknown("TARGET_AMBIGUOUS", "ambiguous") }));
+        Assert.Throws<InvalidOperationException>(() => G3CatalogTargetPositionPolicy.ProjectionDestination(
+            refined with { Target = candidate with { Centroid = new(10,10) } }, projection, 100));
+    }
+
+    [Fact]
+    public void OversizedRegionRemainsAnExclusionEvenWhenItsCentreIsOutsideRecognitionWindow()
+    {
+        var pixels = Enumerable.Repeat((ushort)1000,512*512).ToArray();
+        for (var y=80;y<304;y++) for(var x=80;x<304;x++) pixels[y*512+x]=65520;
+        for (var y=190;y<193;y++) for(var x=308;x<311;x++) pixels[y*512+x]=65520;
+        var frame = new MonochromeFrame(512,512,pixels,65520);
+        var prediction = new PixelPoint(320,192);
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(frame,prediction,100);
+        Assert.NotEqual(GateDisposition.Passed,topology.Gate.Disposition);
+        Assert.Null(topology.Target);
+        Assert.Contains(topology.Candidates,c=>c.Gate.Code=="SATURATED_SOURCE_OVERSIZED" && c.SaturatedPixels==50176);
+        Assert.Contains(topology.Candidates,c=>c.Gate.Code=="SATURATED_SOURCE_HALO_FRAGMENT" && c.SaturatedPixels==9);
+        var fragment = new StarCandidate(new(309,191),65520,10000,50,3,0,.5,100);
+        var identified = SlitTargetIdentifier.Identify(frame,[fragment],prediction,100);
+        Assert.NotEqual(GateDisposition.Passed,identified.Gate.Disposition);
+    }
 }

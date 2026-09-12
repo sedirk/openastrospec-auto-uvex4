@@ -18,7 +18,7 @@ The first two files are frozen design records. `scripts/verify-design-baseline.p
 - PHD2 is the sole owner of G3M2210M and must not be used as the QHYminiCam8M acquisition service.
 - Under ADR-0014, a separate photometry/worker N.I.N.A. instance is the sole production owner of QHYminiCam8M, its photometry filter wheel and GS350 photometry focuser. Its Profile and plugin control surface must exclude all other device categories; future photometry accessories require explicit, bounded integration, not generic device-command access.
 - The legacy QHY service remains for simulation, historical compatibility and explicit idle-boundary rollback; it must be stopped/released before the worker can connect. Never hot-switch owners within an active run.
-- `UvexAdv.Service` is the sole owner of UVEX4 COM5 and must never scan other serial ports.
+- Under ADR-0016, `UvexAdv.Service` is the sole owner of the explicitly bound UVEX4 serial device. Normal connection/recovery never scans ports. An explicitly authorized, bounded, read-only maintenance identification may inspect present, unreserved candidates while the installed service and vendor owner are stopped; it never probes roof/mount/cover/switch ports or grants motion authority.
 - Different physical cameras may operate concurrently; the prohibition is duplicate ownership of the same physical device.
 - Raw observations are immutable inputs. Never rewrite, rename, move, or delete them as part of source-code work.
 - Generated FITS, diagnostics, logs, databases, calibration libraries, SDK bundles, build artifacts, and `.astroproj` files do not belong in Git.

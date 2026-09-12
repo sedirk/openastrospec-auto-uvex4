@@ -1188,12 +1188,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
 
         Assert.Contains("G3WcsRecoveryPolicy.NeedsCoarseCentering", acquire, StringComparison.Ordinal);
-        Assert.Contains("coarseResidualPixels, placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("coarseResidualPixels + lastG3Field.TargetIdentification.CatalogPositionSpreadPixels, placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
         Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
         Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
         Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
-        Assert.Contains("targetToSlitResidualPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
-        Assert.Contains("currentResidual <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("targetToSlitResidualPixels + currentField.TargetIdentification.CatalogPositionSpreadPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
         Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
         Assert.Contains("G3CatalogTargetPositionPolicy.ProjectionDestination", wcs, StringComparison.Ordinal);
         Assert.Contains("PixelDistance(adoptedTargetPixel, desiredTargetPixel)", wcs, StringComparison.Ordinal);

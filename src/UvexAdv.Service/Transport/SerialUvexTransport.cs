@@ -20,20 +20,10 @@ internal sealed class SerialUvexTransport(UvexSafetyOptions options, ILogger<Ser
             throw new InvalidOperationException("The verified UVEX serial port is already open in this process.");
         }
 
-        if (!options.PortName.Equals("COM5", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("The production transport is locked to COM5.");
-        }
-
-        options.HardwareIdentityVerified = WindowsUsbIdentityVerifier.MatchesPort(
-            options.PortName,
-            options.ExpectedUsbVid,
-            options.ExpectedUsbPid);
-        if (!options.HardwareIdentityVerified)
-        {
-            throw new InvalidOperationException(
-                $"{options.PortName} does not match VID_{options.ExpectedUsbVid}&PID_{options.ExpectedUsbPid}; serial open was blocked.");
-        }
+        options.HardwareIdentityVerified = false;
+        WindowsSerialPortInventory.RequireCandidate(options,
+            WindowsSerialPortInventory.GetPresentPorts(options.ExpectedUsbVid, options.ExpectedUsbPid),
+            WindowsSerialPortInventory.GetReservedPorts());
 
         var candidate = new SerialPort(options.PortName, 115200, Parity.None, 8, StopBits.One)
         {
@@ -48,7 +38,7 @@ internal sealed class SerialUvexTransport(UvexSafetyOptions options, ILogger<Ser
         {
             candidate.Open();
             port = candidate;
-            logger.LogInformation("Opened verified UVEX serial port {PortName} at 115200 8N1", options.PortName);
+            logger.LogInformation("Opened bound USB serial port {PortName} at 115200 8N1; UVEX protocol identity is still pending", options.PortName);
             if (options.SerialOpenDelay > TimeSpan.Zero)
             {
                 await Task.Delay(options.SerialOpenDelay, cancellationToken).ConfigureAwait(false);
@@ -72,6 +62,7 @@ internal sealed class SerialUvexTransport(UvexSafetyOptions options, ILogger<Ser
     public Task CloseAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        options.HardwareIdentityVerified = false;
         if (port is not null)
         {
             if (port.IsOpen)

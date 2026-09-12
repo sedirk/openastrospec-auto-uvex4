@@ -219,6 +219,16 @@ public static class ObservationAutomaticRecoveryPolicy
                     1,
                     "Use the existing bounded G3, slit-placement and guiding recovery chain before another science exposure."),
 
+            // Only these ATR boundaries emit this pre-exposure continuity
+            // gate. The runner first attempts a fresh no-motion verification
+            // at the existing settled lock, then checks the inherited motion
+            // budget before a checked-stop and dependency rebuild. This does
+            // not grant recovery to rejected identity/precision windows.
+            (ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock,
+                "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED") => RebuildDependencies(
+                    1,
+                    "Verify the existing settled lock in place first; otherwise require remaining inherited motion budget before rebuilding fresh G3, slit and guide evidence."),
+
             (ObservationStage.RunScienceBlock, "ATR_TIER_NOT_SELECTED") => RetryFreshEvidence(
                     1,
                     "Invalidate the missing ATR tier and run the existing bounded reprobe before another science exposure."),

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <NinaInstallDir Condition="'$(NinaInstallDir)' == ''">C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy</NinaInstallDir>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../UvexAdv.Phd2/UvexAdv.Phd2.csproj" />
+    <Reference Include="NINA.WPF.Base" HintPath="$(NinaInstallDir)\NINA.WPF.Base.dll" Private="false" />
+    <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="false" />
+    <Reference Include="OxyPlot" HintPath="$(NinaInstallDir)\OxyPlot.dll" Private="false" />
+    <Reference Include="CommunityToolkit.Mvvm" HintPath="$(NinaInstallDir)\CommunityToolkit.Mvvm.dll" Private="false" />
+  </ItemGroup>
+</Project>

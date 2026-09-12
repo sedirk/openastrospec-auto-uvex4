@@ -11,6 +11,46 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
         "RealObservationStageRunner.Phd2SlitPlacement.cs"));
 
     [Fact]
+    public void WholeTripDenialCannotFallThroughToAnIndividuallyAffordableDispatch()
+    {
+        var body = Slice(Source,
+            "private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(",
+            "private Task<StageResult> ReturnPhd2LockToOriginAsync(");
+        AssertOrdered(body,
+            "if (plan.IsComplete || supervisedSlitPrecisionWarning)",
+            "var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(",
+            "session.Qualification, session.GuideMode, session.LastMeasurement.Measurement, ledger,",
+            "if (!nextAcquisitionBudget.IsAllowed)",
+            "return await HandleDeniedPhd2AcquisitionBudgetAsync(",
+            "var stage = plan.Stage!;",
+            "var chargedLedger = ledger with",
+            "exact = await phd2.SetExactLockPositionAsync(");
+        var initialDiagnostic = body[body.IndexOf("var acquisitionBudget =", StringComparison.Ordinal)..
+            body.IndexOf("while (true)", body.IndexOf("var acquisitionBudget =", StringComparison.Ordinal), StringComparison.Ordinal)];
+        Assert.DoesNotContain("ReacquireG3ForPhd2HandoffAsync", initialDiagnostic, StringComparison.Ordinal);
+
+        var handoff = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "UvexAdv.Nina.Plugin",
+            "RealObservationStageRunner.Handoff.cs"));
+        AssertOrdered(handoff,
+            "private async Task<StageResult> HandleDeniedPhd2AcquisitionBudgetAsync(",
+            "Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger",
+            "return await ReturnPhd2LockToOriginAsync(",
+            "Phd2HandoffRecoveryPolicy.ShouldReacquire(",
+            "return await ReacquireG3ForPhd2HandoffAsync(",
+            "GateResult.Unknown(budget.Code,");
+    }
+
+    [Fact]
+    public void SlitApertureWarningConvertsTheTargetToTheRuntimeSlitsFrameLocalDomain()
+    {
+        AssertOrdered(Source,
+            "var slitApertureResiduals = targetCompletionWindow.Select(item =>",
+            "Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(",
+            "ToFrameLocal(item.Measurement.TargetCentroid, preset),",
+            "item.RuntimeSlitLocal)");
+    }
+
+    [Fact]
     public void PendingNativeCorrectionWaitsForNewGeometryBeforeFailureRecovery()
     {
         var body = Slice(Source,

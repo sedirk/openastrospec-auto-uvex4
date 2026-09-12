@@ -11,11 +11,19 @@ public sealed class Phd2GuideOutputRecoveryTests
     [InlineData("extra-device")]
     [InlineData("identity-changed")]
     [InlineData("disconnect-unconfirmed")]
+    [InlineData("disconnect-missing-camera-state")]
+    [InlineData("disconnect-malformed-mount-state")]
     [InlineData("active-capture")]
+    [InlineData("selected-1")]
+    [InlineData("selected-2")]
+    [InlineData("selected-3")]
+    [InlineData("selected-4")]
     public async Task NativeFaultAndBoundedReconnectUseSameProductionClient(string scenario)
     {
         var connectionCommands = new ConcurrentQueue<bool>();
         var faultSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconnectStarted = false;
+        var reconnectStateReads = 0;
         await using var server = new FakePhd2Server(async (session, token) =>
         {
             await session.SendEventAsync(new { Event = "StartGuiding" }, token);
@@ -34,9 +42,13 @@ public sealed class Phd2GuideOutputRecoveryTests
                 try { request = await session.ReadRequestAsync(token); }
                 catch (EndOfStreamException) { break; }
                 var method = request.GetProperty("method").GetString();
+                var reportedState = state;
+                if (method == "get_app_state" && Volatile.Read(ref reconnectStarted) &&
+                    scenario == $"selected-{++reconnectStateReads}")
+                    reportedState = "Selected";
                 object? result = method switch
                 {
-                    "get_app_state" => state,
+                    "get_app_state" => reportedState,
                     "get_profile" => new { id = 2, name = "guide-only" },
                     "get_current_equipment" => new
                     {
@@ -47,6 +59,20 @@ public sealed class Phd2GuideOutputRecoveryTests
                     "get_guide_output_enabled" => scenario != "output-disabled",
                     _ => 0,
                 };
+                if (method == "get_current_equipment" && !connected &&
+                    scenario == "disconnect-missing-camera-state")
+                    result = new
+                    {
+                        camera = new { name = "bound-camera" },
+                        mount = new { name = "bound-mount", connected = false },
+                    };
+                if (method == "get_current_equipment" && !connected &&
+                    scenario == "disconnect-malformed-mount-state")
+                    result = new
+                    {
+                        camera = new { name = "bound-camera", connected = false },
+                        mount = new { name = "bound-mount", connected = "false" },
+                    };
                 if (method == "stop_capture")
                 {
                     state = "Stopped";
@@ -77,6 +103,7 @@ public sealed class Phd2GuideOutputRecoveryTests
             Assert.True((await client.StopCaptureAndConfirmAsync(CancellationToken.None)).ConfirmedIdle);
         Assert.True(client.Snapshot.GuideOutput!.Failed); // Stopping does not clear the fault.
         var epoch = client.Snapshot.ConnectionEpoch;
+        Volatile.Write(ref reconnectStarted, true);
         var reconnect = () => client.ReconnectEquipmentAfterOutputFailureAsync(
             new(2, "guide-only", "bound-camera", "bound-mount"), CancellationToken.None);
         if (scenario == "success")
@@ -94,7 +121,15 @@ public sealed class Phd2GuideOutputRecoveryTests
         {
             await Assert.ThrowsAnyAsync<Phd2Exception>(reconnect);
             Assert.True(client.Snapshot.GuideOutput!.Failed);
-            Assert.Equal(scenario == "disconnect-unconfirmed" ? new[] { false } : [], connectionCommands.ToArray());
+            bool[] expectedCommands = scenario switch
+            {
+                "disconnect-unconfirmed" or "disconnect-missing-camera-state" or
+                    "disconnect-malformed-mount-state" or "selected-3" => [false],
+                "selected-4" => [false, true],
+                _ => [],
+            };
+            Assert.Equal(expectedCommands, connectionCommands.ToArray());
+            Assert.Equal(epoch, client.Snapshot.ConnectionEpoch);
         }
         Assert.DoesNotContain("guide", server.ReceivedMethods);
         Assert.DoesNotContain("guide_pulse", server.ReceivedMethods);

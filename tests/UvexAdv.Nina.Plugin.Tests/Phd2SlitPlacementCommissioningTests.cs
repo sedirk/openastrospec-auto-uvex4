@@ -1092,6 +1092,30 @@ public sealed class Phd2SlitPlacementCommissioningTests
         return RunnerSource[start..end];
     }
 
+    [Theory]
+    [InlineData(Phd2ImageCoordinateDomain.FullSensorCoordinates)]
+    [InlineData(Phd2ImageCoordinateDomain.RoiLocalCoordinates)]
+    public void NonzeroRoiApertureResidualUsesTheSameLocalDomainAsTheMeasuredSlit(Phd2ImageCoordinateDomain domain)
+    {
+        var preset = CreatePreset() with { CoordinateDomain = domain, RoiX = 500, RoiY = 200, RoiWidth = 300, RoiHeight = 300 };
+        var slit = new UvexAdv.Observatory.SlitGeometry("frame-local", new(100, 100), 0, 100, 3, 0.5, "guide", 1, 1);
+        var domainTarget = domain == Phd2ImageCoordinateDomain.FullSensorCoordinates
+            ? new Phd2Point(610, 301) : new Phd2Point(110, 101);
+        var conversion = typeof(RealObservationStageRunner).GetMethod("ToFrameLocal",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var local = Assert.IsType<UvexAdv.Observatory.PixelPoint>(conversion.Invoke(null, [domainTarget, preset]));
+        var residual = Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(local, slit)!;
+        Assert.Equal(10, residual.AlongSlitPixels, 8);
+        Assert.Equal(1, residual.CrossSlitPixels, 8);
+        Assert.True(Phd2PlacementGuideWindowPolicy.CanProbeAlongSlitWithPrecisionWarning(
+            true, true, [residual, residual, residual], 2, 2, 75));
+        var offSlitDomainTarget = domainTarget with { Y = domainTarget.Y + 8 };
+        var offSlitLocal = Assert.IsType<UvexAdv.Observatory.PixelPoint>(conversion.Invoke(null, [offSlitDomainTarget, preset]));
+        var offSlit = Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(offSlitLocal, slit)!;
+        Assert.False(Phd2PlacementGuideWindowPolicy.CanProbeAlongSlitWithPrecisionWarning(
+            true, true, [offSlit, offSlit, offSlit], 2, 2, 75));
+    }
+
     private static Phd2SlitPlacementCommissioningPreset CreatePreset()
     {
         var policy = Phd2CalibrationQualityPolicy.Default;

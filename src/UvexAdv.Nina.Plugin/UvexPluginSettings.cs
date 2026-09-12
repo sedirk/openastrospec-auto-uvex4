@@ -65,7 +65,7 @@ internal sealed class UvexPluginSettings
     public int FocusMaximum { get => values.GetValueInt32(nameof(FocusMaximum), 20_000); set => values.SetValueInt32(nameof(FocusMaximum), value); }
     public int FocusBacklash { get => values.GetValueInt32(nameof(FocusBacklash), 0); set => values.SetValueInt32(nameof(FocusBacklash), value); }
     public int ManualM2StepSize { get => values.GetValueInt32(nameof(ManualM2StepSize), 50); set => values.SetValueInt32(nameof(ManualM2StepSize), value); }
-    public string ManualUvexSelectedDevice { get => GetString(nameof(ManualUvexSelectedDevice), "UVEX4 / COM5"); set => values.SetValueString(nameof(ManualUvexSelectedDevice), value); }
+    public string ManualUvexSelectedDevice { get => GetString(nameof(ManualUvexSelectedDevice), "UVEX4 / 已绑定串口"); set => values.SetValueString(nameof(ManualUvexSelectedDevice), value); }
     public double WavelengthReferencePixel { get => values.GetValueDouble(nameof(WavelengthReferencePixel), double.NaN); set => values.SetValueDouble(nameof(WavelengthReferencePixel), value); }
     public double WavelengthTargetPixel { get => values.GetValueDouble(nameof(WavelengthTargetPixel), double.NaN); set => values.SetValueDouble(nameof(WavelengthTargetPixel), value); }
     public double GratingStepsPerPixel { get => values.GetValueDouble(nameof(GratingStepsPerPixel), 0); set => values.SetValueDouble(nameof(GratingStepsPerPixel), value); }
@@ -179,6 +179,8 @@ internal sealed class UvexPluginSettings
     // authority. New profiles remain strict; real-control arming is process-local.
     public bool AllowSupervisedSlitQualityWarning { get => values.GetValueBoolean(nameof(AllowSupervisedSlitQualityWarning), false); set => values.SetValueBoolean(nameof(AllowSupervisedSlitQualityWarning), value); }
     public int Phd2ProfileId { get => values.GetValueInt32(nameof(Phd2ProfileId), -1); set => values.SetValueInt32(nameof(Phd2ProfileId), value); }
+    public string SepMainFocusOptionsJson { get => GetString(nameof(SepMainFocusOptionsJson), ""); set => values.SetValueString(nameof(SepMainFocusOptionsJson), value); }
+    public string SepMainFocusLastResultPath { get => GetString(nameof(SepMainFocusLastResultPath), ""); set => values.SetValueString(nameof(SepMainFocusLastResultPath), value); }
     public string Phd2ProfileName { get => GetString(nameof(Phd2ProfileName), string.Empty); set => values.SetValueString(nameof(Phd2ProfileName), value); }
     public string Phd2CameraName { get => GetString(nameof(Phd2CameraName), string.Empty); set => values.SetValueString(nameof(Phd2CameraName), value); }
     public string Phd2CameraStableId { get => GetString(nameof(Phd2CameraStableId), string.Empty); set => values.SetValueString(nameof(Phd2CameraStableId), value); }

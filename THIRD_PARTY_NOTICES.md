@@ -20,6 +20,19 @@ uses the pinned Python packages declared in `reduction/pyproject.toml` and
 binary release, generate an inventory from the exact lock/asset files and include the
 required notices; this document is a boundary statement, not that generated inventory.
 
+## SEP image-analysis runtime
+
+The separately installed image-only worker uses unmodified **SEP 1.4.1**
+([upstream source and license inventory](https://github.com/sep-developers/sep)).
+SEP derives source-extraction code from Source Extractor. Its library is LGPLv3;
+the Python wrapper is MIT and the photutils-derived overlap code is BSD-3-Clause,
+as detailed in the upstream `licenses` directory and individual source headers.
+The Python wheel retains these upstream notices. This project does not relicense
+SEP or statically incorporate it into the N.I.N.A. DLL. The environment is
+replaceable and pinned separately from the spectral-reduction environment.
+Additional analysis/benchmark dependencies are listed in
+`scripts/star-detection/requirements.txt` and retain their own licenses.
+
 ## Vendor native SDKs
 
 Native camera SDKs and driver binaries are intentionally ignored or copied only into

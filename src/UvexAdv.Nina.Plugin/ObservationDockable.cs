@@ -68,7 +68,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         new("OperatorWeakSupervision", "有人弱监督（默认）", "按当前 N.I.N.A. 选择逐项自动连接；未选择、连不上或缺指标的单项只警告降级，已连接设备明确报告危险或关闭时仍阻断。绝不授予无人值守权限。"),
     ];
 
-    private static readonly IReadOnlyList<string> ManualUvexDevices = ["UVEX4 / COM5"];
+    private static readonly IReadOnlyList<string> ManualUvexDevices = ["UVEX4 / 已绑定串口"];
 
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new()
     {
@@ -86,6 +86,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly IImagingMediator imagingMediator;
     private readonly ITelescopeMediator telescopeMediator;
     private readonly CancellationTokenSource lifetime = new();
+    private SepMainFocusViewModel? mainFocus;
+    public SepMainFocusViewModel MainFocus => mainFocus ??= new(settings, host, realRunnerFactory,
+        () => CanUseManualAtrTools() && !IsManualUvexBusy && captureManualAtrSpectrumCommand.CanExecute(null),
+        () => activeProfileService.ActiveProfile.Id.ToString(), () => { RaiseCommandStates(); });
     private readonly ObservationAutomationBridge automationBridge;
     private readonly SimpleAsyncCommand startSelectedModeCommand;
     private readonly SimpleAsyncCommand startSimulationCommand;
@@ -211,7 +215,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private string mountTrackingManualStatus = "尚未请求；正式自动流程会在目录转向前自行启用并核验。";
     private string manualUvexConnectionStatus = "尚未读取 UVEX 服务状态。";
     private string manualUvexPositionStatus = "狭缝、M2 与光栅位置尚未读取。";
-    private string manualUvexLastAction = "设备选择已保存；打开本页不会连接 COM5。请先点击“连接”。";
+    private string manualUvexLastAction = "设备选择已保存；打开本页不会连接 已绑定串口。请先点击“连接”。";
     private string manualUvexError = string.Empty;
     private string manualUvexErrorTechnicalDetails = string.Empty;
     private bool isManualUvexBusy;
@@ -298,7 +302,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             () => IsControllable && RunState is not ObservationRunState.PauseRequested);
         resumeCommand = new SimpleCommand(Resume, () => RunState is
             ObservationRunState.Paused or ObservationRunState.PausedNeedsAttention or ObservationRunState.ManualTakeover);
-        cancelCommand = new SimpleCommand(host.Cancel, () => IsControllable);
+        cancelCommand = new SimpleCommand(() =>
+        {
+            if (mainFocus?.IsBusy == true) mainFocus.CancelCommand.Execute(null);
+            else host.Cancel();
+        }, () => IsControllable || mainFocus?.IsBusy == true);
         takeoverCommand = new SimpleCommand(
             () => host.RequestTakeover("操作员从实时面板请求人工接管。"),
             () => IsControllable && RunState is not ObservationRunState.ManualTakeover);
@@ -1989,6 +1997,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public void Dispose()
     {
+        mainFocus?.Dispose();
         automationBridge.Dispose();
         host.DashboardChanged -= OnDashboardChanged;
         UvexRuntimeState.Changed -= OnManualSpectrumChanged;
@@ -2063,7 +2072,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         if (!CanManageManualUvexConnection()) return;
         IsManualUvexBusy = true;
         ManualUvexError = string.Empty;
-        ManualUvexLastAction = "正在读取 UVEX 服务与 COM5 状态…";
+        ManualUvexLastAction = "正在读取 UVEX 服务与 已绑定串口 状态…";
         try
         {
             using var client = new UvexServiceClient(settings.ServiceUrl);
@@ -2085,15 +2094,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     }
 
     private Task ConnectManualUvexAsync() => RunManualUvexActionAsync(
-        "连接 UVEX4 / COM5",
+        "连接 UVEX4 / 已绑定串口",
         (lease, token) => lease.ConnectAndVerifyAsync(token));
 
     private Task DisconnectManualUvexAsync() => RunManualUvexActionAsync(
-        "断开 UVEX4 / COM5",
+        "断开 UVEX4 / 已绑定串口",
         (lease, token) => lease.DisconnectAndVerifyAsync(token));
 
     private Task ReleaseManualUvexComPortAsync() => RunManualUvexActionAsync(
-        "释放 COM5 给原厂软件",
+        "释放 已绑定串口 给原厂软件",
         (lease, token) => lease.ReleaseComPortAndVerifyAsync(token));
 
     private Task SelectManualSlitAsync(int position) => RunManualUvexActionAsync(
@@ -3057,15 +3066,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         manualUvexConnectionState == DeviceConnectionState.Ready &&
         manualUvexPositionKnown;
 
-    private bool CanEditTargetPlan() => RunState is
+    private bool CanEditTargetPlan() => mainFocus?.IsBusy != true && (RunState is
         ObservationRunState.Idle or
         ObservationRunState.Completed or
         ObservationRunState.Cancelled or
-        ObservationRunState.Faulted;
+        ObservationRunState.Faulted);
 
     private bool CanStartReal() => CanStart();
 
-    private bool CanRestartWithCurrentConfiguration() =>
+    private bool CanRestartWithCurrentConfiguration() => mainFocus?.IsBusy != true &&
         AcquisitionPlan?.HasPendingChanges != true && !IsTargetImportBusy && RunState is
             ObservationRunState.Idle or
             ObservationRunState.Paused or
@@ -3521,6 +3530,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             new("select-simulation", selectSimulationModeCommand, false, false, false, false, "Select the simulation mode without starting it."),
             new("select-real", selectRealModeCommand, false, false, false, false, "Select the real-equipment mode without connecting or moving equipment."),
             new("show-acquisition-plan", showAcquisitionPlanCommand, false, false, false, false, "Show the visible acquisition-plan tab only; no settings or equipment changes."),
+            new("start-main-focus", MainFocus.StartCommand, false, true, false, false, "Invoke the visible main-mirror SEP focus button; no roof opening or slew; requires idle owners and configured limits."),
+            new("cancel-main-focus", MainFocus.CancelCommand, false, false, false, false, "Cancel the same main-focus operation and conditionally return to its original position."),
             new("apply-target-draft", applyTargetDraftCommand, false, false, false, false, "Apply only the visible J2000 target fields while the run is inactive; no equipment operation."),
             new("import-planetarium-target", importFromPlanetariumCommand, false, false, false, false, "Import the current planetarium selection using the visible import button."),
             new("import-framing-target", importFromFramingAssistantCommand, false, false, false, false, "Import the current framing selection using the visible import button."),
@@ -3655,7 +3666,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 item.Kind,
                 item.FileName,
                 item.AbsolutePath)).ToArray(),
-            SupervisedSlitQualityWarningAuthorized);
+            SupervisedSlitQualityWarningAuthorized,
+            MainFocus.IsBusy, MainFocus.Status, MainFocus.EvidenceDirectory);
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(
@@ -3857,6 +3869,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private void RaiseCommandStates()
     {
+        mainFocus?.Refresh();
+        automationBridge?.NotifyStateChanged();
         AcquisitionPlan?.NotifyState();
         RaisePropertyChanged(nameof(SupervisedSlitQualityWarningAuthorized));
         RaisePropertyChanged(nameof(SupervisedSlitQualityWarningStatusText));
@@ -4071,6 +4085,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess())
         {
+            ReloadMainFocus();
             LoadNativeTargetDraftFromSettings();
             RefreshCommissioningProfileCatalog(applySelected: true);
             AcquisitionPlan.Reload();
@@ -4081,6 +4096,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         {
             _ = dispatcher.BeginInvoke(() =>
             {
+                ReloadMainFocus();
                 LoadNativeTargetDraftFromSettings();
                 RefreshCommissioningProfileCatalog(applySelected: true);
                 AcquisitionPlan.Reload();
@@ -4088,6 +4104,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 RefreshProfileOwnership();
             });
         }
+    }
+
+    private void ReloadMainFocus()
+    {
+        mainFocus?.Dispose();
+        mainFocus = null;
+        RaisePropertyChanged(nameof(MainFocus));
     }
 
     private void RefreshImageFilePatternDisplay()

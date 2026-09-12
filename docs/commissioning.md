@@ -1,8 +1,11 @@
 # OpenAstroSpec Auto — UVEX4 实机调试清单
 
-当前软件状态见 [2026-09-12 / 0.4.0.176 收口](closeout-2026-09-12.md)，
+当前软件状态见 [2026-09-13 / 0.4.0.191 收口](closeout-2026-09-13.md)，
 曝光计划入口见[采集计划（曝光预算）](acquisition-plan.md)，
-最近天空验收见 [2026-09-11 多目标测试](commissioning-multitarget-2026-09-11.md)。
+最近天空记录为该报告中 Mirach、γ Cas、Almach 的三次人工一键成功；
+之前的 [2026-09-11 多目标测试](commissioning-multitarget-2026-09-11.md)保留历史版本范围。
+.191 的 [SEP 主镜对焦入口](sep-main-mirror-focus-commissioning.md)已完成离线验证，
+尚未安装或通过新入口的天空验收；本机安装版本仍为 .190。
 最近的多目标前台成功仍使用旧测光服务；双 N.I.N.A. 源码已实现，但须单独完成空闲
 所有权交接、原生采集/轮子/调焦与失联验收。下面的台站实例和历史日期不是通用默认值，
 也不代表所有列出的能力均已实机通过。
@@ -13,7 +16,7 @@ ATR585M 已于 2026-08-16 使用官方工具升级到 FPGA 5.0，并完成 SDK 6
 
 1. 导出 DRIVER.UVEX4 当前设置并保存其通信日志。
 2. 记录光栅、狭缝和 M2 的当前机械位置、方向、行程和回零行为。
-3. 确认 Windows 设备管理器中 COM5 对应 `VID_1A86&PID_7523`。
+3. 按 [ADR-0016](adr/0016-verified-configurable-uvex-serial-binding.md) 确认 UVEX 的实际串口和 USB 实例；不能仅凭 COM5 或 CH340 的 `VID_1A86&PID_7523` 判断设备。其他 ASCOM 设备已配置的端口禁止试探。
 4. 保留旧 Manager 的安装文件；不要卸载或覆盖 UVEX 控制器固件。ATR585M 相机固件按上方独立记录管理。
 
 ## 2. 服务只读验证
@@ -22,7 +25,20 @@ ATR585M 已于 2026-08-16 使用官方工具升级到 FPGA 5.0，并完成 SDK 6
 2. 保持 `Simulator=true` 完成管理器和 API 测试。
 3. 将 `%ProgramData%\UVEX-ADV\config.json` 的 `Simulator` 改为 `false`，但暂时不要获取控制租约或点击运动按钮。
 4. 启动服务，核对固件版本、功能位、温度、光栅位置、M2 位置和狭缝位置。
-5. 身份不匹配时服务必须拒绝打开端口；禁止通过修改代码跳过检查。
+5. USB 绑定不匹配或端口被其他设备配置占用时，服务必须在打开前拒绝；仅在新鲜固件/UVEX4 描述回读通过后才允许后续控制。禁止跳过检查。
+
+### USB 换口后的显式辨认
+
+先在空闲边界停止 `UVEX-ADV` 服务并关闭原厂 UVEX 程序，保留其他设备所有者运行。
+在已授权维护时调用 `UvexAdv.Service.exe --identify-serial-ports COMx,COMy --confirm-read-only`，
+将示例端口替换为明确选择的现存候选。工具逐个查询版本和描述，排除 ASCOM 预留端口，
+每次关闭连接，不自动保存、不初始化电机。保留完整 JSON 结果；唯一目标确认后，备份
+`%ProgramData%\UVEX-ADV\config.json`，更新 `Uvex:PortName` 和 `Uvex:ExpectedUsbInstanceId`，
+重启服务并显式连接读取状态。服务启动不会自动连接。普通连接和异常恢复不会扫描其他端口。
+USB 拓扑标识不是跨插口唯一序列号；旧波长标定、Night Setup 和三焦域绑定不自动重写，
+需要使用新证据重新核验。此验证不授权回零、运动、采集或自动观测。
+未通过标准 ASCOM 配置公开串口的设备，须把已知端口加入本机 `Uvex:ReservedSerialPorts`
+作为额外排除清单；辨认和正常连接都会遵守该清单。
 
 ## 3. 有界运动标定
 

@@ -547,7 +547,13 @@ public static class Phd2SlitLockShiftPlanner
         var outbound = Distance(ledger.CurrentLockPosition, destination);
         var outboundAttempts = Math.Ceiling(outbound / (limits.MaximumStagePixels * qualification.MaximumLockShiftScale));
         var returnDistanceUpper = Distance(ledger.OriginLockPosition, destination) + limits.LockVerificationTolerancePixels;
-        var returnAttempts = Math.Ceiling(returnDistanceUpper / (limits.MaximumStagePixels - limits.LockVerificationTolerancePixels));
+        // An exact endpoint at the existing origin needs no further command:
+        // the verified readback is already inside the same tolerance used by
+        // PlanRecoveryStage and BuildStage. Charging an extra return attempt
+        // here falsely vetoed an otherwise affordable final correction.
+        var returnAttempts = returnDistanceUpper <= limits.LockVerificationTolerancePixels
+            ? 0
+            : Math.Ceiling(returnDistanceUpper / (limits.MaximumStagePixels - limits.LockVerificationTolerancePixels));
         var returnPixels = returnDistanceUpper + 2 * limits.LockVerificationTolerancePixels * returnAttempts;
         var totalPixels = ledger.CumulativeCommandedPixels + outbound + returnPixels;
         var totalAttempts = ledger.AttemptsUsed + outboundAttempts + returnAttempts;

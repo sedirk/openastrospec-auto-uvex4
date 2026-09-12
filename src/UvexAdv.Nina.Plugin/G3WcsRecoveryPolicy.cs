@@ -7,6 +7,12 @@ public static class G3WcsRecoveryPolicy
 {
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
 
+    public static bool CompletedSolvedNeighbourApproach(bool isNeighbourApproach,
+        double commandScale, bool hasFreshFormalSolve, double priorRemainingArcseconds,
+        double freshRemainingArcseconds, double arrivalToleranceArcseconds) =>
+        isNeighbourApproach && commandScale == 1d && hasFreshFormalSolve &&
+        HasMeasuredApproachProgress(priorRemainingArcseconds, freshRemainingArcseconds, arrivalToleranceArcseconds);
+
     public static bool NeedsCoarseCentering(GateResult fieldGate, bool hasFreshFormalSolve,
         double adoptedResidualPixels, double coarseHandoffPixels) =>
         fieldGate.Disposition == GateDisposition.Passed && hasFreshFormalSolve &&

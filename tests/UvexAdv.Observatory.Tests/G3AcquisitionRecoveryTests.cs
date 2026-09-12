@@ -814,6 +814,107 @@ public sealed class G3AcquisitionRecoveryTests
             _ => throw new OperationCanceledException("independent owner cancellation"), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task PriorCrossPierFinalReturnClosesOnlyItsOriginalLedgerAndRetainsAccounting()
+    {
+        var state = PriorFinalReturn();
+        var samples = OriginSamples(state);
+        var closed = G3PriorReturnOriginPolicy.CloseVerifiedReturn(state, "new-run",
+            ObservationStage.ValidateNightSetup, samples, 60, 2, 2, samples[^1].CapturedUtc);
+        Assert.Equal(G3AcquisitionMotionPhase.SettledBudgetLedger, closed.Phase);
+        Assert.Equal(state.ObservationRunId, closed.ObservationRunId);
+        Assert.Equal(state.PierSide, closed.PierSide);
+        Assert.Equal(state.StartedUtc, closed.StartedUtc);
+        Assert.Equal(state.BudgetLineageId, closed.BudgetLineageId);
+        Assert.Equal(state.CorrectionAttempts, closed.CorrectionAttempts);
+        Assert.Equal(state.CumulativeMotionArcseconds, closed.CumulativeMotionArcseconds);
+        Assert.Equal(state.MaximumElapsedSeconds, closed.MaximumElapsedSeconds);
+        Assert.Equal(state.OriginRaDegrees, closed.OriginRaDegrees);
+        Assert.Equal(state.OriginDeclinationDegrees, closed.OriginDeclinationDegrees);
+        Assert.InRange(closed.CurrentRadiusArcseconds, 3.87, 3.90);
+        Assert.Empty(closed.Validate());
+        var directory = Path.Combine(Path.GetTempPath(), "g3-origin-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = Path.Combine(directory, "g3-acquisition-motion.json");
+            await G3AcquisitionMotionStore.WriteAtomicAsync(path, closed);
+            var read = await G3AcquisitionMotionStore.LoadAsync(path);
+            Assert.Null(read.Error);
+            Assert.Equal(closed, read.State);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("same-run")]
+    [InlineData("current-stage")]
+    [InlineData("outbound")]
+    [InlineData("awaiting-solve")]
+    [InlineData("intermediate-return")]
+    [InlineData("same-side")]
+    [InlineData("unknown-side")]
+    [InlineData("epoch")]
+    [InlineData("moving")]
+    [InlineData("far-origin")]
+    [InlineData("drift")]
+    [InlineData("flip-during-window")]
+    [InlineData("nonfinite")]
+    [InlineData("stale")]
+    [InlineData("insufficient-window")]
+    [InlineData("duplicate-timestamp")]
+    [InlineData("missing-samples")]
+    public void PriorOriginReadbackNeverAuthorizesUnverifiedOrCurrentRunRecovery(string failure)
+    {
+        var state = PriorFinalReturn();
+        var samples = OriginSamples(state);
+        var run = "new-run";
+        var stage = ObservationStage.ValidateNightSetup;
+        var now = samples[^1].CapturedUtc;
+        switch (failure)
+        {
+            case "same-run": run = state.ObservationRunId; break;
+            case "current-stage": stage = ObservationStage.AcquireG3SlitField; break;
+            case "outbound": state = state with { Phase = G3AcquisitionMotionPhase.OutboundIntent }; break;
+            case "awaiting-solve": state = state with { Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve }; break;
+            case "intermediate-return": state = state with { CommandedRaDegrees = state.OriginRaDegrees + .01 }; break;
+            case "same-side": samples[0] = samples[0] with { PierSide = state.PierSide }; break;
+            case "unknown-side": samples[0] = samples[0] with { PierSide = "pierUnknown" }; break;
+            case "epoch": samples[1] = samples[1] with { CoordinateEpoch = "J2000" }; break;
+            case "moving": samples[1] = samples[1] with { ConnectedAndIdle = false }; break;
+            case "far-origin": samples = samples.Select(s => s with { DeclinationDegrees = s.DeclinationDegrees + .1 }).ToArray(); break;
+            case "drift": samples[1] = samples[1] with { DeclinationDegrees = samples[1].DeclinationDegrees + 3d / 3600 }; break;
+            case "flip-during-window": samples[1] = samples[1] with { PierSide = state.PierSide }; break;
+            case "nonfinite": samples[1] = samples[1] with { RaDegrees = double.NaN }; break;
+            case "stale": now = now.AddSeconds(3); break;
+            case "insufficient-window": samples[2] = samples[2] with { CapturedUtc = samples[1].CapturedUtc.AddMilliseconds(100) }; break;
+            case "duplicate-timestamp": samples[1] = samples[1] with { CapturedUtc = samples[0].CapturedUtc }; break;
+            case "missing-samples": samples = samples.Take(2).ToArray(); break;
+        }
+        var result = G3PriorReturnOriginPolicy.Evaluate(state, run, stage, samples, 60, 2, 2, now);
+        Assert.NotEqual(GateDisposition.Passed, result.Disposition);
+        Assert.Throws<InvalidOperationException>(() => G3PriorReturnOriginPolicy.CloseVerifiedReturn(
+            state, run, stage, samples, 60, 2, 2, now));
+    }
+
+    private static G3AcquisitionMotionState PriorFinalReturn() => State(DateTimeOffset.UtcNow.AddHours(-1)) with
+    {
+        Kind = G3AcquisitionMotionKind.WcsCentering,
+        Phase = G3AcquisitionMotionPhase.ReturnIntent,
+        PierSide = "pierWest", CoordinateEpoch = "JNOW",
+        OriginRaDegrees = 31.39937583333335, OriginDeclinationDegrees = 42.45742583333334,
+        CommandedRaDegrees = 31.39937583333335, CommandedDeclinationDegrees = 42.45742583333334,
+        PriorReportedRaDegrees = 31.547025416666656, PriorReportedDeclinationDegrees = 42.33662833333334,
+        CommandMagnitudeArcseconds = 585.830258,
+        MaximumSingleCorrectionArcseconds = 5400, MaximumRadiusArcseconds = 18000,
+        MaximumCumulativeMotionArcseconds = 21600, MaximumCorrectionAttempts = 12,
+        CumulativeMotionArcseconds = 12056.7474265, CorrectionAttempts = 9,
+        WorstCaseActionSeconds = 90, MaximumElapsedSeconds = 1200,
+    };
+
+    private static G3OriginReadback[] OriginSamples(G3AcquisitionMotionState state) =>
+        Enumerable.Range(0, 3).Select(i => new G3OriginReadback(state.UpdatedUtc.AddMinutes(30).AddSeconds(i),
+            31.39791458333, 42.45742138888889, "JNOW", "pierEast", true)).ToArray();
+
     private static G3AcquisitionMotionState State(DateTimeOffset started) => new(
         SchemaVersion: G3AcquisitionMotionState.CurrentSchemaVersion,
         TangentProjectionId: G3AcquisitionMotionState.CurrentTangentProjectionId,

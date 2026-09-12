@@ -17,7 +17,7 @@ must have exactly one owner:
 The recent sky tests still used the legacy QHY service, not the native photometry
 worker. Never run both owners against the same physical camera. See the
 [dual-instance implementation](../../docs/dual-nina-implementation.md) and
-[latest software/sky closeout](../../docs/closeout-2026-09-12.md) for deployment
+[latest software/sky closeout](../../docs/closeout-2026-09-13.md) for deployment
 and acceptance boundaries.
 
 ## Human entry points
@@ -40,6 +40,13 @@ starting; plan editing is locked during active/paused runs. See the
 [field definitions and examples](../../docs/acquisition-plan.md). The saved
 supervised slit-quality policy is visible in the run header and does not grant
 real-device control authority.
+
+**Automatic preparation → Main-mirror SEP focus** adds a separate, bounded focus
+operation for irregular reflection-guide star shapes. It reuses N.I.N.A. focuser
+motion/backlash and curve fitting while PHD2 remains the guide-camera owner.
+The visible buttons and backend bridge share the same commands. This .191 entry
+is built/offline-tested, not yet installed or sky-accepted; see the
+[focus setup and acceptance boundaries](../../docs/sep-main-mirror-focus-commissioning.md).
 
 ## Source boundary
 

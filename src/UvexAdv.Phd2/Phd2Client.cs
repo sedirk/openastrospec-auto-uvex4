@@ -115,6 +115,7 @@ public sealed partial class Phd2Client : IPhd2Client
                     Phd2Paused = false,
                     AppState = Phd2AppState.Unknown,
                     CalibrationValidation = null,
+                    GuideOutput = current.GuideOutput?.Failed == true ? current.GuideOutput : null,
                     LastSettle = null,
                     SettleProgress = null,
                     ConnectionEpoch = checked(current.ConnectionEpoch + 1),
@@ -2342,6 +2343,11 @@ public sealed partial class Phd2Client : IPhd2Client
         Phd2StateSnapshot current,
         Phd2AppState appState)
     {
+        // RPC/AppState lifecycle evidence must break a partial no-output
+        // series just like Paused, StarLost and GuidingStopped events.
+        // A confirmed fault remains latched until explicit equipment rebind.
+        if (appState != Phd2AppState.Guiding && current.GuideOutput?.Failed != true)
+            current = current with { GuideOutput = null };
         if (current.AppState == appState)
         {
             return current with { AppState = appState };
@@ -2625,6 +2631,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 Phd2Paused = false,
                 AppState = Phd2AppState.Unknown,
                 CalibrationValidation = null,
+                GuideOutput = current.GuideOutput?.Failed == true ? current.GuideOutput : null,
                 LastProtocolError = error ?? current.LastProtocolError,
             });
         });

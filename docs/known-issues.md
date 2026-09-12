@@ -1,8 +1,83 @@
 # Known issues
 
-## Current closeout boundary (2026-09-12, 0.4.0.176)
+## Current closeout boundary (2026-09-13, source/build 0.4.0.191)
 
-The [latest closeout](closeout-2026-09-12.md) separates source, installation,
+The [September 13 closeout](closeout-2026-09-13.md) records the operator's first
+manual one-click multi-target milestone: Mirach (.181), Gamma Cas (.183) and
+Almach (.190) each completed 11/11. All nine science FITS match their manifest
+hashes, run identities, exposures and accepted temperature range. These are
+separate supervised runs with intervening repairs; failed Vega and earlier
+Almach attempts remain failures. All nine retain slit-precision warnings.
+
+- SEP replaces the production short-frame candidate extractor; catalogue
+  identity, parent/child morphology, companion matching and independent fresh
+  positions are still checked. Repeated catalogue/return failures are not all
+  a single defect, nor evidence that every irregular or faint target now works.
+- WCS/neighbor handoff, return-origin readback and optional destination-pier-side
+  capability handling are fixed through .190 without clearing unsettled motion
+  or treating transport failures as unsupported features. Exact traces and
+  superseded algorithms remain linked in the closeout.
+- .191 adds a shared-command main-mirror SEP focus preparation panel. The
+  Star Focuser component trial retained the original position; the candidate
+  did not demonstrate repeated improvement. **No claim of a better focus or
+  greater slit throughput is made.** Source/offline tests pass; the plugin is
+  **not installed**, and new-button sky acceptance remains pending.
+- Native AutoFocus-window/PHD2 image integration, sequence-triggered main focus,
+  live dock acceptance, dual-N.I.N.A. photometry-worker acceptance, calibrated
+  spectral quality and unattended operation remain separate open work.
+
+The installed plugin remains .190. The following sections are historical,
+version-specific records; their then-pending status is not a current status list.
+
+## USB-port rebinding follow-up (2026-09-12, source/build 0.4.0.178)
+
+[ADR-0016](adr/0016-verified-configurable-uvex-serial-binding.md) supersedes
+the fixed-COM5 restriction with an explicitly verified service binding. The
+maintenance command identifies only an operator-specified, bounded list of
+ports while the installed service is stopped, excludes ports reserved by other
+devices, and sends only the UVEX firmware and description queries. Normal
+connections never scan or automatically rebind. The frontend and M2 focus-domain
+evidence now use the service-confirmed port and USB instance rather than COM5.
+
+The full build and **1,618 .NET tests passed**. After the first administrator
+launch was cancelled, the owner explicitly authorized another attempt. The
+subsequent read-only identification confirmed UVEX4 on COM3; .178 service/plugin
+installation and normal service readback passed. N.I.N.A. was restarted and its
+loaded plugin hash matches the published artifact.
+
+The first installation still selected an immutable Night Setup bound to COM5;
+the owner's next attempt correctly failed `FOCUS_UVEX_SPECTRAL_IDENTITY` rather
+than substituting the roof's USB endpoint. The identity-only migration is now
+completed in **new** Night Setup/preset/bindings files: fresh UVEX firmware,
+description, USB instance and unchanged slit/grating/M2 readback underpin the
+new binding. Original optical metrics, timestamps, evidence and all motion/quality
+limits are preserved. The official commissioning validator passed, and the final
+N.I.N.A. restart loaded the new package with static identity/hash checks passed.
+See the [deployment and migration record](uvex-usb-rebinding-2026-09-12.md).
+No original calibration was rewritten or represented as a new optical measurement.
+**Full real-frontend observing acceptance and the three-panel live UI check remain
+pending; the final frontend was left idle and unarmed.**
+
+## Offline follow-up (2026-09-12, source/build 0.4.0.177)
+
+The [offline blocker audit](offline-blocker-audit-2026-09-12.md) fixes confirmed
+cross-state output false latches, whole-trip/return accounting, ROI coordinate
+mixing, unreachable science recovery, lost optional-photometry handles, and
+science acceptance/terminal-attempt boundaries. Supervised precision warnings
+remain supported; identity, immutable evidence, ownership and physical-return
+obligations are not weakened. **0.4.0.177 was subsequently installed and restarted
+with explicit authorization at 15:14; startup/version/hash checks passed, but
+the three-panel live UI check and real-frontend sky acceptance remain pending.**
+
+Two open boundaries are recorded explicitly: static coarse handoff distance can
+still exceed the inherited fine budget's usable range, and DEC Off/one-way native
+output can be ambiguous without fresh mode evidence. Neither is repaired by
+resetting budgets or silently clearing a real output fault. The installed-version
+and on-sky acceptance statements in the earlier closeout retain their dated scope.
+
+## Historical closeout boundary (2026-09-12, 0.4.0.176)
+
+The [September 12 closeout](closeout-2026-09-12.md) separates source, installation,
 offline checks and actual sky acceptance. 10 Lac, Deneb, Scheat and Gamma Cas
 passed separate .168–.171 frontend runs; later TRN 29 attempts remained failures.
 **.176 is installed but has no completed real-frontend sky replay.** Three-panel

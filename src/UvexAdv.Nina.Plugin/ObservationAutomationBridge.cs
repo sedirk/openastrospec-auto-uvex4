@@ -70,7 +70,10 @@ internal sealed record ObservationAutomationSnapshot(
     IReadOnlyList<ObservationAutomationGateSnapshot> QualityGates,
     IReadOnlyList<ObservationAutomationTimelineSnapshot> RecentTimeline,
     IReadOnlyList<ObservationAutomationEvidenceSnapshot> EvidenceFiles,
-    bool SupervisedSlitQualityWarningAuthorized = false);
+    bool SupervisedSlitQualityWarningAuthorized = false,
+    bool MainFocusBusy = false,
+    string MainFocusStatus = "",
+    string MainFocusEvidenceDirectory = "");
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,

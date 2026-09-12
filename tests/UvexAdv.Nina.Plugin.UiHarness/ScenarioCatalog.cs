@@ -22,6 +22,8 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("main-focus", 900, 750, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock() },
+        new("main-focus-narrow", 540, 900, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock() },
         new("plan-target", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 }),
         new("plan-budget", 1040, 800, ObservationDockMockViewModel.ExposureBudget()),
         new("plan-budget-narrow", 540, 900, ObservationDockMockViewModel.ExposureBudget()),
@@ -322,8 +324,8 @@ public sealed class ObservationDockMockViewModel
     public string ManualAtrInspectionHeader => IsManualAtrToolsAvailable
         ? "手动单帧检查 · 点击展开" : "自动观测占用光谱相机 · 手动检查暂不可用";
     public string ManualUvexServiceUrl { get; init; } = "http://127.0.0.1:47844";
-    public IReadOnlyList<string> ManualUvexDeviceChoices { get; init; } = ["UVEX4 / COM5"];
-    public string SelectedManualUvexDevice { get; init; } = "UVEX4 / COM5";
+    public IReadOnlyList<string> ManualUvexDeviceChoices { get; init; } = ["UVEX4 / 已绑定串口"];
+    public string SelectedManualUvexDevice { get; init; } = "UVEX4 / 已绑定串口";
     public string ManualUvexConnectionStatus { get; init; } = "Ready · COM5 · 固件 2.3 · 位置可信（Live）";
     public string ManualUvexPositionStatus { get; init; } = "狭缝：槽位 2（15um） · M2：12500 步 · 光栅：-1923 步 · 照明灯：Off";
     public string ManualUvexLastAction { get; init; } = "状态已刷新；没有执行任何机械运动。";
@@ -337,6 +339,7 @@ public sealed class ObservationDockMockViewModel
     public string ManualM2NegativeButtonText => $"M2 −{ManualM2StepSize} 步";
     public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
 
+    public MainFocusMock MainFocus { get; } = new() { IsExpanded=false };
     public int AutomaticPreparationIssueCount { get; init; } = 3;
     public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。";
     public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles { get; init; } =
@@ -547,7 +550,7 @@ public sealed class ObservationDockMockViewModel
         IsManualUvexConnected = false,
         ManualUvexConnectionStatus = "未连接 · COM5 · 固件 2.3 · 位置未知",
         ManualUvexPositionStatus = "上次位置：狭缝槽位 2（15um） · M2 12500 步 · 光栅 -1923 步；连接后重新读取。",
-        ManualUvexLastAction = "设备选择已保存；打开本页不会连接 COM5。请点击“连接”。",
+        ManualUvexLastAction = "设备选择已保存；打开本页不会连接已绑定串口。请点击“连接”。",
         OperatorNotice = "离线设备手控截图；按钮没有连接任何真实设备。",
     };
 

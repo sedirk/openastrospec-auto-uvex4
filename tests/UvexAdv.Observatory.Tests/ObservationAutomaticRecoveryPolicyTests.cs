@@ -141,6 +141,44 @@ public sealed class ObservationAutomaticRecoveryPolicyTests
         Assert.False(plan.IsRecoverable);
     }
 
+    [Theory]
+    [InlineData(ObservationStage.SelectAtrExposure)]
+    [InlineData(ObservationStage.RunScienceBlock)]
+    public void AtrPreExposureEpochChangeGetsOnlyOneEvidenceGatedRecovery(ObservationStage stage)
+    {
+        var session = new ObservationAutomaticRecoverySession();
+        var gate = GateResult.Unknown("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", "epoch changed before opening the shutter");
+
+        var retry = session.Evaluate(stage, gate);
+        var exhausted = session.Evaluate(stage, gate);
+
+        Assert.True(retry.ShouldRetry);
+        Assert.Equal(ObservationAutomaticRecoveryAction.RebuildStageDependencies, retry.Plan.Action);
+        Assert.Equal(1, retry.Plan.MaximumAttempts);
+        Assert.Contains("in place first", retry.Plan.Reason, StringComparison.Ordinal);
+        Assert.Contains("inherited motion budget", retry.Plan.Reason, StringComparison.Ordinal);
+        Assert.False(exhausted.ShouldRetry);
+        Assert.True(exhausted.Exhausted);
+        Assert.Equal(1, exhausted.TotalAttempts);
+    }
+
+    [Fact]
+    public void AtrEpochRecoveryDoesNotBroadenToOtherStagesOrRejectedOpticalWindows()
+    {
+        foreach (var stage in Enum.GetValues<ObservationStage>())
+        {
+            if (stage is not (ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock))
+                Assert.False(ObservationAutomaticRecoveryPolicy.For(stage,
+                    GateResult.Unknown("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", "wrong stage")).IsRecoverable);
+        }
+        foreach (var stage in new[] { ObservationStage.SelectAtrExposure, ObservationStage.RunScienceBlock })
+        {
+            foreach (var code in new[] { "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED", "PHD2_LOCK_LEDGER_RECONCILIATION_REQUIRED",
+                "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE", "PHD2_REBUILD_OWNER_IDENTITY_CHANGED" })
+                Assert.False(ObservationAutomaticRecoveryPolicy.For(stage, GateResult.Unknown(code, "hard stop")).IsRecoverable);
+        }
+    }
+
     [Fact]
     public void PassingWarningsAreNeverRetried()
     {

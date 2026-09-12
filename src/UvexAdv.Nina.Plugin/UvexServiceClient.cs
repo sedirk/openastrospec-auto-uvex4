@@ -90,7 +90,7 @@ internal sealed class UvexServiceClient : IDisposable
                     // The firmware operation can complete just before the
                     // asynchronously refreshed device snapshot leaves its
                     // transient Unknown state. Polling is read-only: never
-                    // resend ON, OFF, a lease action, or another COM5 command.
+                    // resend ON, OFF, a lease action, or another the configured serial port command.
                     await Task.Delay(SlitIlluminationReadbackDelay, deadline.Token).ConfigureAwait(false);
                 }
             }
@@ -207,7 +207,7 @@ internal sealed class UvexServiceClient : IDisposable
                 : await owner.ConnectAsync(Token, cancellationToken).ConfigureAwait(false);
             await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
             var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("UVEX service returned no device state after connecting COM5.");
+                ?? throw new InvalidOperationException("UVEX service returned no device state after connecting the configured serial port.");
             if (after.ConnectionState != DeviceConnectionState.Ready || !after.PositionKnown)
             {
                 throw new InvalidOperationException(
@@ -228,7 +228,7 @@ internal sealed class UvexServiceClient : IDisposable
             var operation = await owner.DisconnectAsync(Token, cancellationToken).ConfigureAwait(false);
             await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
             var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("UVEX service returned no device state after disconnecting COM5.");
+                ?? throw new InvalidOperationException("UVEX service returned no device state after disconnecting the configured serial port.");
             if (after.ConnectionState != DeviceConnectionState.Disconnected || after.PositionKnown)
             {
                 throw new InvalidOperationException(
@@ -262,11 +262,11 @@ internal sealed class UvexServiceClient : IDisposable
             var operation = await owner.EnterMaintenanceAsync(Token, cancellationToken).ConfigureAwait(false);
             await owner.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
             var after = await owner.GetStatusAsync(cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("UVEX service returned no device state after releasing COM5.");
+                ?? throw new InvalidOperationException("UVEX service returned no device state after releasing the configured serial port.");
             if (after.ConnectionState != DeviceConnectionState.Maintenance)
             {
                 throw new InvalidOperationException(
-                    $"UVEX service did not enter maintenance mode after releasing COM5: state={after.ConnectionState}.");
+                    $"UVEX service did not enter maintenance mode after releasing the configured serial port: state={after.ConnectionState}.");
             }
 
             return after;

@@ -13,6 +13,7 @@ public sealed class UvexDeviceController(
     private UvexDeviceStatus status = new()
     {
         PortName = options.PortName,
+        UsbInstanceId = options.ExpectedUsbInstanceId,
         Slits = CreateFallbackSlits(options),
     };
 
@@ -34,6 +35,8 @@ public sealed class UvexDeviceController(
         {
             ConnectionState = DeviceConnectionState.Disconnected,
             PortName = options.PortName,
+            UsbInstanceId = options.ExpectedUsbInstanceId,
+            SerialIdentityVerified = false,
             PositionKnown = false,
             PositionTrust = HasAnyPosition(snapshot) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
             SlitIlluminationLedState = UvexOutputState.Unknown,
@@ -64,9 +67,11 @@ public sealed class UvexDeviceController(
         }
 
         Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 1);
+        options.HardwareIdentityVerified = false;
         SetStatus(status with
         {
             ConnectionState = DeviceConnectionState.Faulted,
+            SerialIdentityVerified = false,
             PositionKnown = false,
             PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
             SlitIlluminationLedState = UvexOutputState.Unknown,
@@ -112,6 +117,7 @@ public sealed class UvexDeviceController(
             SetStatus(status with
             {
                 ConnectionState = DeviceConnectionState.Connecting,
+                SerialIdentityVerified = false,
                 PositionKnown = false,
                 PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
                 SlitIlluminationLedState = UvexOutputState.Unknown,
@@ -120,6 +126,7 @@ public sealed class UvexDeviceController(
             });
             try
             {
+                options.HardwareIdentityVerified = false;
                 // Always close the prior protocol session, even when the
                 // SerialPort already reports closed.  A USB/power loss can end
                 // the transport without cancelling the old read loop.
@@ -129,21 +136,24 @@ public sealed class UvexDeviceController(
                 }
                 catch
                 {
-                    // Opening a fresh, identity-verified COM5 session below is
+                    // Opening a fresh, identity-verified configured session below is
                     // the recovery authority; stale-session cleanup is best effort.
                 }
 
                 await session.OpenAsync(cancellationToken).ConfigureAwait(false);
                 SetStatus(status with { ConnectionState = DeviceConnectionState.Initializing });
                 await RefreshIdentityAsync(cancellationToken).ConfigureAwait(false);
+                options.HardwareIdentityVerified = true;
                 await RefreshSlitConfigurationAsync(cancellationToken).ConfigureAwait(false);
                 await RefreshPositionsAsync(cancellationToken).ConfigureAwait(false);
                 Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 0);
-                SetStatus(status with { ConnectionState = DeviceConnectionState.Ready, LastError = null });
+                SetStatus(status with { ConnectionState = DeviceConnectionState.Ready, LastError = null,
+                    SerialIdentityVerified = !options.Simulator, UsbInstanceId = options.ExpectedUsbInstanceId });
                 return true;
             }
             catch (Exception ex)
             {
+                options.HardwareIdentityVerified = false;
                 try
                 {
                     await session.CloseAsync(CancellationToken.None).ConfigureAwait(false);
@@ -155,6 +165,7 @@ public sealed class UvexDeviceController(
                 SetStatus(status with
                 {
                     ConnectionState = DeviceConnectionState.Faulted,
+                    SerialIdentityVerified = false,
                     LastError = ex.Message,
                     PositionKnown = false,
                     PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
@@ -176,6 +187,7 @@ public sealed class UvexDeviceController(
         try
         {
             Interlocked.Exchange(ref unexpectedTransportRecoveryPending, 0);
+            options.HardwareIdentityVerified = false;
             try
             {
                 await session.CloseAsync(cancellationToken).ConfigureAwait(false);
@@ -185,6 +197,7 @@ public sealed class UvexDeviceController(
                 SetStatus(status with
                 {
                     ConnectionState = DeviceConnectionState.Disconnected,
+                    SerialIdentityVerified = false,
                     PositionKnown = false,
                     PositionTrust = HasAnyPosition(status) ? UvexPositionTrust.LastKnown : UvexPositionTrust.Unknown,
                     SlitIlluminationLedState = UvexOutputState.Unknown,
@@ -201,7 +214,8 @@ public sealed class UvexDeviceController(
     public async Task EnterMaintenanceAsync(string leaseToken, CancellationToken cancellationToken)
     {
         leases.Require(leaseToken);
-        SetStatus(status with { ConnectionState = DeviceConnectionState.Maintenance, PositionKnown = false, PositionTrust = UvexPositionTrust.LastKnown });
+        options.HardwareIdentityVerified = false;
+        SetStatus(status with { ConnectionState = DeviceConnectionState.Maintenance, SerialIdentityVerified = false, PositionKnown = false, PositionTrust = UvexPositionTrust.LastKnown });
         await session.CloseAsync(cancellationToken).ConfigureAwait(false);
         SetStatus(status with { ConnectionState = DeviceConnectionState.Maintenance, PositionKnown = false, PositionTrust = UvexPositionTrust.LastKnown });
     }
@@ -461,8 +475,7 @@ public sealed class UvexDeviceController(
             throw new InvalidOperationException("UVEX did not acknowledge ISLV.");
         }
 
-        var firmware = await session.SendAsync(UvexCommands.FirmwareVersion(), cancellationToken).ConfigureAwait(false);
-        var description = await session.SendAsync(UvexCommands.Description(), cancellationToken).ConfigureAwait(false);
+        var identity = await UvexReadOnlyIdentityProbe.ReadAsync(session, cancellationToken).ConfigureAwait(false);
         var configuration = await session.SendAsync(UvexCommands.Configuration(), cancellationToken).ConfigureAwait(false);
         var capabilities = UvexCapabilities.None;
         if (configuration?.TryGetInt32(0, out var bitMask) == true)
@@ -472,8 +485,8 @@ public sealed class UvexDeviceController(
 
         SetStatus(status with
         {
-            FirmwareVersion = firmware?.Arguments.FirstOrDefault(),
-            Description = description is null ? null : string.Join(' ', description.Arguments),
+            FirmwareVersion = identity.FirmwareVersion,
+            Description = identity.Description,
             Capabilities = capabilities,
         });
     }

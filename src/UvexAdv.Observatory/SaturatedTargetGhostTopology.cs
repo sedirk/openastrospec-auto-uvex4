@@ -63,8 +63,7 @@ public static class SaturatedTargetGhostTopologyAnalyzer
         var (background, sigma) = EstimateBackground(frame);
         var components = FindSaturatedComponents(frame);
         var allMeasured = components
-            .Where(component => component.Pixels.Count >= options.MinimumComponentPixels &&
-                                component.Pixels.Count <= options.MaximumComponentPixels)
+            .Where(component => component.Pixels.Count >= options.MinimumComponentPixels)
             .Select(component => Measure(
                 frame,
                 component,
@@ -90,8 +89,19 @@ public static class SaturatedTargetGhostTopologyAnalyzer
                         "A small clipped island lies inside the measured extent of a much larger saturated source; it is not an independent stellar centre.",
                         candidate.Gate.Metrics),
                 }
-                : candidate)
-            .Where(candidate => candidate.DistanceToPredictionPixels <= maximumPredictionResidualPixels)
+                : candidate.SaturatedPixels > options.MaximumComponentPixels
+                    ? candidate with
+                    {
+                        Topology = SaturatedSourceTopology.Indeterminate,
+                        SelectionScore = 0,
+                        Gate = GateResult.Unknown("SATURATED_SOURCE_OVERSIZED",
+                            "The oversized clipped region remains an exclusion, not a target centroid; use an independent short exposure.",
+                            candidate.Gate.Metrics),
+                    }
+                    : candidate)
+            .Where(candidate => candidate.DistanceToPredictionPixels <= maximumPredictionResidualPixels ||
+                (candidate.Gate.Code == "SATURATED_SOURCE_OVERSIZED" &&
+                 candidate.DistanceToPredictionPixels <= maximumPredictionResidualPixels + candidate.ExclusionRadiusPixels))
             .ToArray();
         var ghosts = measured
             .Where(candidate => candidate.Topology == SaturatedSourceTopology.AnnularGhost)

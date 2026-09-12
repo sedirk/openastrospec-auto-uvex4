@@ -14,6 +14,26 @@ public sealed class ProductionRouteParitySourceTests
         "UvexTargetObservationContainer.cs");
 
     [Fact]
+    public void SepMainFocusUsesVisibleCommandAndSharedObservationOwnership()
+    {
+        var viewModel = ReadSource("SepMainFocusViewModel.cs");
+        var host = ReadSource("ObservationCoordinatorHost.cs");
+        var hardware = ReadSource("NinaSepMainFocusHardware.cs");
+        Assert.Contains("new(\"start-main-focus\", MainFocus.StartCommand, false, true", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("new(\"cancel-main-focus\", MainFocus.CancelCommand", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("host.RunFocusPreparationAsync", viewModel, StringComparison.Ordinal);
+        Assert.Contains("new SepMainFocusRunner(hardware).RunAsync", viewModel, StringComparison.Ordinal);
+        Assert.Contains("RunFocusPreparationAsync", host, StringComparison.Ordinal);
+        Assert.Contains("focuser.MoveFocuser(position", hardware, StringComparison.Ordinal);
+        Assert.Contains("phd.CaptureSingleFrameWithParametersAsync", hardware, StringComparison.Ordinal);
+        Assert.Contains("sep.MeasureFocusAsync", hardware, StringComparison.Ordinal);
+        Assert.Contains("new HyperbolicFitting().Calculate", hardware, StringComparison.Ordinal);
+        Assert.DoesNotContain("SlewTo", hardware, StringComparison.Ordinal);
+        Assert.DoesNotContain("commission_focus.py", viewModel, StringComparison.Ordinal);
+        Assert.Contains("mainFocus?.IsBusy != true", DockableSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DockableRealStartUsesTheSharedLockedProductionRoute()
     {
         var body = MethodBody(
@@ -114,8 +134,11 @@ public sealed class ProductionRouteParitySourceTests
     public void LowSignalAndLocalMorphologyDoNotPreemptBoundedRecovery()
     {
         Assert.Contains("ATR_SIGNAL_LIMITED_LONGEST_SAFE_TIER", RealRunnerSource, StringComparison.Ordinal);
-        Assert.Contains("ATR_TARGET_CONTRAST_LOW", RealRunnerSource, StringComparison.Ordinal);
-        Assert.Contains("ATR_SNR_LOW", RealRunnerSource, StringComparison.Ordinal);
+        // The extracted quality policy has runtime coverage for accepted
+        // low-contrast/low-SNR warnings; assert the production call boundary
+        // here instead of requiring those classifications to stay in this file.
+        Assert.Contains("var quality = ValidateAtrScienceMetrics(captured.Metrics);", RealRunnerSource, StringComparison.Ordinal);
+        Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration.Atr)", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", RealRunnerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("configuration.Environment.WeakSupervisionEnabled", RealRunnerSource, StringComparison.Ordinal);

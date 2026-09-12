@@ -26,3 +26,4 @@ Current accepted decisions:
 - [ADR-0013: Explicit supervised ATR probing with slit-precision warnings](0013-supervised-slit-quality-warning-probe.md)
 - [ADR-0014: Dual N.I.N.A. acquisition with one observatory coordinator](0014-dual-nina-coordinated-acquisition.md)
 - [ADR-0015: Persist an explicitly selected supervised slit-quality policy](0015-persistent-supervised-slit-quality-policy.md)
+- [ADR-0016: Verified configurable UVEX serial binding](0016-verified-configurable-uvex-serial-binding.md)

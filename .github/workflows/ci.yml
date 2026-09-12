@@ -52,6 +52,36 @@ jobs:
         run: |
           Write-Host 'The N.I.N.A. plugin is release-tested on Windows with supported N.I.N.A. 3.2 assemblies; hosted CI does not fabricate external runtime files.'
 
+  sep-image-tests:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.419
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/star-detection/requirements.txt
+
+      - name: Install isolated pinned SEP image-test dependencies
+        shell: pwsh
+        run: python -m pip install -r scripts/star-detection/requirements.txt
+
+      - name: Build the hardware-free C# image protocol client
+        shell: pwsh
+        run: dotnet build tests/UvexAdv.StarDetection.Benchmark/UvexAdv.StarDetection.Benchmark.csproj -c Release
+
+      - name: Test extraction, focus metrics and actual C# to SEP transport
+        shell: pwsh
+        run: |
+          $env:UVEX_SEP_TEST_DOTNET = (Get-Command dotnet).Source
+          $env:UVEX_SEP_TEST_DLL = (Resolve-Path tests/UvexAdv.StarDetection.Benchmark/bin/Release/net8.0/UvexAdv.StarDetection.Benchmark.dll).Path
+          python -m pytest scripts/star-detection -q
+
   spectral-studio-tests:
     runs-on: windows-2022
     defaults:

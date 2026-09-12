@@ -26,7 +26,7 @@ internal sealed class UvexHostedService(
                 {
                     // The service owns the protocol session, but service lifetime is
                     // deliberately not device-connection lifetime.  Like PHD2, it
-                    // starts disconnected and only opens COM5 after an explicit
+                    // starts disconnected and only opens its bound port after an explicit
                     // operator/API connect request.  A normal disconnect must remain
                     // disconnected; otherwise the old five-second retry loop races
                     // the vendor application and makes the Disconnect button a lie.

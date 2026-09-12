@@ -21,7 +21,9 @@ public sealed record WindowsFocusDomainEvidenceInput(
     int? Gs350PositionSteps,
     LiveFocusMetricState? CurrentQhyMetric,
     int? UvexM2PositionSteps,
-    bool Gs350NativePositionVerified = false);
+    bool Gs350NativePositionVerified = false,
+    string UvexPortName = FocusDomainConventions.UvexConnectionEndpoint,
+    string? UvexUsbInstanceId = null);
 
 /// <summary>
 /// A fail-closed focus identity snapshot. A missing or ambiguous PnP role is
@@ -175,17 +177,28 @@ public sealed class WindowsFocusDomainEvidence
         List<GateResult> gates)
     {
         const FocusDomainRole role = FocusDomainRole.UvexSpectral;
-        var resolution = ResolveComDevice(devices, FocusDomainConventions.UvexConnectionEndpoint, Ch340VidPid);
-        gates.Add(resolution.Gate with { Code = PnpGateCode(role) });
-        if (resolution.Device is null) return;
+        var resolution = ResolveComDevice(devices, input.UvexPortName, Ch340VidPid);
+        if (resolution.Device is null)
+        {
+            gates.Add(resolution.Gate with { Code = PnpGateCode(role) });
+            return;
+        }
 
+        if (input.UvexUsbInstanceId is not null && !string.Equals(
+                resolution.Device.InstanceId, input.UvexUsbInstanceId, StringComparison.OrdinalIgnoreCase))
+        {
+            gates.Add(GateResult.Fail(PnpGateCode(role), "UVEX service USB binding does not match the currently present device; do not reuse the old focus endpoint."));
+            return;
+        }
+
+        gates.Add(resolution.Gate with { Code = PnpGateCode(role) });
         states.Add(new LiveFocusDomainState(
             role,
             FocusDomainConventions.UvexOwner,
             FocusDomainConventions.UvexLogicalDeviceId,
             new FocusPhysicalBinding(
                 FocusMechanism.UvexM2,
-                FocusDomainConventions.UvexConnectionEndpoint,
+                input.UvexPortName,
                 resolution.Device.InstanceId,
                 null),
             input.UvexM2PositionSteps));

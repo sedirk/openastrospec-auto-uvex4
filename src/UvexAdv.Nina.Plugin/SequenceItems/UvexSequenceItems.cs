@@ -287,7 +287,7 @@ public sealed class WavelengthLockItem : UvexSequenceItemBase
 }
 
 [ExportMetadata("Name", "UVEX 维护模式")]
-[ExportMetadata("Description", "释放或重新接管 COM5；用于与旧 DRIVER.UVEX4 互斥切换")]
+[ExportMetadata("Description", "释放或重新接管 已绑定串口；用于与旧 DRIVER.UVEX4 互斥切换")]
 [ExportMetadata("Category", "OpenAstroSpec Auto")]
 [Export(typeof(ISequenceItem))]
 [JsonObject(MemberSerialization.OptIn)]

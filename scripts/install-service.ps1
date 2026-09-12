@@ -162,7 +162,7 @@ try {
         'obj=', 'NT AUTHORITY\LocalService',
         'DisplayName=', 'OpenAstroSpec Auto — UVEX4 Spectrograph Service'
     ) | Out-Null
-    Invoke-ServiceControl -Arguments @('description', $serviceName, 'Single-owner UVEX4 COM5 control and loopback API.') | Out-Null
+    Invoke-ServiceControl -Arguments @('description', $serviceName, 'Single-owner UVEX4 verified serial control and loopback API.') | Out-Null
     Invoke-ServiceControl -Arguments @('failure', $serviceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/15000/restart/60000') | Out-Null
     Start-Service $serviceName
     $installed = Get-Service $serviceName

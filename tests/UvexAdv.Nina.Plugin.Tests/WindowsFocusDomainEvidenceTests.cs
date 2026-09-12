@@ -14,6 +14,32 @@ public sealed class WindowsFocusDomainEvidenceTests
     private const string Gs350Topology = @"PCIROOT(0)#PCI(0803)#PCI(0003)#USBROOT(0)#USB(1)";
 
     [Fact]
+    public void RelocatedUvexUsesCurrentServiceEndpointRatherThanCom5()
+    {
+        var reader = CreateReader(Device(UvexInstance, "COM3", null), Device("USB\\VID_1A86&PID_7523\\roof", "COM5", null));
+        var snapshot = reader.BuildLiveFocusDomains(DefaultInput() with
+        {
+            UvexPortName = "COM3", UvexUsbInstanceId = UvexInstance,
+        });
+        var uvex = Assert.Single(snapshot.FocusDomains, state => state.Role == FocusDomainRole.UvexSpectral);
+        Assert.Equal("COM3", uvex.PhysicalBinding.ConnectionEndpoint);
+        Assert.Equal(UvexInstance, uvex.PhysicalBinding.HardwareInstanceId);
+    }
+
+    [Fact]
+    public void ChangedUsbInstanceCannotBeCopiedFromServiceIntoFocusEvidence()
+    {
+        var reader = CreateReader(Device(UvexInstance, "COM3", null));
+        var snapshot = reader.BuildLiveFocusDomains(DefaultInput() with
+        {
+            UvexPortName = "COM3", UvexUsbInstanceId = "different-device",
+        });
+        Assert.DoesNotContain(snapshot.FocusDomains, state => state.Role == FocusDomainRole.UvexSpectral);
+        Assert.Equal(GateDisposition.Failed, Assert.Single(snapshot.EvidenceGates,
+            gate => gate.Code == "FOCUS_UVEX_SPECTRAL_WINDOWS_PNP").Disposition);
+    }
+
+    [Fact]
     public void ResolvesMachineStyleComBindingsAndExactGs350Topology()
     {
         var metric = CreateQhyMetric(DateTimeOffset.UtcNow);

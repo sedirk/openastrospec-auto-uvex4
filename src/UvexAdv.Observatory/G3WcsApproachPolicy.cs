@@ -16,7 +16,8 @@ public static class G3WcsApproachPolicy
         return Math.Max(NeighbourClearancePixels, Math.Min(width, height) / 2d);
     }
     public static PixelPoint ChooseTargetPixel(PixelPoint currentTarget, PixelPoint slit, int width, int height,
-        int failedNeighbourApproaches = 0, double arrivalTolerancePixels = 0)
+        int failedNeighbourApproaches = 0, double arrivalTolerancePixels = 0,
+        bool completedSolvedNeighbourApproach = false)
     {
         ArgumentNullException.ThrowIfNull(currentTarget);
         ArgumentNullException.ThrowIfNull(slit);
@@ -26,6 +27,12 @@ public static class G3WcsApproachPolicy
             !double.IsFinite(slit.X) || !double.IsFinite(slit.Y) ||
             slit.X < 0 || slit.X >= width || slit.Y < 0 || slit.Y >= height)
             throw new ArgumentException("A WCS approach needs finite target geometry and an in-frame slit.");
+        // A staging point exists to obtain a closer formal WCS, not to meet
+        // a slit-position tolerance outside the detector. Consume a completed,
+        // unclamped, independently solved and improving staging leg once. The
+        // caller still computes the final transfer from the NEW WCS and checks
+        // every original motion, return, identity and acquisition gate.
+        if (completedSolvedNeighbourApproach) return slit;
         var dx = currentTarget.X - slit.X;
         var dy = currentTarget.Y - slit.Y;
         // Keep the very bright target beyond the frame for a neighbour solve.

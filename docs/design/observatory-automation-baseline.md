@@ -9,6 +9,9 @@
 dual N.I.N.A. with a spectroscopy master and a photometry-only worker.
 Design acceptance is not deployment or real-hardware commissioning evidence.
 
+**Serial binding revision:** 2026-09-12, ADR-0016, explicitly requested after a USB
+relocation: configurable, verified UVEX serial binding replaces the COM5 lock.
+
 This document is the canonical design target for turning the existing UVEX workflow into a N.I.N.A. Advanced Sequencer-style pipeline. It records intended behavior, including functionality that does not exist yet. README files and implementation comments may summarize it but must not contradict it.
 
 The file is hash-protected. Ordinary implementation work must not modify it. A deliberate change requires the owner’s explicit request, a superseding ADR, a review of safety and data consequences, and an intentional hash-manifest update.
@@ -29,7 +32,7 @@ Automation must reduce repetitive manual work without hiding uncertainty. A fail
 ### Optical and mechanical equipment
 
 - Main telescope: Celestron C11 with CCDT67 reducer. The reducer was not necessarily operated at its nominal reduction factor; the true effective focal length remains a measured configuration value and must not be hard-coded from the product name.
-- Spectrograph: motorized UVEX 4i, single long slit / Czerny-Turner architecture, connected on COM5.
+- Spectrograph: motorized UVEX 4i, single long slit / Czerny-Turner architecture, on an explicitly identified and configured serial port (historically COM5).
 - Slit wheel positions: position 1 = 300 µm, position 2 = 15 µm, position 3 = 25 µm, position 4 = 35 µm.
 - Slit, grating angle, telescope focus, and UVEX internal M2 focus may differ between nights. In normal observing, one optical configuration is usually chosen and retained for the night.
 - The current calibration module is incomplete. A bright calibration star or a compact emission-line object such as a planetary nebula supplies wavelength references. The LED panel supplies a candidate flat but cannot by itself establish spectrophotometric response.
@@ -50,7 +53,7 @@ The observatory walls obscure the sky to roughly 40° altitude around the platfo
 
 | Physical device | Sole owner | Responsibilities |
 |---|---|---|
-| UVEX4 / COM5 | `UvexAdv.Service` | Protocol, state, slit, grating, M2, leases, limits, audit and emergency stop |
+| UVEX4 / verified configured serial endpoint | `UvexAdv.Service` | Protocol identity, state, slit, grating, M2, leases, limits, audit and emergency stop |
 | ATR585M | spectroscopy/master N.I.N.A. | Probe and science spectrum exposures, raw FITS and camera state |
 | G3M2210M | PHD2 | Slit-field frames, guide-star tracking and mount guide corrections |
 | QHYminiCam8M | photometry/worker N.I.N.A. | Wide-field acquisition, native raw saving and time-series photometry |
@@ -72,6 +75,13 @@ The invariant is one owner **per physical device**, not one process for all came
   maintenance is explicit and cannot mix arbitrary DLL versions. ADR-0011's
   direct AllInOne loading rule continues to describe the legacy service only.
 - No helper may scan camera or serial-device lists and select by ordinal position. Persist and validate stable identity.
+- ADR-0016 permits explicitly authorized maintenance identification by the UVEX
+  service executable while its installed service and vendor owner are stopped.
+  It queries only firmware/description on a bounded list of present USB candidates,
+  excludes ports reserved by other ASCOM devices, closes every attempt, and never
+  moves equipment or silently picks the first responder. COM and CH340 VID/PID
+  are not unique device identities. A USB instance binding plus fresh UVEX protocol
+  proof is required; normal connection/recovery never scans or changes the binding.
 - A device hand-off, if ever required for diagnostics, must be explicit, logged, disconnected, confirmed, and outside an active science run. It is not part of normal acquisition.
 
 The two instances have distinct bound Profile IDs and process sessions. Only the

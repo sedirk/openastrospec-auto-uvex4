@@ -109,6 +109,10 @@ public sealed class RealObservationStageRunnerFactory
             CaptureEnvironmentDeviceSelection());
     }
 
+    internal NinaSepMainFocusHardware CreateMainFocusHardware(UvexPluginSettings settings, UvexAdv.Observatory.SepMainFocusOptions options)
+        => new(profileService, focuserMediator, telescopeMediator, cameraMediator, domeMediator,
+            flatDeviceMediator, safetyMonitorMediator, imageDataFactory, settings, options);
+
     private NinaEnvironmentDeviceSelection CaptureEnvironmentDeviceSelection()
     {
         var profile = profileService.ActiveProfile;

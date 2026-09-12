@@ -76,6 +76,20 @@ public sealed class ObservationCoordinatorHost : IDisposable
 
     public event EventHandler<ObservationDashboardSnapshot>? DashboardChanged;
 
+    internal async Task<T> RunFocusPreparationAsync<T>(Func<Task<T>> operation, CancellationToken token)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!await runGate.WaitAsync(0, token)) throw new InvalidOperationException("观测仍占用设备；不能启动主镜对焦。");
+        try
+        {
+            var lease = RealObservationRunOwnershipLease.TryAcquire(System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UVEX-ADV", "observations", "control", "real-observation-owner.lock"));
+            if (!lease.Acquired) throw new InvalidOperationException(lease.Failure);
+            using (lease.Lease) return await operation();
+        }
+        finally { runGate.Release(); }
+    }
+
     public ObservationDashboardSnapshot Dashboard
     {
         get

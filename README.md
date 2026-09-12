@@ -25,7 +25,8 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-12.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-13.md) ·
+[SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
 [acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
 [known issues](docs/known-issues.md) ·
@@ -33,18 +34,20 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-12 closeout](docs/closeout-2026-09-12.md) covers **0.4.0.176**:
-visible acquisition budgets, a saved supervised quality policy, WCS/guide handoff,
-post-save temperature validation and PHD2 spectrum-continuity fixes. On
-[September 11](docs/commissioning-multitarget-2026-09-11.md), 10 Lac, Deneb, Scheat
-and Gamma Cas each completed a real **11/11** run on .168–.171, with 12 independently
-checked science spectra in total. Later TRN 29 attempts did not complete;
-**.176 is installed but still awaits a complete real-frontend sky replay**.
-These are separate supervised runs, not one uninterrupted multi-target sequence.
-Slit-quality warnings remain; acceptance is not calibrated spectroscopy, precision
-photometry or unattended certification. The tested station still used the legacy
-QHY service, **not** the newly implemented dual-N.I.N.A. worker. Earlier results
-retain their original boundaries in the [September 10 report](docs/closeout-2026-09-10.md).
+The [2026-09-13 closeout](docs/closeout-2026-09-13.md) covers **0.4.0.191**:
+verified UVEX USB rebinding, SEP-based irregular-star detection, catalogue/companion
+identification, WCS/guide recovery and a main-mirror focus preparation panel.
+The operator reports their first successful manual one-click observations across
+multiple targets: **Mirach, Gamma Cas and Almach** each completed **11/11** on
+.181/.183/.190. All **9 science FITS** were independently checked against their
+recorded hashes, run identities, exposure times and temperatures. These are separate
+supervised runs with repairs between attempts, not one uninterrupted target queue.
+Slit-quality warnings remain; acquisition acceptance is not calibrated spectroscopy,
+precision photometry or unattended certification. The station still used the legacy
+QHY service, **not** the dual-N.I.N.A. worker. **.191 is built and offline-tested,
+but not installed or sky-accepted**; the installed plugin remains .190. Earlier
+successes and failures retain their dated scope in the
+[September 12 report](docs/closeout-2026-09-12.md).
 
 The repository contains two user-facing GPL-3.0-only software products:
 
@@ -103,7 +106,7 @@ These are normative:
 - the spectroscopy/master N.I.N.A. owns ATR585M for spectra and coordinates shared equipment;
 - PHD2 owns G3M2210M for the slit field and guiding;
 - under [ADR-0014](docs/adr/0014-dual-nina-coordinated-acquisition.md), a separate photometry N.I.N.A. owns QHYminiCam8M, its photometry filter wheel and GS350 focuser; it must not control any shared equipment;
-- `UvexAdv.Service` alone owns UVEX4 COM5.
+- Under [ADR-0016](docs/adr/0016-verified-configurable-uvex-serial-binding.md), `UvexAdv.Service` alone owns the explicitly verified UVEX4 serial device; COM5 is only a historical example.
 
 Since `0.4.0.139`, the source integrates this dual-instance route, a restricted native
 receiver sequence, and a prominent **Simultaneous photometry** switch in the
@@ -197,7 +200,7 @@ quality studies are retained separately under `reduction/output/_internal/`.
 ## Safety status
 
 - The checked-in configuration uses the UVEX simulator. It does not open COM5.
-- Production serial transport is fixed to COM5 at 115200 8N1 and verifies `VID_1A86&PID_7523` through the Windows device registry before opening it.
+- Production serial transport uses an explicitly verified port/USB binding at 115200 8N1. It excludes reserved device ports before opening, then verifies fresh UVEX firmware/description readback. Normal connection/recovery never scans ports; see [ADR-0016](docs/adr/0016-verified-configurable-uvex-serial-binding.md) for authorized read-only maintenance identification.
 - Motor commands additionally require a renewable exclusive lease and configured software travel limits.
 - The plugin starts with `Commissioned=false`; spectral analysis works, but closed-loop motor movement is blocked until ROI, spectral lines, backlash, and limits are measured.
 - EEPROM/network writes, firmware updates, blind serial-port scans, and direct ToupTek SDK access are intentionally absent.
@@ -282,12 +285,12 @@ mock states; it never constructs the production dockable or contacts equipment.
 
 The `OpenAstroSpec 自动观测` (`OpenAstroSpec Automated Observation`) dock now separates
 **UVEX manual preparation** from **automated observation**. It remembers the selected
-`UVEX4 / COM5` device but opening the service or dock does not connect hardware. The
-operator explicitly presses Connect to open COM5 and read live positions; Disconnect
+UVEX4 service binding, but opening the service or dock does not connect hardware. The
+operator explicitly presses Connect to open the verified port and read live positions; Disconnect
 closes the port and remains disconnected without a background retry. Once connected,
 manual preparation uses the sole `UvexAdv.Service` owner to select any of the four
 mechanical slit positions, toggle slit illumination, jog M2 within service-enforced
-bounds, or explicitly release COM5 to the vendor application. It does not require Night Setup,
+bounds, or explicitly release the UVEX port to the vendor application. It does not require Night Setup,
 PHD2, QHY, WCS, or the full automated-observation commissioning package. Automated
 observation still offers **simulated automation** and **real automation** with one
 mode-aware start button. Its structured preparation form reads connected N.I.N.A.
@@ -399,7 +402,7 @@ The local SDK is intentionally ignored by Git. If `.dotnet` is absent, install .
 
 `scripts/install-service.ps1` installs in simulator mode unless the explicit `-EnableHardware` switch is supplied. Existing `%ProgramData%\UVEX-ADV\config.json` is always preserved.
 
-For this commissioned COM5 computer, close N.I.N.A., double-click
+For an already commissioned computer with a verified UVEX binding, close N.I.N.A., double-click
 `Install-UVEX-ADV-Hardware.cmd` once, and accept the administrator prompt. The
 legacy script filename is retained for compatibility. It builds/tests the project,
 installs both automatic Windows services, installs the N.I.N.A. plugin, and creates
@@ -413,7 +416,7 @@ launch a service executable manually; open only the desktop shortcut.
 
 Do not set `Simulator=false` until the steps in
 [docs/commissioning.md](docs/commissioning.md) are complete. DRIVER.UVEX4 and the
-legacy-named `UVEX-ADV` Windows service must never own COM5 at the same time.
+legacy-named `UVEX-ADV` Windows service must never own the same UVEX serial device at the same time.
 
 Protocol implementation is based only on the public
 [UVEX4 serial protocol](https://spectro-uvex.tech/wp-content/uploads/2022/02/spec-driver-spectro.pdf).

@@ -20,7 +20,8 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-09-12.md) ·
+[最新软件/实机收口](docs/closeout-2026-09-13.md) ·
+[SEP 检测与主镜对焦](docs/sep-main-mirror-focus-commissioning.md) ·
 [采集计划／曝光预算](docs/acquisition-plan.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
 [已知问题](docs/known-issues.md) ·
@@ -28,15 +29,15 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-09-12 收口说明](docs/closeout-2026-09-12.md)汇总 **0.4.0.176**：可见采集预算、
-质量策略保存、WCS／导星交接、保存后温度检查及光谱试拍连续性修复。
-[9 月 11 日实测](docs/commissioning-multitarget-2026-09-11.md)中，10 Lac、天津四、
-Scheat 和 Gamma Cas 分别在 .168–.171 完成真实 **11/11**，合计 12 张独立核对的
-合格科学光谱。后续 TRN 29 尝试未完成，**最新 .176 已安装，但完整正式前台天空验收仍待进行**。
-这些是不同版本的独立监督运行，不是一次连续多目标长序列；入缝质量警告保留，
-采集接受不等于精密测光、定标光谱或无人值守验收。现场仍使用旧 QHY 服务，
-不能算作双 N.I.N.A. 测光端实机验收。更早结果保留在
-[9 月 10 日历史收口](docs/closeout-2026-09-10.md)中。
+[2026-09-13 收口说明](docs/closeout-2026-09-13.md)汇总 **0.4.0.191**：经验证的 UVEX
+USB 换口绑定、SEP 不规则星像检测、目录/伴星身份对应、WCS/导星恢复和主镜对焦准备页。
+操作员确认首次完成跨多目标的人工一键光谱拍摄：**Mirach、γ Cas、Almach** 分别在
+.181/.183/.190 完成 **11/11**，共 **9 张科学 FITS**，原始哈希、运行身份、曝光时长和
+温度已独立核对。这是目标之间经过修复的三次独立监督运行，不是无间断多目标队列。
+入缝精度警告保留，采集接受不等于精密测光、定标光谱或无人值守验收；现场仍使用旧
+QHY 服务，不能算作双 N.I.N.A. 测光端验收。**.191 已构建并完成离线验证，尚未安装或
+完成天空验收；本机安装仍为 .190**。更早成功和失败保留在
+[9 月 12 日历史收口](docs/closeout-2026-09-12.md)中。
 
 本仓库包含两个面向用户、均采用 GPL-3.0-only 许可的软件产品：
 
@@ -66,7 +67,7 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 - 光谱主控 N.I.N.A. 独占 ATR585M，并协调公共设备和全台流程；
 - PHD2 独占 G3M2210M，用于狭缝视场与导星；
 - 按 [ADR-0014](docs/adr/0014-dual-nina-coordinated-acquisition.md)，独立测光 N.I.N.A. 拥有 QHYminiCam8M、测光滤镜轮和 GS350 电调焦，不得控制其他公共设备；
-- 只有 `UvexAdv.Service` 可以独占 UVEX4 COM5。
+- 按 [ADR-0016](docs/adr/0016-verified-configurable-uvex-serial-binding.md)，只有 `UvexAdv.Service` 可以独占明确核验绑定的 UVEX4 串口设备；COM5 仅为历史示例。
 
 从 `.139` 起，源码已接入双实例、受限原生高级序列接收项，以及主控顶部的“同步测光”
 总开关。关闭总开关不影响定位所需的广域帧；光谱定位优先，连续测光在曝光、保存和
@@ -105,7 +106,7 @@ _上图由离线 UI 测试工具生成，不包含真实设备状态，也不会
 ## 安全状态
 
 - 仓库内配置使用 UVEX 模拟器，不会打开 COM5。
-- 生产串口固定为 COM5、115200 8N1；打开前通过 Windows 设备注册表校验 `VID_1A86&PID_7523`。
+- 生产串口使用明确核验的端口/USB 绑定、115200 8N1；打开前排除其他设备预留端口，打开后核验新鲜的 UVEX 固件/描述回读。普通连接和恢复不扫描端口；授权只读维护辨认见 [ADR-0016](docs/adr/0016-verified-configurable-uvex-serial-binding.md)。
 - 电机命令还必须持有可续期的独占租约，并满足已配置的软件行程限制。
 - 插件以 `Commissioned=false` 启动。光谱分析可用，但在 ROI、谱线、回差和限位测量完成前，闭环电机运动会被阻断。
 - 项目有意不提供 EEPROM/网络写入、固件更新、盲扫串口或直接访问 ToupTek SDK 的功能。
@@ -161,7 +162,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-qhy-service.ps1 `
 
 长期问题清单、夜间主题规则、截图矩阵和操作员 UI 验收记录位于 [`docs/observation-operator-ui-acceptance.md`](docs/observation-operator-ui-acceptance.md)。隔离的 WPF 测试工具使用确定性模拟状态渲染真实生产数据模板；它不会构造生产 dockable，也不会联系设备。
 
-`OpenAstroSpec 自动观测` 面板把**设备手控**和**自动观测**明确分开。设备手控保存本机 `UVEX4 / COM5` 选择，但打开服务或面板时不连接硬件；点击`连接`才打开串口并读取位置，点击`断开`后保持断开，不会被后台重新连接。连接后可通过唯一的 `UvexAdv.Service` 完成状态回读、四槽位切缝、狭缝灯和 M2 有界小步进，也可显式释放 COM5 给原厂软件；它不要求 Night Setup、PHD2、QHY、WCS 或整套自动观测 commissioning。自动观测仍提供**模拟自动观测**和**真实自动观测**两种模式及一个模式感知启动按钮；`自动准备`页会从 N.I.N.A. 自动读取已连接设备，把不可变身份/哈希由 bindings 或 Night Setup 文件一次导入，把狭缝等人工决定项做成选择器，并在缺项所在卡片就地标红。完整工程诊断只保留在高级设置，不再作为一整段错误倾倒在主界面。QHY/GS350、PHD2/G3 狭缝视场和 ATR 光谱预览被组织为紧凑标签页，并显示当前阶段、下一阶段、质量门、时间线、证据文件和剩余进度。
+`OpenAstroSpec 自动观测` 面板把**设备手控**和**自动观测**明确分开。设备手控保存本机已核验的 UVEX4 服务绑定，但打开服务或面板时不连接硬件；点击`连接`才打开串口并读取位置，点击`断开`后保持断开，不会被后台重新连接。连接后可通过唯一的 `UvexAdv.Service` 完成状态回读、四槽位切缝、狭缝灯和 M2 有界小步进，也可显式释放 UVEX 串口给原厂软件；它不要求 Night Setup、PHD2、QHY、WCS 或整套自动观测 commissioning。自动观测仍提供**模拟自动观测**和**真实自动观测**两种模式及一个模式感知启动按钮；`自动准备`页会从 N.I.N.A. 自动读取已连接设备，把不可变身份/哈希由 bindings 或 Night Setup 文件一次导入，把狭缝等人工决定项做成选择器，并在缺项所在卡片就地标红。完整工程诊断只保留在高级设置，不再作为一整段错误倾倒在主界面。QHY/GS350、PHD2/G3 狭缝视场和 ATR 光谱预览被组织为紧凑标签页，并显示当前阶段、下一阶段、质量门、时间线、证据文件和剩余进度。
 
 目标草稿可以从 N.I.N.A. 构图助手，或 N.I.N.A. 已配置星图软件（包括 Stellarium）当前选定对象中一次性复制。插件把快照规范化为 J2000 度，并记录来源与时间。导入不会连接设备或启动运行，不会更改 Night Setup、commissioning、时长或安全设置，也不会改写已经创建的高级序列容器。在实现面板选择流程前，多画幅构图会被拒绝。
 
@@ -200,10 +201,10 @@ ATR585M 已于 2026-08-16 使用官方 FPGA 5.0 固件和 ToupCam SDK 60 完成 
 
 `scripts/install-service.ps1` 默认安装模拟模式，只有显式提供 `-EnableHardware` 才会启用硬件。已有 `%ProgramData%\UVEX-ADV\config.json` 始终会保留。
 
-在已 commissioning 的 COM5 计算机上，先关闭 N.I.N.A.，再双击一次 `Install-UVEX-ADV-Hardware.cmd` 并接受管理员提示。为兼容性保留了旧脚本文件名。安装器会构建并测试项目，安装两个自动启动的 Windows 服务和 N.I.N.A. 插件，并创建 `OpenAstroSpec Auto - UVEX4 Manager` 桌面快捷方式。如果 N.I.N.A. 仍在运行，安装器会在修改任何服务前停止，以免插件与服务版本不一致。插件安装器还会拒绝缺少观测、PHD2 或 QHY 模块的过期发布输出。安装后不要手工启动服务可执行文件，只应打开桌面快捷方式。
+在已 commissioning 且明确核验 UVEX 绑定的计算机上，先关闭 N.I.N.A.，再双击一次 `Install-UVEX-ADV-Hardware.cmd` 并接受管理员提示。为兼容性保留了旧脚本文件名。安装器会构建并测试项目，安装两个自动启动的 Windows 服务和 N.I.N.A. 插件，并创建 `OpenAstroSpec Auto - UVEX4 Manager` 桌面快捷方式。如果 N.I.N.A. 仍在运行，安装器会在修改任何服务前停止，以免插件与服务版本不一致。插件安装器还会拒绝缺少观测、PHD2 或 QHY 模块的过期发布输出。安装后不要手工启动服务可执行文件，只应打开桌面快捷方式。
 
 ## 真实硬件 commissioning
 
-在完成 [`docs/commissioning.md`](docs/commissioning.md) 的全部步骤前，不要设置 `Simulator=false`。DRIVER.UVEX4 与旧名称的 `UVEX-ADV` Windows 服务绝不能同时占用 COM5。
+在完成 [`docs/commissioning.md`](docs/commissioning.md) 的全部步骤前，不要设置 `Simulator=false`。DRIVER.UVEX4 与旧名称的 `UVEX-ADV` Windows 服务绝不能同时占用同一个 UVEX 串口设备。
 
 协议实现仅基于公开的 [UVEX4 串口协议](https://spectro-uvex.tech/wp-content/uploads/2022/02/spec-driver-spectro.pdf)。该文档中重复的 `FSTE` 条目被视为歧义；本项目使用无歧义的相对对焦命令 `FGIN`、`FGOU`、`FHOM` 和 `FSTP`。

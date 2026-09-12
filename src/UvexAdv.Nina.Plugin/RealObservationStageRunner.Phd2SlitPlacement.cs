@@ -1764,12 +1764,6 @@ internal sealed partial class RealObservationStageRunner
                     qualification.MaximumLockShiftScale, first.Measurement.TargetCentroid,
                     first.Measurement.RecognizedSlitAcquisitionPoint, motionCommandIssued = false, budgetReset = false },
                 first.Frame.Path, cancellationToken).ConfigureAwait(false);
-            if (Phd2HandoffRecoveryPolicy.ShouldReacquire(acquisitionBudget,
-                PointDistance(first.Measurement.TargetCentroid, first.Measurement.RecognizedSlitAcquisitionPoint),
-                preset.BuildMotionLimits().TargetOnSlitTolerancePixels * quality.RequiredResidualToleranceScale + preset.MaximumResidualGrowthPixels))
-                return await ReacquireG3ForPhd2HandoffAsync(context, acquisitionBudget.Code, acquisitionBudget.Message,
-                    postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken).ConfigureAwait(false);
-
             var priorResidual = PointDistance(first.Measurement.TargetCentroid, first.Measurement.RecognizedSlitAcquisitionPoint);
             IReadOnlyList<Phd2GuidingResidualState> targetCompletionWindow = firstMeasurements;
             var completionWindowRetries = 0;
@@ -1815,7 +1809,7 @@ internal sealed partial class RealObservationStageRunner
                         completionTolerance + preset.MaximumResidualGrowthPixels);
                 var slitApertureResiduals = targetCompletionWindow.Select(item =>
                     Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(
-                        new PixelPoint(item.Measurement.TargetCentroid.X, item.Measurement.TargetCentroid.Y),
+                        ToFrameLocal(item.Measurement.TargetCentroid, preset),
                         item.RuntimeSlitLocal)).ToArray();
                 var alongSlitPrecisionWarning = Phd2PlacementGuideWindowPolicy.CanProbeAlongSlitWithPrecisionWarning(
                     configuration.AllowSupervisedSlitQualityWarning, measuredSupervisedGeometry,
@@ -1896,14 +1890,11 @@ internal sealed partial class RealObservationStageRunner
                 }
                 if (!plan.IsAllowed && !supervisedSlitPrecisionWarning)
                 {
-                    if (pendingPhd2LockShift is { } outstanding)
-                    {
-                        return await ReturnPhd2LockToOriginAsync(
-                            context, session,
-                            outstanding with { Phase = Phd2LockShiftPendingPhase.ReturnRequired },
-                            $"{plan.Code}: {plan.Message}", cancellationToken).ConfigureAwait(false);
-                    }
-                    throw new InvalidOperationException($"{plan.Code}: {plan.Message}");
+                    return await HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
+                        new Phd2LockShiftAcquisitionBudget(false, plan.Code, plan.Message, 0, 0, 0, 0,
+                            ledger.CumulativeCommandedPixels, ledger.AttemptsUsed,
+                            (DateTimeOffset.UtcNow - ledger.StartedUtc).TotalSeconds),
+                        postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken).ConfigureAwait(false);
                 }
                 if (plan.IsComplete || supervisedSlitPrecisionWarning)
                 {
@@ -1964,6 +1955,21 @@ internal sealed partial class RealObservationStageRunner
                             Phd2EffectiveQualityMetrics(session.Quality, session.GuideMode, session.SelectedGuide, session.Settle, priorResidual),
                             Metadata(loaded));
                 }
+
+                // A complete read-only/explicit-warning endpoint was handled
+                // above. Only a NEW lock command needs the whole remaining
+                // trip to fit. Re-evaluate from this iteration's fresh frame
+                // and inherited ledger; the initial diagnostic must not become
+                // stale, nor may a denied whole trip fall through to one
+                // individually affordable but unfinishable first segment.
+                var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(
+                    session.Qualification, session.GuideMode, session.LastMeasurement.Measurement, ledger,
+                    BuildPhd2LockShiftSafetySnapshot(context, preset, topology.PierSide), topology,
+                    preset.BuildMotionLimits(), DateTimeOffset.UtcNow);
+                if (!nextAcquisitionBudget.IsAllowed)
+                    return await HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
+                        nextAcquisitionBudget, postCalibrationReacquisitionDepth, lostLockReacquisitionDepth,
+                        cancellationToken).ConfigureAwait(false);
 
                 var stage = plan.Stage!;
                 var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(
@@ -3806,7 +3812,11 @@ internal sealed partial class RealObservationStageRunner
                 frame,
                 predictedTarget,
                 preset.TargetSearchRadiusPixels);
-            identification = topology.Gate.Disposition == GateDisposition.Passed && topology.Target is { } topologyTarget
+            // A long selection frame must not replace the independently checked
+            // short-exposure centre with a clipped core/ghost blend. Fresh fine
+            // residuals are still mandatory before any lock movement or science.
+            identification = string.IsNullOrWhiteSpace(seedField.TargetIdentification.BoundShortPositionEvidencePath) &&
+                topology.Gate.Disposition == GateDisposition.Passed && topology.Target is { } topologyTarget
                 ? new TargetIdentification(
                     GateResult.Pass(
                         "PHD2_GUIDE_FRAME_CATALOG_TARGET_TOPOLOGY_REFINED",

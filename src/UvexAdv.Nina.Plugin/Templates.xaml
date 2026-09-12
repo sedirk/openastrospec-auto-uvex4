@@ -5,6 +5,7 @@
                     xmlns:seq="clr-namespace:UvexAdv.Nina.Plugin.SequenceItems"
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
+  <DataTemplate x:Key="SepMainFocusPanel"><local:SepMainFocusView /></DataTemplate>
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable">
     <Grid Margin="4" Background="#0B1220" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.Resources>
@@ -230,7 +231,7 @@
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="设备所有权：N.I.N.A. 独占 ATR585M；UvexAdv.Service 独占 UVEX4 / COM5。此页不会让插件直接打开相机 SDK 或串口。"
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="设备所有权：N.I.N.A. 独占 ATR585M；UvexAdv.Service 独占 UVEX4 / 已绑定串口。此页不会让插件直接打开相机 SDK 或串口。"
                        TextWrapping="Wrap" Foreground="#7DD3FC" Margin="0,0,0,10" />
             <TextBlock Grid.Row="1" Grid.Column="0" Text="UVEX 服务 API 地址" VerticalAlignment="Center" />
             <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ServiceUrl, UpdateSourceTrigger=PropertyChanged}" Margin="5,2" />
@@ -852,14 +853,14 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                   <TextBlock Text="UVEX4 手动准备" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="用于观测前借天光选缝、开关狭缝灯和简单调整 M2。只经过 UvexAdv.Service → COM5；不要求本夜光学设置、PHD2、测光相机、WCS 或完整自动观测标定。"
+                  <TextBlock Text="用于观测前借天光选缝、开关狭缝灯和简单调整 M2。只经过 UvexAdv.Service → 已绑定串口；不要求本夜光学设置、PHD2、测光相机、WCS 或完整自动观测标定。"
                              Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,10,0" />
                   <WrapPanel Margin="0,5,10,0">
                     <TextBlock Text="设备" Foreground="#CBD5E1" VerticalAlignment="Center" Margin="0,0,6,0" />
                     <ComboBox ItemsSource="{Binding ManualUvexDeviceChoices}"
                               SelectedItem="{Binding SelectedManualUvexDevice, Mode=TwoWay}"
                               Width="190"
-                              ToolTip="选择保存在当前 N.I.N.A. Profile；本机安全配置只允许 UVEX4 / COM5，不扫描其他串口。" />
+                              ToolTip="选择保存在当前 N.I.N.A. Profile；本机安全配置只允许 UVEX4 / 已绑定串口，不扫描其他串口。" />
                     <TextBlock Text="已保存；打开本页不会连接"
                                Foreground="#86EFAC" VerticalAlignment="Center" Margin="8,0,0,0" />
                   </WrapPanel>
@@ -868,11 +869,11 @@
                 <WrapPanel Grid.Column="1" VerticalAlignment="Center">
                   <Button Content="刷新状态" Command="{Binding RefreshManualUvexStatusCommand}" />
                   <Button Content="连接" Command="{Binding ConnectManualUvexCommand}" Background="#166534" BorderBrush="#4ADE80"
-                          ToolTip="显式打开已保存的 UVEX4 / COM5 并读取可信位置。" />
+                          ToolTip="显式打开已保存的 UVEX4 / 已绑定串口 并读取可信位置。" />
                   <Button Content="断开" Command="{Binding DisconnectManualUvexCommand}"
-                          ToolTip="关闭 COM5 并保持断开；服务不会在后台自动重连。" />
-                  <Button Content="释放 COM5 给原厂软件" Command="{Binding ReleaseManualUvexComPortCommand}" Background="#7F1D1D" BorderBrush="#FB7185"
-                          ToolTip="让服务进入维护模式并关闭 COM5；不会移动任何机构。再次点击连接 UVEX4 可恢复。" />
+                          ToolTip="关闭 已绑定串口 并保持断开；服务不会在后台自动重连。" />
+                  <Button Content="释放 已绑定串口 给原厂软件" Command="{Binding ReleaseManualUvexComPortCommand}" Background="#7F1D1D" BorderBrush="#FB7185"
+                          ToolTip="让服务进入维护模式并关闭 已绑定串口；不会移动任何机构。再次点击连接 UVEX4 可恢复。" />
                 </WrapPanel>
               </Grid>
             </Border>
@@ -1109,6 +1110,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Margin="0,0,10,0">
                   <TextBlock Text="真实自动观测准备表" FontSize="15" FontWeight="Bold" Foreground="{StaticResource PreparationPrimaryTextBrush}" />
+                  <local:SepMainFocusView DataContext="{Binding MainFocus}" Margin="0,8,0,5" />
                   <TextBlock Text="启动时恢复上次台站方案，并读取已保存的设备身份；不会因此连接设备。红色标记表示仍需补充或核对的资料。"
                              Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   <TextBlock Text="{Binding AutomaticPreparationSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0">

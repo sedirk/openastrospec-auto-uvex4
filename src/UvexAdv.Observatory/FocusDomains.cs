@@ -111,6 +111,7 @@ public static class FocusDomainConventions
 
     public const string UvexOwner = "UvexAdv.Service";
     public const string UvexLogicalDeviceId = "UVEX4.M2";
+    // Legacy records/test fixtures only; runtime obtains the endpoint from the UVEX owner.
     public const string UvexConnectionEndpoint = "COM5";
 
     private const string Ch340VidPid = "VID_1A86&PID_7523";
@@ -281,7 +282,9 @@ public static class FocusDomainConventions
                 RequireIdentity(label, binding.Owner, UvexOwner, "owner", issues);
                 RequireIdentity(label, binding.LogicalDeviceId, UvexLogicalDeviceId, "logical device", issues);
                 RequireMechanism(label, physical.Mechanism, FocusMechanism.UvexM2, issues);
-                RequireIdentity(label, physical.ConnectionEndpoint, UvexConnectionEndpoint, "connection endpoint", issues);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(physical.ConnectionEndpoint ?? "",
+                        @"\ACOM[1-9][0-9]{0,3}\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    issues.Add($"{label} requires an explicit serial endpoint identified by the UVEX owner.");
                 RequireVidPid(label, physical.HardwareInstanceId, Ch340VidPid, "UVEX4/CH340", issues);
                 break;
         }

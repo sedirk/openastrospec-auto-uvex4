@@ -7,6 +7,12 @@ using UvexAdv.Service.Operations;
 using UvexAdv.Service.Persistence;
 using UvexAdv.Service.Transport;
 
+if (args.FirstOrDefault() == "--identify-serial-ports")
+{
+    await SerialPortIdentificationCommand.RunAsync(args);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var dataPaths = new UvexDataPaths();
 builder.Configuration.AddJsonFile(dataPaths.Configuration, optional: true, reloadOnChange: true);
