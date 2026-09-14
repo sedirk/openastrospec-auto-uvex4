@@ -5,10 +5,11 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Wait')][long]$AfterRevision,
     [Parameter(ParameterSetName = 'Wait')][ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 30000,
     [Parameter(Mandatory, ParameterSetName = 'Invoke')][switch]$Invoke,
-    [Parameter(Mandatory, ParameterSetName = 'Invoke')][ValidateSet('enable-bridge','arm-real-control','disarm-real-control','arm-slit-quality-warning','disarm-slit-quality-warning','select-simulation','select-real','show-acquisition-plan','apply-target-draft','import-planetarium-target','import-framing-target','start-selected','restart-real-run','pause','resume','takeover','cancel')][string]$Command,
+    [Parameter(Mandatory, ParameterSetName = 'Invoke')][ValidateSet('enable-bridge','arm-real-control','disarm-real-control','arm-slit-quality-warning','disarm-slit-quality-warning','select-simulation','select-real','show-acquisition-plan','show-target-strategy','show-workflow','show-atr-inspector','show-calibration-library','show-main-focus','save-main-focus','start-main-focus','cancel-main-focus','apply-target-draft','import-planetarium-target','use-planetarium-strategy','import-framing-target','start-selected','restart-real-run','pause','resume','takeover','cancel')][string]$Command,
     [Parameter(Mandatory, ParameterSetName = 'Invoke')][long]$ExpectedRevision,
     [Parameter(ParameterSetName = 'Invoke')][string]$OperatorAttestation = '',
     [Parameter(ParameterSetName = 'Invoke')][hashtable]$TargetDraft,
+    [Parameter(ParameterSetName = 'Invoke')][hashtable]$FocusSampling,
     [ValidateRange(100, 30000)][int]$ConnectTimeoutMilliseconds = 5000,
     [ValidateRange(100, 120000)][int]$ResponseTimeoutMilliseconds = 65000
 )
@@ -34,6 +35,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Invoke') {
     $request.command = $Command
     $request.expectedRevision = $ExpectedRevision
     if ($null -ne $TargetDraft) { $request.targetDraft = $TargetDraft }
+    if ($null -ne $FocusSampling) { $request.focusSampling = $FocusSampling }
     if (-not [string]::IsNullOrWhiteSpace($OperatorAttestation)) {
         $request.operatorAttestation = $OperatorAttestation
     }

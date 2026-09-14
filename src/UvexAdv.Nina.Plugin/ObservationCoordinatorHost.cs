@@ -32,7 +32,11 @@ public sealed record ObservationDashboardSnapshot(
     IReadOnlyDictionary<ObservationStage, GateResult> Gates,
     IReadOnlyDictionary<ObservationPreviewChannel, ObservationPreview> Previews,
     IReadOnlyList<ObservationDashboardEvidence> Evidence,
-    string? ManifestPath);
+    string? ManifestPath,
+    ObservationPlan? LockedPlan = null,
+    string LockedRunAdapter = "unknown",
+    IReadOnlyList<ObservationDashboardEvidence>? WorkflowEvidence = null,
+    bool WorkflowHistoryTruncated = false);
 
 [Export(typeof(ObservationCoordinatorHost))]
 [PartCreationPolicy(CreationPolicy.Shared)]
@@ -49,6 +53,11 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private ObservationRunPersistenceSession? persistence;
     private ObservationRunCounters counters = ObservationRunCounters.Empty;
     private string? manifestPath;
+    private string? manifestRunId;
+    private ObservationPlan? dashboardPlan;
+    private string dashboardRunAdapter = "unknown";
+    private readonly List<ObservationDashboardEvidence> workflowEvidence = new();
+    private bool workflowHistoryTruncated;
     private object? activeRunReservation;
     private RealObservationRunOwnershipLease? realRunOwnershipLease;
     private bool persistenceFailureLatched;
@@ -147,6 +156,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
             persistence = null;
             counters = ObservationRunCounters.Empty;
             manifestPath = null;
+            manifestRunId = null;
             persistenceFailureLatched = false;
         }
         try
@@ -189,8 +199,9 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 }
                 persistence = runPersistence;
                 manifestPath = runPersistence.ManifestPath;
+                manifestRunId = plan.ObservationRunId;
             }
-            ResetDashboardForRun();
+            ResetDashboardForRun(plan, lockedMetadata);
             await coordinator.StartAsync(
                 plan,
                 new DashboardStageRunner(this, runner),
@@ -308,13 +319,25 @@ public sealed class ObservationCoordinatorHost : IDisposable
         ObservationDashboardSnapshot dashboard;
         lock (sync)
         {
-            evidence.Add(new ObservationDashboardEvidence(
+            var published = new ObservationDashboardEvidence(
                 kind,
                 absolutePath,
                 DateTimeOffset.UtcNow,
                 metadata is null
                     ? null
-                    : new Dictionary<string, string>(metadata, StringComparer.Ordinal)));
+                    : new Dictionary<string, string>(metadata, StringComparer.Ordinal));
+            evidence.Add(published);
+            // Science-frame traffic must not evict the acquisition path. Keep a
+            // separate bounded trace; the durable manifest remains the full record.
+            if (kind is "target-acquisition-branch" or "target-acquisition-strategy")
+            {
+                workflowEvidence.Add(published);
+                if (workflowEvidence.Count > 4096)
+                {
+                    workflowEvidence.RemoveAt(0);
+                    workflowHistoryTruncated = true;
+                }
+            }
             if (evidence.Count > 200)
             {
                 evidence.RemoveRange(0, evidence.Count - 200);
@@ -421,7 +444,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
     }
 
-    private void ResetDashboardForRun()
+    private void ResetDashboardForRun(ObservationPlan plan, ObservationRunLockedMetadata metadata)
     {
         EventHandler<ObservationDashboardSnapshot>? handler;
         ObservationDashboardSnapshot dashboard;
@@ -429,6 +452,10 @@ public sealed class ObservationCoordinatorHost : IDisposable
         {
             gates.Clear();
             evidence.Clear();
+            dashboardPlan = plan;
+            dashboardRunAdapter = metadata.Labels?.TryGetValue("adapter", out var adapter) == true ? adapter : "unknown";
+            workflowEvidence.Clear();
+            workflowHistoryTruncated = false;
             previews[ObservationPreviewChannel.QhyWideField] = EmptyPreview(
                 ObservationPreviewChannel.QhyWideField,
                 "运行已就绪，等待 QHY/GS350 广域取景阶段");
@@ -486,12 +513,20 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
     }
 
-    private ObservationDashboardSnapshot CreateDashboardLocked(ObservationSnapshot? run = null) => new(
-        run ?? coordinator.Snapshot,
+    private ObservationDashboardSnapshot CreateDashboardLocked(ObservationSnapshot? run = null)
+    {
+        var snapshot = run ?? coordinator.Snapshot;
+        var planMatchesRun = dashboardPlan is not null && dashboardPlan.ObservationRunId == snapshot.ObservationRunId;
+        return new(
+        snapshot,
         new Dictionary<ObservationStage, GateResult>(gates),
         new Dictionary<ObservationPreviewChannel, ObservationPreview>(previews),
         evidence.ToArray(),
-        manifestPath);
+        manifestRunId is not null && manifestRunId == snapshot.ObservationRunId ? manifestPath : null,
+        planMatchesRun ? dashboardPlan : null,
+        planMatchesRun ? dashboardRunAdapter : "unknown",
+        workflowEvidence.ToArray(), workflowHistoryTruncated);
+    }
 
     private static ObservationPreview EmptyPreview(ObservationPreviewChannel channel, string caption) =>
         new(channel, null, caption, DateTimeOffset.UtcNow);

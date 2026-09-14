@@ -86,8 +86,8 @@ public sealed record MotionLimits(
 
 /// <summary>
 /// Declares what the G3 acquisition camera is expected to see at the catalogue
-/// coordinate.  This is an observing-plan input, not a value inferred from a
-/// target name.  Non-stellar modes keep catalogue/WCS geometry authoritative
+/// coordinate. Automatic selection uses bound catalogue metadata, never a
+/// guess from the target name. Non-stellar modes keep catalogue/WCS geometry authoritative
 /// when the science target is too faint, extended, or already hidden by the
 /// slit to provide a repeatable stellar centroid.
 /// </summary>
@@ -98,6 +98,7 @@ public enum TargetObservabilityClass
     CompactExtended,
     ExtendedNebula,
     InvisibleInG3,
+    AutoFromPlanetarium,
 }
 
 public sealed record ObservationPlan(
@@ -113,7 +114,8 @@ public sealed record ObservationPlan(
     string ExpectedG3ProfileName,
     string ExpectedQhyCameraId,
     bool RequireSafetyMonitor = true,
-    TargetObservabilityClass TargetObservability = TargetObservabilityClass.DirectStellar)
+    TargetObservabilityClass TargetObservability = TargetObservabilityClass.DirectStellar,
+    TargetCatalogMetadata? CatalogMetadata = null)
 {
     public IReadOnlyList<string> Validate()
     {
@@ -141,6 +143,9 @@ public sealed record ObservationPlan(
         if (string.IsNullOrWhiteSpace(ExpectedAtrCameraId)) issues.Add("Expected ATR camera identity is required.");
         if (string.IsNullOrWhiteSpace(ExpectedG3ProfileName)) issues.Add("Expected PHD2/G3 profile is required.");
         if (string.IsNullOrWhiteSpace(ExpectedQhyCameraId)) issues.Add("Expected QHY camera identity is required.");
+        if (!Enum.IsDefined(TargetObservability)) issues.Add("Target observability strategy is invalid.");
+        var strategyGate = TargetAcquisitionStrategyPolicy.Resolve(TargetObservability, Target, CatalogMetadata).Gate;
+        if (strategyGate.Disposition != GateDisposition.Passed) issues.Add($"{strategyGate.Code}: {strategyGate.Message}");
         return issues.AsReadOnly();
     }
 }

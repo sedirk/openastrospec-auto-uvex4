@@ -6,6 +6,7 @@
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
   <DataTemplate x:Key="SepMainFocusPanel"><local:SepMainFocusView /></DataTemplate>
+  <DataTemplate x:Key="UvexAdv.Nina.Plugin.SepMainFocusViewModel_Dockable"><local:SepMainFocusView NativeToolbar="True" Height="470" /></DataTemplate>
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable">
     <Grid Margin="4" Background="#0B1220" local:ObservationStaticTextLocalization.IsEnabled="True">
       <Grid.Resources>
@@ -776,64 +777,34 @@
       </Border>
 
       <!-- The main area uses tabs instead of one very long, nested-scroll page. -->
-      <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedWorkspaceTabIndex, Mode=TwoWay}">
+      <TabControl Grid.Row="1" x:Name="ObservationWorkspaceTabs" SelectedIndex="{Binding SelectedWorkspaceTabIndex, Mode=TwoWay}">
         <TabItem Header="运行概览">
-          <StackPanel Margin="9">
-            <Border Background="#0E2A1B" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="5" Padding="9" Margin="0,0,0,8">
+          <Grid Margin="5">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border x:Name="RealModeStartupSummary" Background="#172033" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="6" Margin="0,0,0,5">
               <StackPanel>
-                <TextBlock Text="自动流程（真实成功路线）" FontWeight="Bold" Foreground="#86EFAC" />
-                <TextBlock Text="目录转向 → 测光相机广域见证 → 光谱仪导星相机解算 / N.I.N.A. 大步修正 / 邻场搜索 → PHD2 入缝并导星 → 光谱相机自适应曝光 + 可选测光相机同步测光"
-                           Foreground="#D1FAE5" TextWrapping="Wrap" Margin="0,3,0,0" />
+                <WrapPanel>
+                  <Button Content="目标与定位策略" Command="{Binding ShowObservationPlanCommand}" />
+                  <Button Content="采集计划（曝光预算）" Command="{Binding ShowAcquisitionPlanCommand}" />
+                  <Button Content="观测准备" Command="{Binding ShowStartupRequirementsCommand}" />
+                </WrapPanel>
+                <TextBlock Text="{Binding RealModeStatusSummary}" Foreground="#FBBF24" TextWrapping="Wrap" Margin="4,3,4,0">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                      <Style.Triggers><DataTrigger Binding="{Binding Workflow.RunId}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
               </StackPanel>
             </Border>
-            <Border x:Name="RealModeStartupSummary" Background="#172033" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="8" Margin="0,0,0,8">
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
-                  <TextBlock Text="{Binding RealModeStatusSummary}" Foreground="#FBBF24" FontWeight="SemiBold" TextWrapping="Wrap" />
-                  <TextBlock Text="自动观测准备与 UVEX 手控彼此独立；切缝和 M2 对焦不需要先填完自动观测表单。"
-                             Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,2,0,0" />
-                </StackPanel>
-                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
-                  <Button Content="编辑观测计划" Command="{Binding ShowObservationPlanCommand}" />
-                  <Button Content="采集计划（曝光预算）" Command="{Binding ShowAcquisitionPlanCommand}" />
-                  <Button Content="填写自动准备表单" Command="{Binding ShowStartupRequirementsCommand}" />
-                </WrapPanel>
-              </Grid>
-            </Border>
-            <Border x:Name="OperationalReadinessSummary" Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="5" Padding="9">
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="Auto" />
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="PHD2 导星" FontWeight="Bold" Foreground="#FDE68A" VerticalAlignment="Center" Margin="0,0,14,0" />
-                <StackPanel Grid.Row="0" Grid.Column="1">
-                  <TextBlock Text="{Binding Phd2CalibrationOverviewGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
-                  <TextBlock Text="{Binding Phd2CalibrationOverviewText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,1,0,0" />
-                </StackPanel>
-                <Button Grid.Row="0" Grid.RowSpan="3" Grid.Column="2" Content="详细策略" Command="{Binding ShowStartupRequirementsCommand}" VerticalAlignment="Center" Margin="10,0,0,0" />
-                <Separator Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,7" />
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="目标定位辅助" FontWeight="Bold" Foreground="#7DD3FC" VerticalAlignment="Center" Margin="0,0,14,0" />
-                <StackPanel Grid.Row="2" Grid.Column="1">
-                  <TextBlock Text="{Binding GhostAssistanceModeText}" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="{Binding GhostOverviewText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,1,0,0" />
-                </StackPanel>
-              </Grid>
-            </Border>
-          </StackPanel>
+            <local:ObservationWorkflowView Grid.Row="1" x:Name="ProductionWorkflow" Graph="{Binding Workflow, Mode=OneWay}" />
+          </Grid>
         </TabItem>
 
         <TabItem Header="设备手控">
+          <TabControl SelectedIndex="{Binding SelectedManualTabIndex, Mode=TwoWay}" Margin="5">
+          <TabItem Header="光谱仪 · 狭缝 / M2">
           <ScrollViewer x:Name="ManualUvexControlScrollViewer"
                         VerticalScrollBarVisibility="Auto"
                         HorizontalScrollBarVisibility="Disabled"
@@ -936,6 +907,11 @@
             </Border>
           </Grid>
           </ScrollViewer>
+          </TabItem>
+          <TabItem Header="主镜对焦">
+            <local:SepMainFocusView DataContext="{Binding MainFocus}" Margin="4" />
+          </TabItem>
+          </TabControl>
         </TabItem>
 
         <TabItem Header="观测计划">
@@ -1018,7 +994,8 @@
                              Foreground="#93C5FD" TextWrapping="Wrap" Margin="0,3,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,7,0,0">
-                  <TextBlock Text="目标在光谱仪导星相机中的可观测类型" FontWeight="SemiBold" />
+                  <TextBlock Text="目标定位策略" FontWeight="SemiBold" FontSize="14" />
+                  <TextBlock Text="选择目标特征，程序按下面的顺序尝试可用方法；不是遇错就换一个目标类型。" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,3,0,4" />
                   <ComboBox x:Name="TargetObservabilityInput" ItemsSource="{Binding AvailableTargetObservabilityClasses}"
                             DisplayMemberPath="Label"
                             SelectedValuePath="Value"
@@ -1026,6 +1003,21 @@
                             IsEnabled="{Binding IsTargetPlanEditable}"
                             Margin="0,2,0,0" />
                   <TextBlock Text="{Binding TargetObservabilitySummary}" Foreground="#93C5FD" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  <WrapPanel Margin="0,5,0,3">
+                    <Button x:Name="UsePlanetariumStrategyButton" Content="使用星图自动策略" Command="{Binding UsePlanetariumStrategyCommand}" />
+                    <Button Content="从第三方星图导入" Command="{Binding ImportFromPlanetariumCommand}" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding TargetStrategyMetadataSummary}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,2,0,5" />
+                  <Border Background="#102A3B" BorderBrush="#28566D" BorderThickness="1" CornerRadius="4" Padding="7">
+                    <StackPanel>
+                      <TextBlock Text="本目标的尝试顺序" FontWeight="SemiBold" Foreground="#7DD3FC" />
+                      <TextBlock Text="{Binding TargetStrategyPrioritySummary}" TextWrapping="Wrap" Margin="0,4,0,5" />
+                      <TextBlock Text="只有证据不足且存在兼容的下一方法时才切换。目标多义、设备不安全、预算用尽不会借切换绕过；各方法共用本轮预算。" Foreground="#CBD5E1" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <TextBlock Text="本轮实际执行" FontWeight="SemiBold" Margin="0,8,0,2" />
+                  <TextBlock x:Name="TargetStrategyRuntimeText" Text="{Binding TargetStrategyRuntimeSummary}" Foreground="{Binding TargetStrategyRuntimeColor}" TextWrapping="Wrap" />
+                  <Button Content="在节点图中查看本轮路径与证据" Command="{Binding ShowWorkflowCommand}" HorizontalAlignment="Left" Margin="0,5,0,0" />
                 </StackPanel>
               </Grid>
             </Border>
@@ -1089,175 +1081,149 @@
         </TabItem>
 
         <TabItem Header="自动准备">
-          <ScrollViewer x:Name="AutomaticPreparationScrollViewer"
-                        VerticalScrollBarVisibility="Auto"
-                        HorizontalScrollBarVisibility="Disabled"
-                        CanContentScroll="False"
-                        PanningMode="VerticalOnly">
-          <Grid Margin="9">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Border Grid.Row="0" Style="{StaticResource PreparationIntroBorder}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                  <TextBlock Text="真实自动观测准备表" FontSize="15" FontWeight="Bold" Foreground="{StaticResource PreparationPrimaryTextBrush}" />
-                  <local:SepMainFocusView DataContext="{Binding MainFocus}" Margin="0,8,0,5" />
-                  <TextBlock Text="启动时恢复上次台站方案，并读取已保存的设备身份；不会因此连接设备。红色标记表示仍需补充或核对的资料。"
-                             Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding AutomaticPreparationSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0">
-                    <TextBlock.Style>
-                      <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                        <Setter Property="Foreground" Value="#D9B86C" />
-                        <Style.Triggers>
-                          <DataTrigger Binding="{Binding AutomaticPreparationIssueCount}" Value="0">
-                            <Setter Property="Foreground" Value="#87C7AE" />
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </TextBlock.Style>
-                  </TextBlock>
-                </StackPanel>
-                <Button Grid.Column="1" Style="{StaticResource PreparationSecondaryButton}" Content="重新扫描保存的配置" Command="{Binding RefreshCommissioningProfilesCommand}" VerticalAlignment="Center" />
-              </Grid>
+          <Grid x:Name="AutomaticPreparationRoot" Margin="9">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border x:Name="PreparationHeader" Style="{StaticResource PreparationIntroBorder}">
+              <StackPanel>
+                <TextBlock Text="观测前准备" FontSize="15" FontWeight="Bold" />
+                <TextBlock Text="{Binding AutomaticPreparationSummary}" Foreground="#D9B86C" TextWrapping="Wrap" Margin="0,4,0,0" />
+                <TextBlock Text="这里只核对已保存资料；设备连接、天气与位置在正式启动时另行复核。"
+                           Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
+              </StackPanel>
             </Border>
-
-            <Border Grid.Row="1" Style="{StaticResource PreparationPanelBorder}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="台站配置方案" FontWeight="Bold" VerticalAlignment="Center" />
-                <StackPanel Grid.Column="1">
-                  <ComboBox ItemsSource="{Binding CommissioningProfiles}"
-                            SelectedItem="{Binding SelectedCommissioningProfile, Mode=TwoWay}"
-                            DisplayMemberPath="DisplayName" MinWidth="360" HorizontalAlignment="Stretch" />
-                  <TextBlock Text="{Binding SelectedCommissioningProfileDescription}" Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding CommissioningProfileLoadStatus}" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
-                  <TextBlock Text="启动时默认选择最新完整标定包；哈希、内部引用和设备身份的静态校验全部通过后自动确认。此过程不连接或移动设备。"
-                             Foreground="#8FBACB" TextWrapping="Wrap" Margin="0,2,0,0" />
-                </StackPanel>
-                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="加载所选方案" Command="{Binding ApplySelectedCommissioningProfileCommand}" Margin="10,0,0,0" VerticalAlignment="Center" />
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="2" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsTargetPreparationMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="1. 观测目标" FontWeight="Bold" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="{Binding TargetPreparationStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="选择/导入目标" Command="{Binding ShowObservationPlanCommand}" Margin="10,0,0,0" />
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="3" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsDevicePreparationMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="2. 设备身份" FontWeight="Bold" VerticalAlignment="Top" Margin="0,5,8,0" />
-                <StackPanel Grid.Column="1">
-                  <TextBlock Text="{Binding DevicePreparationStatus}" TextWrapping="Wrap" Margin="0,0,0,6" />
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="赤道仪（N.I.N.A.）" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding TelescopeCandidates}" SelectedItem="{Binding SelectedTelescopeCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱相机" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding AtrCameraCandidates}" SelectedItem="{Binding SelectedAtrCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="光谱仪导星相机（PHD2）" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0" />
-                    <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding G3CameraCandidates}" SelectedItem="{Binding SelectedG3CameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="测光相机" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding QhyCameraCandidates}" SelectedItem="{Binding SelectedQhyCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="4,2" />
-                  </Grid>
-                  <TextBlock Text="这里只选择期望设备，不会连接：光谱相机由光谱主控持有，光谱仪导星相机由 PHD2 持有；测光相机由所选测光端或旧版兼容服务持有，不能重复占用。"
-                             Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
-                </StackPanel>
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="4" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsCommissioningPreparationMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="3. 一次性安装标定" FontWeight="Bold" VerticalAlignment="Top" Margin="0,5,8,0" />
-                <StackPanel Grid.Column="1">
-                  <TextBlock Text="{Binding CommissioningPreparationStatus}" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding PreparationEvidenceInventorySummary}" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="这里不是普通表单：ID、SHA-256、四槽狭缝指纹、三焦域身份和运动限额必须由标定流程整体生成或导入，界面不会让你手抄。"
-                             Foreground="#D6BC82" TextWrapping="Wrap" Margin="0,4,0,0" />
-                </StackPanel>
-                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="导入完整标定包" Command="{Binding ImportCommissioningBindingsCommand}" Margin="10,0,0,0" VerticalAlignment="Top" />
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="5" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsNightSetupPreparationMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="4. 本次观测配置" FontWeight="Bold" VerticalAlignment="Top" Margin="0,5,8,0" />
-                <StackPanel Grid.Column="1">
-                  <TextBlock Text="{Binding NightSetupPreparationStatus}" TextWrapping="Wrap" />
-                  <Grid Margin="0,6,0,0">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="目标波段" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding PreparationSpectralRegionChoices}"
-                              DisplayMemberPath="DisplayName" SelectedValuePath="Id"
-                              SelectedValue="{Binding SelectedPreparationSpectralRegion, Mode=TwoWay}" Margin="4,2" />
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="波长标定参考" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding PreparationCalibrationReferenceChoices}"
-                              DisplayMemberPath="DisplayName" SelectedValuePath="Id"
-                              SelectedValue="{Binding SelectedPreparationCalibrationReference, Mode=TwoWay}" Margin="4,2" />
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="安全能力" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding PreparationSafetyCapabilityChoices}"
-                              DisplayMemberPath="DisplayName" SelectedValuePath="Id"
-                              SelectedValue="{Binding SelectedPreparationSafetyCapability, Mode=TwoWay}" Margin="4,2" />
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="长波二级谱抑制" VerticalAlignment="Center" />
-                    <CheckBox Grid.Row="3" Grid.Column="1" Content="已安装并经过确认的级次分选滤镜"
-                              IsChecked="{Binding PreparationOrderSortingFilterInstalled, Mode=TwoWay}" Margin="4,4" />
-                  </Grid>
-                  <TextBlock Text="{Binding PreparationDraftStatus}" Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <WrapPanel Margin="0,6,0,0">
-                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="自动生成准备草稿" Command="{Binding CreateNightSetupDraftCommand}" Margin="0,0,8,0" />
-                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="导入锁定本夜配置" Command="{Binding SelectNightSetupSnapshotCommand}" Margin="0,0,8,0" />
-                    <Button Style="{StaticResource PreparationSecondaryButton}" Content="打开草稿位置" Command="{Binding OpenPreparationDraftFolderCommand}" />
+            <TabControl x:Name="PreparationSections" Grid.Row="1" SelectedIndex="{Binding SelectedPreparationTabIndex, Mode=TwoWay}">
+              <TabItem Header="核对与入口">
+                <ScrollViewer x:Name="AutomaticPreparationScrollViewer" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
+                  <WrapPanel Margin="6">
+                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsTargetPreparationMissing}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="目标与采集计划" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding TargetPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <TextBlock Text="目标、定位策略和曝光预算统一在观测计划中设置。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
+                        <WrapPanel Margin="0,7,0,0">
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="目标与定位策略" Command="{Binding ShowObservationPlanCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="采集计划" Command="{Binding ShowAcquisitionPlanCommand}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsNightSetupPreparationMissing}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="本夜光学配置" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding NightSetupPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="{Binding PreparationSlitStatus}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" />
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="核对本夜配置" Command="{Binding ShowNightSetupPreparationCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsDevicePreparationMissing}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="期望设备" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding PreparationDeviceSummary}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="仅更换设备或重新部署时修改。设备已记录，不等于已连接。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="高级设置 · 设备绑定" Command="{Binding ShowDeviceBindingsSettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsCommissioningPreparationMissing}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="台站方案与安装标定" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding CommissioningPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="设备身份、狭缝标定和运动范围随台站方案整体加载；不需要每次观测重新填写。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="管理方案与标定包" Command="{Binding ShowDeviceBindingsSettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationPanelBorder}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="监督方式" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="本页不确认现场安全，也不授权真实控制。监督方式的详细设置统一在高级设置中维护。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="高级设置 · 站点与模拟" Command="{Binding ShowSafetySettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsAutomationPolicyPreparationMissing}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="配置检查" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding AutomationPolicyPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <ItemsControl ItemsSource="{Binding PreparationChecklistIssues}" Margin="0,0,0,5">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,5" Foreground="#D9B86C" /></DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="查看配置分类" Command="{Binding ShowAdvancedSettingsCommand}" HorizontalAlignment="Left" />
+                      </StackPanel>
+                    </Border>
+                    <Border Width="360" Style="{StaticResource PreparationPanelBorder}" Margin="0,0,8,8">
+                      <StackPanel>
+                        <TextBlock Text="准备工具与运行记录" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="需要时打开相应工具；导航本身不会对焦、移动设备或启动观测。" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,7" />
+                        <WrapPanel>
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="主镜对焦…" Command="{Binding ShowMainFocusCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="狭缝 / M2 手控…" Command="{Binding ShowManualUvexControlCommand}" />
+                          <Button x:Name="PreparationToolsEndButton" Style="{StaticResource PreparationSecondaryButton}" Content="实时流程节点" Command="{Binding ShowWorkflowCommand}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
                   </WrapPanel>
-                  <TextBlock Text="草稿会自动汇总保存的身份、相机参数、狭缝和上述选择，但不会连接设备，也不会把尚未实测的焦点、光栅或运动证据伪装成已完成。"
-                             Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
-                </StackPanel>
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="6" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsSlitChoiceMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="5. 目标狭缝" FontWeight="Bold" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="由操作员选择；如果导入了本夜光学设置，会自动选中其中记录的槽位。" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="2" Width="190" Margin="10,0,0,0"
-                          ItemsSource="{Binding UvexSlitChoices}"
-                          DisplayMemberPath="DisplayName"
-                          SelectedValuePath="Position"
-                          SelectedValue="{Binding ExpectedUvexSlitPosition, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-              </Grid>
-            </Border>
-
-            <Border Grid.Row="7" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsAutomationPolicyPreparationMissing}">
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="6. 自动检查结果" FontWeight="Bold" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="{Binding AutomationPolicyPreparationStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <Button Grid.Column="2" Style="{StaticResource PreparationSecondaryButton}" Content="查看工程诊断" Command="{Binding ShowAdvancedSettingsCommand}" Margin="10,0,0,0" />
-              </Grid>
-            </Border>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="本夜配置">
+                <ScrollViewer x:Name="PreparationNightSetupScrollViewer" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="6">
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsNightSetupPreparationMissing}">
+                      <StackPanel>
+                        <TextBlock Text="用于正式启动的配置" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding NightSetupPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,5" />
+                        <TextBlock Text="导入已有的本夜配置会更新期望光学设置；正式启动仍需读取设备并核对，不代表当前设备已到位。" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" />
+                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="导入本夜配置…" Command="{Binding SelectNightSetupSnapshotCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsSlitChoiceMissing}">
+                      <StackPanel>
+                        <TextBlock Text="本轮期望狭缝" FontSize="14" FontWeight="Bold" />
+                        <ComboBox x:Name="PreparationSlitSelector" ItemsSource="{Binding UvexSlitChoices}" DisplayMemberPath="DisplayName" SelectedValuePath="Position"
+                                  SelectedValue="{Binding ExpectedUvexSlitPosition, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding IsTargetPlanEditable}" MaxWidth="360" HorizontalAlignment="Left" Margin="0,6,0,5" />
+                        <TextBlock Text="{Binding PreparationSlitStatus}" TextWrapping="Wrap" />
+                        <TextBlock Text="选择不会立即转动狭缝轮。期望槽位须与导入的本夜配置一致；改变光学配置后，请导入对应的新配置。实际切缝在设备手控中执行。" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PreparationPanelBorder}">
+                      <StackPanel>
+                        <TextBlock Text="准备草稿 · 不作为启动凭据" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="下面三项只写入准备草稿，不修改已导入的本夜配置，也不会自动调整光栅或滤镜。生成草稿不能代替实测标定与配置导入。"
+                                   Foreground="#D9B86C" TextWrapping="Wrap" Margin="0,5,0,8" />
+                        <WrapPanel IsEnabled="{Binding IsTargetPlanEditable}">
+                          <StackPanel Width="260" Margin="0,0,12,8">
+                            <TextBlock Text="计划波段（草稿）" />
+                            <ComboBox ItemsSource="{Binding PreparationSpectralRegionChoices}" DisplayMemberPath="DisplayName" SelectedValuePath="Id"
+                                      SelectedValue="{Binding SelectedPreparationSpectralRegion, Mode=TwoWay}" Margin="0,4,0,0" />
+                          </StackPanel>
+                          <StackPanel Width="260" Margin="0,0,12,8">
+                            <TextBlock Text="波长标定参考（草稿）" />
+                            <ComboBox ItemsSource="{Binding PreparationCalibrationReferenceChoices}" DisplayMemberPath="DisplayName" SelectedValuePath="Id"
+                                      SelectedValue="{Binding SelectedPreparationCalibrationReference, Mode=TwoWay}" Margin="0,4,0,0" />
+                          </StackPanel>
+                        </WrapPanel>
+                        <CheckBox Content="记录已安装并确认的级次分选滤镜（仅草稿）" IsChecked="{Binding PreparationOrderSortingFilterInstalled, Mode=TwoWay}" IsEnabled="{Binding IsTargetPlanEditable}" Margin="0,2,0,5">
+                          <CheckBox.ContentTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></CheckBox.ContentTemplate>
+                        </CheckBox>
+                        <TextBlock Text="草稿中的设备、相机参数与监督方式从当前设置汇总；更改监督方式请到高级设置。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" Margin="0,2,0,7" />
+                        <TextBlock Text="{Binding PreparationDraftStatus}" Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" />
+                        <WrapPanel Margin="0,7,0,0">
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="生成准备草稿" Command="{Binding CreateNightSetupDraftCommand}" />
+                          <Button x:Name="OpenPreparationDraftFolderButton" Style="{StaticResource PreparationSecondaryButton}" Content="打开草稿文件夹" Command="{Binding OpenPreparationDraftFolderCommand}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+            </TabControl>
           </Grid>
-          </ScrollViewer>
         </TabItem>
 
         <TabItem Header="实时图像">
-          <TabControl Margin="3">
+          <TabControl Margin="3" SelectedIndex="{Binding SelectedPreviewTabIndex, Mode=TwoWay}">
             <TabItem Header="测光相机 · 定位">
               <Grid Margin="3">
                 <local:EmbeddedImageViewer PreviewImage="{Binding QhyPreviewImage}"
@@ -1282,7 +1248,17 @@
                                            MinHeight="220" />
               </Grid>
             </TabItem>
-            <TabItem Header="光谱相机 · 光谱">
+            <TabItem>
+              <TabItem.Header>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="光谱相机 · 光谱" VerticalAlignment="Center" Margin="0,0,5,0"
+                             FontSize="{Binding FontSize, RelativeSource={RelativeSource AncestorType=TabItem}}" />
+                  <Button Content="单帧检查" ToolTip="打开光谱单帧检查" Command="{Binding ShowAtrInspectorCommand}"
+                          FontSize="10" MinHeight="14" Height="14" Padding="4,0" Margin="1,0" VerticalAlignment="Center" />
+                  <Button Content="校准库" ToolTip="打开校准库页面" Command="{Binding ShowCalibrationLibraryCommand}"
+                          FontSize="10" MinHeight="14" Height="14" Padding="4,0" Margin="1,0" VerticalAlignment="Center" />
+                </StackPanel>
+              </TabItem.Header>
               <Grid Margin="3">
                 <Grid.RowDefinitions>
                   <RowDefinition Height="*" />
@@ -1301,7 +1277,7 @@
                 <Expander Grid.Row="1" x:Name="ManualAtrInspector" Header="{Binding ManualAtrInspectionHeader}" Margin="0,6,0,0">
                   <Expander.Style>
                     <Style TargetType="Expander" BasedOn="{StaticResource ObservationSettingsExpander}">
-                      <Setter Property="IsExpanded" Value="False" />
+                      <Setter Property="IsExpanded" Value="{Binding ManualAtrInspectionExpanded, Mode=TwoWay}" />
                       <Style.Triggers>
                         <DataTrigger Binding="{Binding IsManualAtrToolsAvailable}" Value="False">
                           <Setter Property="IsExpanded" Value="False" />
@@ -1460,332 +1436,648 @@
         </TabItem>
 
         <TabItem Header="高级设置">
-          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="10">
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="高级设置保存" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="输入框、下拉框和复选框会立即更新当前 N.I.N.A. Profile 的内存设置；点击下方按钮可立即写盘，不必依赖关闭 N.I.N.A. 时保存。已经开始的运行仍使用其启动时锁定的快照。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
-                  <WrapPanel>
-                    <Button Content="保存当前高级设置"
-                            Command="{Binding SaveAdvancedSettingsCommand}"
-                            Margin="0,0,8,0"
-                            AutomationProperties.AutomationId="OpenAstroSpec.SaveAdvancedSettings" />
-                    <TextBlock Text="{Binding AdvancedSettingsSaveStatus}" Foreground="#FDE68A" TextWrapping="Wrap" VerticalAlignment="Center" />
-                  </WrapPanel>
-                </StackPanel>
-              </Border>
-              <Border Background="#10243B" BorderBrush="#22D3EE" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="大模型前端闭环桥" FontSize="15" FontWeight="Bold" Foreground="#67E8F9" />
-                  <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除导星相机旧状态、修改设置或删除证据。"
-                             Foreground="#CFFAFE" TextWrapping="Wrap" Margin="0,4,0,7" />
-                  <CheckBox Content="启用本机当前用户的 LLM 后台命名管道"
-                            IsChecked="{Binding ModelAutomationBridgeEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                            AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationBridgeEnabled" />
-                  <CheckBox Content="仅为本次 N.I.N.A. 会话授权后台触发真实流程的启动/恢复按钮"
-                            IsChecked="{Binding ModelAutomationRealControlArmed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                            IsEnabled="{Binding ModelAutomationBridgeEnabled}"
-                            Margin="0,5,0,0"
-                            AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationRealControlArmed" />
-                  <WrapPanel Margin="0,6,0,0">
-                    <Button Content="代码启用后台桥"
-                            Command="{Binding EnableModelAutomationBridgeCommand}"
-                            Margin="0,0,6,0"
-                            AutomationProperties.AutomationId="OpenAstroSpec.EnableModelAutomationBridge" />
-                    <Button Content="代码授权本次真实流程"
-                            Command="{Binding ArmModelAutomationRealControlCommand}"
-                            Margin="0,0,6,0"
-                            AutomationProperties.AutomationId="OpenAstroSpec.ArmModelAutomationRealControl" />
-                    <Button Content="撤销本次真实流程授权"
-                            Command="{Binding DisarmModelAutomationRealControlCommand}"
-                            AutomationProperties.AutomationId="OpenAstroSpec.DisarmModelAutomationRealControl" />
-                  </WrapPanel>
-                  <TextBlock Text="该真实流程授权每次启动 N.I.N.A. 都会恢复为关闭。后台只有在本次请求携带精确操作员证明时，才能通过与可见按钮相同的 ICommand 重新授权；证明不会写入日志。暂停、取消和人工接管属于停止类动作；恢复仍会重新校验全部可能过期的门。"
-                             Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <TextBlock Text="{Binding ModelAutomationBridgeEndpoint, StringFormat=端点：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding ModelAutomationInvocationSummary}" Foreground="#C4B5FD" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding ModelAutomationLastActivity, StringFormat=最近调用：{0}}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,3,0,0" />
-                </StackPanel>
-              </Border>
-              <TextBlock Text="运行准入与数据归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
-              <Border x:Name="RealModeStartupDetails" Background="#172033" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="真实模式启动条件" FontSize="15" FontWeight="Bold" Foreground="#FDE68A" />
-                  <TextBlock Text="{Binding ModeDescription}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding RealModeStatus}" Foreground="#FBBF24" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <WrapPanel Margin="0,7,0,0">
-                    <Button Content="导入设备标定方案" Command="{Binding ImportCommissioningBindingsCommand}" Margin="0,0,8,0" />
-                    <Button Content="启用并核验恒星时跟踪" Command="{Binding EnableMountTrackingCommand}" AutomationProperties.AutomationId="OpenAstroSpec.EnableMountTracking" />
-                  </WrapPanel>
-                  <TextBlock Text="{Binding MountTrackingManualStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,5,0,0" />
-                </StackPanel>
-              </Border>
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="N.I.N.A. 原生目标归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="光谱相机仍由 N.I.N.A. 保存。模板必须包含目标名；推荐值还会按夜晚、目标和官方图像类型分目录。插件不会在启动时静默修改 Profile。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
-                  <TextBlock Text="当前 Profile 模板" FontWeight="SemiBold" />
-                  <TextBox Text="{Binding NinaImageFilePatternCurrent, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,2,0,6" />
-                  <TextBlock Text="OpenAstroSpec 推荐模板" FontWeight="SemiBold" />
-                  <TextBox Text="{Binding NinaImageFilePatternRecommended, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,2,0,6" />
-                  <TextBlock Text="{Binding NinaImageFilePatternStatus}" Foreground="#FDE68A" TextWrapping="Wrap" />
-                  <WrapPanel Margin="0,7,0,0">
-                    <Button Content="应用推荐的目标分目录模板"
-                            Command="{Binding ApplyRecommendedImageFilePatternCommand}"
-                            Margin="0,0,8,0"
-                            AutomationProperties.AutomationId="OpenAstroSpec.ApplyImageFilePattern" />
-                    <Button Content="撤销本次模板修改"
-                            Command="{Binding RestorePreviousImageFilePatternCommand}"
-                            AutomationProperties.AutomationId="OpenAstroSpec.RestoreImageFilePattern" />
-                  </WrapPanel>
-                </StackPanel>
-              </Border>
-              <TextBlock Text="目标获取、入缝与导星" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
-              <Expander Header="PHD2 与目标定位策略详情" Style="{StaticResource ObservationSettingsExpander}">
-                <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
-                  <StackPanel>
-                    <WrapPanel>
-                      <TextBlock Text="PHD2 校准质量" FontWeight="Bold" Foreground="#FDE68A" Margin="0,0,10,0" />
-                      <TextBlock Text="{Binding Phd2CalibrationGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
+          <Grid Margin="10">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+              <StackPanel>
+                <TextBlock Text="分类设置" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
+                <TextBlock Text="点选下面的分类，直接查看和修改参数。保存写入当前 Profile；正在运行的观测仍使用启动时快照。"
+                           Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
+                <WrapPanel>
+                  <Button Content="保存当前高级设置"
+                          Command="{Binding SaveAdvancedSettingsCommand}"
+                          Margin="0,0,8,0"
+                          AutomationProperties.AutomationId="OpenAstroSpec.SaveAdvancedSettings" />
+                  <TextBlock Text="{Binding AdvancedSettingsSaveStatus}" Foreground="#FDE68A" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+            <TabControl Grid.Row="1" x:Name="AdvancedSettingsSections" Background="#0B1220" BorderBrush="#334155"
+                        SelectedIndex="{Binding SelectedAdvancedCategoryIndex, Mode=TwoWay}"
+                        TabStripPlacement="Left"
+                        HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                        AutomationProperties.AutomationId="OpenAstroSpec.AdvancedSettingsSections">
+              <TabControl.Resources>
+                <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+                  <Setter Property="HeaderTemplate">
+                    <Setter.Value><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" MaxWidth="96" /></DataTemplate></Setter.Value>
+                  </Setter>
+                </Style>
+                <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                  <Setter Property="ContentTemplate">
+                    <Setter.Value><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></Setter.Value>
+                  </Setter>
+                </Style>
+              </TabControl.Resources>
+              <TabControl.Template>
+                <ControlTemplate TargetType="TabControl">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="132" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <ScrollViewer x:Name="AdvancedSettingsNavigationScrollViewer" Grid.Column="0" Margin="0,0,8,0"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" PanningMode="VerticalOnly" Focusable="False">
+                      <StackPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1" />
+                    </ScrollViewer>
+                    <Border Grid.Column="1" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            Background="{TemplateBinding Background}">
+                      <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"
+                                        HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                    </Border>
+                  </Grid>
+                </ControlTemplate>
+              </TabControl.Template>
+              <TabItem Header="运行与归档">
+                <ScrollViewer x:Name="AdvancedSettingsCategory0ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <TextBlock Text="运行准入与数据归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
+                    <Border x:Name="RealModeStartupDetails" Background="#172033" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="真实模式启动条件" FontSize="15" FontWeight="Bold" Foreground="#FDE68A" />
+                        <TextBlock Text="{Binding ModeDescription}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding RealModeStatus}" Foreground="#FBBF24" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <WrapPanel Margin="0,7,0,0">
+                          <Button Content="管理方案与标定包" Command="{Binding ShowDeviceBindingsSettingsCommand}" Margin="0,0,8,0" />
+                          <Button Content="启用并核验恒星时跟踪" Command="{Binding EnableMountTrackingCommand}" AutomationProperties.AutomationId="OpenAstroSpec.EnableMountTracking" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding MountTrackingManualStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,5,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="N.I.N.A. 原生目标归档" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" />
+                        <TextBlock Text="光谱相机仍由 N.I.N.A. 保存。模板必须包含目标名；推荐值还会按夜晚、目标和官方图像类型分目录。插件不会在启动时静默修改 Profile。"
+                                   Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,6" />
+                        <TextBlock Text="当前 Profile 模板" FontWeight="SemiBold" />
+                        <TextBox Text="{Binding NinaImageFilePatternCurrent, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,2,0,6" />
+                        <TextBlock Text="OpenAstroSpec 推荐模板" FontWeight="SemiBold" />
+                        <TextBox Text="{Binding NinaImageFilePatternRecommended, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,2,0,6" />
+                        <TextBlock Text="{Binding NinaImageFilePatternStatus}" Foreground="#FDE68A" TextWrapping="Wrap" />
+                        <WrapPanel Margin="0,7,0,0">
+                          <Button Content="应用推荐的目标分目录模板"
+                                  Command="{Binding ApplyRecommendedImageFilePatternCommand}"
+                                  Margin="0,0,8,0"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.ApplyImageFilePattern" />
+                          <Button Content="撤销本次模板修改"
+                                  Command="{Binding RestorePreviousImageFilePatternCommand}"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.RestoreImageFilePattern" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="后台接口">
+                <ScrollViewer x:Name="AdvancedSettingsCategory1ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Background="#10243B" BorderBrush="#22D3EE" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="大模型前端闭环桥" FontSize="15" FontWeight="Bold" Foreground="#67E8F9" />
+                        <TextBlock Text="把后台请求派发到本页按钮绑定的同一个 ICommand；阶段树、设备所有权、质量门、运动/回程预算和证据写入不会被复制或绕过。接口不提供设备手控、清除导星相机旧状态、修改设置或删除证据。"
+                                   Foreground="#CFFAFE" TextWrapping="Wrap" Margin="0,4,0,7" />
+                        <CheckBox Content="启用本机当前用户的 LLM 后台命名管道"
+                                  IsChecked="{Binding ModelAutomationBridgeEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationBridgeEnabled" />
+                        <CheckBox Content="仅为本次 N.I.N.A. 会话授权后台触发真实流程的启动/恢复按钮"
+                                  IsChecked="{Binding ModelAutomationRealControlArmed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding ModelAutomationBridgeEnabled}"
+                                  Margin="0,5,0,0"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.ModelAutomationRealControlArmed" />
+                        <WrapPanel Margin="0,6,0,0">
+                          <Button Content="代码启用后台桥"
+                                  Command="{Binding EnableModelAutomationBridgeCommand}"
+                                  Margin="0,0,6,0"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.EnableModelAutomationBridge" />
+                          <Button Content="代码授权本次真实流程"
+                                  Command="{Binding ArmModelAutomationRealControlCommand}"
+                                  Margin="0,0,6,0"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.ArmModelAutomationRealControl" />
+                          <Button Content="撤销本次真实流程授权"
+                                  Command="{Binding DisarmModelAutomationRealControlCommand}"
+                                  AutomationProperties.AutomationId="OpenAstroSpec.DisarmModelAutomationRealControl" />
+                        </WrapPanel>
+                        <TextBlock Text="该真实流程授权每次启动 N.I.N.A. 都会恢复为关闭。后台只有在本次请求携带精确操作员证明时，才能通过与可见按钮相同的 ICommand 重新授权；证明不会写入日志。暂停、取消和人工接管属于停止类动作；恢复仍会重新校验全部可能过期的门。"
+                                   Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <TextBlock Text="{Binding ModelAutomationBridgeEndpoint, StringFormat=端点：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding ModelAutomationInvocationSummary}" Foreground="#C4B5FD" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding ModelAutomationLastActivity, StringFormat=最近调用：{0}}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,3,0,0" />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="站点与模拟">
+                <ScrollViewer x:Name="AdvancedSettingsCategory2ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Style="{StaticResource PreparationPanelBorder}">
+                      <StackPanel>
+                        <TextBlock Text="观测监督方式" FontSize="15" FontWeight="Bold" />
+                        <TextBlock Text="这项设置会改变下一轮环境检查与收尾方式，不是草稿说明，也不等于本次会话的真实控制授权。"
+                                   Foreground="#D9B86C" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <ComboBox ItemsSource="{Binding PreparationSafetyCapabilityChoices}" DisplayMemberPath="DisplayName" SelectedValuePath="Id"
+                                  SelectedValue="{Binding SelectedPreparationSafetyCapability, Mode=TwoWay}" IsEnabled="{Binding IsTargetPlanEditable}" />
+                        <TextBlock Text="{Binding SelectedPreparationSafetyCapabilityDescription}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,4" />
+                        <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="0,4,0,4" />
+                        <Button Content="返回启动前核对" Command="{Binding ShowPreparationChecklistCommand}" HorizontalAlignment="Left" Margin="0,5,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="站点、地平线与模拟速度" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
+                                      <WrapPanel Margin="0">
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="站点纬度（度）"/><TextBox Text="{Binding SiteLatitudeDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="站点东经（度）"/><TextBox Text="{Binding SiteLongitudeDegreesEast, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="海拔（米）"/><TextBox Text="{Binding SiteElevationMeters, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="围墙最低高度角（度）"/><TextBox Text="{Binding HorizonMinimumDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="启动裕量（度）"/><TextBox Text="{Binding HorizonStartMarginDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="继续运行裕量（度）"/><TextBox Text="{Binding HorizonContinueMarginDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8"><TextBlock Text="模拟时每阶段停留时间（毫秒）"/><TextBox Text="{Binding SimulationStageMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
                     </WrapPanel>
-                    <TextBlock Text="{Binding Phd2CalibrationPolicyText, StringFormat=策略：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding Phd2CalibrationPermissionText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding Phd2CommissioningRouteText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
-                    <TextBlock Text="{Binding Phd2CalibrationScaleText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
-                    <TextBlock Text="{Binding Phd2CalibrationReasonText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    </Border>
                   </StackPanel>
-                </Border>
-              </Expander>
-              <TextBlock Text="并行观测与站点" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
-              <Expander Header="光谱相机长曝光期间的测光相机并行成像" Style="{StaticResource ObservationSettingsExpander}">
-                <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
-                  <StackPanel>
-                    <TextBlock Text="滤镜循环（Filter:秒，逗号分隔）" FontWeight="Bold" Foreground="#7DD3FC" />
-                    <TextBox Text="{Binding QhyParallelFilterSequenceCsv, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="留空沿用单滤镜测光；行星状星云示例：H:60,O:60,S:60"
-                             Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding QhyParallelFilterSequenceStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <Grid Margin="0,6,0,0">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="70"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="70"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions>
-                      <TextBlock Grid.Column="0" Text="最少星数" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding QhyMinimumDetectedStars}" Margin="5,0" ToolTip="0 = 仅记录，不阻断"/>
-                      <TextBlock Grid.Column="3" Text="最低透明度" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding QhyMinimumTransparency}" Margin="5,0" ToolTip="0 = 仅记录，不阻断"/>
-                      <TextBlock Grid.Column="6" Text="最大饱和比例" VerticalAlignment="Center"/><TextBox Grid.Column="7" Text="{Binding QhyMaximumSaturatedFraction}" Margin="5,0"/>
-                    </Grid>
-                    <TextBlock Text="测光与光谱曝光并行，各自使用独立相机。测光支路若被设为严格质量门，失败仍会暂停主流程。"
-                               Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="解算与居中">
+                <ScrollViewer x:Name="AdvancedSettingsCategory3ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                                    <StackPanel>
+                                      <TextBlock Text="光谱仪导星相机长曝光解算与 WCS 居中" FontWeight="Bold" Foreground="#7DD3FC" />
+                                      <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占光谱仪导星相机拍一张新全帧。若同一指向已有本轮新鲜测光相机/PL3 正式解，光谱仪导星相机优先以它作为真实天空提示；当无机械零位赤道仪的自报坐标偏差超过此处可信范围时，每轮最多用该测光相机真值 Sync 一次并验证读回，绝不反复同步或发 Slew。光谱仪导星相机正式解在像元尺度合理、数值有限且位于提示可达范围内时直接信任；源数和匹配数只作遥测。目标/赤道仪与测光相机的大残差不再误写成两镜光轴差。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新光谱仪导星相机解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
+                                      <TextBlock Text="判据分离：2″只约束静态 frame/mount 绑定和小步搜索稳定性；大步实报终点在完整运动预算内即可拍验证帧，光学到位必须由移动后的 fresh 光谱仪导星相机 WCS 证明。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="0,0,0,6" />
+                                      <WrapPanel Margin="0">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="曝光 preset schema" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3PlateSolveExposurePresetSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="曝光 preset ID" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3PlateSolveExposurePresetId, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="解算曝光档位 (ms)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3PlateSolveExposureMillisecondsCsv, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="WCS 门 schema" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3WcsCenteringSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="目标画内边距 (px)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3TargetInsideFieldMarginPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="单次上限 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3WcsMaximumSingleCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最大半径 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3WcsMaximumRadiusArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="累计含回程 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3WcsMaximumCumulativeMotionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Width="240" Margin="0,0,12,8">
+                        <TextBlock Text="动作" VerticalAlignment="Center"/><TextBox Width="45" Text="{Binding G3WcsMaximumCorrectionAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                        <TextBlock Text="分钟" VerticalAlignment="Center"/><TextBox Width="45" Text="{Binding G3WcsMaximumCenteringMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="单动作最坏时长 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3MotionWorstCaseActionSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="移动后稳定等待 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3MotionPostSlewSettleSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="光谱仪导星相机相对天空提示可信范围 (deg)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <TextBlock MaxWidth="540" Text="默认 5°；优先相对新鲜测光相机/PL3 WCS 检验，并作为无机械零位赤道仪的一次性 Sync 触发阈值。不会自动扩大此值，也不授权同等幅度 Slew" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock Text="大步后允许拍 fresh 验证帧的最大实报终点残差 (arcsec)" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3WcsFreshSolveAuthorizationResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                    </WrapPanel>
+                                    </StackPanel>
+                                  </Border>
                   </StackPanel>
-                </Border>
-              </Expander>
-              <Expander Header="站点、40° 围墙与模拟速度" Style="{StaticResource ObservationSettingsExpander}">
-                <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,5"><TextBlock Text="站点纬度（度）"/><TextBox Text="{Binding SiteLatitudeDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,5"><TextBlock Text="站点东经（度）"/><TextBox Text="{Binding SiteLongitudeDegreesEast, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,5"><TextBlock Text="海拔（米）"/><TextBox Text="{Binding SiteElevationMeters, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,5"><TextBlock Text="围墙最低高度角（度）"/><TextBox Text="{Binding HorizonMinimumDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,0,5"><TextBlock Text="启动裕量（度）"/><TextBox Text="{Binding HorizonStartMarginDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="2" Grid.Column="2" Margin="0,0,0,5"><TextBlock Text="继续运行裕量（度）"/><TextBox Text="{Binding HorizonContinueMarginDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"><TextBlock Text="模拟时每阶段停留时间（毫秒）"/><TextBox Text="{Binding SimulationStageMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0"/></StackPanel>
-                  </Grid>
-                </Border>
-              </Expander>
-              <TextBlock Text="设备身份与标定证据" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="狭缝轮光学身份复核" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="10/20 ms HDR 测量黑色暗孔径的两条物理边；强反光允许过曝，其 FWHM 不再当作缝宽。四槽位必须分别实测；不唯一、超出指纹族或与回报序号不符时，任何入缝与科学曝光都会在运动前阻断。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,4" />
-                  <TextBlock Text="{Binding SlitIdentityStatusText}" Foreground="#FDE68A" TextWrapping="Wrap" />
-                </StackPanel>
-              </Border>
-              <TextBlock Text="这些字段用于不可变设备身份和标定来源追踪。日常操作请在“自动准备”选择台站配置方案；这里只保留工程诊断与人工核对。" Foreground="#FBBF24" TextWrapping="Wrap" Margin="0,0,0,8" />
-              <Border Background="#3B2610" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="设备所有权预检" FontWeight="Bold" Foreground="#FCD34D" />
-                  <TextBlock Text="{Binding NinaFilterWheelOwnershipStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding NinaGuiderOwnershipStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                  <Button Content="重新读取 N.I.N.A. 设备选择" Command="{Binding RefreshProfileOwnershipCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="9,3" />
-                </StackPanel>
-              </Border>
-              <Expander Header="目标获取算法与恢复预算（工程参数）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
-                <StackPanel Margin="0,4,0,0">
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="广域→狭缝场转换" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="{Binding WideToSlitTransferModeText, StringFormat=WideToSlitTransferMode：{0}}" FontFamily="Consolas" Margin="0,3,0,0" />
-                  <TextBlock Text="{Binding WideToSlitTransferStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,0" />
-                  <Separator Margin="0,7,0,6" />
-                  <CheckBox Content="光谱仪导星相机一旦解算成功，立即建立测光相机/光谱仪导星相机快速双解算候选"
-                            IsChecked="{Binding QhyG3FastPairEnabled}" />
-                  <TextBlock Text="{Binding QhyG3FastPairStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,4,0,6" />
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="95"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="95"/></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="配对 schema" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding QhyG3FastPairSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
-                    <TextBlock Grid.Row="0" Grid.Column="3" Text="Policy ID" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding QhyG3FastPairPolicyId, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="单张测光相机曝光 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding QhyG3FastPairExposureSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="1" Grid.Column="3" Text="缓存最长年龄 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding QhyG3FastPairMaximumCachedAgeSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="两帧中点差 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding QhyG3FastPairMaximumMidpointSeparationSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="2" Grid.Column="3" Text="整组时限 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding QhyG3FastPairMaximumWallClockSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Mount span (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding QhyG3FastPairMaximumMountSpanArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="3" Grid.Column="3" Text="候选有效期 (h)" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="4" Text="{Binding QhyG3FastPairCandidateValidityHours, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="不确定度上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding QhyG3FastPairMaximumCandidateUncertaintyArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="4" Grid.Column="3" Grid.ColumnSpan="2" Text="单样本永远是 Candidate；需独立聚合/验证后才能激活。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="5,2"/>
-                  </Grid>
-                </StackPanel>
-              </Border>
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="确定性鬼影辅助（受设备标定约束）" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="只在普通/超亮目标身份定位失败时，使用同一无运动 OFF/ON/OFF 序列中至少两张新鲜、同曝光 OFF 帧。标定、完整策略、提取策略、安装/方向指纹均由 schema 4 preset 及其 SHA-256 绑定；不含目标常量或两镜固定光轴差。"
-                             Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,6" />
-                  <WrapPanel VerticalAlignment="Center">
-                    <TextBlock Text="GhostAssistanceMode" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <ComboBox Width="230"
-                              ItemsSource="{Binding GhostAssistanceModes}"
-                              SelectedItem="{Binding GhostAssistanceMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                              AutomationProperties.Name="鬼影辅助模式" />
-                  </WrapPanel>
-                  <TextBlock Text="Skip（默认）：不运行模板；AutoIfValidElseSkip：模板无效时继续既有长曝光 WCS/N.I.N.A. 居中/小步重解；RequireValid：模板无效时暂停等待处理。"
-                             Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,5,0,0" />
-                  <TextBlock Text="{Binding GhostCalibrationSummaryText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding GhostApplicabilityText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,2,0,0" />
-                  <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,2,0,0" />
-                </StackPanel>
-              </Border>
-              <TextBlock Text="旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）" FontWeight="Bold" Margin="0,0,0,4" />
-              <TextBlock Text="当前前端只接受测光相机正式 WCS 作为广域见证，不依据它移动赤道仪；大步运动交给 fresh 光谱仪导星相机 WCS + N.I.N.A.。以下 schema 1 参数只供旧运行记录重放和工程诊断，不再作为当前路线的启动阻断项。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
-              <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="schema" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding QhyCoarseCenteringSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
-                <TextBlock Grid.Row="0" Grid.Column="3" Text="单次上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding QhyCoarseMaximumSingleCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="累计含回程 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding QhyCoarseMaximumCumulativeCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="3" Text="总动作次数" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding QhyCoarseMaximumCorrectionAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="最长粗居中 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding QhyCoarseMaximumCenteringMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-              </Grid>
-              <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                <StackPanel>
-                  <TextBlock Text="光谱仪导星相机长曝光解算与 WCS 居中" FontWeight="Bold" Foreground="#7DD3FC" />
-                  <TextBlock Text="曝光档位是带版本的设备参数；每档都由 PHD2 独占光谱仪导星相机拍一张新全帧。若同一指向已有本轮新鲜测光相机/PL3 正式解，光谱仪导星相机优先以它作为真实天空提示；当无机械零位赤道仪的自报坐标偏差超过此处可信范围时，每轮最多用该测光相机真值 Sync 一次并验证读回，绝不反复同步或发 Slew。光谱仪导星相机正式解在像元尺度合理、数值有限且位于提示可达范围内时直接信任；源数和匹配数只作遥测。目标/赤道仪与测光相机的大残差不再误写成两镜光轴差。若目标在画外，插件按该新 WCS 经 N.I.N.A. 做有界分段居中，再用新实报位置和新光谱仪导星相机解验证实际天球响应。" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,6" />
-                  <TextBlock Text="判据分离：2″只约束静态 frame/mount 绑定和小步搜索稳定性；大步实报终点在完整运动预算内即可拍验证帧，光学到位必须由移动后的 fresh 光谱仪导星相机 WCS 证明。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="0,0,0,6" />
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="曝光 preset schema" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding G3PlateSolveExposurePresetSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
-                    <TextBlock Grid.Row="0" Grid.Column="3" Text="曝光 preset ID" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding G3PlateSolveExposurePresetId, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="解算曝光档位 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="4" Text="{Binding G3PlateSolveExposureMillisecondsCsv, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="WCS 门 schema" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding G3WcsCenteringSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
-                    <TextBlock Grid.Row="2" Grid.Column="3" Text="目标画内边距 (px)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding G3TargetInsideFieldMarginPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="单次上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding G3WcsMaximumSingleCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="3" Grid.Column="3" Text="最大半径 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="4" Text="{Binding G3WcsMaximumRadiusArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="累计含回程 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding G3WcsMaximumCumulativeMotionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <StackPanel Grid.Row="4" Grid.Column="3" Grid.ColumnSpan="2" Orientation="Horizontal">
-                      <TextBlock Text="动作" VerticalAlignment="Center"/><TextBox Width="45" Text="{Binding G3WcsMaximumCorrectionAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Text="分钟" VerticalAlignment="Center"/><TextBox Width="45" Text="{Binding G3WcsMaximumCenteringMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    </StackPanel>
-                    <TextBlock Grid.Row="5" Grid.Column="0" Text="单动作最坏时长 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding G3MotionWorstCaseActionSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="5" Grid.Column="3" Text="移动后稳定等待 (s)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="4" Text="{Binding G3MotionPostSlewSettleSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="光谱仪导星相机相对天空提示可信范围 (deg)" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding G3MaximumPlateSolveHintOffsetDegrees, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    <TextBlock Grid.Row="6" Grid.Column="3" Grid.ColumnSpan="2" Text="默认 5°；优先相对新鲜测光相机/PL3 WCS 检验，并作为无机械零位赤道仪的一次性 Sync 触发阈值。不会自动扩大此值，也不授权同等幅度 Slew" Foreground="#94A3B8" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                    <TextBlock Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Text="大步后允许拍 fresh 验证帧的最大实报终点残差 (arcsec)" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                    <TextBox Grid.Row="7" Grid.Column="4" Text="{Binding G3WcsFreshSolveAuthorizationResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                  </Grid>
-                </StackPanel>
-              </Border>
-              <TextBlock Text="光谱仪导星相机直接解算失败后的有界方形螺旋搜索" FontWeight="Bold" Margin="0,0,0,4" />
-              <TextBlock Text="这些数值由所选台站配置方案加载，且不得超过设备标定的运动上限；0 表示未调试并会阻断真实模式。每步均重新检查暂停、安全、屋顶、天气、地平线和赤道仪状态，失败时按小步安全返回搜索原点。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
-              <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="步长 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding G3SearchStepArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="0" Grid.Column="3" Text="最大半径 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding G3SearchMaximumRadiusArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="累计运动 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3SearchMaximumCumulativeArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="3" Text="搜索尝试次数" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding G3SearchMaximumAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="最长搜索 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding G3SearchMaximumMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="2" Grid.Column="3" Text="模式" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="SquareSpiral" IsReadOnly="True" Margin="5,2"/>
-              </Grid>
-              <TextBlock Text="PHD2 名称分域（必须精确匹配，不做模糊匹配）" FontWeight="Bold" Margin="0,0,0,4" />
-              <TextBlock Text="注册表相机名"/><TextBox Text="{Binding Phd2RegistryCameraName, Mode=OneWay}" IsReadOnly="True" Margin="0,2,0,4" />
-              <TextBlock Text="注册表赤道仪名"/><TextBox Text="{Binding Phd2RegistryMountName, Mode=OneWay}" IsReadOnly="True" Margin="0,2,0,4" />
-              <TextBlock Text="JSON-RPC 运行时相机名"/><TextBox Text="{Binding Phd2RuntimeCameraName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="JSON-RPC 运行时赤道仪名"/><TextBox Text="{Binding Phd2RuntimeMountName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="7" Margin="0,2,0,7">
-                <StackPanel>
-                  <CheckBox Content="本轮显式允许 DegradedSupervised 短时有监督科学块" IsChecked="{Binding AllowDegradedSupervisedScience}" />
-                  <TextBlock Text="默认关闭。只有当前锁定动作配置勾选后，有监督降级模式才可继续；它仍不获得无人值守权限，所有后续证据/帧必须标注降级。设备标定方案不能替你勾选。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,4,0,0" />
-                </StackPanel>
-              </Border>
-              <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Grid.Column="0" Text="光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding G3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Column="3" Text="光谱仪导星相机增益 (%)" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding G3GainPercent, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱仪导星相机驱动恢复 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Text="连续全幅之间；本机实测 3000 ms" Foreground="#94A3B8" VerticalAlignment="Center" Margin="5,2"/>
-              </Grid>
-              <Expander Header="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
-                <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
-                  <StackPanel>
-                    <TextBlock Text="只适用于目标身份已由本轮新鲜测光相机 WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光光谱仪导星相机帧即使能用翼部求质心，也永远不能参与对焦；光谱仪导星相机解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />
-                    <CheckBox Content="显式启用超亮目标翼部质心分支" IsChecked="{Binding BrightTargetWingCentroidEnabled}" Margin="0,0,0,6" />
-                    <TextBlock Text="启用前必须填写最短曝光、证据新鲜度和测光相机残差；0 表示未配置并阻断。这里没有目标名、目标坐标、两镜光轴偏移或固定 500 ms。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,0,0,5" />
-                    <Grid>
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
-                      <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                      </Grid.RowDefinitions>
-                      <TextBlock Grid.Row="0" Grid.Column="0" Text="最短光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding BrightTargetMinimumG3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="0" Grid.Column="3" Text="测光相机 WCS 最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyWcsAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="1" Grid.Column="0" Text="光谱仪导星相机帧最长年龄 (min)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BrightTargetMaximumG3FrameAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="1" Grid.Column="3" Text="测光相机目标残差上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding BrightTargetMaximumQhyResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="2" Grid.Column="0" Text="目录坐标差上限 (arcsec)" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding BrightTargetMaximumCatalogMismatchArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="2" Grid.Column="3" Text="C11 焦点置信度下限" VerticalAlignment="Center"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding BrightTargetMinimumC11FocusConfidence, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="3" Grid.Column="0" Text="饱和核最少像素" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding BrightTargetMinimumSaturatedCorePixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="3" Grid.Column="3" Text="饱和核最多像素" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="4" Text="{Binding BrightTargetMaximumSaturatedCorePixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="4" Grid.Column="0" Text="翼部半径 (px)" VerticalAlignment="Center"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding BrightTargetWingRadiusPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="4" Grid.Column="3" Text="翼部最少像素" VerticalAlignment="Center"/><TextBox Grid.Row="4" Grid.Column="4" Text="{Binding BrightTargetMinimumWingPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="5" Grid.Column="0" Text="翼部显著性下限 (sigma)" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding BrightTargetMinimumWingProminenceSigma, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="5" Grid.Column="3" Text="翼部 ADU 上限/饱和" VerticalAlignment="Center"/><TextBox Grid.Row="5" Grid.Column="4" Text="{Binding BrightTargetMaximumWingLevelFraction, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="6" Grid.Column="0" Text="翼部 SNR 下限" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding BrightTargetMinimumWingSignalToNoise, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="6" Grid.Column="3" Text="角向覆盖下限" VerticalAlignment="Center"/><TextBox Grid.Row="6" Grid.Column="4" Text="{Binding BrightTargetMinimumAngularCoverageFraction, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="7" Grid.Column="0" Text="对向翼部平衡下限" VerticalAlignment="Center"/><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding BrightTargetMinimumOpposedWingBalance, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="7" Grid.Column="3" Text="内外质心差上限 (px)" VerticalAlignment="Center"/><TextBox Grid.Row="7" Grid.Column="4" Text="{Binding BrightTargetMaximumWingCentroidDisagreementPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="8" Grid.Column="0" Text="边缘安全距离 (px)" VerticalAlignment="Center"/><TextBox Grid.Row="8" Grid.Column="1" Text="{Binding BrightTargetEdgeMarginPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="8" Grid.Column="3" Text="饱和邻星排除半径 (px)" VerticalAlignment="Center"/><TextBox Grid.Row="8" Grid.Column="4" Text="{Binding BrightTargetNearbySaturatedCoreRadiusPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="9" Grid.Column="0" Text="唯一性比值下限" VerticalAlignment="Center"/><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding BrightTargetMinimumUniquenessRatio, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                      <TextBlock Grid.Row="9" Grid.Column="3" Text="次峰/鬼影比例上限" VerticalAlignment="Center"/><TextBox Grid.Row="9" Grid.Column="4" Text="{Binding BrightTargetMaximumSecondaryPeakRatio, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
-                    </Grid>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="邻场与导星">
+                <ScrollViewer x:Name="AdvancedSettingsCategory4ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <TextBlock Text="PHD2 与目标定位策略详情" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
+                      <StackPanel>
+                        <WrapPanel>
+                          <TextBlock Text="PHD2 校准质量" FontWeight="Bold" Foreground="#FDE68A" Margin="0,0,10,0" />
+                          <TextBlock Text="{Binding Phd2CalibrationGradeText}" FontWeight="Bold" Foreground="#FDBA74" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding Phd2CalibrationPolicyText, StringFormat=策略：{0}}" Foreground="#94A3B8" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding Phd2CalibrationPermissionText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding Phd2CommissioningRouteText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <TextBlock Text="{Binding Phd2CalibrationScaleText}" Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <TextBlock Text="{Binding Phd2CalibrationReasonText}" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,4,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="光谱仪导星相机直接解算失败后的有界方形螺旋搜索" FontWeight="Bold" Margin="0,0,0,4" />
+                    <TextBlock Text="这些数值由所选台站配置方案加载，且不得超过设备标定的运动上限；0 表示未调试并会阻断真实模式。每步均重新检查暂停、安全、屋顶、天气、地平线和赤道仪状态，失败时按小步安全返回搜索原点。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
+                    <WrapPanel Margin="0,0,0,8">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="步长 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3SearchStepArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最大半径 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3SearchMaximumRadiusArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="累计运动 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3SearchMaximumCumulativeArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="搜索尝试次数" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3SearchMaximumAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最长搜索 (min)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3SearchMaximumMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="模式" VerticalAlignment="Center"/>
+                        <TextBox Text="SquareSpiral" IsReadOnly="True" Margin="5,2"/>
+                      </StackPanel>
+                    </WrapPanel>
+                    <TextBlock Text="PHD2 名称分域（必须精确匹配，不做模糊匹配）" FontWeight="Bold" Margin="0,0,0,4" />
+                    <TextBlock Text="注册表相机名"/>
+                    <TextBox Text="{Binding Phd2RegistryCameraName, Mode=OneWay}" IsReadOnly="True" Margin="0,2,0,4" />
+                    <TextBlock Text="注册表赤道仪名"/>
+                    <TextBox Text="{Binding Phd2RegistryMountName, Mode=OneWay}" IsReadOnly="True" Margin="0,2,0,4" />
+                    <TextBlock Text="JSON-RPC 运行时相机名"/>
+                    <TextBox Text="{Binding Phd2RuntimeCameraName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="JSON-RPC 运行时赤道仪名"/>
+                    <TextBox Text="{Binding Phd2RuntimeMountName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="7" Margin="0,2,0,7">
+                      <StackPanel>
+                        <CheckBox Content="本轮显式允许 DegradedSupervised 短时有监督科学块" IsChecked="{Binding AllowDegradedSupervisedScience}" />
+                        <TextBlock Text="默认关闭。只有当前锁定动作配置勾选后，有监督降级模式才可继续；它仍不获得无人值守权限，所有后续证据/帧必须标注降级。设备标定方案不能替你勾选。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,4,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <WrapPanel Margin="0,0,0,8">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="光谱仪导星相机增益 (%)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3GainPercent, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="光谱仪导星相机驱动恢复 (ms)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding G3CameraRecoveryDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <TextBlock MaxWidth="540" TextWrapping="Wrap" Text="连续全幅之间；本机实测 3000 ms" Foreground="#94A3B8" VerticalAlignment="Center" Margin="5,2"/>
+                    </WrapPanel>
                   </StackPanel>
-                </Border>
-              </Expander>
-                </StackPanel>
-              </Expander>
-              <Expander Header="设备身份、哈希与路径（工程核对）" Style="{StaticResource ObservationSettingsExpander}" IsExpanded="False">
-                <StackPanel Margin="0,4,0,0">
-              <CheckBox Content="标定包静态校验已通过（最新完整包默认自动确认；不会绕过运行时硬门）" IsChecked="{Binding RealModeCommissioned}" Margin="0,0,0,6" />
-              <TextBlock Text="设备标定文件"/><TextBox Text="{Binding CommissioningPresetPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="设备标定方案 ID"/><TextBox Text="{Binding CommissioningPresetId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="设备标定方案 SHA-256"/><TextBox Text="{Binding CommissioningPresetSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="硬件指纹 SHA-256"/><TextBox Text="{Binding CommissioningHardwareFingerprintSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="本夜光学设置快照文件"/><TextBox Text="{Binding NightSetupSnapshotPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="本夜光学设置 SHA-256"/><TextBox Text="{Binding NightSetupSnapshotSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="赤道仪 DeviceId"/><TextBox Text="{Binding ExpectedTelescopeId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="光谱相机 DeviceId"/><TextBox Text="{Binding ExpectedAtrCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="PHD2 / 光谱仪导星相机 Profile"/><TextBox Text="{Binding ExpectedG3ProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="PHD2 registry evidence SHA-256"/><TextBox Text="{Binding Phd2ProfileEvidenceSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-              <TextBlock Text="测光相机 service CameraId"/><TextBox Text="{Binding ExpectedQhyCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
-                </StackPanel>
-              </Expander>
-            </StackPanel>
-          </ScrollViewer>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="双相机配对">
+                <ScrollViewer x:Name="AdvancedSettingsCategory5ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                                    <StackPanel>
+                                      <TextBlock Text="广域→狭缝场转换" FontWeight="Bold" Foreground="#7DD3FC" />
+                                      <TextBlock Text="{Binding WideToSlitTransferModeText, StringFormat=WideToSlitTransferMode：{0}}" FontFamily="Consolas" Margin="0,3,0,0" />
+                                      <TextBlock Text="{Binding WideToSlitTransferStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,3,0,0" />
+                                      <Separator Margin="0,7,0,6" />
+                                      <CheckBox Content="光谱仪导星相机一旦解算成功，立即建立测光相机/光谱仪导星相机快速双解算候选"
+                                                IsChecked="{Binding QhyG3FastPairEnabled}" />
+                                      <TextBlock Text="{Binding QhyG3FastPairStatus}" TextWrapping="Wrap" Foreground="#BAE6FD" Margin="0,4,0,6" />
+                                      <WrapPanel Margin="0">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="配对 schema" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="Policy ID" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairPolicyId, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="单张测光相机曝光 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairExposureSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="缓存最长年龄 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairMaximumCachedAgeSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="两帧中点差 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairMaximumMidpointSeparationSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="整组时限 (s)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairMaximumWallClockSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="Mount span (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairMaximumMountSpanArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="候选有效期 (h)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairCandidateValidityHours, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="不确定度上限 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyG3FastPairMaximumCandidateUncertaintyArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <TextBlock MaxWidth="540" Text="单样本永远是 Candidate；需独立聚合/验证后才能激活。" TextWrapping="Wrap" Foreground="#FDE68A" Margin="5,2"/>
+                    </WrapPanel>
+                                    </StackPanel>
+                                  </Border>
+                    <TextBlock Text="旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）" FontWeight="Bold" Margin="0,0,0,4" />
+                    <TextBlock Text="当前前端只接受测光相机正式 WCS 作为广域见证，不依据它移动赤道仪；大步运动交给 fresh 光谱仪导星相机 WCS + N.I.N.A.。以下 schema 1 参数只供旧运行记录重放和工程诊断，不再作为当前路线的启动阻断项。" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,0,0,5" />
+                    <WrapPanel Margin="0,0,0,8">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="schema" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyCoarseCenteringSchemaVersion, Mode=OneWay}" IsReadOnly="True" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="单次上限 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyCoarseMaximumSingleCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="累计含回程 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyCoarseMaximumCumulativeCorrectionArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="总动作次数" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyCoarseMaximumCorrectionAttempts, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最长粗居中 (min)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyCoarseMaximumCenteringMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                    </WrapPanel>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="并行测光">
+                <ScrollViewer x:Name="AdvancedSettingsCategory6ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <TextBlock Text="光谱相机长曝光期间的测光相机并行成像" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <Border Background="#111827" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="9" Margin="0,4,0,0">
+                                      <StackPanel>
+                                        <TextBlock Text="滤镜循环（Filter:秒，逗号分隔）" FontWeight="Bold" Foreground="#7DD3FC" />
+                                        <TextBox Text="{Binding QhyParallelFilterSequenceCsv, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="留空沿用单滤镜测光；行星状星云示例：H:60,O:60,S:60"
+                                                 Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding QhyParallelFilterSequenceStatus}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        <WrapPanel Margin="0,6,0,0">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最少星数" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyMinimumDetectedStars}" Margin="5,0" ToolTip="0 = 仅记录，不阻断"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最低透明度" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyMinimumTransparency}" Margin="5,0" ToolTip="0 = 仅记录，不阻断"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最大饱和比例" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding QhyMaximumSaturatedFraction}" Margin="5,0"/>
+                      </StackPanel>
+                    </WrapPanel>
+                                        <TextBlock Text="测光与光谱曝光并行，各自使用独立相机。测光支路若被设为严格质量门，失败仍会暂停主流程。"
+                                                   Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                      </StackPanel>
+                                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="鬼影辅助">
+                <ScrollViewer x:Name="AdvancedSettingsCategory7ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="确定性鬼影辅助（受设备标定约束）" FontWeight="Bold" Foreground="#7DD3FC" />
+                        <TextBlock Text="只在普通/超亮目标身份定位失败时，使用同一无运动 OFF/ON/OFF 序列中至少两张新鲜、同曝光 OFF 帧。标定、完整策略、提取策略、安装/方向指纹均由 schema 4 preset 及其 SHA-256 绑定；不含目标常量或两镜固定光轴差。"
+                                   Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,6" />
+                        <WrapPanel VerticalAlignment="Center">
+                          <TextBlock Text="GhostAssistanceMode" VerticalAlignment="Center" Margin="0,0,8,0" />
+                          <ComboBox Width="230"
+                                    ItemsSource="{Binding GhostAssistanceModes}"
+                                    SelectedItem="{Binding GhostAssistanceMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    AutomationProperties.Name="鬼影辅助模式" />
+                        </WrapPanel>
+                        <TextBlock Text="Skip（默认）：不运行模板；AutoIfValidElseSkip：模板无效时继续既有长曝光 WCS/N.I.N.A. 居中/小步重解；RequireValid：模板无效时暂停等待处理。"
+                                   Foreground="#FDE68A" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        <TextBlock Text="{Binding GhostCalibrationSummaryText}" Foreground="#E2E8F0" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding GhostApplicabilityText}" Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,2,0,0" />
+                        <TextBlock Text="{Binding GhostDecisionText}" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,2,0,0" />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="亮星翼部">
+                <ScrollViewer x:Name="AdvancedSettingsCategory8ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <TextBlock Text="超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <Border Background="#2B1B12" BorderBrush="#FB923C" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,4,0,0">
+                                      <StackPanel>
+                                        <TextBlock Text="只适用于目标身份已由本轮新鲜测光相机 WCS + 目录坐标锁定、并且 C11/Star Focuser Pro 有独立有效焦点证据的超亮目标。短曝光光谱仪导星相机帧即使能用翼部求质心，也永远不能参与对焦；光谱仪导星相机解算失败本身不会放宽身份、唯一性或运动门。" Foreground="#FED7AA" TextWrapping="Wrap" Margin="0,0,0,6" />
+                                        <CheckBox Content="显式启用超亮目标翼部质心分支" IsChecked="{Binding BrightTargetWingCentroidEnabled}" Margin="0,0,0,6" />
+                                        <TextBlock Text="启用前必须填写最短曝光、证据新鲜度和测光相机残差；0 表示未配置并阻断。这里没有目标名、目标坐标、两镜光轴偏移或固定 500 ms。" Foreground="#FDBA74" TextWrapping="Wrap" Margin="0,0,0,5" />
+                                        <WrapPanel Margin="0">
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="最短光谱仪导星相机曝光 (ms)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumG3ExposureMilliseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="测光相机 WCS 最长年龄 (min)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumQhyWcsAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="光谱仪导星相机帧最长年龄 (min)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumG3FrameAgeMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="测光相机目标残差上限 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumQhyResidualArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="目录坐标差上限 (arcsec)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumCatalogMismatchArcseconds, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="C11 焦点置信度下限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumC11FocusConfidence, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="饱和核最少像素" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumSaturatedCorePixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="饱和核最多像素" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumSaturatedCorePixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="翼部半径 (px)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetWingRadiusPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="翼部最少像素" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumWingPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="翼部显著性下限 (sigma)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumWingProminenceSigma, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="翼部 ADU 上限/饱和" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumWingLevelFraction, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="翼部 SNR 下限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumWingSignalToNoise, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="角向覆盖下限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumAngularCoverageFraction, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="对向翼部平衡下限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumOpposedWingBalance, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="内外质心差上限 (px)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumWingCentroidDisagreementPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="边缘安全距离 (px)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetEdgeMarginPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="饱和邻星排除半径 (px)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetNearbySaturatedCoreRadiusPixels, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="唯一性比值下限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMinimumUniquenessRatio, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                      <StackPanel Width="240" Margin="0,0,12,8">
+                        <TextBlock TextWrapping="Wrap" Text="次峰/鬼影比例上限" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding BrightTargetMaximumSecondaryPeakRatio, UpdateSourceTrigger=PropertyChanged}" Margin="5,2"/>
+                      </StackPanel>
+                    </WrapPanel>
+                                      </StackPanel>
+                                    </Border>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="设备绑定">
+                <ScrollViewer x:Name="AdvancedSettingsCategory9ScrollViewer"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
+                  <StackPanel Margin="8">
+                    <Border Style="{StaticResource PreparationPanelBorder}">
+                      <StackPanel>
+                        <TextBlock Text="台站方案与标定包" FontSize="15" FontWeight="Bold" />
+                        <TextBlock Text="长期保存的设备配置集中在这里维护。加载方案会更新后续运行设置，但不会连接设备或移动机构。"
+                                   Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <StackPanel IsEnabled="{Binding IsTargetPlanEditable}">
+                          <ComboBox ItemsSource="{Binding CommissioningProfiles}" SelectedItem="{Binding SelectedCommissioningProfile, Mode=TwoWay}"
+                                    DisplayMemberPath="DisplayName" HorizontalAlignment="Stretch" />
+                          <TextBlock Text="{Binding SelectedCommissioningProfileDescription}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                          <WrapPanel>
+                            <Button Content="加载所选方案" Command="{Binding ApplySelectedCommissioningProfileCommand}" />
+                            <Button Content="导入完整标定包…" Command="{Binding ImportCommissioningBindingsCommand}" />
+                          </WrapPanel>
+                        </StackPanel>
+                        <Button Content="刷新本地方案列表" Command="{Binding RefreshCommissioningProfilesCommand}" HorizontalAlignment="Left" Margin="0,4,0,0" />
+                        <TextBlock Text="刷新只重新读取本地文件与保存的设备选择，不查找串口、不连接硬件。" Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding CommissioningProfileLoadStatus}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,0" />
+                        <TextBlock Text="{Binding PreparationEvidenceInventorySummary}" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" Margin="0,4,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsDevicePreparationMissing}">
+                      <StackPanel>
+                        <TextBlock Text="期望设备 · 不执行连接" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding DevicePreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <StackPanel IsEnabled="{Binding IsTargetPlanEditable}">
+                          <TextBlock Text="赤道仪（光谱主控）" />
+                          <ComboBox ItemsSource="{Binding TelescopeCandidates}" SelectedItem="{Binding SelectedTelescopeCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="0,3,0,7" />
+                          <TextBlock Text="光谱相机（光谱主控）" />
+                          <ComboBox ItemsSource="{Binding AtrCameraCandidates}" SelectedItem="{Binding SelectedAtrCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="0,3,0,7" />
+                          <TextBlock Text="光谱仪导星相机（PHD2）" />
+                          <ComboBox ItemsSource="{Binding G3CameraCandidates}" SelectedItem="{Binding SelectedG3CameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="0,3,0,7" />
+                          <TextBlock Text="测光相机（测光端）" />
+                          <ComboBox ItemsSource="{Binding QhyCameraCandidates}" SelectedItem="{Binding SelectedQhyCameraCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="0,3,0,7" />
+                        </StackPanel>
+                        <TextBlock Text="同一物理设备只能由指定所有者持有；选择候选不会打开相机。旧版兼容服务不是活动运行中的自动后备。"
+                                   Foreground="{StaticResource PreparationMutedTextBrush}" TextWrapping="Wrap" />
+                        <Button Content="返回启动前核对" Command="{Binding ShowPreparationChecklistCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="设备身份与标定证据" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,4,0,6" />
+                    <Border Background="#10243B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="狭缝轮光学身份复核" FontWeight="Bold" Foreground="#7DD3FC" />
+                        <TextBlock Text="10/20 ms HDR 测量黑色暗孔径的两条物理边；强反光允许过曝，其 FWHM 不再当作缝宽。四槽位必须分别实测；不唯一、超出指纹族或与回报序号不符时，任何入缝与科学曝光都会在运动前阻断。"
+                                   Foreground="#BAE6FD" TextWrapping="Wrap" Margin="0,3,0,4" />
+                        <TextBlock Text="{Binding SlitIdentityStatusText}" Foreground="#FDE68A" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="以下是方案中的原始身份和文件引用。优先使用上方方案加载或标定包导入；手工维护后仍需通过一致性校验，填写完整不代表实机验证通过。" Foreground="#FBBF24" TextWrapping="Wrap" Margin="0,0,0,8" />
+                    <Border Background="#3B2610" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                      <StackPanel>
+                        <TextBlock Text="设备所有权预检" FontWeight="Bold" Foreground="#FCD34D" />
+                        <TextBlock Text="{Binding NinaFilterWheelOwnershipStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <TextBlock Text="{Binding NinaGuiderOwnershipStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <Button Content="重新读取 N.I.N.A. 设备选择" Command="{Binding RefreshProfileOwnershipCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="9,3" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="设备身份、哈希与路径（工程核对）" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <StackPanel Margin="0,4,0,0">
+                    <CheckBox Content="标定包静态校验已通过（最新完整包默认自动确认；不会绕过运行时硬门）" IsChecked="{Binding RealModeCommissioned}" Margin="0,0,0,6" />
+                    <TextBlock Text="设备标定文件"/><TextBox Text="{Binding CommissioningPresetPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="设备标定方案 ID"/><TextBox Text="{Binding CommissioningPresetId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="设备标定方案 SHA-256"/><TextBox Text="{Binding CommissioningPresetSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="硬件指纹 SHA-256"/><TextBox Text="{Binding CommissioningHardwareFingerprintSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="本夜光学设置快照文件"/><TextBox Text="{Binding NightSetupSnapshotPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="本夜光学设置 SHA-256"/><TextBox Text="{Binding NightSetupSnapshotSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="赤道仪 DeviceId"/><TextBox Text="{Binding ExpectedTelescopeId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="光谱相机 DeviceId"/><TextBox Text="{Binding ExpectedAtrCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="PHD2 / 光谱仪导星相机 Profile"/><TextBox Text="{Binding ExpectedG3ProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="PHD2 registry evidence SHA-256"/><TextBox Text="{Binding Phd2ProfileEvidenceSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <TextBlock Text="测光相机 service CameraId"/><TextBox Text="{Binding ExpectedQhyCameraId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                      </StackPanel>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+            </TabControl>
+          </Grid>
         </TabItem>
       </TabControl>
 
@@ -1949,7 +2241,7 @@
             <TextBlock Text="分钟" VerticalAlignment="Center"/><TextBox Width="60" Text="{Binding DurationMinutes}" Margin="4,0"/>
           </WrapPanel>
           <WrapPanel Margin="0,4,0,0">
-            <TextBlock Text="目标类型" VerticalAlignment="Center"/><ComboBox Width="150" ItemsSource="{Binding AvailableTargetObservabilityClasses}" SelectedItem="{Binding TargetObservability}" Margin="4,0,9,0"/>
+            <TextBlock Text="定位策略" VerticalAlignment="Center"/><ComboBox Width="210" ItemsSource="{Binding AvailableTargetObservabilityClasses}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding TargetObservability}" Margin="4,0,9,0"/>
             <TextBlock Text="围墙" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonMinimumDegrees}" Margin="4,0,9,0"/>
             <TextBlock Text="启动裕量" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonStartMarginDegrees}" Margin="4,0,9,0"/>
             <TextBlock Text="继续裕量" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonContinueMarginDegrees}" Margin="4,0"/>

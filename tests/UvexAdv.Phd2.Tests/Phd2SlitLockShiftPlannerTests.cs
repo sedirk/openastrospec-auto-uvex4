@@ -213,17 +213,19 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.False(result.Stage.AutomaticRetryAllowed);
     }
 
-    [Fact]
-    public void CatalogWcsGeometryCanPlanOffSlitShiftWithoutFabricatedTargetFlux()
+    [Theory]
+    [InlineData(Phd2TargetPositionAuthority.CatalogWcsProjection,"CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE")]
+    [InlineData(Phd2TargetPositionAuthority.CatalogWcsRegisteredField,"REGISTERED_CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE")]
+    public void CatalogWcsGeometryCanPlanOffSlitShiftWithoutFabricatedTargetFlux(Phd2TargetPositionAuthority authority,string label)
     {
         var fixture = CreateFixture();
         var measurement = Measurement(
             guide: new Phd2Point(100, 100),
             target: new Phd2Point(200, 200),
             slit: new Phd2Point(215, 200),
-            fluxLabel: "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE",
+            fluxLabel: label,
             fluxMetric: 0,
-            targetPositionAuthority: Phd2TargetPositionAuthority.CatalogWcsProjection);
+            targetPositionAuthority: authority);
 
         var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(
             fixture.Qualification,

@@ -38,7 +38,8 @@ internal static class ObservationPlanFactory
             settings.ObservationExpectedQhyCameraId,
             motion,
             lockedConfiguration?.Environment.RequireSafetyMonitor ?? settings.RequireSafetyMonitor,
-            settings.ObservationTargetObservability);
+            settings.ObservationTargetObservability,
+            settings.ObservationTargetCatalogMetadata);
     }
 
     public static ObservationPlan Create(
@@ -59,7 +60,8 @@ internal static class ObservationPlanFactory
         string expectedQhyCameraId,
         MotionLimits motion,
         bool requireSafetyMonitor,
-        TargetObservabilityClass targetObservability = TargetObservabilityClass.DirectStellar)
+        TargetObservabilityClass targetObservability = TargetObservabilityClass.DirectStellar,
+        TargetCatalogMetadata? catalogMetadata = null)
     {
         var now = DateTimeOffset.UtcNow;
         return new ObservationPlan(
@@ -78,6 +80,7 @@ internal static class ObservationPlanFactory
             expectedG3ProfileName,
             expectedQhyCameraId,
             requireSafetyMonitor,
-            targetObservability);
+            targetObservability,
+            catalogMetadata);
     }
 }

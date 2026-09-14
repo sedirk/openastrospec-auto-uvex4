@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-13.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-15.md) ·
 [SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
 [acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
@@ -34,20 +34,23 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-13 closeout](docs/closeout-2026-09-13.md) covers **0.4.0.191**:
-verified UVEX USB rebinding, SEP-based irregular-star detection, catalogue/companion
-identification, WCS/guide recovery and a main-mirror focus preparation panel.
-The operator reports their first successful manual one-click observations across
-multiple targets: **Mirach, Gamma Cas and Almach** each completed **11/11** on
-.181/.183/.190. All **9 science FITS** were independently checked against their
-recorded hashes, run identities, exposure times and temperatures. These are separate
-supervised runs with repairs between attempts, not one uninterrupted target queue.
-Slit-quality warnings remain; acquisition acceptance is not calibrated spectroscopy,
-precision photometry or unattended certification. The station still used the legacy
-QHY service, **not** the dual-N.I.N.A. worker. **.191 is built and offline-tested,
-but not installed or sky-accepted**; the installed plugin remains .190. Earlier
-successes and failures retain their dated scope in the
-[September 12 report](docs/closeout-2026-09-12.md).
+The [2026-09-15 closeout](docs/closeout-2026-09-15.md) covers **0.4.0.203**, now
+installed and checked in native N.I.N.A. panels. It brings traceable read-only
+workflow nodes, target-acquisition priorities, flatter preparation/settings pages,
+SEP focus recovery, consistent catalogue coordinates and fresh-field registration
+for catalogue-guided slit placement. The final checks passed **2,055 .NET tests,
+66 reduction tests and 45 SEP/transport tests**; 83 UI scenes were rendered and
+reviewed. N.I.N.A. was normally closed after the operator ended the night.
+
+The Star Focuser trial on .199 **verified the original focus position**; it did
+not demonstrate an improved candidate or a universally optimal backlash setting.
+.203's corrected WR152 import and saved-frame registration replay passed, but
+**its complete on-sky catalogue/slit/science route remains unaccepted** after clouds
+ended testing. The [September 13 milestone](docs/closeout-2026-09-13.md)—Mirach,
+Gamma Cas and Almach, separate supervised 11/11 runs on .181/.183/.190, nine
+hash-checked science FITS—retains its original version scope and slit-quality
+warnings. It was not an uninterrupted queue, dual-N.I.N.A. worker acceptance,
+calibrated spectroscopy, precision photometry or unattended certification.
 
 The repository contains two user-facing GPL-3.0-only software products:
 

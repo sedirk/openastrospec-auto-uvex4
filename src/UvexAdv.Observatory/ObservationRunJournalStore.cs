@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace UvexAdv.Observatory;
 
@@ -116,6 +118,8 @@ public sealed class ObservationRunJournalStore
         NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
         Converters = { new JsonStringEnumConverter() },
     };
+
+    private static readonly JsonSerializerOptions LegacyPlanOptions = CreateLegacyPlanOptions();
 
     private readonly SemaphoreSlim pathGate;
 
@@ -626,14 +630,19 @@ public sealed class ObservationRunJournalStore
                 FileShare.ReadWrite | FileShare.Delete,
                 81920,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var manifest = await JsonSerializer.DeserializeAsync<ObservationRunManifest>(stream, JsonOptions, cancellationToken)
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
+            var manifest = document.RootElement.Deserialize<ObservationRunManifest>(JsonOptions);
             if (manifest is null)
             {
                 throw new ObservationRunManifestCorruptException($"Manifest '{ManifestPath}' is empty.");
             }
 
-            ValidateManifest(manifest);
+            // Validate the persisted schema before interpreting omitted optional
+            // fields through today's model. Historical records stay read-only;
+            // mutations below still require the current typed plan hash.
+            var persistedPlan = document.RootElement.TryGetProperty("plan", out var plan) ? plan : (JsonElement?)null;
+            ValidateManifest(manifest, persistedPlan);
             return manifest;
         }
         catch (ObservationRunManifestCorruptException)
@@ -735,7 +744,7 @@ public sealed class ObservationRunJournalStore
         }
     }
 
-    private static void ValidateManifest(ObservationRunManifest manifest)
+    private static void ValidateManifest(ObservationRunManifest manifest, JsonElement? persistedPlan = null)
     {
         if (manifest.SchemaVersion != CurrentSchemaVersion)
         {
@@ -749,7 +758,7 @@ public sealed class ObservationRunJournalStore
         }
 
         if (!string.Equals(manifest.Plan.ObservationRunId, manifest.ObservationRunId, StringComparison.Ordinal) ||
-            !SameHash(ComputeSha256(manifest.Plan), manifest.PlanSha256))
+            !ValidPlanHash(manifest, persistedPlan))
         {
             throw new ObservationRunManifestCorruptException("Manifest plan identity or SHA-256 is invalid.");
         }
@@ -790,6 +799,38 @@ public sealed class ObservationRunJournalStore
         }
 
         foreach (var evidence in manifest.Evidence) ValidateEvidence(evidence);
+    }
+
+    private static bool ValidPlanHash(ObservationRunManifest manifest, JsonElement? persistedPlan)
+    {
+        if (SameHash(ComputeSha256(manifest.Plan), manifest.PlanSha256)) return true;
+
+        // Before catalogue strategy metadata was introduced, schema-1 plans
+        // ended at targetObservability. Re-serializing one with today's model
+        // appends catalogMetadata:null and produces a different hash despite
+        // unchanged source bytes. Accept only that known, absent-field shape:
+        // the exact typed legacy projection must reproduce the ORIGINAL hash
+        // and exactly describe the persisted JSON. Explicit null/new metadata, unknown fields, altered
+        // values and omitted safety/motion fields cannot take this path.
+        if (persistedPlan is not { ValueKind: JsonValueKind.Object } raw ||
+            raw.TryGetProperty("catalogMetadata", out _) || manifest.Plan.CatalogMetadata is not null) return false;
+        var legacyBytes = JsonSerializer.SerializeToUtf8Bytes(manifest.Plan, LegacyPlanOptions);
+        return SameHash(Convert.ToHexString(SHA256.HashData(legacyBytes)), manifest.PlanSha256) &&
+            JsonNode.DeepEquals(JsonNode.Parse(raw.GetRawText()), JsonNode.Parse(legacyBytes));
+    }
+
+    private static JsonSerializerOptions CreateLegacyPlanOptions()
+    {
+        // Keep the original typed converters, especially DateTimeOffset:
+        // serializing a JsonNode instead would escape the timezone '+' as
+        // \u002B and cannot reproduce a historical typed-plan hash.
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(info =>
+        {
+            if (info.Type == typeof(ObservationPlan))
+                info.Properties.Remove(info.Properties.Single(property => property.Name == "catalogMetadata"));
+        });
+        return new JsonSerializerOptions(JsonOptions) { TypeInfoResolver = resolver };
     }
 
     private static ObservationRunLockedMetadata NormalizeLockedMetadata(ObservationRunLockedMetadata metadata) =>

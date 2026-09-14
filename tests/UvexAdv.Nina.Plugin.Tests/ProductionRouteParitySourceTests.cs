@@ -14,6 +14,23 @@ public sealed class ProductionRouteParitySourceTests
         "UvexTargetObservationContainer.cs");
 
     [Fact]
+    public void AutomaticTargetStrategyIsSharedAndMetadataCannotBeOverwrittenByBindings()
+    {
+        var factory = ReadSource("ObservationPlanFactory.cs");
+        var template = ReadSource("Templates.xaml");
+        Assert.Contains("settings.ObservationTargetCatalogMetadata", factory, StringComparison.Ordinal);
+        Assert.Contains("CatalogMetadata);", SequenceSource, StringComparison.Ordinal);
+        Assert.Contains("CatalogMetadata = copy.CatalogMetadata", SequenceSource, StringComparison.Ordinal);
+        Assert.Contains("settings.ObservationTargetCatalogMetadata = result.CatalogMetadata", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("settings.ObservationTargetCatalogMetadata = null", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("nameof(UvexPluginSettings.ObservationTargetCatalogMetadataJson) or", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("new(\"use-planetarium-strategy\", usePlanetariumStrategyCommand", DockableSource, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding UsePlanetariumStrategyCommand}\"", template, StringComparison.Ordinal);
+        Assert.Contains("TargetStrategyRuntimeSummary", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteTargetBranch", DockableSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SepMainFocusUsesVisibleCommandAndSharedObservationOwnership()
     {
         var viewModel = ReadSource("SepMainFocusViewModel.cs");

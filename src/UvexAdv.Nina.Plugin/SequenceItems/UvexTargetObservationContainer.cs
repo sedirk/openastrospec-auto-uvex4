@@ -73,6 +73,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         TargetName = copy.TargetName;
         CatalogId = copy.CatalogId;
         TargetObservability = copy.TargetObservability;
+        CatalogMetadata = copy.CatalogMetadata;
         RightAscensionDegrees = copy.RightAscensionDegrees;
         DeclinationDegrees = copy.DeclinationDegrees;
         Target.PositionAngle = copy.Target.PositionAngle;
@@ -133,9 +134,12 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     [JsonProperty]
     public TargetObservabilityClass TargetObservability { get; set; }
 
+    [JsonProperty]
+    public TargetCatalogMetadata? CatalogMetadata { get; set; }
+
     [JsonIgnore]
-    public IReadOnlyList<TargetObservabilityClass> AvailableTargetObservabilityClasses { get; } =
-        Enum.GetValues<TargetObservabilityClass>();
+    public IReadOnlyList<TargetObservabilityChoice> AvailableTargetObservabilityClasses =>
+        ObservationDockable.TargetObservabilityChoices;
 
     [JsonProperty]
     public double RightAscensionDegrees
@@ -368,7 +372,8 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
             ExpectedQhyCameraId,
             motion,
             lockedConfiguration?.Environment.RequireSafetyMonitor ?? settings.RequireSafetyMonitor,
-            TargetObservability);
+            TargetObservability,
+            CatalogMetadata);
     }
 
     private void LoadDefaults()
@@ -376,6 +381,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         TargetName = settings.ObservationTargetName;
         CatalogId = settings.ObservationCatalogId;
         TargetObservability = settings.ObservationTargetObservability;
+        CatalogMetadata = settings.ObservationTargetCatalogMetadata;
         RightAscensionDegrees = settings.ObservationRightAscensionDegrees;
         DeclinationDegrees = settings.ObservationDeclinationDegrees;
         DurationMinutes = settings.ObservationDurationMinutes;

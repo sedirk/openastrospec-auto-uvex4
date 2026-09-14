@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using UvexAdv.Observatory;
 using UvexAdv.Qhy.Core;
 using Xunit;
@@ -84,12 +85,33 @@ public sealed class PhotometryUiPresentationTests
     [Fact]
     public void CameraTabsUseRolesWhileBindingsKeepTheirStableNames()
     {
-        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
-        Assert.Contains("Header=\"测光相机 · 定位\"", xaml);
-        Assert.Contains("Header=\"光谱仪导星相机\"", xaml);
-        Assert.Contains("Header=\"光谱相机 · 光谱\"", xaml);
-        Assert.Contains("{Binding QhyPreviewImage}", xaml);
-        Assert.Contains("{Binding G3PreviewImage}", xaml);
-        Assert.Contains("{Binding AtrPreviewImage}", xaml);
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var observation = Assert.Single(document.Descendants(presentation + "DataTemplate"),
+            template => (string?)template.Attribute(xaml + "Key") == "UvexAdv.Nina.Plugin.ObservationDockable_Dockable");
+        var liveImages = Assert.Single(observation.Descendants(presentation + "TabItem"),
+            tab => (string?)tab.Attribute("Header") == "实时图像");
+        var cameraTabs = Assert.Single(liveImages.Elements(presentation + "TabControl"))
+            .Elements(presentation + "TabItem").ToArray();
+
+        foreach (var (binding, label) in new[]
+        {
+            ("{Binding QhyPreviewImage}", "测光相机 · 定位"),
+            ("{Binding G3PreviewImage}", "光谱仪导星相机"),
+            ("{Binding AtrPreviewImage}", "光谱相机 · 光谱"),
+        })
+        {
+            // Identify the actual camera page by its stable production image binding,
+            // not by matching an unrelated role label elsewhere in the template.
+            var tab = Assert.Single(cameraTabs, candidate => candidate.Descendants()
+                .Any(element => element.Name.LocalName == "EmbeddedImageViewer" &&
+                    (string?)element.Attribute("PreviewImage") == binding));
+            var headerLabels = tab.Elements(presentation + "TabItem.Header")
+                .Descendants(presentation + "TextBlock")
+                .Select(text => (string?)text.Attribute("Text"))
+                .Append((string?)tab.Attribute("Header"));
+            Assert.Contains(label, headerLabels);
+        }
     }
 }

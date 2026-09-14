@@ -1,16 +1,142 @@
 using UvexAdv.Nina.Plugin;
 using UvexAdv.Nina.Plugin.UiHarness;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScenarioCatalogTests
 {
+    [Theory]
+    [InlineData("workflow-idle")]
+    [InlineData("workflow-running")]
+    [InlineData("workflow-fallback")]
+    [InlineData("workflow-blocked")]
+    [InlineData("workflow-cancelling")]
+    [InlineData("workflow-cancelled")]
+    [InlineData("workflow-completed")]
+    [InlineData("workflow-narrow")]
+    [InlineData("workflow-short")]
+    public void WorkflowHeaderComesFromTheSameReplayAsItsNodes(string scenario)
+    {
+        var vm = ScenarioCatalog.Select(scenario).Single().ViewModel;
+        var graph = vm.Workflow;
+        var stages = graph.Nodes.Where(node => node.Kind == ObservationWorkflowNodeKind.MainStage).ToArray();
+        var current = stages.FirstOrDefault(node => node.IsCurrent);
+        var completed = stages.Count(node => node.StateKind == ObservationWorkflowNodeState.Passed);
+        Assert.True(vm.IsSimulationMode);
+        Assert.Contains("模拟", vm.ModeText);
+        Assert.Contains("模拟", vm.RealModeStatusSummary);
+        Assert.Equal(completed * 100d / 11, vm.ProgressPercent);
+        Assert.Contains($"{completed}/11", vm.ProgressSummary);
+        if (current is not null) Assert.Equal(current.Label, vm.CurrentStageText);
+        if (graph.RunId is not null) Assert.Equal("simulator", graph.RunAdapter);
+        if (graph.RunState is ObservationRunState.Cancelled or ObservationRunState.Completed)
+        {
+            Assert.False(vm.IsRunActive);
+            Assert.Equal("不再自动执行", vm.NextStageText);
+        }
+    }
+
+    [Fact]
+    public void TargetStrategiesDistinguishCatalogueRecommendationRuntimeAndUnavailableMetadata()
+    {
+        var automatic = ScenarioCatalog.Select("target-strategy-auto").Single().ViewModel;
+        Assert.Equal(TargetObservabilityClass.AutoFromPlanetarium, automatic.TargetObservability);
+        Assert.Equal(6, automatic.AvailableTargetObservabilityClasses.Count);
+        Assert.Equal(TargetObservabilityClass.AutoFromPlanetarium, automatic.AvailableTargetObservabilityClasses.Last().Value);
+        Assert.Equal("根据星图自动", automatic.AvailableTargetObservabilityClasses.Last().Label);
+        Assert.Contains("double star", automatic.TargetStrategyMetadataSummary);
+        Assert.Contains("尚未执行", automatic.TargetStrategyRuntimeSummary);
+        Assert.True(automatic.UsePlanetariumStrategyCommand.CanExecute(null));
+
+        var unknown = ScenarioCatalog.Select("target-strategy-unknown").Single().ViewModel;
+        Assert.Contains("不推断为暗目标", unknown.TargetObservabilitySummary);
+        Assert.Contains("旧资料不会沿用", unknown.TargetStrategyMetadataSummary);
+        var catalogue = ScenarioCatalog.Select("target-strategy-catalogue").Single().ViewModel;
+        Assert.Contains("行星状星云", catalogue.TargetObservabilitySummary);
+        Assert.StartsWith("1. 正式 WCS", catalogue.TargetStrategyPrioritySummary);
+
+        var fallback = ScenarioCatalog.Select("target-strategy-fallback").Single().ViewModel;
+        Assert.Contains("原因", fallback.TargetStrategyRuntimeSummary);
+        Assert.Contains("未宣称精确入缝", fallback.TargetStrategyRuntimeSummary);
+        Assert.Contains("本轮同帧解算有效", fallback.TargetStrategyAttemptHistory);
+        Assert.Equal("#86EFAC", fallback.TargetStrategyRuntimeColor);
+        Assert.Equal(0, fallback.SelectedWorkspaceTabIndex);
+        var busy = ScenarioCatalog.Select("target-strategy-busy").Single().ViewModel;
+        Assert.False(busy.IsTargetPlanEditable);
+        Assert.False(busy.UsePlanetariumStrategyCommand.CanExecute(null));
+        Assert.False(busy.ImportFromPlanetariumCommand.CanExecute(null));
+        Assert.Contains("第 2/3 张", busy.TargetStrategyRuntimeSummary);
+        Assert.Contains("尚未通过", busy.TargetStrategyAttemptHistory);
+        Assert.Equal("#7DD3FC", busy.TargetStrategyRuntimeColor);
+        Assert.True(ScenarioCatalog.Select("target-strategy-narrow-bottom").Single().ExercisePlanScrolling);
+    }
+
+    [Fact]
+    public void FocusScenariosExposeInvalidBusyCancelledAndNativeStatesWithoutDevices()
+    {
+        var invalid = Assert.IsType<MainFocusMock>(ScenarioCatalog.Select("main-focus-invalid").Single().AlternateViewModel);
+        Assert.False(invalid.StartCommand.CanExecute(null));
+        Assert.Contains("最小、最大", invalid.AvailabilityMessage);
+        var cancelling = Assert.IsType<MainFocusMock>(ScenarioCatalog.Select("main-focus-cancelling").Single().AlternateViewModel);
+        Assert.False(cancelling.StartCommand.CanExecute(null));
+        Assert.True(cancelling.CancelCommand.CanExecute(null));
+        var native = ScenarioCatalog.Select("main-focus-native").Single();
+        Assert.Equal("UvexAdv.Nina.Plugin.SepMainFocusViewModel_Dockable", native.TemplateKey);
+        Assert.Equal(1, ScenarioCatalog.Select("main-focus-embedded").Single().ViewModel.SelectedManualTabIndex);
+    }
+
+    [Fact]
+    public void PreparationFixturesIncludeTargetAndSlitIssuesAndLockBusyEdits()
+    {
+        var missing = ScenarioCatalog.Select("preparation-missing").Single().ViewModel;
+        Assert.Equal(3, missing.SelectedWorkspaceTabIndex);
+        Assert.Equal(0, missing.SelectedPreparationTabIndex);
+        Assert.Equal(8, missing.AutomaticPreparationIssueCount);
+        Assert.Equal(10, missing.PreparationChecklistIssueCount);
+        Assert.Contains(missing.PreparationChecklistIssues, issue => issue.Contains("期望狭缝", StringComparison.Ordinal));
+        Assert.Contains(missing.PreparationChecklistIssues, issue => issue.Contains("设备身份", StringComparison.Ordinal));
+        var ready = ScenarioCatalog.Select("preparation-ready").Single().ViewModel;
+        Assert.Equal(0, ready.PreparationChecklistIssueCount);
+        Assert.Empty(ready.PreparationChecklistIssues);
+        Assert.Contains("尚未检查设备连接", ready.AutomaticPreparationSummary);
+        Assert.Contains("不代表实时设备已经就绪", ready.AutomationPolicyPreparationStatus);
+        Assert.Contains("不是实时位置或到位证明", ready.PreparationSlitStatus);
+        Assert.Contains("已选择本夜配置：", ready.NightSetupPreparationStatus);
+        Assert.Contains("3 项待处理", ScenarioCatalog.Select("preparation-default").Single().ViewModel.AutomaticPreparationSummary);
+        Assert.Contains("准备草稿不能代替锁定配置", missing.NightSetupPreparationStatus);
+        var night = ScenarioCatalog.Select("preparation-night").Single().ViewModel;
+        Assert.Equal(1, night.SelectedPreparationTabIndex);
+        Assert.True(night.IsTargetPlanEditable);
+        Assert.True(night.CreateNightSetupDraftCommand.CanExecute(null));
+        var busy = ScenarioCatalog.Select("preparation-busy").Single().ViewModel;
+        Assert.False(busy.IsTargetPlanEditable);
+        Assert.False(busy.CreateNightSetupDraftCommand.CanExecute(null));
+        Assert.False(busy.SelectNightSetupSnapshotCommand.CanExecute(null));
+        Assert.True(busy.ShowPreparationChecklistCommand.CanExecute(null));
+        Assert.True(busy.ShowDeviceBindingsSettingsCommand.CanExecute(null));
+        Assert.True(busy.ShowSafetySettingsCommand.CanExecute(null));
+        Assert.True(ScenarioCatalog.Select("preparation-narrow-bottom").Single().ExercisePreparationScrolling);
+        Assert.True(ScenarioCatalog.Select("preparation-night-narrow-bottom").Single().ExercisePreparationScrolling);
+        Assert.Equal("en-US", ScenarioCatalog.Select("preparation-en").Single().Culture.Name);
+        Assert.Equal("en-US", ScenarioCatalog.Select("preparation-night-en").Single().Culture.Name);
+        foreach (var scenario in ScenarioCatalog.Select(null).Where(item => item.ViewModel.SelectedWorkspaceTabIndex == 6))
+            Assert.Equal(scenario.ViewModel.AdvancedCategoryIndex, scenario.ViewModel.SelectedAdvancedCategoryIndex);
+    }
+
     [Fact]
     public void Catalog_CoversRequiredOperatorAndAdvancedSettingsStates()
     {
         var scenarios = ScenarioCatalog.Select(null);
 
-        Assert.Equal(["idle", "main-focus", "main-focus-narrow", "plan-target", "plan-budget", "plan-budget-narrow", "plan-budget-invalid", "plan-budget-locked", "plan-budget-en", "plan-target-short", "plan-target-short-bottom", "plan-budget-short", "plan-budget-short-bottom", "plan-budget-small-bottom", "plan-budget-short-bottom-en", "uvex-manual", "startup-requirements", "running", "recovering", "atr-manual", "atr-live", "atr-levels", "atr-narrow", "failure", "failure-en", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced", "photometry-off", "photometry-worker", "photometry-worker-en", "photometry-master", "photometry-master-en", "photometry-worker-running", "photometry-worker-pausing", "photometry-worker-narrow", "photometry-help"], scenarios.Select(item => item.Name));
+        string[] existing = ["idle", "main-focus", "main-focus-narrow", "main-focus-invalid", "main-focus-busy", "main-focus-curve", "main-focus-cancelling", "main-focus-native", "main-focus-embedded", "plan-target", "target-strategy-auto", "target-strategy-unknown", "target-strategy-catalogue", "target-strategy-fallback", "target-strategy-busy", "target-strategy-narrow-bottom", "plan-budget", "plan-budget-narrow", "plan-budget-invalid", "plan-budget-locked", "plan-budget-en", "plan-target-short", "plan-target-short-bottom", "plan-budget-short", "plan-budget-short-bottom", "plan-budget-small-bottom", "plan-budget-short-bottom-en", "uvex-manual", "startup-requirements", "running", "recovering", "atr-manual", "atr-live", "atr-levels", "atr-narrow", "failure", "failure-en", "phd2-degraded", "phd2-direct-target", "ghost-assistance", "qhy-g3-fast-pair", "narrow", "advanced", "photometry-off", "photometry-worker", "photometry-worker-en", "photometry-master", "photometry-master-en", "photometry-worker-running", "photometry-worker-pausing", "photometry-worker-narrow", "photometry-help"];
+        string[] added = ["workflow-idle", "workflow-running", "workflow-fallback", "workflow-blocked", "workflow-cancelling", "workflow-cancelled", "workflow-completed", "workflow-narrow", "workflow-short", "advanced-narrow"];
+        string[] preparation = ["preparation-default", "preparation-missing", "preparation-ready", "preparation-night", "preparation-busy",
+            "preparation-en", "preparation-night-en", "preparation-narrow", "preparation-narrow-bottom", "preparation-night-narrow", "preparation-night-narrow-bottom"];
+        var expected = existing.Concat(added).Concat(preparation).Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
+        Assert.Equal(expected.Length, scenarios.Count);
+        Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
+        Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal("zh-CN", scenarios.Single(item => item.Name == "failure").Culture.Name);
         Assert.Equal("en-US", scenarios.Single(item => item.Name == "failure-en").Culture.Name);
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);
@@ -43,6 +169,7 @@ public sealed class ScenarioCatalogTests
         Assert.Equal(6, advanced.SelectedWorkspaceTabIndex);
         Assert.True(advanced.BrightTargetWingCentroidEnabled);
         Assert.True(advanced.BrightTargetMinimumG3ExposureMilliseconds > 0);
+        Assert.Equal(8, advanced.AdvancedCategoryIndex);
         var degraded = scenarios.Single(item => item.Name == "phd2-degraded").ViewModel;
         Assert.Equal("DegradedSupervised", degraded.Phd2CalibrationGradeText);
         Assert.Contains("exact-lock：是", degraded.Phd2CalibrationPermissionText, StringComparison.Ordinal);
@@ -64,6 +191,7 @@ public sealed class ScenarioCatalogTests
         var fastPair = scenarios.Single(item => item.Name == "qhy-g3-fast-pair").ViewModel;
         Assert.True(fastPair.QhyG3FastPairEnabled);
         Assert.Equal(6, fastPair.SelectedWorkspaceTabIndex);
+        Assert.Equal(5, fastPair.AdvancedCategoryIndex);
         Assert.Contains("0 次赤道仪命令", fastPair.QhyG3FastPairStatus, StringComparison.Ordinal);
         Assert.Contains("Candidate", fastPair.WideToSlitTransferStatus, StringComparison.Ordinal);
     }

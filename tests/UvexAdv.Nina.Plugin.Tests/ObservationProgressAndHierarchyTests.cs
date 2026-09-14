@@ -49,14 +49,15 @@ public sealed class ObservationProgressAndHierarchyTests
     }
 
     [Fact]
-    public void AdvancedSettingsSeparatesRoutineAndEngineeringSections()
+    public void AdvancedSettingsUsesFlatDiscoverableCategories()
     {
         Assert.Contains("Text=\"运行准入与数据归档\"", Xaml, StringComparison.Ordinal);
-        Assert.Contains("Text=\"目标获取、入缝与导星\"", Xaml, StringComparison.Ordinal);
-        Assert.Contains("Text=\"并行观测与站点\"", Xaml, StringComparison.Ordinal);
-        Assert.Contains("Text=\"设备身份与标定证据\"", Xaml, StringComparison.Ordinal);
-        Assert.Contains("Header=\"目标获取算法与恢复预算（工程参数）\"", Xaml, StringComparison.Ordinal);
-        Assert.Contains("Header=\"设备身份、哈希与路径（工程核对）\"", Xaml, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"AdvancedSettingsSections\"", Xaml, StringComparison.Ordinal);
+        foreach (var category in new[] { "运行与归档", "后台接口", "站点与模拟", "解算与居中", "邻场与导星",
+            "双相机配对", "并行测光", "鬼影辅助", "亮星翼部", "设备绑定" })
+            Assert.Contains($"Header=\"{category}\"", Xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Header=\"目标获取算法与恢复预算（工程参数）\"", Xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Header=\"设备身份、哈希与路径（工程核对）\"", Xaml, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(Xaml, "Text=\"\\{Binding GhostCalibrationSummaryText\\}\"", RegexOptions.CultureInvariant).Cast<Match>());
     }
 

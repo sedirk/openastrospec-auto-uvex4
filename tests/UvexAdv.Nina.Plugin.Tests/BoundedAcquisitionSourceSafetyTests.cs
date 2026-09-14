@@ -1,3 +1,4 @@
+using UvexAdv.Observatory;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
@@ -217,7 +218,11 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<G3FieldState> CaptureAndAnalyzeG3Async(",
             "private static bool FocusFailureMayBeSaturationDominated(");
 
-        Assert.Contains("G3_STAR_FIELD_SPARSE_VALID_EXPOSURE", recoverable, StringComparison.Ordinal);
+        Assert.Contains("TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(gate)", recoverable, StringComparison.Ordinal);
+        Assert.True(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
+            GateResult.Unknown("G3_STAR_FIELD_SPARSE_VALID_EXPOSURE", "fresh structured evidence")));
+        Assert.False(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
+            GateResult.Unknown("G3_FOCUS_UNCONFIRMED", "local morphology alone is not recovery authority")));
         Assert.Contains("solveLadderHasStructuredContent || targetMayBeInvisible", recoverable, StringComparison.Ordinal);
         Assert.DoesNotContain("fullEnvironmentSparseRecoveryAuthorized", recoverable, StringComparison.Ordinal);
         Assert.Contains("focusMeasurement.Gate.Code.StartsWith(\"G3_FOCUS_\"", recoverable, StringComparison.Ordinal);
@@ -227,8 +232,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("var targetMayBeInvisible = UsesCatalogWcsTargetAuthority(context);", analysis, StringComparison.Ordinal);
         Assert.Contains("the local morphology heuristic accepted", analysis, StringComparison.Ordinal);
         Assert.Contains("That heuristic is diagnostic only", analysis, StringComparison.Ordinal);
-        Assert.Contains("Formal target-inside PL3 WCS remained mount-bound", analysis, StringComparison.Ordinal);
-        Assert.Contains("heuristic is useful telemetry", analysis, StringComparison.Ordinal);
+        Assert.Contains("IdentifyTargetWithStrategyAsync(context,", analysis, StringComparison.Ordinal);
+        Assert.Contains("ValidateTrustedG3SolveCarryForwardAsync(", analysis, StringComparison.Ordinal);
+        var freshTrust = analysis.IndexOf("var plausibility = ValidateG3PlateSolvePlausibility(", StringComparison.Ordinal);
+        var fallback = analysis.IndexOf("var identified = await IdentifyTargetWithStrategyAsync(", StringComparison.Ordinal);
+        Assert.True(freshTrust >= 0 && fallback > freshTrust);
+        Assert.Contains("if (plausibility.Disposition != GateDisposition.Passed)", analysis, StringComparison.Ordinal);
         Assert.Contains("TargetIdentification.FromCatalogWcs", analysis, StringComparison.Ordinal);
         Assert.Contains("pairAnalysis.Gate.Disposition == GateDisposition.Passed", recoverable, StringComparison.Ordinal);
     }

@@ -20,6 +20,11 @@ public static class Program
 
         try
         {
+            AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+            {
+                if (e.Exception is System.IO.FileNotFoundException or TypeLoadException)
+                    Console.Error.WriteLine("UI dependency: " + e.Exception.Message);
+            };
             var scenarios = ScenarioCatalog.Select(options.Scenario);
             var results = ScreenshotRenderer.RenderAll(scenarios, options.OutputDirectory);
             ScreenshotManifest.Write(options.OutputDirectory, results);

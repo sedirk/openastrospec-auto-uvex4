@@ -16,6 +16,8 @@
     <Reference Include="ASCOM.Exceptions" HintPath="$(NinaInstallDir)\ASCOM.Exceptions.dll" Private="true" />
     <Reference Include="System.ComponentModel.Composition" HintPath="$(NinaInstallDir)\System.ComponentModel.Composition.dll" Private="true" />
     <Reference Include="Accord" HintPath="$(NinaInstallDir)\Accord.dll" Private="true" />
+    <Reference Include="AvalonDock" HintPath="$(NinaInstallDir)\AvalonDock.dll" Private="true" />
+    <Reference Include="OxyPlot" HintPath="$(NinaInstallDir)\OxyPlot.dll" Private="true" />
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="true" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="true" />
     <Reference Include="NINA.Equipment" HintPath="$(NinaInstallDir)\NINA.Equipment.dll" Private="true" />
@@ -85,6 +87,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\ObservationAutomationBridge.cs"
           Link="Sources\ObservationAutomationBridge.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\NativeDockNavigation.cs"
+          Link="Sources\NativeDockNavigation.cs"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\invoke-model-frontend-closed-loop.ps1"
           Link="Sources\invoke-model-frontend-closed-loop.ps1"

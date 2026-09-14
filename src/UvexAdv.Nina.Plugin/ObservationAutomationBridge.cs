@@ -73,7 +73,23 @@ internal sealed record ObservationAutomationSnapshot(
     bool SupervisedSlitQualityWarningAuthorized = false,
     bool MainFocusBusy = false,
     string MainFocusStatus = "",
-    string MainFocusEvidenceDirectory = "");
+    string MainFocusEvidenceDirectory = "",
+    string TargetStrategySelection = "",
+    string TargetStrategySummary = "",
+    string TargetStrategyPriority = "",
+    string TargetStrategyMetadata = "",
+    string TargetStrategyRuntime = "",
+    int SelectedWorkspaceTabIndex = 0,
+    int SelectedPlanTabIndex = 0,
+    int SelectedPreviewTabIndex = 0,
+    int SelectedManualTabIndex = 0,
+    bool ManualAtrInspectionExpanded = false,
+    string CalibrationLibraryNavigationOutcome = "NotRequested",
+    bool CalibrationLibrarySelected = false,
+    string ObservationPanelNavigationOutcome = "NotRequested",
+    bool ObservationPanelSelected = false,
+    ObservationWorkflowGraph? Workflow = null,
+    UvexAdv.Observatory.SepMainFocusOptions? MainFocusOptions = null);
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,
@@ -147,7 +163,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
     };
 
     private readonly Func<long, ObservationAutomationSnapshot> snapshotFactory;
-    private readonly Func<string, string?, ObservationTargetDraft?, ObservationAutomationInvocationResult> commandInvoker;
+    private readonly Func<string, string?, ObservationTargetDraft?, SepFocusSamplingDraft?, ObservationAutomationInvocationResult> commandInvoker;
     private readonly Action<ObservationAutomationActivity> activitySink;
     private readonly CancellationTokenSource lifetime = new();
     private readonly object revisionSync = new();
@@ -166,7 +182,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
 
     public ObservationAutomationBridge(
         Func<long, ObservationAutomationSnapshot> snapshotFactory,
-        Func<string, string?, ObservationTargetDraft?, ObservationAutomationInvocationResult> commandInvoker,
+        Func<string, string?, ObservationTargetDraft?, SepFocusSamplingDraft?, ObservationAutomationInvocationResult> commandInvoker,
         Action<ObservationAutomationActivity> activitySink,
         bool initiallyEnabled,
         Func<bool>? roleAllowed = null)
@@ -342,7 +358,7 @@ internal sealed class ObservationAutomationBridge : IDisposable
                             false);
                     }
 
-                    return commandInvoker(command, request.OperatorAttestation, request.TargetDraft);
+                    return commandInvoker(command, request.OperatorAttestation, request.TargetDraft, request.FocusSampling);
                 }).Task.ConfigureAwait(false);
             }
         }
@@ -521,5 +537,6 @@ internal sealed class ObservationAutomationBridge : IDisposable
         ObservationTargetDraft? TargetDraft,
         long? ExpectedRevision,
         long? AfterRevision,
-        int? TimeoutMilliseconds);
+        int? TimeoutMilliseconds,
+        SepFocusSamplingDraft? FocusSampling = null);
 }

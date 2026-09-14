@@ -16,6 +16,9 @@ public sealed class ObservationRunCoordinatorTests
         Assert.Equal(ObservationRunState.Completed, coordinator.Snapshot.State);
         Assert.Equal(ObservationRunCoordinator.Stages, runner.Executed);
         Assert.Equal(0, runner.PausedCount);
+        Assert.Equal(ObservationRunCoordinator.Stages,
+            coordinator.Snapshot.RecentEvents.Where(item => item.Code == "STAGE_COMPLETED")
+                .Select(item => item.Stage!.Value));
     }
 
     [Fact]
@@ -95,6 +98,8 @@ public sealed class ObservationRunCoordinatorTests
         await WaitForStateAsync(coordinator, ObservationRunState.PausedNeedsAttention);
         Assert.Equal(ObservationStage.CoarseCenter, coordinator.Snapshot.CurrentStage);
         Assert.Contains("test failure", coordinator.Snapshot.PauseReason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(coordinator.Snapshot.RecentEvents,
+            item => item.Stage == ObservationStage.CoarseCenter && item.Code == "STAGE_COMPLETED");
 
         Assert.True(coordinator.Resume());
         await run;
@@ -102,6 +107,8 @@ public sealed class ObservationRunCoordinatorTests
         Assert.Equal(ObservationRunState.Completed, coordinator.Snapshot.State);
         Assert.Equal(2, runner.Executed.Count(stage => stage == ObservationStage.CoarseCenter));
         Assert.Equal(1, runner.RevalidationCount);
+        Assert.Single(coordinator.Snapshot.RecentEvents,
+            item => item.Stage == ObservationStage.CoarseCenter && item.Code == "STAGE_COMPLETED");
     }
 
     [Fact]

@@ -97,6 +97,12 @@ internal sealed class UvexPluginSettings
     public string ObservationTargetImportedUtc { get => GetString(nameof(ObservationTargetImportedUtc), string.Empty); set => values.SetValueString(nameof(ObservationTargetImportedUtc), value); }
     public string ObservationTargetImportDetails { get => GetString(nameof(ObservationTargetImportDetails), "尚未从构图助手或第三方星图导入。当前目标字段可手工编辑。"); set => values.SetValueString(nameof(ObservationTargetImportDetails), value); }
     public double ObservationTargetPositionAngleDegrees { get => values.GetValueDouble(nameof(ObservationTargetPositionAngleDegrees), double.NaN); set => values.SetValueDouble(nameof(ObservationTargetPositionAngleDegrees), value); }
+    public string ObservationTargetCatalogMetadataJson { get => GetString(nameof(ObservationTargetCatalogMetadataJson), string.Empty); set => values.SetValueString(nameof(ObservationTargetCatalogMetadataJson), value); }
+    public TargetCatalogMetadata? ObservationTargetCatalogMetadata
+    {
+        get => TargetCatalogMetadataSerialization.Read(ObservationTargetCatalogMetadataJson);
+        set => ObservationTargetCatalogMetadataJson = TargetCatalogMetadataSerialization.Write(value);
+    }
     public TargetObservabilityClass ObservationTargetObservability
     {
         get

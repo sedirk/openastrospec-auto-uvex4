@@ -3,6 +3,7 @@ using NINA.Equipment.Interfaces;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using System.Net.Http;
 using System.Text.Json;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -101,10 +102,13 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
     private static readonly HttpClient StellariumClient = new()
     {
         Timeout = TimeSpan.FromSeconds(2),
+        MaxResponseContentBufferSize = 2 * 1024 * 1024,
     };
 
     private readonly IPlanetariumFactory planetariumFactory;
     private readonly Func<Uri?>? stellariumEndpoint;
+    private readonly HttpClient stellariumHttp;
+    private readonly Func<double, StellariumCoordinateNormalizer.Velocity>? velocityProvider;
 
     public NinaPlanetariumTargetSource(IPlanetariumFactory planetariumFactory)
         : this(planetariumFactory, null)
@@ -113,10 +117,14 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
 
     internal NinaPlanetariumTargetSource(
         IPlanetariumFactory planetariumFactory,
-        Func<Uri?>? stellariumEndpoint)
+        Func<Uri?>? stellariumEndpoint,
+        HttpClient? stellariumHttp = null,
+        Func<double, StellariumCoordinateNormalizer.Velocity>? velocityProvider = null)
     {
         this.planetariumFactory = planetariumFactory ?? throw new ArgumentNullException(nameof(planetariumFactory));
         this.stellariumEndpoint = stellariumEndpoint;
+        this.stellariumHttp = stellariumHttp ?? StellariumClient;
+        this.velocityProvider = velocityProvider;
     }
 
     public async Task<ObservationPlanetariumTargetSnapshot> CaptureAsync(
@@ -177,11 +185,12 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             : ToJ2000(target.Coordinates, planetarium.Name);
         var importedName = target?.Name;
         var importedCatalogId = target?.Id;
+        TargetCatalogMetadata? catalogMetadata = null;
         string? identityNote = null;
         if (targetCoordinates is not null &&
             planetarium.Name?.Contains("Stellarium", StringComparison.OrdinalIgnoreCase) == true)
         {
-            var identity = await TryReadStellariumIdentityAsync(
+            var identity = await ReadStellariumIdentityAsync(
                 targetCoordinates,
                 target?.Name,
                 cancellationToken).ConfigureAwait(false);
@@ -189,9 +198,12 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             {
                 importedName = identity.TargetName;
                 importedCatalogId = identity.CatalogId ?? target?.Id;
+                catalogMetadata = identity.CatalogMetadata with { CatalogId = importedCatalogId };
+                targetCoordinates = new(catalogMetadata.RightAscensionDegrees, catalogMetadata.DeclinationDegrees);
                 identityNote = $"已用同一时刻的 Stellarium 选择详情按坐标复核，目标/文件名采用“{identity.TargetName}”"
                     + (string.IsNullOrWhiteSpace(importedCatalogId) ? "。" : $"；目录标识为 {importedCatalogId}。")
-                    + (string.IsNullOrWhiteSpace(target?.Name) ? string.Empty : $" 星图本地化显示名为“{target.Name.Trim()}”。");
+                    + (string.IsNullOrWhiteSpace(target?.Name) ? string.Empty : $" 星图本地化显示名为“{target.Name.Trim()}”。")
+                    + $" 已按接口去除光行差 {catalogMetadata.CoordinateProvenance!.CorrectionArcseconds:F3}″，保存标准 J2000 轴向天体测量坐标；赤道仪所需当前坐标由 N.I.N.A. 单独转换，不重复换算。";
             }
         }
 
@@ -224,6 +236,14 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         var sourceName = string.IsNullOrWhiteSpace(planetarium.Name)
             ? "N.I.N.A. 第三方星图"
             : $"N.I.N.A. 第三方星图 / {planetarium.Name.Trim()}";
+        if (catalogMetadata is null && targetCoordinates is not null && !string.IsNullOrWhiteSpace(importedName))
+        {
+            // Other planetaria may supply native DSOType/Magnitude. Missing fields
+            // remain unknown; do not infer an object type from its common name.
+            catalogMetadata = new TargetCatalogMetadata(importedName, importedCatalogId,
+                targetCoordinates.RightAscensionDegrees, targetCoordinates.DeclinationDegrees,
+                sourceName, target?.DSOType, NormalizeCatalogMagnitude(target?.Magnitude), DateTimeOffset.UtcNow);
+        }
         var cancellationNote = "N.I.N.A. 3.2 的星图读取接口不接收取消令牌；本次单次读取仅在调用前后检查取消，不会建立持续跟随。";
         var sourceDetails = string.Join(
             " ",
@@ -236,10 +256,11 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             targetCoordinates,
             positionAngle,
             sourceName,
-            sourceDetails);
+            sourceDetails,
+            catalogMetadata);
     }
 
-    private async Task<StellariumSelectedIdentity?> TryReadStellariumIdentityAsync(
+    private async Task<StellariumSelectedIdentity?> ReadStellariumIdentityAsync(
         ObservationTargetCoordinates expectedCoordinates,
         string? ninaDisplayName,
         CancellationToken cancellationToken)
@@ -247,42 +268,77 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         try
         {
             var endpoint = stellariumEndpoint?.Invoke();
-            if (endpoint is null) return null;
-            var requestUri = new Uri(endpoint, "api/objects/info?format=json");
-            using var response = await StellariumClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (endpoint is null) throw new InvalidOperationException("The configured Stellarium RemoteControl endpoint is required for coordinate normalization.");
+            async Task<JsonDocument> Read(string relative)
+            {
+                var bytes = await stellariumHttp.GetByteArrayAsync(new Uri(endpoint, relative), cancellationToken).ConfigureAwait(false);
+                if (bytes.Length > 2 * 1024 * 1024) throw new InvalidOperationException("Stellarium response is too large.");
+                return JsonDocument.Parse(bytes);
+            }
+            using var statusBefore = await Read("api/main/status").ConfigureAwait(false);
+            using var propertiesBefore = await Read("api/stelproperty/list").ConfigureAwait(false);
+            var before = StellariumCoordinateNormalizer.ReadState(statusBefore.RootElement, propertiesBefore.RootElement);
+            using var document = await Read("api/objects/info?format=json").ConfigureAwait(false);
             var root = document.RootElement;
-            if (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False) return null;
+            if (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False)
+                throw new InvalidOperationException("No selected catalogue object.");
 
             var canonicalName = ReadNonBlankString(root, "name");
-            if (canonicalName is null) return null;
+            if (canonicalName is null) throw new InvalidOperationException("Selected object has no stable name.");
             if (!TryReadFiniteDouble(root, "raJ2000", out var rightAscensionDegrees) ||
                 !TryReadFiniteDouble(root, "decJ2000", out var declinationDegrees))
             {
-                return null;
+                throw new InvalidOperationException("Stellarium did not supply raJ2000/decJ2000.");
             }
             rightAscensionDegrees = ((rightAscensionDegrees % 360d) + 360d) % 360d;
             var selectedCoordinates = new ObservationTargetCoordinates(rightAscensionDegrees, declinationDegrees);
-            if (AngularSeparationArcSeconds(expectedCoordinates, selectedCoordinates) > 5d) return null;
+            if (AngularSeparationArcSeconds(expectedCoordinates, selectedCoordinates) > 5d)
+                throw new InvalidOperationException("The NINA result and selected object differ (selection changed or CCD framing center). Import the selected object, not a view center with its name.");
+
+            using var propertiesAfter = await Read("api/stelproperty/list").ConfigureAwait(false);
+            using var statusAfter = await Read("api/main/status").ConfigureAwait(false);
+            var after = StellariumCoordinateNormalizer.ReadState(statusAfter.RootElement, propertiesAfter.RootElement);
+            if (!StellariumCoordinateNormalizer.SameState(before, after))
+                throw new InvalidOperationException("Stellarium time, observer or astrometry settings changed during import.");
+            using var selectionAfter = await Read("api/objects/info?format=json").ConfigureAwait(false);
+            var last = selectionAfter.RootElement;
+            if (ReadNonBlankString(last, "name") != canonicalName ||
+                ReadNonBlankString(last, "type") != ReadNonBlankString(root, "type") ||
+                !TryReadFiniteDouble(last, "raJ2000", out var lastRa) ||
+                !TryReadFiniteDouble(last, "decJ2000", out var lastDec) ||
+                AngularSeparationArcSeconds(selectedCoordinates, new(lastRa, lastDec)) > 0.1)
+                throw new InvalidOperationException("Stellarium selection changed while its coordinate context was being read.");
+            var normalized = StellariumCoordinateNormalizer.Normalize(selectedCoordinates,
+                before with { JulianDay = (before.JulianDay + after.JulianDay) / 2 },
+                ReadNonBlankString(root, "type") ?? string.Empty, ReadNonBlankString(root, "object-type"), velocityProvider);
 
             var resolved = ResolveStellariumIdentity(
                 canonicalName,
                 ReadNonBlankString(root, "localized-name"),
                 ReadNonBlankString(root, "designation"),
                 ninaDisplayName);
-            return new StellariumSelectedIdentity(resolved.TargetName, resolved.CatalogId);
+            var metadata = ParseStellariumCatalogMetadata(root, resolved.TargetName, resolved.CatalogId,
+                expectedCoordinates, DateTimeOffset.UtcNow);
+            if (metadata is null) throw new InvalidOperationException("Selected-object metadata did not match its coordinates.");
+            metadata = metadata with
+            {
+                RightAscensionDegrees = normalized.Coordinates.RightAscensionDegrees,
+                DeclinationDegrees = normalized.Coordinates.DeclinationDegrees,
+                CoordinateProvenance = normalized.Provenance,
+            };
+            return new StellariumSelectedIdentity(resolved.TargetName, resolved.CatalogId, metadata);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
-            // The N.I.N.A. IPlanetarium result remains authoritative for pointing.
-            // Name/catalog enrichment is optional and must never make import fail.
-            return null;
+            // Unknown apparent-place semantics must not be relabelled as a
+            // catalogue position. Existing/manual draft remains untouched.
+            throw new ObservationTargetImportException("STELLARIUM_COORDINATE_CONVERSION_FAILED",
+                "Stellarium 坐标未完成标准化；未覆盖目标草稿。可手工输入可信目录的标准 J2000 坐标。 " +
+                ObservationTargetImportErrors.SafeMessage(ex), ex);
         }
     }
 
@@ -345,6 +401,7 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
     {
         value = 0;
         return root.TryGetProperty(propertyName, out var element) &&
+            element.ValueKind == JsonValueKind.Number &&
             element.TryGetDouble(out value) &&
             double.IsFinite(value);
     }
@@ -363,7 +420,38 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         return Math.Acos(Math.Clamp(cosine, -1d, 1d)) / degreesToRadians * 3600d;
     }
 
-    private sealed record StellariumSelectedIdentity(string TargetName, string? CatalogId);
+    /// <summary>
+    /// Stellarium getInfoMap exposes type, object-type, star-type and vmag.
+    /// Nebula::getInfoMap localizes type, so object-type is retained independently.
+    /// This is the same selected-object read used for name identity enrichment;
+    /// metadata from a changed selection cannot attach to the previous target.
+    /// </summary>
+    internal static TargetCatalogMetadata? ParseStellariumCatalogMetadata(
+        JsonElement root, string targetName, string? catalogId,
+        ObservationTargetCoordinates expectedCoordinates, DateTimeOffset capturedUtc)
+    {
+        if (!double.IsFinite(expectedCoordinates.RightAscensionDegrees) || expectedCoordinates.RightAscensionDegrees is < 0 or >= 360 ||
+            !double.IsFinite(expectedCoordinates.DeclinationDegrees) || expectedCoordinates.DeclinationDegrees is < -90 or > 90 ||
+            root.ValueKind != JsonValueKind.Object ||
+            (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False) ||
+            !TryReadFiniteDouble(root, "raJ2000", out var ra) ||
+            !TryReadFiniteDouble(root, "decJ2000", out var dec) || dec is < -90 or > 90)
+            return null;
+        ra = ((ra % 360d) + 360d) % 360d;
+        if (AngularSeparationArcSeconds(expectedCoordinates, new ObservationTargetCoordinates(ra, dec)) > 5d)
+            return null;
+        var magnitude = TryReadFiniteDouble(root, "vmag", out var vmag) ? NormalizeCatalogMagnitude(vmag) : null;
+        return new TargetCatalogMetadata(targetName, catalogId,
+            expectedCoordinates.RightAscensionDegrees, expectedCoordinates.DeclinationDegrees,
+            "Stellarium /api/objects/info (同次选择、坐标复核)",
+            ReadNonBlankString(root, "type"), magnitude, capturedUtc,
+            ReadNonBlankString(root, "object-type") ?? ReadNonBlankString(root, "star-type"));
+    }
+
+    private static double? NormalizeCatalogMagnitude(double? magnitude) =>
+        magnitude is { } value && double.IsFinite(value) && value is > -40 and < 50 ? value : null;
+
+    private sealed record StellariumSelectedIdentity(string TargetName, string? CatalogId, TargetCatalogMetadata CatalogMetadata);
 
     private static ObservationTargetCoordinates ToJ2000(Coordinates coordinates, string sourceName)
     {

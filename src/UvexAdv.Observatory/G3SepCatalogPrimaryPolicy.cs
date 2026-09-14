@@ -22,6 +22,9 @@ public static class G3SepCatalogPrimaryPolicy
             || !double.IsFinite(primaryPrediction.X) || !double.IsFinite(primaryPrediction.Y)
             || !double.IsFinite(minimumSnr) || minimumSnr<=0)
             return Reject("G3_SEP_REFERENCE_INVALID","An independently bound astrometric primary and disjoint companion region are required.");
+        if (G3ShortExposurePolicy.RecordSaturation(image.ParentComponents, primaryPrediction, limit, minimumSnr, metrics))
+            return Reject(G3ShortExposurePolicy.SaturatedCode,
+                "A supported SEP parent in the exact-ID primary region remains saturated. Reduce exposure, without selecting the companion or a deblend knot.");
         var parents=image.ParentComponents.Where(c=>c.SaturatedFraction==0 && c.Flux>0 && c.Snr>=minimumSnr
             && c.Npix>=9 && c.RawSupportPixels>=3 && c.SepFlags==0
             && c.Bbox[0]>0 && c.Bbox[1]>0 && c.Bbox[0]+c.Bbox[2]<image.Width && c.Bbox[1]+c.Bbox[3]<image.Height

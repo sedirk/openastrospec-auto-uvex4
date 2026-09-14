@@ -3075,7 +3075,19 @@ internal sealed partial class RealObservationStageRunner
             string targetEvidence;
             double? saturatedIntegratedFluxDiagnostic = null;
             var targetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid;
-            if (lastG3Field?.BrightTargetAuthority is not null)
+            if (UsesCatalogWcsTargetAuthority(context))
+            {
+                if (guideMode != Phd2SlitGuideMode.OffSlitGuideStar || lastG3Field is null)
+                    throw new InvalidOperationException("G3_CATALOG_GUIDE_MODE: Catalogue-only placement requires an independent off-slit guide star.");
+                var reference = await CatalogReferenceAsync(context, lastG3Field, cancellationToken).ConfigureAwait(false);
+                var registered = await RegisterCatalogueFrameAsync(context, reference, frame, image.Data.FlatArray,
+                    expectedTargetLocal, runtimeSlitLocal, preset, result.Path, cancellationToken).ConfigureAwait(false);
+                targetLocal = registered.Target;
+                targetFlux = 0;
+                targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsRegisteredField;
+                targetEvidence = $"catalog-wcs:{context.Plan.Target.CatalogId}:{reference.FramePath};registered-frame:{result.Sha256};stars:{registered.MatchedStars};scatter:{registered.ScatterPixels:R}";
+            }
+            else if (lastG3Field?.BrightTargetAuthority is not null)
             {
                 var wing = BrightTargetWingCentroidAnalyzer.Analyze(frame, configuration.G3.EffectiveBrightTarget.CentroidOptions);
                 if (wing.Gate.Disposition != GateDisposition.Passed || wing.Target is null)
@@ -3267,6 +3279,7 @@ internal sealed partial class RealObservationStageRunner
                 targetPositionAuthority switch
                 {
                     Phd2TargetPositionAuthority.CatalogWcsProjection => "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE",
+                    Phd2TargetPositionAuthority.CatalogWcsRegisteredField => "REGISTERED_CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE",
                     Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid => "SATURATED_TARGET_TOPOLOGY_FLUX_NOT_APPLICABLE",
                     _ => guideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding ? "DEGRADED_DIRECT_TARGET_FLUX" : "TARGET_FLUX",
                 },
@@ -3361,7 +3374,11 @@ internal sealed partial class RealObservationStageRunner
         Phd2SlitPlacementCommissioningPreset preset,
         CancellationToken cancellationToken)
     {
-        if (preset.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar)
+        if (UsesCatalogWcsTargetAuthority(context) && preset.GuideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)
+            return Phd2PlacementGuideChoice.Failed(seedField,
+                GateResult.Unknown("G3_CATALOG_GUIDE_MODE", "目录定位不能直导不可见目标；请选择旁星或包含旁星的自动导星模式。"),
+                preset.GuideMode, "catalogue-only requires off-slit guide");
+        if (preset.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar || UsesCatalogWcsTargetAuthority(context))
         {
             return await CaptureAndSelectPhd2GuideAtExposureAsync(
                 context,
@@ -3765,7 +3782,20 @@ internal sealed partial class RealObservationStageRunner
         TargetIdentification identification;
         BrightTargetCentroidAnalysis? brightAnalysis = null;
         BrightTargetAuthorityEvidence? brightAuthority = null;
-        if (seedField.BrightTargetAuthority is { } priorBrightAuthority)
+        G3CatalogRegistrationReference? catalogReference = seedField.CatalogRegistrationReference;
+        if (UsesCatalogWcsTargetAuthority(context))
+        {
+            if (resolvedMode != Phd2SlitGuideMode.OffSlitGuideStar)
+                return Phd2PlacementGuideChoice.Failed(seedField,
+                    GateResult.Unknown("G3_CATALOG_GUIDE_MODE", "目录定位使用独立旁星导星，不把不可见目标当成直导星。"), resolvedMode, "catalogue-only guide mode");
+            catalogReference = await CatalogReferenceAsync(context, seedField, cancellationToken).ConfigureAwait(false);
+            var registered = await RegisterCatalogueFrameAsync(context, catalogReference, frame, image.Data.FlatArray,
+                seedField.TargetIdentification.Target?.Centroid ?? seedField.TargetIdentification.PredictedPoint,
+                seedField.SlitDetection.Geometry, preset, capture.Path, cancellationToken).ConfigureAwait(false);
+            identification = TargetIdentification.FromCatalogWcs(registered.Target, frame.Width, frame.Height,
+                "目录采样点保持不变；新选星帧通过独立参考星配准，不使用目标附近的亮峰。");
+        }
+        else if (seedField.BrightTargetAuthority is { } priorBrightAuthority)
         {
             brightAnalysis = BrightTargetWingCentroidAnalyzer.Analyze(frame, configuration.G3.EffectiveBrightTarget.CentroidOptions);
             brightAuthority = priorBrightAuthority with
@@ -3867,6 +3897,7 @@ internal sealed partial class RealObservationStageRunner
             BrightTargetAuthority = brightAuthority,
             BrightTargetEvidencePath = brightAuthority is null ? seedField.BrightTargetEvidencePath : capture.Path,
             MountBinding = selectionMountBinding,
+            CatalogRegistrationReference = catalogReference,
         };
         var target = identification.Target!;
         if (resolvedMode == Phd2SlitGuideMode.OffSlitGuideStar)
@@ -4256,6 +4287,8 @@ internal sealed partial class RealObservationStageRunner
         const int maximumWindows = 4;
         var tolerance = preset.MaximumGuideLockResidualPixels;
         var freshWindowDeadlineExpired = false;
+        var completedWindows = 0;
+        double[] lastCompleteResiduals = [];
         for (var window = 1; window <= maximumWindows; window++)
         {
             var remaining = deadlineUtc - DateTimeOffset.UtcNow;
@@ -4283,11 +4316,13 @@ internal sealed partial class RealObservationStageRunner
                 snapshot.ConnectionEpoch == baseline.ConnectionEpoch && snapshot.GuideEpoch == baseline.GuideEpoch &&
                 snapshot.LockPosition is { } actual && PointDistance(actual, currentLock) <= preset.LockVerificationTolerancePixels;
             var residuals = measurements.Select(item => PointDistance(item.Measurement.GuideStar, currentLock)).ToArray();
+            completedWindows++;
+            lastCompleteResiduals = residuals;
             phd2.ThrowIfGuideOutputFailed();
             var withinAdvisoryThreshold = Phd2PlacementGuideWindowPolicy.AllWithinTolerance(residuals, tolerance);
             var supervisedMeasuredGeometry = HasSupervisedScienceOptIn() && measurements.All(item =>
                 item.Measurement.GuidePositionMeasuredInFrame &&
-                item.Measurement.TargetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection) &&
+                Phd2PlacementGuideWindowPolicy.HasMeasuredPositionAuthority(item.Measurement.TargetPositionAuthority)) &&
                 residuals.All(double.IsFinite);
             var accepted = sameEpochAndLock &&
                 (guideMode != Phd2SlitGuideMode.OffSlitGuideStar ||
@@ -4317,7 +4352,12 @@ internal sealed partial class RealObservationStageRunner
             runtimeSlitLocal = latest.RuntimeSlitLocal;
             Report($"PHD2 导星残差窗口 {window}/{maximumWindows}（{string.Join(", ", residuals.Select(value => value.ToString("F2", CultureInfo.InvariantCulture)))}px）未全部满足 {tolerance:F2}px；在剩余时间内保持锁点，等待整组新帧。");
         }
-        if (freshWindowDeadlineExpired)
+        await PublishRunJsonEvidenceAsync("phd2-placement-guide-window-terminal",
+            "导星窗口终态：区分未完成测量与已完成但未通过的窗口",
+            new { completedWindows, lastCompleteResiduals, tolerance, freshWindowDeadlineExpired,
+                deadlineUtc, budgetReset = false, lockMutation = false }, lastG3Field?.FramePath,
+            cancellationToken).ConfigureAwait(false);
+        if (Phd2PlacementGuideWindowPolicy.FailureCode(freshWindowDeadlineExpired, completedWindows) == "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")
             throw new InvalidOperationException(
                 "PHD2_FRESH_GUIDE_WINDOW_DEADLINE: The unchanged post-lock stage deadline expired before a complete fresh optical window was available; this is not evidence that a complete window failed the guide precision threshold.");
         throw new InvalidOperationException(

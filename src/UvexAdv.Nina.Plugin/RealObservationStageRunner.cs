@@ -1222,6 +1222,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
     private async Task<StageResult> ValidateNightSetupAsync(ObservationContext context, CancellationToken cancellationToken)
     {
+        var strategyGate = await PublishTargetStrategyAsync(context, cancellationToken).ConfigureAwait(false);
+        if (strategyGate.Disposition != GateDisposition.Passed) return new StageResult(strategyGate);
         var gate = await EvaluateInterlocksAsync(
             context,
             connectQhy: true,
@@ -4815,6 +4817,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             context,
             cancellationToken).ConfigureAwait(false);
 
+        var strategy = ResolveTargetStrategy(context);
+        await PublishTargetBranchAsync(context,
+            strategy.UsesCatalogPositionOnly ? TargetAcquisitionBranch.CatalogWcsGeometry : TargetAcquisitionBranch.DirectStellarPosition,
+            "TARGET_BRANCH_SELECTED", "先取得本轮导星相机正式 WCS；只有当前帧证据满足条件才使用后续分支。", null, cancellationToken).ConfigureAwait(false);
         lastG3Field = await CaptureAndAnalyzeG3WithSolveLadderAsync(context, cancellationToken).ConfigureAwait(false);
         if (lastG3Field.Gate.Disposition == GateDisposition.Passed)
         {
@@ -4851,6 +4857,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         if (!IsRecoverableG3SearchGate(lastG3Field.Gate))
         {
+            await PublishTargetBranchAsync(context,
+                activeTargetBranch ?? (strategy.UsesCatalogPositionOnly ? TargetAcquisitionBranch.CatalogWcsGeometry : TargetAcquisitionBranch.DirectStellarPosition),
+                "TARGET_BRANCH_BLOCKED", $"{lastG3Field.Gate.Code}: {lastG3Field.Gate.Message} 此失败没有兼容的自动回退，不切换目标或重置预算。",
+                lastG3Field.FramePath, cancellationToken).ConfigureAwait(false);
             return new StageResult(
                 lastG3Field.Gate,
                 lastG3Field.FramePath,
@@ -4864,6 +4874,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 });
         }
 
+        await PublishTargetBranchAsync(context, TargetAcquisitionBranch.BoundedNeighborWcs,
+            "TARGET_BRANCH_FALLBACK", $"直接取场未通过（{lastG3Field.Gate.Code}）；按原限制尝试邻场解算，所有新动作仍计入原账本。",
+            lastG3Field.FramePath, cancellationToken).ConfigureAwait(false);
         return await RunBoundedG3LocalSearchAsync(
             context,
             lastG3Field,
@@ -4888,6 +4901,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return new StageResult(GateResult.Unknown("G3_COARSE_HANDOFF_REQUIRED",
                 "目标已入导星相机画面，但尚未进入精调交接范围；必须先完成正式 WCS 居中，不能直接启动 PHD2 精调。"), field.FramePath);
         lastG3Field = field;
+        PublishCompletedTargetBranch(field);
         var brightTarget = field.BrightTargetAnalysis is not null && field.BrightTargetAuthority is not null;
         var ghostTarget = field.GhostAssistance is { Result.Decision: GhostAssistanceDecision.UseCalibratedAuxiliaryEstimate };
         var catalogWcsTarget = field.TargetIdentification.Authority == TargetIdentificationAuthority.CatalogWcsProjection;
@@ -5814,20 +5828,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.G3.MaximumPlateSolveHintOffsetDegrees);
     }
 
-    private static bool IsRecoverableG3SearchGate(GateResult gate) => gate.Code is
-        "G3_PLATE_SOLVE_FAILED" or
-        "G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD" or
-        "G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD" or
-        "G3_SOLVED_TARGET_OUTSIDE" or
-        "G3_STAR_FIELD_SPARSE_VALID_EXPOSURE" or
-        "TARGET_NOT_FOUND" or
-        "TARGET_AMBIGUOUS" or
-        "BRIGHT_TARGET_SATURATED_CORE_NOT_FOUND" or
-        "BRIGHT_TARGET_WINGS_UNUSABLE" or
-        "BRIGHT_TARGET_AMBIGUOUS";
+    private static bool IsRecoverableG3SearchGate(GateResult gate) =>
+        TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(gate);
 
     private static bool UsesCatalogWcsTargetAuthority(ObservationContext context) =>
-        context.Plan.TargetObservability != TargetObservabilityClass.DirectStellar;
+        ResolveTargetStrategy(context).UsesCatalogPositionOnly;
 
     private static bool IsRecoverableSparseG3Field(
         G3StellarFocusMeasurement focusMeasurement,
@@ -10033,6 +10038,17 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 slitIdentity,
                 slitIdentityEvidencePath);
         }
+        // The carried ladder solve already passed this gate before its
+        // no-motion carry-forward check. A solve made directly on the OFF
+        // reference must meet that same physical plausibility contract before
+        // it can become the catalogue-geometry fallback authority.
+        if (trustedPl3CarryGate?.Disposition != GateDisposition.Passed)
+        {
+            var plausibility = ValidateG3PlateSolvePlausibility(solve, image.Properties.Width, image.Properties.Height);
+            if (plausibility.Disposition != GateDisposition.Passed)
+                return G3FieldState.Failed(plausibility, reference.Captured.Capture.Path, image, solve,
+                    reference.Captured.MountBinding, slitIdentity, slitIdentityEvidencePath);
+        }
         if (solve.Result.Flipped != configuration.G3.ExpectedWcsFlipped)
         {
             PublishG3Preview(slitPreview.Image, $"G3 WCS parity={solve.Result.Flipped} 与 commissioning preset 不符。");
@@ -10133,58 +10149,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             properties.Width,
             properties.Height,
             solve.SolverIdentity);
-        var rawIdentification = trustedPl3CarryGate?.Disposition == GateDisposition.Passed
-            ? G3CatalogTargetPositionPolicy.Identify(
-                offComposite, candidates, predictedPoint, UsesCatalogWcsTargetAuthority(context),
-                commissioning!.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? configuration.Slit.TargetPredictionTolerancePixels)
-            : UsesCatalogWcsTargetAuthority(context)
-                ? TargetIdentification.FromCatalogWcs(predictedPoint, properties.Width, properties.Height,
-                    $"Formal WCS projects the declared {context.Plan.TargetObservability} target; no stellar peak or flux is required.")
-            : SlitTargetIdentifier.Identify(
-                offComposite,
-                candidates,
-                predictedPoint,
-                configuration.Slit.TargetPredictionTolerancePixels);
-        var identified = rawIdentification;
-        if (trustedPl3CarryGate?.Disposition == GateDisposition.Passed &&
-            identified.Gate.Disposition != GateDisposition.Passed &&
-            identified.Gate.Code is "TARGET_NOT_FOUND" or "TARGET_AMBIGUOUS")
-        {
-            // The formal same-detector PL3 result has already established the
-            // catalogue coordinate in this immutable frame and survived the
-            // no-motion LED carry-forward checks.  A home-grown local peak
-            // heuristic is useful telemetry, but it must not undo that stronger
-            // WCS authority (especially for a saturated target plus ghost).
-            // Promote the formal projection so coarse WCS centering continues
-            // from the position that actually improved, instead of returning
-            // to the old origin and launching an irrelevant neighbour search.
-            var localDiagnostic = identified.Gate;
-            identified = TargetIdentification.FromCatalogWcs(
-                predictedPoint,
-                properties.Width,
-                properties.Height,
-                $"Formal target-inside PL3 WCS remained mount-bound through the LED sequence. Local morphology reported advisory {localDiagnostic.Code}: {localDiagnostic.Message} The catalogue/WCS projection remains the coarse target authority.");
-        }
-        else if (trustedPl3CarryGate?.Disposition == GateDisposition.Passed &&
-                 identified.Gate.Disposition == GateDisposition.Passed &&
-                 identified.Target is not null &&
-                 identified.Authority == TargetIdentificationAuthority.StellarCentroid)
-        {
-            // PL3 owns identity; the local stellar candidate may refine the
-            // detector coordinate but must not become a weaker, independent
-            // identity authority.  Otherwise the immediately following PHD2
-            // selection frame can let a saturated target/ghost uniqueness
-            // heuristic overturn the formal target-inside WCS result.
-            var local = identified;
-            identified = local with
-            {
-                Gate = GateResult.Pass(
-                    "TARGET_CATALOG_WCS_REFINED",
-                    $"Formal target-inside PL3 WCS establishes identity; the local centroid refines the detector position by {local.PredictionResidualPixels:F2}px and remains advisory for continuity."),
-                Authority = TargetIdentificationAuthority.CatalogWcsProjection,
-                CatalogPositionRefinedFromSameFrame = true,
-            };
-        }
+        // Both fresh solves and no-motion carried solves now follow the same
+        // explicit priority. The source WCS has passed physical plausibility;
+        // local non-detection cannot invalidate it, and ambiguous peaks never
+        // supply a measured correction offset.
+        var identified = await IdentifyTargetWithStrategyAsync(context,
+            offComposite, candidates, predictedPoint,
+            trustedPl3CarryGate?.Disposition == GateDisposition.Passed
+                ? commissioning!.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? configuration.Slit.TargetPredictionTolerancePixels
+                : configuration.Slit.TargetPredictionTolerancePixels,
+            reference.Captured.Capture.Path, cancellationToken).ConfigureAwait(false);
         if (identified.Gate.Disposition != GateDisposition.Passed)
         {
             var ghostTarget = await TryAcquireTargetFromGhostAsync(
@@ -10541,33 +10515,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             properties.Width,
             properties.Height,
             probe.Solve.SolverIdentity);
-        var identified = G3CatalogTargetPositionPolicy.Identify(
-            frame, candidates, predictedPoint, UsesCatalogWcsTargetAuthority(context),
-            commissioning!.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? configuration.Slit.TargetPredictionTolerancePixels);
-        if (identified.Gate.Disposition != GateDisposition.Passed &&
-            identified.Gate.Code is "TARGET_NOT_FOUND" or "TARGET_AMBIGUOUS")
-        {
-            var localDiagnostic = identified.Gate;
-            identified = TargetIdentification.FromCatalogWcs(
-                predictedPoint,
-                properties.Width,
-                properties.Height,
-                $"Fresh target-inside PL3 WCS is authoritative. Local morphology is advisory ({localDiagnostic.Code}: {localDiagnostic.Message}).");
-        }
-        else if (identified.Gate.Disposition == GateDisposition.Passed &&
-                 identified.Target is not null &&
-                 identified.Authority == TargetIdentificationAuthority.StellarCentroid)
-        {
-            var local = identified;
-            identified = local with
-            {
-                Gate = GateResult.Pass(
-                    "TARGET_CATALOG_WCS_REFINED",
-                    $"Fresh target-inside PL3 WCS establishes identity; the local centroid refines the detector position by {local.PredictionResidualPixels:F2}px. Saturation and ghost morphology cannot revoke this identity in the following no-motion guide-selection frame."),
-                Authority = TargetIdentificationAuthority.CatalogWcsProjection,
-                CatalogPositionRefinedFromSameFrame = true,
-            };
-        }
+        var identified = await IdentifyTargetWithStrategyAsync(context,
+            frame, candidates, predictedPoint,
+            commissioning!.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? configuration.Slit.TargetPredictionTolerancePixels,
+            probe.FramePath, cancellationToken).ConfigureAwait(false);
 
         var residualPixels = identified.Target is { } target
             ? PixelDistance(target.Centroid, cache.SlitDetection.Geometry.AcquisitionPoint)
@@ -10674,6 +10625,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         var branch = configuration.G3.EffectiveBrightTarget;
         if (!branch.Enabled) return null;
+        await PublishTargetBranchAsync(context, TargetAcquisitionBranch.CalibratedBrightWings,
+            "TARGET_BRANCH_FALLBACK", "直接取场证据不足，检查已显式启用的亮星翼部路线；外部目录身份、独立焦点和狭缝证据均仍必需。",
+            reference.Captured.Capture.Path, cancellationToken).ConfigureAwait(false);
         if (commissioning is null || nightSetup is null)
             return G3FieldState.Failed(GateResult.Unknown(
                 "BRIGHT_TARGET_LOCKS_UNAVAILABLE",
@@ -16455,7 +16409,8 @@ internal sealed record G3FieldState(
     GhostRunnerAssistanceEvidence? GhostAssistance = null,
     G3FieldMountBinding? MountBinding = null,
     SlitWheelIdentityResult? SlitIdentity = null,
-    string? SlitIdentityEvidencePath = null)
+    string? SlitIdentityEvidencePath = null,
+    G3CatalogRegistrationReference? CatalogRegistrationReference = null)
 {
     public static G3FieldState Failed(
         GateResult gate,

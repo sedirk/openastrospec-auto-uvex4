@@ -64,21 +64,26 @@ Deneb 同步测光质量未通过；未验证双 N.I.N.A. 或无人值守。Gamm
 
 快照在 UI 线程从同一份不可变 dashboard 同步刷新显示与诊断后返回；读取本身不增加 revision，避免主机刚进入阻断状态时返回上一帧的空错误代码，也避免 `wait` 自己唤醒自己。
 
-### 主镜 SEP 对焦（.191）
+### 主镜 SEP 对焦（.198）
 
-白名单另含 `show-acquisition-plan`（只导航）及 `start-main-focus` / `cancel-main-focus`。
-对焦命令分别调用“自动准备 → 主镜 SEP 对焦”可见按钮绑定的 `StartCommand` / `CancelCommand`。
+白名单另含 `show-acquisition-plan`（只导航）及 `show-main-focus`、`save-main-focus`、`start-main-focus` / `cancel-main-focus`。
+对焦命令分别调用“设备手控 → 主镜对焦”可见按钮绑定的 `SaveCommand` / `StartCommand` / `CancelCommand`；自动准备只提供直达入口。
 启动须有本次会话真实授权、已保存的有效参数和空闲所有者；与正式观测互斥。
 它只在已打开的屋顶/镜盖、已安全跟踪的星场进行主镜有界调焦和 PHD2 单帧测量，
 不会开顶、转向、接管正在导星的会话或启动科学曝光。取消不保证无条件运动回原位：
 外部位置/安全状态变化时不覆盖操作员动作，结果记录是否实际确认返回。
 
-JSON 快照另含 `mainFocusBusy`、`mainFocusStatus`、`mainFocusEvidenceDirectory`。
+`save-main-focus`可携带`focusSampling`（客户端`-FocusSampling`哈希表），
+仅包含`frames`、`exposureMilliseconds`、`gainPercent`，分别约束为2–5、500–10000、0–100。
+通过同一保存按钮原子更新可见字段及当前Profile，不修改软限位、安全条件、设备绑定或验收阈值；
+对焦忙碌或编辑器输入无效时拒绝。省略载荷就是保存当前可见草稿，不启动设备。
+JSON 快照另含 `mainFocusBusy`、`mainFocusStatus`、`mainFocusEvidenceDirectory`、`mainFocusOptions`。
 `UI_COMMAND_DISPATCHED` 只表示同一命令已发起，不代表对焦成功；须等 busy 结束并读取
-本轮 `result.json`，区分候选接受、保留原位、取消及故障。后台不能提交任意电调焦位置，
+本轮 `result.json`，区分候选接受`Improved`、原位光学复核通过`VerifiedAtOrigin`、普通保留原位`Unchanged`、取消及故障。
+只有前两者且最终位置读回确认才有`FocusVerified=true`，机械回位本身不代表对焦通过。后台不能提交任意电调焦位置，
 也不能把历史结果路径视为当前设备读回。配置、算法和验收见[主镜对焦说明](sep-main-mirror-focus-commissioning.md)。
 
-接口有意不提供 UVEX 设备手控、M2/狭缝/光栅运动、任意清除恢复账本、修改设置或删除证据。唯一可退役旧 G3 恢复状态的入口是与可见“新开一轮”按钮同源的 `restart-real-run`，它保留审计且拒绝歧义状态。后台不能把 disabled 的 UI 命令当作可执行，也不能跳过恢复复核、安全门或预算。
+接口有意不提供 UVEX 设备手控、M2/狭缝/光栅运动、任意清除恢复账本、通用设备/安全设置修改或删除证据；只有上文显式列出的有限草稿字段可经对应按钮保存。唯一可退役旧 G3 恢复状态的入口是与可见“新开一轮”按钮同源的 `restart-real-run`，它保留审计且拒绝歧义状态。后台不能把 disabled 的 UI 命令当作可执行，也不能跳过恢复复核、安全门或预算。
 
 响应快照包含运行状态、当前/下一阶段、两级状态摘要、阻断代码与说明、恢复说明、全部阶段质量门、最近 30 条时间线、最近 20 份证据、运行清单、可用/不可用命令及原因、建议恢复动作和需要操作员完成的动作。面向操作员的文字跟随 N.I.N.A. 当前界面语言；稳定代码、原始技术消息和文件路径保持不变，便于大模型诊断而不篡改机器值。
 

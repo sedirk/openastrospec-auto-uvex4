@@ -5,6 +5,7 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed class SimpleAsyncCommand(Func<Task> execute, Func<bool>? canExecute = null) : ICommand
 {
     private bool busy;
+    internal bool IsExecuting => busy;
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => !busy && (canExecute?.Invoke() ?? true);
 

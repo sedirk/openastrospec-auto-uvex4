@@ -1,6 +1,38 @@
 # Known issues
 
-## Current closeout boundary (2026-09-13, source/build 0.4.0.191)
+## Current closeout boundary (2026-09-15, installed 0.4.0.203)
+
+The [September 15 closeout](closeout-2026-09-15.md) records the installed package,
+native-panel and coordinate-import checks, saved-frame replay, full software
+regression, and normal N.I.N.A. exit after the operator ended testing due to clouds.
+
+- The corrected Stellarium import and catalogue-guided fresh-field registration
+  are in the production runner. The WR152 import agreed with an independent
+  catalogue reference within about 0.010 arcsec in this example, and 12 saved-frame
+  registrations passed. Neither proves complete .203 on-sky slit placement or
+  science acquisition. Sparse fields, competing matches, field rotation, changed
+  epochs and missing fresh evidence remain legitimate stopping conditions.
+- Import normalization removes the interface's aberration displacement; it is
+  not a general six-dimensional proper-motion/parallax propagation service for
+  arbitrary source epochs. Moving targets and unsupported source semantics are
+  not silently interpreted as fixed catalogue stars.
+- Main-mirror focus on .199 reached `VerifiedAtOrigin`, not `Improved`: the
+  original position was optically rechecked after repeated A/B visits. The site's
+  roughly 180–200-step backlash estimate and 300-step overshoot setting are not
+  universal defaults or a precise mechanical calibration. See the
+  [focus recovery evidence](sep-main-focus-recovery-20260914.md).
+- Phase 1 workflow nodes are read-only. Free graph editing and template wiring
+  are not implemented. Native Advanced Sequencer-triggered focus and the
+  dual-N.I.N.A. photometry worker still require their own hardware acceptance.
+- A static short-exposure strategy description still mentions three frames;
+  the current bounded saturation-recovery policy can use up to six, with at most
+  three exposure reductions. Runtime counters/evidence describe the actual
+  limit. This wording mismatch is not a different acquisition path.
+- Calibrated spectral quality, precision photometry and unattended operation
+  remain outside the recorded acceptance. Earlier multi-target success must not
+  be relabelled as validation of this installed version.
+
+## Historical closeout boundary (2026-09-13, source/build 0.4.0.191)
 
 The [September 13 closeout](closeout-2026-09-13.md) records the operator's first
 manual one-click multi-target milestone: Mirach (.181), Gamma Cas (.183) and

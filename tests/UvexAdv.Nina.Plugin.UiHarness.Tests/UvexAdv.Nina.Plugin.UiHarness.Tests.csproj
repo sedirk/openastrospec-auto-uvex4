@@ -23,6 +23,10 @@
 
   <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
     <Reference Include="NINA" HintPath="$(NinaInstallDir)\NINA.dll" Private="true" />
+    <Reference Include="OxyPlot" HintPath="$(NinaInstallDir)\OxyPlot.dll" Private="true" />
+    <Reference Include="OxyPlot.Contrib.Wpf" HintPath="$(NinaInstallDir)\OxyPlot.Contrib.Wpf.dll" Private="true" />
+    <Reference Include="OxyPlot.Wpf" HintPath="$(NinaInstallDir)\OxyPlot.Wpf.dll" Private="true" />
+    <Reference Include="NINA.CustomControlLibrary" HintPath="$(NinaInstallDir)\NINA.CustomControlLibrary.dll" Private="true" />
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="true" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="true" />
     <Reference Include="NINA.Equipment" HintPath="$(NinaInstallDir)\NINA.Equipment.dll" Private="true" />

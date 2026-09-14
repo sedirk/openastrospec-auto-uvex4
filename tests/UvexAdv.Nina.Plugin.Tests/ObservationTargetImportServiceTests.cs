@@ -465,6 +465,7 @@ public sealed class ObservationTargetImportServiceTests
         var target = Activator.CreateInstance(dsoType, "Selected target", coordinates, null)!;
         SetProperty(target, "Name", "Selected target");
         var planetarium = CreatePlanetariumProxy(dsoType, TaskFromResult(dsoType, target));
+        ((DynamicInterfaceProxy)planetarium).Values["get_Name"] = "Other native planetarium";
         var source = CreateNinaPlanetariumSource(planetarium);
 
         var snapshot = await InvokePlanetariumCaptureAsync(source);

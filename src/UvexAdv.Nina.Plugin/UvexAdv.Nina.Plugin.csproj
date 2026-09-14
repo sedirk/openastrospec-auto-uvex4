@@ -27,6 +27,7 @@
   <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
     <Reference Include="ASCOM.Exceptions" HintPath="$(NinaInstallDir)\ASCOM.Exceptions.dll" Private="false" />
     <Reference Include="Accord" HintPath="$(NinaInstallDir)\Accord.dll" Private="false" />
+    <Reference Include="AvalonDock" HintPath="$(NinaInstallDir)\AvalonDock.dll" Private="false" />
     <Reference Include="NINA" HintPath="$(NinaInstallDir)\NINA.dll" Private="false" />
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="false" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="false" />

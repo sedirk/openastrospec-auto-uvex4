@@ -5,6 +5,14 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3SepCatalogPrimaryPolicyTests
 {
+    [Fact]
+    public void SaturatedCompanionOutsidePrimaryAssociationDoesNotVetoPrimary()
+    {
+        var companion=Parent(Prediction.X+Vector.X,Prediction.Y+Vector.Y) with { SaturatedFraction=.02 };
+        Assert.Equal("G3_SEP_CATALOG_PRIMARY_REGION_MEASURED",Measure(Image(Parent(),companion)).Gate.Code);
+        Assert.Equal(G3ShortExposurePolicy.SaturatedCode,
+            Measure(Image(Parent() with { SaturatedFraction=.02 })).Gate.Code);
+    }
     private static readonly PixelPoint Prediction=new(811.5747,402.4852), Vector=new(-4.1746,24.753);
     private static SepPositionComponent Parent(double x=808.72768,double y=407.27273)=>
         new(x,y,8,2,1126773,30336,1088,0,60,100,[(int)x-15,(int)y-15,31,31],0,1);

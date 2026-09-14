@@ -77,6 +77,9 @@ internal sealed partial class RealObservationStageRunner
             return null;
         }
 
+        await PublishTargetBranchAsync(context, TargetAcquisitionBranch.CalibratedGhost,
+            "TARGET_BRANCH_FALLBACK", "直接取场证据不足，检查已启用的鬼影辅助；必须已有独立标定与外部目标身份，不从当前图猜模板。",
+            reference.Captured.Capture.Path, cancellationToken).ConfigureAwait(false);
         var ghost = commissioning?.Value.GhostAssistance;
         if (ghost is null)
         {
@@ -388,6 +391,10 @@ internal sealed partial class RealObservationStageRunner
         bool rehashReferenceSource = true)
     {
         var result = GhostUnavailableResult(mode, unavailableGate);
+        await PublishTargetBranchAsync(context, TargetAcquisitionBranch.CalibratedGhost,
+            "TARGET_BRANCH_BLOCKED", $"{unavailableGate.Code}: {unavailableGate.Message} " +
+                (result.Decision == GhostAssistanceDecision.PauseNeedsAttention ? "显式要求的鬼影分支未通过，不能跳过。" : "本分支不适用，继续原有 WCS / 有界邻场后备。"),
+            reference.Captured.Capture.Path, cancellationToken).ConfigureAwait(false);
         var path = await PublishGhostAssistanceEvidenceAsync(
             context,
             sequence,

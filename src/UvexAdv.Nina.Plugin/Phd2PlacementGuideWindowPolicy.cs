@@ -1,4 +1,5 @@
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -8,6 +9,13 @@ internal sealed record Phd2SlitApertureResidual(
 
 internal static class Phd2PlacementGuideWindowPolicy
 {
+    internal static string FailureCode(bool deadlineExpired, int completedWindows) =>
+        deadlineExpired && completedWindows == 0 ? "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" : "PHD2_GUIDE_WINDOW_NOT_STABLE";
+
+    internal static bool HasMeasuredPositionAuthority(Phd2TargetPositionAuthority authority) => authority is
+        Phd2TargetPositionAuthority.DetectedTargetCentroid or Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid or
+        Phd2TargetPositionAuthority.CatalogWcsRegisteredField;
+
     internal static Phd2SlitApertureResidual? ProjectOnMeasuredSlit(PixelPoint target, SlitGeometry slit)
     {
         if (!double.IsFinite(target.X) || !double.IsFinite(target.Y) ||

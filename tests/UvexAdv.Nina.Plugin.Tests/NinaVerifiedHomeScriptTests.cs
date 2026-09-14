@@ -28,6 +28,14 @@ public sealed class NinaVerifiedHomeScriptTests
     }
 
     [Fact]
+    public void FreshIdleSessionMayOmitAnObservationRunId()
+    {
+        var source = Script();
+        Assert.Contains("previousObservationRunId = if ($null -ne $snapshot.PSObject.Properties['observationRunId'])", source);
+        Assert.Contains("{ $snapshot.observationRunId } else { $null }", source);
+    }
+
+    [Fact]
     public void ConfirmationRequiresRepeatedFreshStationaryHomeReadbacksWithoutLedgerChanges()
     {
         var source = Script();

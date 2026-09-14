@@ -234,6 +234,11 @@ public sealed class ObservationRunCoordinator : IDisposable
                     continue;
                 }
 
+                // A published sub-gate is not a completed stage. Emit the canonical
+                // completion only after the runner has returned an advancing result,
+                // so read-only workflow views need not guess from intermediate gates.
+                AddEvent(ObservationRunState.RunningAuto, stage, "STAGE_COMPLETED",
+                    $"{result.Gate.Code}: {result.Gate.Message}", result.EvidencePath);
                 stageIndex++;
                 await RunCheckpointAsync(plan, runner, context, stageIndex < Stages.Count ? Stages[stageIndex] : null, stageIndex, cancellationToken).ConfigureAwait(false);
             }

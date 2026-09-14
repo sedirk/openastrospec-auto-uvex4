@@ -28,7 +28,33 @@ Do not edit a frozen design record or its hash manifest unless the user explicit
 
 ## Hardware authorization
 
-Source inspection, simulation, compilation, tests, and read-only status checks do not authorize equipment movement or acquisition. Unless the current user request explicitly authorizes the relevant action, do not:
+### Standing authorization: reported observation blockers (owner, 2026-09-14)
+
+When the owner reports another blocker in this project's N.I.N.A. observation or
+focus workflow, including by sending a failure screenshot, treat it as a request
+to **fix the software, verify it, install the exact plugin artifact and restart
+N.I.N.A.** Do not stop after diagnosis or repeatedly ask whether to implement,
+install or restart. This standing authorization remains effective until the owner
+revokes it or gives a conflicting instruction. It is the narrow exception for
+N.I.N.A. installation/restart to the explicit-current-request rule below.
+
+- Read the evidence needed to make a sound fix, preserve raw observations and
+  existing changes, and run focused regressions plus the required release checks.
+  "Directly fix" does not mean guessing at the cause or removing identity/safety
+  checks merely to make a run pass.
+- Before deployment, use the existing frontend/backend cancellation boundary to
+  stop the blocked run without starting mechanical recovery, confirm acquisition
+  and device motion are idle, back up Profile and plugin, then exit N.I.N.A.
+  normally. Install, restart, verify the loaded version and actual plugin panels,
+  and report the result. Do not force-kill a busy or unconfirmed device owner;
+  report that exceptional blocker if normal safe shutdown cannot be confirmed.
+- This authorizes neither a new observation/exposure nor a slew, home, focus move,
+  roof/cover movement, automatic resume, firmware update or unrelated service/
+  PHD2 restart. Those still require a separate applicable observing or maintenance
+  authorization. Do not assume restart means continuing an old run.
+- Do not turn replay or installation checks into a claim of real-sky success.
+
+Source inspection, simulation, compilation, tests, and read-only status checks do not authorize equipment movement or acquisition. Except for the standing N.I.N.A. blocker-maintenance authorization above, unless the current user request explicitly authorizes the relevant action, do not:
 
 - slew or pulse the mount;
 - open, close, or move the roof/dome;

@@ -52,7 +52,8 @@ function Save-Audit([string]$Name, [object]$Data) {
 Save-Audit 'intent.json' ([ordered]@{
     timestampUtc = [DateTimeOffset]::UtcNow
     owner = 'NINA telescope mediator'; operatorAuthorized = $true
-    previousObservationRunId = $snapshot.observationRunId
+    # A freshly started idle UI has no run yet; the JSON serializer omits nulls.
+    previousObservationRunId = if ($null -ne $snapshot.PSObject.Properties['observationRunId']) { $snapshot.observationRunId } else { $null }
     previousRunState = $snapshot.runState; pluginVersion = $snapshot.pluginVersion
     telescopeId = $ExpectedTelescopeId; mountBefore = $mount; phdStateBefore = $phd
     roofCommandAllowed = $false; oldLedgerModified = $false

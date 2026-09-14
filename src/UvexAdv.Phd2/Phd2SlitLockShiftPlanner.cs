@@ -242,6 +242,8 @@ public enum Phd2TargetPositionAuthority
     /// topology and centroid remain mandatory residual evidence.
     /// </summary>
     CatalogWcsIdentityWithSaturatedTopologyCentroid,
+    /// <summary>Fixed catalogue sample point transferred by independently measured field stars; no target flux/centroid claim.</summary>
+    CatalogWcsRegisteredField,
 }
 
 public sealed record Phd2LockShiftSafetySnapshot(
@@ -782,6 +784,11 @@ public static class Phd2SlitLockShiftPlanner
             if (measurement.FluxMetric != 0 ||
                 !string.Equals(measurement.FluxEvidenceLabel, "CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE", StringComparison.Ordinal))
                 return Denied("G3_CATALOG_WCS_AUTHORITY_INVALID", "Catalogue-WCS target geometry must explicitly mark target flux as not applicable and must not fabricate a flux metric.");
+        }
+        else if (measurement.TargetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsRegisteredField)
+        {
+            if (measurement.FluxMetric != 0 || measurement.FluxEvidenceLabel != "REGISTERED_CATALOG_WCS_TARGET_FLUX_NOT_APPLICABLE")
+                return Denied("G3_REGISTERED_CATALOG_AUTHORITY_INVALID", "Registered catalogue geometry must retain explicit N/A target flux.");
         }
         else if (measurement.TargetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid)
         {

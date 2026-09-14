@@ -221,6 +221,13 @@ authorized by enabling the receiver.
 
 ## 8. Failure and recovery rules
 
+**Maintenance authorization (2026-09-14, ADR-0017):** an owner-reported observation
+or focus blocker authorizes the assisting maintainer to fix, verify, install and
+normally restart N.I.N.A. without another install/restart confirmation, after a
+confirmed idle cancellation boundary. This standing instruction is not a runtime
+auto-resume or hardware-motion authorization; the failure rules below, device
+ownership and science acceptance remain unchanged. See `AGENTS.md` for scope.
+
 - A cancellation request prevents new motion/exposure promptly and leaves all services in an inspectable state.
 - A solve or identification failure invokes only a bounded recovery plan, then enters `PausedNeedsAttention` with the retained evidence and failure reason.
 - Guide loss prevents new ATR exposures. The current exposure is retained and flagged or aborted only according to an explicit threshold policy.

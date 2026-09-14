@@ -143,6 +143,10 @@ public static partial class G3ShortPositionMeasurementPolicy
         var separation = Distance(first.Identification.Target.Centroid, second.Identification.Target.Centroid);
         var metrics = new Dictionary<string, double> { ["shortRepeatSeparationPixels"] = separation,
             ["maximumShortRepeatSeparationPixels"] = MaximumRepeatSeparationPixels };
+        if ((G3SepShortPositionPolicy.IsSplitParent(first) || G3SepShortPositionPolicy.IsSplitParent(second))
+            && !G3SepShortPositionPolicy.IsUnsplitParent(first) && !G3SepShortPositionPolicy.IsUnsplitParent(second))
+            return GateResult.Unknown("G3_SEP_PARENT_BLEND_UNRESOLVED",
+                "Both whole-parent measurements remain split. A common parent label and matching photocentre alone cannot resolve a persistent blend; an independent unsplit witness or catalogue-primary route is required.", metrics);
         return double.IsFinite(separation) && separation <= MaximumRepeatSeparationPixels
             ? GateResult.Pass("G3_SHORT_REPEAT_CONFIRMED", "Independent compact positions agree for coarse handoff; fresh fine residual remains mandatory.", metrics)
             : GateResult.Unknown("G3_SHORT_REPEAT_DISAGREES", "Independent short-frame positions disagree; do not move from an uncertain centre.", metrics);
@@ -156,7 +160,7 @@ public static partial class G3ShortPositionMeasurementPolicy
     /// </summary>
     public static G3ShortPositionConfirmationDecision EvaluateConfirmation(
         G3ShortPositionMeasurement? previous, G3ShortPositionMeasurement current,
-        string? previousHash, string currentHash, int attempt, double recognitionRadius)
+        string? previousHash, string currentHash, int attempt, double recognitionRadius, int maximumFrames = MaximumFrames)
     {
         var measured = current.Gate.Disposition == GateDisposition.Passed && current.Identification.Target is not null;
         var repeat = previous is null ? null : ConfirmRepeat(previous, current, previousHash ?? "", currentHash);
@@ -166,7 +170,8 @@ public static partial class G3ShortPositionMeasurementPolicy
         var gate = !measured ? current.Gate : repeat ?? (current.RequiresIndependentRepeat
             ? GateResult.Unknown("G3_SHORT_REPEAT_REQUIRED", "A second independent valid short position is required.")
             : current.Gate);
-        if (attempt is < 1 or > MaximumFrames || currentHash.Length != 64 || !currentHash.All(Uri.IsHexDigit))
+        if (maximumFrames is < MaximumFrames or > G3ShortExposurePolicy.AbsoluteMaximumFrames
+            || attempt < 1 || attempt > maximumFrames || currentHash.Length != 64 || !currentHash.All(Uri.IsHexDigit))
             gate = GateResult.Unknown("G3_SHORT_CONFIRMATION_INVALID", "Invalid frame index or hash; no further capture is authorized by this image policy.");
         else if (measured && (!double.IsFinite(spread) || spread < 0 ||
             !double.IsFinite(recognitionRadius) || recognitionRadius <= 0 ||
@@ -177,16 +182,16 @@ public static partial class G3ShortPositionMeasurementPolicy
         if (current.Gate.Metrics is not null) foreach (var item in current.Gate.Metrics) metrics[item.Key] = item.Value;
         if (repeat?.Metrics is not null) foreach (var item in repeat.Metrics) metrics[item.Key] = item.Value;
         metrics["shortPositionFrames"] = attempt;
-        metrics["maximumShortPositionFrames"] = MaximumFrames;
+        metrics["maximumShortPositionFrames"] = maximumFrames;
         metrics["shortPositionSpreadPixels"] = spread;
         gate = gate with { Metrics = metrics };
         var accepted = measured && gate.Disposition == GateDisposition.Passed;
-        var retry = !accepted && attempt is >= 1 and < MaximumFrames && gate.Code is
+        var retry = !accepted && attempt >= 1 && attempt < maximumFrames && gate.Code is
             "G3_SHORT_REPEAT_REQUIRED" or "G3_SHORT_REPEAT_DISAGREES" or
             "G3_SHORT_CONTOUR_TRUNCATED" or "G3_SHORT_CONTOUR_BLENDED" or
             "G3_SHORT_WINGS_INCOMPLETE" or "G3_SHORT_CONTOURS_DISAGREE" or "G3_SHORT_CORE_TOO_LARGE" or
             "G3_SHORT_UNSATURATED_UNMEASURED" or "G3_SHORT_CATALOG_PRIMARY_NOT_MEASURED" or
-            "G3_SEP_UNMEASURED" or "G3_SEP_AMBIGUOUS" or "G3_SEP_CATALOG_PRIMARY_UNMEASURED";
+            "G3_SEP_UNMEASURED" or "G3_SEP_AMBIGUOUS" or "G3_SEP_PARENT_BLEND_UNRESOLVED" or "G3_SEP_CATALOG_PRIMARY_UNMEASURED" or G3ShortExposurePolicy.SaturatedCode;
         // A disagreeing frame must never replace a catalogue-established primary
         // with its companion. Keep the original anchor within this 3-frame window.
         var retainCatalogPrimary = previous is not null && G3ResolvedCompanionPositionPolicy.IsPrimaryBound(previous);

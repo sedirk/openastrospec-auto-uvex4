@@ -27,6 +27,8 @@ using UvexAdv.Phd2;
 namespace UvexAdv.Nina.Plugin;
 
 [Export(typeof(IDockableVM))]
+[Export(typeof(ObservationDockable))]
+[PartCreationPolicy(CreationPolicy.Shared)]
 [SupportedOSPlatform("windows")]
 public sealed class ObservationDockable : DockableVM, IDisposable
 {
@@ -38,13 +40,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         new(4, "槽位 4 · 标称 35 µm"),
     ];
 
-    private static readonly IReadOnlyList<TargetObservabilityChoice> TargetObservabilityChoices =
+    internal static readonly IReadOnlyList<TargetObservabilityChoice> TargetObservabilityChoices =
     [
-        new(TargetObservabilityClass.DirectStellar, "可直接识别的恒星", "用目标星质心复核 WCS 预测。"),
-        new(TargetObservabilityClass.FaintPointSource, "暗点源 / 类星体", "以目录 WCS 几何为准，不要求 G3 中看见目标核。"),
-        new(TargetObservabilityClass.CompactExtended, "紧致星云 / 行星状星云", "以目录中心入缝；发射线 SNR 优先于连续谱。"),
-        new(TargetObservabilityClass.ExtendedNebula, "扩展星云", "以计划坐标作为取样位置，不把星云误当恒星。"),
-        new(TargetObservabilityClass.InvisibleInG3, "G3 中不可见", "允许目标峰完全不可见；依赖目录 WCS、旁星与光谱信号。"),
+        new(TargetObservabilityClass.DirectStellar, "恒星 · 优先实测星像", "优先实测星像，过曝时用 SEP 短帧复核；满足条件才回退到本轮 WCS 几何。"),
+        new(TargetObservabilityClass.FaintPointSource, "暗点源 / 类星体 · 目录定位", "不强求导星相机看见目标核；用本轮 WCS 定位计划坐标。"),
+        new(TargetObservabilityClass.CompactExtended, "紧致星云 / 行星状星云 · 目录定位", "用计划目录中心，不把不规则星云当作恒星质心；不改变光谱验收算法。"),
+        new(TargetObservabilityClass.ExtendedNebula, "扩展目标 · 指定坐标取样", "用计划坐标作为狭缝取样位置，而不是自动寻找最亮区域。"),
+        new(TargetObservabilityClass.InvisibleInG3, "导星图中不可见 · 目录定位", "允许目标峰不可见，仍须有本轮可信 WCS、狭缝位置与导星证据。"),
+        new(TargetObservabilityClass.AutoFromPlanetarium, "根据星图自动", "从本次导入的天体类别、星等推荐路线；未知类型明确提示，不根据名称猜测。"),
     ];
 
     private static readonly IReadOnlyList<PreparationOptionChoice> SpectralRegionChoices =
@@ -85,11 +88,28 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly ICameraMediator cameraMediator;
     private readonly IImagingMediator imagingMediator;
     private readonly ITelescopeMediator telescopeMediator;
+    private readonly Lazy<UvexCalibrationLibraryDockable> calibrationLibrary;
+    private AvalonDock.Layout.LayoutAnchorable? calibrationLibraryAnchorable;
+    private string calibrationLibraryNavigationOutcome = "NotRequested";
+    private AvalonDock.Layout.LayoutAnchorable? observationPanelAnchorable;
+    private string observationPanelNavigationOutcome = "NotRequested";
     private readonly CancellationTokenSource lifetime = new();
     private SepMainFocusViewModel? mainFocus;
     public SepMainFocusViewModel MainFocus => mainFocus ??= new(settings, host, realRunnerFactory,
-        () => CanUseManualAtrTools() && !IsManualUvexBusy && captureManualAtrSpectrumCommand.CanExecute(null),
+        MainFocusUnavailableReason,
         () => activeProfileService.ActiveProfile.Id.ToString(), () => { RaiseCommandStates(); });
+    private int selectedManualTabIndex;
+    public int SelectedManualTabIndex { get => selectedManualTabIndex; set { selectedManualTabIndex = value; RaisePropertyChanged(); } }
+    public ICommand ShowMainFocusCommand => new SimpleCommand(() => { SelectedManualTabIndex = 1; SelectedWorkspaceTabIndex = 1; });
+    public ICommand ShowWorkflowCommand => new SimpleCommand(() =>
+    {
+        SelectedWorkspaceTabIndex = 0;
+        ActivateObservationPanel();
+    });
+    public ObservationWorkflowGraph Workflow { get; private set; } = ObservationWorkflowProjection.Build(
+        new ObservationDashboardSnapshot(ObservationSnapshot.Idle,
+            new Dictionary<ObservationStage, GateResult>(),
+            new Dictionary<ObservationPreviewChannel, ObservationPreview>(), [], null));
     private readonly ObservationAutomationBridge automationBridge;
     private readonly SimpleAsyncCommand startSelectedModeCommand;
     private readonly SimpleAsyncCommand startSimulationCommand;
@@ -116,9 +136,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand openRunDirectoryCommand;
     private readonly SimpleCommand showObservationPlanCommand;
     private readonly SimpleCommand showAcquisitionPlanCommand;
+    private readonly SimpleCommand showAtrInspectorCommand;
+    private readonly SimpleAsyncCommand showCalibrationLibraryCommand;
     private readonly SimpleCommand showStartupRequirementsCommand;
     private readonly SimpleCommand showManualUvexControlCommand;
     private readonly SimpleCommand showAdvancedSettingsCommand;
+    private readonly SimpleCommand showDeviceBindingsSettingsCommand;
+    private readonly SimpleCommand showSafetySettingsCommand;
+    private readonly SimpleCommand showPreparationChecklistCommand;
+    private readonly SimpleCommand showNightSetupPreparationCommand;
     private readonly SimpleCommand saveAdvancedSettingsCommand;
     private readonly SimpleCommand autoFillConnectedNinaDevicesCommand;
     private readonly SimpleCommand selectNightSetupSnapshotCommand;
@@ -134,6 +160,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleAsyncCommand importFromFramingAssistantCommand;
     private readonly SimpleAsyncCommand importFromPlanetariumCommand;
     private readonly ObservationTargetDraftCommand applyTargetDraftCommand;
+    private readonly SimpleCommand usePlanetariumStrategyCommand;
     private readonly SimpleCommand bindCurrentAtrCameraCommand;
     private readonly SimpleCommand refreshAtrManualStatusCommand;
     private readonly SimpleAsyncCommand captureManualAtrSpectrumCommand;
@@ -253,7 +280,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         IPlanetariumFactory planetariumFactory,
         ICameraMediator cameraMediator,
         IImagingMediator imagingMediator,
-        ITelescopeMediator telescopeMediator)
+        ITelescopeMediator telescopeMediator,
+        Lazy<UvexCalibrationLibraryDockable> calibrationLibrary)
         : base(profileService)
     {
         activeProfileService = profileService;
@@ -264,6 +292,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         this.cameraMediator = cameraMediator;
         this.imagingMediator = imagingMediator;
         this.telescopeMediator = telescopeMediator;
+        this.calibrationLibrary = calibrationLibrary;
         targetImportService = ObservationTargetImportNinaSources.CreateService(
             framingAssistant,
             planetariumFactory,
@@ -292,6 +321,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         applyTargetDraftCommand = new ObservationTargetDraftCommand(
             () => new(TargetName, CatalogId, RightAscensionDegrees, DeclinationDegrees),
             draft => ApplyImportedTarget(draft.ToImportResult()), CanImportTarget);
+        usePlanetariumStrategyCommand = new SimpleCommand(
+            () => TargetObservability = TargetObservabilityClass.AutoFromPlanetarium, CanImportTarget);
         startSelectedModeCommand = new SimpleAsyncCommand(StartSelectedModeAsync, CanStart);
         startSimulationCommand = new SimpleAsyncCommand(StartSimulationAsync, CanStart);
         startRealCommand = new SimpleAsyncCommand(StartRealAsync, CanStartReal);
@@ -348,15 +379,53 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         openRunDirectoryCommand = new SimpleCommand(
             () => OpenContainingDirectory(RunManifestPath, "运行清单"),
             () => PathExists(RunManifestPath));
-        showManualUvexControlCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 1);
-        showObservationPlanCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 2);
+        showManualUvexControlCommand = new SimpleCommand(() => { SelectedManualTabIndex = 0; SelectedWorkspaceTabIndex = 1; });
+        showObservationPlanCommand = new SimpleCommand(() =>
+        {
+            SelectedWorkspaceTabIndex = 2;
+            SelectedPlanTabIndex = 0;
+            ActivateObservationPanel();
+        });
         showAcquisitionPlanCommand = new SimpleCommand(() =>
         {
             SelectedWorkspaceTabIndex = 2;
             SelectedPlanTabIndex = 1;
+            ActivateObservationPanel();
         });
-        showStartupRequirementsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 3);
+        showStartupRequirementsCommand = new SimpleCommand(() =>
+        {
+            SelectedPreparationTabIndex = 0;
+            SelectedWorkspaceTabIndex = 3;
+        });
+        showAtrInspectorCommand = new SimpleCommand(() =>
+        {
+            SelectedWorkspaceTabIndex = 4;
+            SelectedPreviewTabIndex = 2;
+            ManualAtrInspectionExpanded = true;
+            ActivateObservationPanel();
+        });
+        showCalibrationLibraryCommand = new SimpleAsyncCommand(ShowCalibrationLibraryAsync);
         showAdvancedSettingsCommand = new SimpleCommand(() => SelectedWorkspaceTabIndex = 6);
+        showDeviceBindingsSettingsCommand = new SimpleCommand(() =>
+        {
+            SelectedAdvancedCategoryIndex = 9;
+            SelectedWorkspaceTabIndex = 6;
+        });
+        showSafetySettingsCommand = new SimpleCommand(() =>
+        {
+            SelectedAdvancedCategoryIndex = 2;
+            SelectedWorkspaceTabIndex = 6;
+        });
+        showPreparationChecklistCommand = new SimpleCommand(() =>
+        {
+            SelectedPreparationTabIndex = 0;
+            SelectedWorkspaceTabIndex = 3;
+        });
+        showNightSetupPreparationCommand = new SimpleCommand(() =>
+        {
+            SelectedPreparationTabIndex = 1;
+            SelectedWorkspaceTabIndex = 3;
+        });
         saveAdvancedSettingsCommand = new SimpleCommand(SaveAdvancedSettings);
         autoFillConnectedNinaDevicesCommand = new SimpleCommand(
             AutoFillConnectedNinaDevices,
@@ -512,6 +581,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ShowStartupRequirementsCommand => showStartupRequirementsCommand;
     public ICommand ShowManualUvexControlCommand => showManualUvexControlCommand;
     public ICommand ShowAdvancedSettingsCommand => showAdvancedSettingsCommand;
+    public ICommand ShowDeviceBindingsSettingsCommand => showDeviceBindingsSettingsCommand;
+    public ICommand ShowSafetySettingsCommand => showSafetySettingsCommand;
+    public ICommand ShowPreparationChecklistCommand => showPreparationChecklistCommand;
+    public ICommand ShowNightSetupPreparationCommand => showNightSetupPreparationCommand;
     public ICommand SaveAdvancedSettingsCommand => saveAdvancedSettingsCommand;
     public ICommand AutoFillConnectedNinaDevicesCommand => autoFillConnectedNinaDevicesCommand;
     public ICommand SelectNightSetupSnapshotCommand => selectNightSetupSnapshotCommand;
@@ -527,8 +600,11 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public ICommand ImportFromFramingAssistantCommand => importFromFramingAssistantCommand;
     public ICommand ImportFromPlanetariumCommand => importFromPlanetariumCommand;
     public ICommand ApplyTargetDraftCommand => applyTargetDraftCommand;
+    public ICommand UsePlanetariumStrategyCommand => usePlanetariumStrategyCommand;
     public ICommand BindCurrentAtrCameraCommand => bindCurrentAtrCameraCommand;
     public ICommand RefreshAtrManualStatusCommand => refreshAtrManualStatusCommand;
+    public ICommand ShowAtrInspectorCommand => showAtrInspectorCommand;
+    public ICommand ShowCalibrationLibraryCommand => showCalibrationLibraryCommand;
     public ICommand CaptureManualAtrSpectrumCommand => captureManualAtrSpectrumCommand;
     public ICommand RefreshManualUvexStatusCommand => refreshManualUvexStatusCommand;
     public ICommand ConnectManualUvexCommand => connectManualUvexCommand;
@@ -589,6 +665,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.PreparationSpectralRegionPreset;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (string.Equals(settings.PreparationSpectralRegionPreset, value, StringComparison.Ordinal)) return;
             settings.PreparationSpectralRegionPreset = value;
             RaisePropertyChanged();
@@ -600,6 +677,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.PreparationCalibrationReferencePreset;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (string.Equals(settings.PreparationCalibrationReferencePreset, value, StringComparison.Ordinal)) return;
             settings.PreparationCalibrationReferencePreset = value;
             RaisePropertyChanged();
@@ -611,6 +689,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.PreparationSafetyCapabilityPreset;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (string.Equals(settings.PreparationSafetyCapabilityPreset, value, StringComparison.Ordinal)) return;
             settings.PreparationSafetyCapabilityPreset = value;
             ApplyPreparationSafetyCapability();
@@ -619,6 +698,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             RaisePropertyChanged(nameof(ModeDescription));
             RaisePropertyChanged(nameof(RealModeStatus));
             RaisePropertyChanged(nameof(RealModeStatusSummary));
+            RaisePropertyChanged(nameof(SelectedPreparationSafetyCapabilityDescription));
             RaiseCommandStates();
         }
     }
@@ -628,6 +708,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.PreparationOrderSortingFilterInstalled;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (settings.PreparationOrderSortingFilterInstalled == value) return;
             settings.PreparationOrderSortingFilterInstalled = value;
             RaisePropertyChanged();
@@ -653,6 +734,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => selectedTelescopeCandidate;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (Equals(selectedTelescopeCandidate, value)) return;
             selectedTelescopeCandidate = value;
             if (value is not null) settings.ExpectedTelescopeId = value.Id;
@@ -667,6 +749,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => selectedAtrCameraCandidate;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (Equals(selectedAtrCameraCandidate, value)) return;
             selectedAtrCameraCandidate = value;
             if (value is not null)
@@ -686,6 +769,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => selectedG3CameraCandidate;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (Equals(selectedG3CameraCandidate, value)) return;
             selectedG3CameraCandidate = value;
             if (value is not null)
@@ -716,6 +800,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => selectedQhyCameraCandidate;
         set
         {
+            if (!CanEditTargetPlan()) return;
             if (Equals(selectedQhyCameraCandidate, value)) return;
             selectedQhyCameraCandidate = value;
             if (value is not null) settings.ObservationExpectedQhyCameraId = value.Id;
@@ -766,14 +851,51 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         get => settings.ObservationTargetObservability;
         set
         {
+            if (!CanEditTargetPlan() || !Enum.IsDefined(value)) return;
             settings.ObservationTargetObservability = value;
             RaisePropertyChanged();
-            RaisePropertyChanged(nameof(TargetObservabilitySummary));
+            RaiseTargetStrategyProperties();
         }
     }
 
-    public string TargetObservabilitySummary =>
-        TargetObservabilityChoices.First(choice => choice.Value == TargetObservability).Description;
+    private TargetAcquisitionStrategyDecision TargetStrategy => TargetAcquisitionStrategyPolicy.Resolve(
+        TargetObservability,
+        new EquatorialTarget(TargetName, CatalogId, RightAscensionDegrees, DeclinationDegrees),
+        settings.ObservationTargetCatalogMetadata);
+
+    public string TargetObservabilitySummary => TargetStrategy.Summary;
+    public string TargetStrategyPrioritySummary => string.Join(Environment.NewLine,
+        TargetStrategy.OrderedBranches.Select((branch, index) => $"{index + 1}. {branch.Label} — {branch.Prerequisites}"));
+    public string TargetStrategyMetadataSummary => settings.ObservationTargetCatalogMetadata is { } metadata &&
+        TargetCatalogClassifier.IsBoundTo(metadata, new EquatorialTarget(TargetName, CatalogId, RightAscensionDegrees, DeclinationDegrees))
+        ? $"星图资料：{metadata.ObjectSubtype ?? metadata.ObjectType ?? "类型未提供"} · 星等 {(metadata.VisualMagnitude is { } mag ? mag.ToString("0.##", CultureInfo.InvariantCulture) : "未提供")} · {metadata.Source}"
+        : "没有与当前目标匹配的星图类别资料。点击“从第三方星图导入”可更新；手工改目标后旧资料不会沿用。";
+    private string targetStrategyRuntimeSummary = "本轮尚未执行目标定位；下面的优先级是计划，不是成功记录。";
+    public string TargetStrategyRuntimeSummary => targetStrategyRuntimeSummary;
+    private string targetStrategyRuntimeCode = string.Empty;
+    public string TargetStrategyRuntimeColor => targetStrategyRuntimeCode is "TARGET_BRANCH_BLOCKED" or "TARGET_STRATEGY_UNSUPPORTED_OBJECT" or "TARGET_STRATEGY_INVALID" ? "#FDA4AF" :
+        targetStrategyRuntimeCode == "TARGET_BRANCH_PASSED" ? "#86EFAC" : "#7DD3FC";
+    private string targetStrategyAttemptHistory = "尚无实际分支记录。";
+    public string TargetStrategyAttemptHistory => targetStrategyAttemptHistory;
+    private string? targetStrategyRunId;
+
+    private static string TargetBranchStatusLabel(string code) => code switch
+    {
+        "TARGET_BRANCH_PASSED" => "已验证",
+        "TARGET_BRANCH_BLOCKED" => "未通过",
+        "TARGET_STRATEGY_UNSUPPORTED_OBJECT" or "TARGET_STRATEGY_INVALID" => "策略未通过",
+        "TARGET_BRANCH_FALLBACK" => "转入后备方法",
+        "TARGET_BRANCH_SELECTED" => "正在尝试",
+        _ => "路线已规划，尚非成功",
+    };
+
+    private void RaiseTargetStrategyProperties()
+    {
+        RaisePropertyChanged(nameof(TargetObservabilitySummary));
+        RaisePropertyChanged(nameof(TargetStrategyPrioritySummary));
+        RaisePropertyChanged(nameof(TargetStrategyMetadataSummary));
+        automationBridge?.NotifyStateChanged();
+    }
 
     public double DeclinationDegrees
     {
@@ -799,7 +921,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     public int SelectedPlanTabIndex
     {
         get => selectedPlanTabIndex;
-        set { selectedPlanTabIndex = value; RaisePropertyChanged(); }
+        set
+        {
+            if (selectedPlanTabIndex == value) return;
+            selectedPlanTabIndex = value;
+            RaisePropertyChanged();
+            automationBridge?.NotifyStateChanged();
+        }
     }
 
     private void SaveAcquisitionPlan(AcquisitionPlanValues plan)
@@ -1539,24 +1667,28 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     {
         get
         {
-            var issueCount = RealModeEligibilityIssues().Count;
+            var issueCount = PreparationChecklistIssueCount;
             if (!ObservationUiPresentation.IsChinese(UiCulture))
             {
                 return issueCount == 0
                     ? settings.WeakSupervisionEnabled
-                        ? "⚠ Ready for supervised operation; missing environment adapters warn, explicit danger still blocks."
-                        : "✓ Full-unattended fields are complete; environment equipment and safe cleanup are revalidated at startup."
-                    : "Automatic-observation preparation is incomplete; manual UVEX control remains available. Resolve the highlighted groups in Automatic preparation.";
+                        ? "Static setup is complete for supervised operation; live conditions are checked at startup and explicit danger still blocks."
+                        : "Static setup is complete for the unattended policy; environment equipment and cleanup capabilities still require startup validation."
+                    : "Static automation requirements are incomplete; review the preparation checklist. Manual device control remains separate.";
             }
             return issueCount == 0
                 ? settings.WeakSupervisionEnabled
-                    ? "⚠ 已就绪：有人弱监督；环境适配器缺失只警告，明确危险仍阻断。"
-                    : "✓ 全无人监管资料已填写；启动时将核验环境设备并管理开顶与安全收尾。"
-                : "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。";
+                    ? "有人弱监督的静态资料齐全；设备与现场条件在启动时复核，明确危险仍阻断。"
+                    : "全无人监管策略的静态资料齐全；环境设备与收尾能力仍须启动核验。"
+                : "自动观测静态条件尚未齐全；请查看“自动准备”的启动清单。“设备手控”独立使用。";
         }
     }
 
     public int AutomaticPreparationIssueCount => RealModeEligibilityIssues().Count;
+    public int PreparationChecklistIssueCount => CountPreparationChecklistIssues(
+        AutomaticPreparationIssueCount, IsTargetPreparationMissing, IsSlitChoiceMissing);
+    internal static int CountPreparationChecklistIssues(int staticIssueCount, bool targetMissing, bool slitMissing) =>
+        staticIssueCount + (targetMissing ? 1 : 0) + (slitMissing ? 1 : 0);
     public bool IsTargetPreparationMissing =>
         string.IsNullOrWhiteSpace(TargetName) ||
         !double.IsFinite(RightAscensionDegrees) ||
@@ -1576,15 +1708,22 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string.IsNullOrWhiteSpace(settings.ObservationExpectedQhyCameraId) ||
         settings.ObservationExpectedQhyCameraId.StartsWith("SIM-", StringComparison.OrdinalIgnoreCase) ||
         settings.Phd2ProfileId < 0 ||
-        string.IsNullOrWhiteSpace(settings.Phd2CameraStableId);
-    public string DevicePreparationStatus => IsDevicePreparationMissing
+        string.IsNullOrWhiteSpace(settings.Phd2ProfileName) ||
+        string.IsNullOrWhiteSpace(settings.Phd2CameraStableId) ||
+        string.IsNullOrWhiteSpace(settings.Phd2CameraName) ||
+        string.IsNullOrWhiteSpace(settings.Phd2MountName) ||
+        string.IsNullOrWhiteSpace(settings.Phd2RuntimeCameraName) ||
+        string.IsNullOrWhiteSpace(settings.Phd2RuntimeMountName) ||
+        string.IsNullOrWhiteSpace(settings.Phd2ProfileEvidenceSha256);
+    public string DevicePreparationStatus => PreparationDeviceSummary;
+    public string PreparationDeviceSummary => IsDevicePreparationMissing
         ? ObservationUiPresentation.Text(
-            "未完成：请从已保存的配置候选中选择设备；这里只记录身份，不会连接设备。",
-            "Incomplete: select devices from the saved configuration candidates. This records identity without connecting equipment.",
+            "期望设备身份尚未齐全；请在“高级设置 → 设备绑定”加载或核对保存的身份。",
+            "Expected device identities are incomplete; load or review saved identities in Advanced settings → Device bindings.",
             UiCulture)
         : ObservationUiPresentation.Text(
-            $"已绑定：赤道仪 {settings.ExpectedTelescopeId} · 光谱相机 {settings.ObservationExpectedAtrCameraId} · 测光相机 {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
-            $"Bound: mount {settings.ExpectedTelescopeId} · spectroscopy camera {settings.ObservationExpectedAtrCameraId} · photometry camera {settings.ObservationExpectedQhyCameraId} · PHD2 {settings.Phd2ProfileName}",
+            "已记录赤道仪、光谱相机、PHD2 导星相机和测光相机的期望身份；尚不代表设备已连接或核验通过。",
+            "Expected mount, spectroscopy, PHD2 guide-camera and photometry-camera identities are recorded; this does not mean devices are connected or verified.",
             UiCulture);
     public bool IsCommissioningPreparationMissing =>
         !settings.RealModeCommissioned ||
@@ -1594,23 +1733,80 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         string.IsNullOrWhiteSpace(settings.CommissioningPresetSha256) ||
         string.IsNullOrWhiteSpace(settings.CommissioningHardwareFingerprintSha256);
     public string CommissioningPreparationStatus => IsCommissioningPreparationMissing
-        ? $"未完成：{preparationEvidence.InstallationStatus}"
-        : $"已导入：{settings.CommissioningPresetId}";
+        ? ObservationUiPresentation.Text("标定方案尚待加载或核验；请在“高级设置 → 设备绑定”处理。", "The commissioning setup still needs loading or verification in Advanced settings → Device bindings.", UiCulture)
+        : ObservationUiPresentation.Text("已记录标定方案；完整性与适用性仍受启动校验约束。", "A commissioning setup is recorded; integrity and applicability remain subject to startup validation.", UiCulture);
     public bool IsNightSetupPreparationMissing =>
         string.IsNullOrWhiteSpace(settings.NightSetupSnapshotPath) ||
         !File.Exists(settings.NightSetupSnapshotPath) ||
         string.IsNullOrWhiteSpace(settings.NightSetupSnapshotSha256);
     public string NightSetupPreparationStatus => IsNightSetupPreparationMissing
-        ? $"未完成：{preparationEvidence.NightSetupStatus}"
-        : $"已选择：{settings.ObservationNightSetupId} · {Path.GetFileName(settings.NightSetupSnapshotPath)}";
+        ? ObservationUiPresentation.Text("尚未选择锁定的本夜配置；请在“本夜配置”导入。准备草稿不能代替锁定配置。", "No locked Night Setup is selected; import one in Night Setup. A preparation draft cannot replace it.", UiCulture)
+        : ObservationUiPresentation.Text($"已选择本夜配置：{settings.ObservationNightSetupId}；启动时仍需核对实际光学状态。", $"Selected Night Setup: {settings.ObservationNightSetupId}; actual optical state still requires validation at startup.", UiCulture);
     public bool IsSlitChoiceMissing => ExpectedUvexSlitPosition is < 1 or > 4;
+    public string PreparationSlitStatus => IsSlitChoiceMissing
+        ? ObservationUiPresentation.Text("请选择期望狭缝槽位；选择本身不会移动狭缝轮。", "Select the expected slit slot; the selection itself does not move the wheel.", UiCulture)
+        : ObservationUiPresentation.Text($"期望槽位 {ExpectedUvexSlitPosition}；仅为配置要求，不是实时位置或到位证明。", $"Expected slot {ExpectedUvexSlitPosition}; this is a configuration requirement, not live position or arrival evidence.", UiCulture);
+    public string PreparationSafetySummary => settings.WeakSupervisionEnabled
+        ? ObservationUiPresentation.Text("有人弱监督；不会自动开关屋顶，明确危险仍阻断。", "Supervised operation; no automatic roof motion, and explicit danger still blocks.", UiCulture)
+        : ObservationUiPresentation.Text("全无人监管策略；启动时必须通过环境与安全收尾能力核验。", "Full-unattended policy; live environment and safe-cleanup capabilities must pass startup validation.", UiCulture);
+    public string SelectedPreparationSafetyCapabilityDescription => settings.WeakSupervisionEnabled
+        ? ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。缺失的环境能力按项警告降级，不授予无人值守权限；已连接设备明确报告危险仍阻断。不会自动开关屋顶。", "This changes real-run safety requirements, not just draft notes. Missing environment capabilities degrade individually with warnings and never grant unattended authority; explicit danger from a connected device still blocks. No automatic roof motion is allowed.", UiCulture)
+        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。真实流程启动后，仅在实时安全门通过时才可开顶；结束或终端故障时需按顺序收镜盖、停放赤道仪并关顶。选择本身不会连接或移动设备。", "This changes real-run safety requirements, not just draft notes. After a real run starts, roof opening requires passing live safety gates; completion or terminal failure requires closing the cover, parking the mount and closing the roof in order. Selection itself does not connect or move equipment.", UiCulture);
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
     public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
-        ? "已通过：后台配置结构、设备所有权和运动限额完整。"
-        : $"尚未通过：当前还有 {AutomaticPreparationIssueCount} 项一致性检查未满足。这里仅汇总结果；请在上方导入锁定包或生成准备草稿，不需要逐项填写哈希和工程限额。";
-    public string AutomaticPreparationSummary => AutomaticPreparationIssueCount == 0
-        ? "✓ 表单已完成；启动时会自动读取实时状态并做最后复核。"
-        : "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。";
+        ? ObservationUiPresentation.Text("当前静态运行参数检查无阻断；不代表实时设备已经就绪。", "Current static run-parameter checks have no blockers; this does not mean live equipment is ready.", UiCulture)
+        : ObservationUiPresentation.Text($"静态运行参数有 {AutomaticPreparationIssueCount} 项待处理；请按启动清单定位，详细原因在高级设置。", $"Static run parameters have {AutomaticPreparationIssueCount} outstanding checks; use the preparation checklist, with detailed reasons in Advanced settings.", UiCulture);
+    public string AutomaticPreparationSummary => FormatPreparationSummary(PreparationChecklistIssueCount, UiCulture);
+    internal static string FormatPreparationSummary(int issueCount, CultureInfo culture) => issueCount == 0
+        ? ObservationUiPresentation.Text("当前静态清单无待处理项；尚未检查设备连接、实际光学状态或实时安全条件。", "The current static checklist has no outstanding items; device connections, actual optical state and live safety conditions have not been checked.", culture)
+        : ObservationUiPresentation.Text($"静态清单有 {issueCount} 项待处理；下方按类别列出处理入口。本页不连接或移动设备。", $"The static checklist has {issueCount} outstanding items; grouped actions are listed below. This page does not connect or move equipment.", culture);
+
+    public IReadOnlyList<string> PreparationChecklistIssues => BuildPreparationChecklistIssues(
+        RealModeEligibilityIssues(), IsTargetPreparationMissing, IsDevicePreparationMissing,
+        IsCommissioningPreparationMissing, IsNightSetupPreparationMissing, IsSlitChoiceMissing, UiCulture);
+
+    internal static IReadOnlyList<string> BuildPreparationChecklistIssues(
+        IEnumerable<string> staticIssues, bool targetMissing, bool devicesMissing,
+        bool commissioningMissing, bool nightSetupMissing, bool slitMissing, CultureInfo culture)
+    {
+        var actions = new List<string>();
+        string Text(string chinese, string english) => ObservationUiPresentation.Text(chinese, english, culture);
+        var deviceAction = Text("设备身份：在高级设置 → 设备绑定核对已保存的选择与所有权。", "Device identities: review saved selections and ownership in Advanced settings → Device bindings.");
+        var commissioningAction = Text("安装标定：在高级设置 → 设备绑定加载并核验完整标定方案。", "Commissioning: load and verify the complete setup in Advanced settings → Device bindings.");
+        var nightAction = Text("本夜配置：导入锁定配置；草稿不构成启动依据。", "Night Setup: import a locked setup; a draft cannot qualify a run for startup.");
+        if (targetMissing) actions.Add(Text("观测目标：在观测计划中选择目标并确认 J2000 坐标。", "Target: select the object and verify J2000 coordinates in Observation plan."));
+        if (devicesMissing) actions.Add(deviceAction);
+        if (commissioningMissing) actions.Add(commissioningAction);
+        if (nightSetupMissing) actions.Add(nightAction);
+        if (slitMissing) actions.Add(Text("期望狭缝：在本夜配置中选择有效槽位；选择不会移动设备。", "Expected slit: select a valid slot in Night Setup; selecting it does not move equipment."));
+
+        foreach (var issue in staticIssues)
+        {
+            bool Has(params string[] terms) => terms.Any(term => issue.Contains(term, StringComparison.OrdinalIgnoreCase));
+            // Only return fixed operator-facing categories. Raw IDs, file paths,
+            // hashes, limits and exception details remain in Advanced settings.
+            if (Has("文件模板", "FilePattern"))
+                actions.Add(Text("数据归档：在高级设置 → 运行与归档检查目标分目录模板。", "Data archiving: review target-directory naming in Advanced settings → Run and archive."));
+            else if (Has("本夜", "Night Setup", "NightSetup")) actions.Add(nightAction);
+            else if (Has("亮目标", "翼部"))
+                actions.Add(Text("亮星翼部：在高级设置核对显式启用的例外分支参数。", "Bright-target wings: review parameters for the explicitly enabled exception in Advanced settings."));
+            else if (Has("WCS", "长曝光解算", "移动后", "单动作"))
+                actions.Add(Text("解算与居中：在高级设置核对曝光档位及有界运动参数。", "Solving and centering: review exposure tiers and bounded motion parameters in Advanced settings."));
+            else if (Has("搜索", "G3 曝光", "G3 连续"))
+                actions.Add(Text("邻场与导星：在高级设置核对导星相机采集与有界搜索参数。", "Search and guiding: review guide-camera acquisition and bounded-search parameters in Advanced settings."));
+            else if (Has("快速配对", "WideToSlitTransferMode"))
+                actions.Add(Text("双相机配对：在高级设置核对配对策略；候选不能授权运动。", "Camera pairing: review the pairing policy in Advanced settings; candidates do not authorize motion."));
+            else if (Has("QHY 并行", "QHY 最少", "QHY 最低", "QHY 最大", "并行曝光", "并行滤镜"))
+                actions.Add(Text("并行测光：在高级设置核对滤镜循环与测光质量要求。", "Parallel photometry: review filter cycles and quality requirements in Advanced settings."));
+            else if (Has("DeviceId", "StableId", "PHD2", "No_Device", "设备所有权")) actions.Add(deviceAction);
+            else if (Has("安全", "天气", "无人", "监督", "屋顶", "镜盖", "safety", "weather", "unattended", "supervision"))
+                actions.Add(Text("安全策略：在高级设置 → 站点与模拟核对运行策略与环境能力要求。", "Safety policy: review the operating policy and environment requirements in Advanced settings → Site and simulation."));
+            else if (Has("标定", "commissioning", "指纹", "已调试", "狭缝光学")) actions.Add(commissioningAction);
+            else
+                actions.Add(Text("其他静态条件：在高级设置 → 运行与归档查看详细原因。", "Other static requirements: inspect detailed reasons in Advanced settings → Run and archive."));
+        }
+        return actions.Distinct(StringComparer.Ordinal).ToArray();
+    }
 
     public string StateText { get => stateText; private set { stateText = value; RaisePropertyChanged(); } }
     public string CurrentStageText { get => currentStageText; private set { currentStageText = value; RaisePropertyChanged(); } }
@@ -1836,9 +2032,102 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             if (selectedWorkspaceTabIndex == value) return;
             selectedWorkspaceTabIndex = value;
             RaisePropertyChanged();
+            automationBridge?.NotifyStateChanged();
+        }
+    }
+    private int selectedAdvancedCategoryIndex;
+    public int SelectedAdvancedCategoryIndex
+    {
+        get => selectedAdvancedCategoryIndex;
+        set
+        {
+            if (value is < 0 or > 9 || selectedAdvancedCategoryIndex == value) return;
+            selectedAdvancedCategoryIndex = value;
+            RaisePropertyChanged();
+        }
+    }
+    private int selectedPreparationTabIndex;
+    public int SelectedPreparationTabIndex
+    {
+        get => selectedPreparationTabIndex;
+        set
+        {
+            if (value is < 0 or > 1 || selectedPreparationTabIndex == value) return;
+            selectedPreparationTabIndex = value;
+            RaisePropertyChanged();
+        }
+    }
+    private int selectedPreviewTabIndex;
+    public int SelectedPreviewTabIndex
+    {
+        get => selectedPreviewTabIndex;
+        set
+        {
+            if (selectedPreviewTabIndex == value) return;
+            selectedPreviewTabIndex = value;
+            RaisePropertyChanged();
+            automationBridge?.NotifyStateChanged();
+        }
+    }
+    private bool manualAtrInspectionExpanded;
+    public bool ManualAtrInspectionExpanded
+    {
+        get => manualAtrInspectionExpanded && IsManualAtrToolsAvailable;
+        set
+        {
+            if (manualAtrInspectionExpanded == value) return;
+            manualAtrInspectionExpanded = value;
+            RaisePropertyChanged();
+            automationBridge?.NotifyStateChanged();
         }
     }
     public bool IsSimulationOnly => false;
+
+    private void ActivateObservationPanel()
+    {
+        try
+        {
+            IsVisible = true;
+            observationPanelAnchorable = NativeDockNavigation.ActivateExisting(this);
+            observationPanelNavigationOutcome = observationPanelAnchorable is null ? "PanelNotAvailable" : "Activated";
+            if (observationPanelAnchorable is null)
+                OperatorNotice = ObservationUiPresentation.Text("自动观测面板尚未出现在 N.I.N.A. 主控台布局中；内部页签已选择，但没有声称页面已显示。请先打开主控台。", "The observation panel is not present in N.I.N.A.'s imaging layout. Its page was selected internally but is not confirmed visible. Open Imaging first.", UiCulture);
+        }
+        catch (Exception ex)
+        {
+            observationPanelAnchorable = null;
+            observationPanelNavigationOutcome = "ActivationFailed";
+            Error = ObservationUiPresentation.Text($"自动观测页面打开失败：{ex.Message}", $"Could not open observation panel: {ex.Message}", UiCulture);
+        }
+        automationBridge?.NotifyStateChanged();
+    }
+
+    private async Task ShowCalibrationLibraryAsync()
+    {
+        try
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null) throw new InvalidOperationException("N.I.N.A. 界面尚未就绪。");
+            var library = calibrationLibrary.Value;
+            library.IsVisible = true;
+            // Let N.I.N.A.'s existing visibility binding reveal its own panel first.
+            // No window, replacement panel, camera connection or acquisition is created here.
+            calibrationLibraryAnchorable = await dispatcher.InvokeAsync(
+                () => NativeDockNavigation.ActivateExisting(library),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+            calibrationLibraryNavigationOutcome = calibrationLibraryAnchorable is null ? "PanelNotAvailable" : "Activated";
+            OperatorNotice = calibrationLibraryAnchorable is null
+                ? ObservationUiPresentation.Text("校准库标签尚未出现在 N.I.N.A. 主控台布局中；请先打开主控台。没有创建替代窗口或启动采集。", "The calibration-library panel is not present in N.I.N.A.'s imaging layout. Open Imaging first. No replacement window or acquisition was started.", UiCulture)
+                : ObservationUiPresentation.Text("已打开校准库页面；没有开始校准帧采集。", "Opened the calibration-library panel; calibration acquisition was not started.", UiCulture);
+        }
+        catch (Exception ex)
+        {
+            calibrationLibraryAnchorable = null;
+            calibrationLibraryNavigationOutcome = "ActivationFailed";
+            Error = ObservationUiPresentation.Text($"校准库页面打开失败：{ex.Message}", $"Could not open calibration-library panel: {ex.Message}", UiCulture);
+        }
+        automationBridge?.NotifyStateChanged();
+    }
 
     public string AtrManualCameraStatus
     {
@@ -2728,6 +3017,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         settings.ObservationTargetImportSource = result.Source;
         settings.ObservationTargetImportedUtc = result.ImportedUtc.ToUniversalTime().ToString("O");
         settings.ObservationTargetPositionAngleDegrees = result.PositionAngleDegrees ?? double.NaN;
+        settings.ObservationTargetCatalogMetadata = result.CatalogMetadata;
+        RaiseTargetStrategyProperties();
 
         var auditSummary = FormatTargetImportSummary(
             result.Source,
@@ -2810,6 +3101,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         settings.ObservationTargetImportedUtc = string.Empty;
         settings.ObservationTargetImportDetails = "目标名称、目录 ID 或坐标已被操作员手工编辑；先前外部导入的来源证明已失效。";
         settings.ObservationTargetPositionAngleDegrees = double.NaN;
+        settings.ObservationTargetCatalogMetadata = null;
+        RaiseTargetStrategyProperties();
         HasTargetImport = false;
         TargetImportSummary = "目标由手工输入。";
         TargetImportDetails = settings.ObservationTargetImportDetails;
@@ -2856,8 +3149,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             var eligibility = RealModeEligibilityIssues();
             if (eligibility.Count > 0)
             {
+                SelectedPreparationTabIndex = 0;
                 SelectedWorkspaceTabIndex = 3;
-                Error = "自动观测尚不能启动：请先完成“自动准备”中标红的字段。工程级详细原因仍可在“高级设置”查看。";
+                Error = ObservationUiPresentation.Text("自动观测尚不能启动：请先处理“自动准备”启动清单中的待处理项，详细原因可在高级设置查看。", "Automation cannot start yet: resolve the outstanding preparation-checklist items; detailed reasons are in Advanced settings.", UiCulture);
                 return;
             }
             settings.ObservationUseRealMode = true;
@@ -2911,8 +3205,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         var eligibility = RealModeEligibilityIssues();
         if (eligibility.Count > 0)
         {
+            SelectedPreparationTabIndex = 0;
             SelectedWorkspaceTabIndex = 3;
-            Error = "无法按当前设置新开一轮：请先完成“自动准备”中标红的字段。工程级详细原因仍可在“高级设置”查看。";
+            Error = ObservationUiPresentation.Text("无法按当前设置新开一轮：请先处理“自动准备”启动清单中的待处理项，详细原因可在高级设置查看。", "A new run cannot start with these settings: resolve the outstanding preparation-checklist items; detailed reasons are in Advanced settings.", UiCulture);
             return;
         }
 
@@ -3046,6 +3341,15 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private bool CanUseManualAtrTools() => NinaInstancePolicy.IsMaster(settings) && !IsTargetImportBusy && CanEditTargetPlan();
 
+    private string? MainFocusUnavailableReason()
+    {
+        if (!NinaInstancePolicy.IsMaster(settings)) return "测光端不控制主镜；请在光谱主控 N.I.N.A. 中对焦。";
+        if (SepMainFocusViewModel.ObservationBlockReason(RunState) is { } reason) return reason;
+        if (IsTargetImportBusy) return "正在导入目标，请稍候。";
+        if (IsManualUvexBusy || captureManualAtrSpectrumCommand.IsExecuting || cameraMediator.GetInfo().IsExposing)
+            return "设备手控或相机采集仍在进行，请等待当前操作完成。";
+        return null;
+    }
     private bool CanManageManualUvexConnection() => NinaInstancePolicy.IsMaster(settings) && !IsManualUvexBusy && CanEditTargetPlan();
 
     private bool CanConnectManualUvex() =>
@@ -3382,11 +3686,13 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess())
         {
-            ApplyDashboard(dashboard);
+            ApplyDashboard(host.Dashboard);
         }
         else
         {
-            _ = dispatcher.BeginInvoke(() => ApplyDashboard(dashboard));
+            // Apply the newest immutable host view when the UI queue is serviced.
+            // A queued old run must not undo a newer bridge/UI snapshot.
+            _ = dispatcher.BeginInvoke(() => ApplyDashboard(host.Dashboard));
         }
     }
 
@@ -3397,6 +3703,42 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         // This does not connect, expose or create another camera owner.
         RefreshAtrManualStatus();
         var run = dashboard.Run;
+        Workflow = ObservationWorkflowProjection.Build(dashboard);
+        RaisePropertyChanged(nameof(Workflow));
+        if (targetStrategyRunId != run.ObservationRunId)
+        {
+            targetStrategyRunId = run.ObservationRunId;
+            targetStrategyRuntimeSummary = "本轮尚未执行目标定位；下面的优先级是计划，不是成功记录。";
+            targetStrategyRuntimeCode = string.Empty;
+            targetStrategyAttemptHistory = "尚无实际分支记录。";
+        }
+        var strategyEvent = run.RecentEvents.LastOrDefault(item =>
+            item.Code.StartsWith("TARGET_BRANCH_", StringComparison.Ordinal) ||
+            item.Code.StartsWith("TARGET_STRATEGY_", StringComparison.Ordinal));
+        if (strategyEvent is not null)
+        {
+            targetStrategyRuntimeCode = strategyEvent.Code;
+            targetStrategyRuntimeSummary = $"{strategyEvent.TimestampUtc.ToLocalTime():HH:mm:ss} · {TargetBranchStatusLabel(strategyEvent.Code)} · {strategyEvent.Message}";
+        }
+        var boundStrategyEvidence = (dashboard.WorkflowEvidence ?? dashboard.Evidence).Where(item =>
+            item.Metadata is { } metadata && metadata.TryGetValue("observationRunId", out var id) &&
+            !string.IsNullOrWhiteSpace(run.ObservationRunId) && id == run.ObservationRunId).ToArray();
+        var strategyEvidence = boundStrategyEvidence.LastOrDefault(item => item.Kind is "target-acquisition-branch" or "target-acquisition-strategy");
+        if (strategyEvidence?.Metadata is { } strategyMetadata &&
+            strategyMetadata.TryGetValue("message", out var strategyMessage) &&
+            (strategyEvent is null || strategyEvidence.PublishedUtc >= strategyEvent.TimestampUtc))
+        {
+            targetStrategyRuntimeCode = MetadataValue(strategyMetadata, "code", string.Empty);
+            var observedTarget = MetadataValue(strategyMetadata, "targetName", "本轮锁定目标");
+            targetStrategyRuntimeSummary = $"{strategyEvidence.PublishedUtc.ToLocalTime():HH:mm:ss} · {observedTarget} · {TargetBranchStatusLabel(targetStrategyRuntimeCode)} · {strategyMessage}";
+        }
+        var branchEvidence = boundStrategyEvidence.Where(item => item.Kind == "target-acquisition-branch").TakeLast(8).ToArray();
+        if (branchEvidence.Length > 0)
+            targetStrategyAttemptHistory = string.Join(Environment.NewLine, branchEvidence.Select(item =>
+                $"{item.PublishedUtc.ToLocalTime():HH:mm:ss} · {TargetBranchStatusLabel(MetadataValue(item.Metadata!, "code", string.Empty))} · {MetadataValue(item.Metadata!, "message", "记录未包含说明")}"));
+        RaisePropertyChanged(nameof(TargetStrategyRuntimeSummary));
+        RaisePropertyChanged(nameof(TargetStrategyRuntimeColor));
+        RaisePropertyChanged(nameof(TargetStrategyAttemptHistory));
         var culture = UiCulture;
         GateResult? currentGate = null;
         if (run.CurrentStage is { } currentGateStage)
@@ -3512,8 +3854,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         ApplyPreview(dashboard, ObservationPreviewChannel.G3SlitField);
         ApplyPreview(dashboard, ObservationPreviewChannel.AtrSpectrum);
         ApplyFailureDiagnostic(dashboard);
-        RaiseCommandStates();
-        if (notifyBridge) automationBridge?.NotifyStateChanged();
+        RaiseCommandStates(notifyBridge: notifyBridge);
     }
 
     private IReadOnlyList<ObservationAutomationCommandBinding> AutomationCommandBindings()
@@ -3530,10 +3871,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             new("select-simulation", selectSimulationModeCommand, false, false, false, false, "Select the simulation mode without starting it."),
             new("select-real", selectRealModeCommand, false, false, false, false, "Select the real-equipment mode without connecting or moving equipment."),
             new("show-acquisition-plan", showAcquisitionPlanCommand, false, false, false, false, "Show the visible acquisition-plan tab only; no settings or equipment changes."),
+            new("show-target-strategy", showObservationPlanCommand, false, false, false, false, "Show the visible target and acquisition-strategy page; navigation only."),
+            new("show-workflow", ShowWorkflowCommand, false, false, false, false, "Show the read-only production workflow nodes; navigation only, never executes a node."),
+            new("show-atr-inspector", showAtrInspectorCommand, false, false, false, false, "Show the visible spectroscopy-camera page and manual inspection section; navigation only, never starts an exposure."),
+            new("show-calibration-library", showCalibrationLibraryCommand, false, false, false, false, "Activate the existing visible N.I.N.A. calibration-library dock; navigation only, never starts calibration acquisition."),
             new("start-main-focus", MainFocus.StartCommand, false, true, false, false, "Invoke the visible main-mirror SEP focus button; no roof opening or slew; requires idle owners and configured limits."),
+            new("save-main-focus", MainFocus.SaveCommand, false, false, false, false, "Save the visible main-focus draft; optional sampling fields only. No motion, limits or safety changes."),
+            new("show-main-focus", ShowMainFocusCommand, false, false, false, false, "Show Equipment controls / Main-mirror focus; navigation only."),
             new("cancel-main-focus", MainFocus.CancelCommand, false, false, false, false, "Cancel the same main-focus operation and conditionally return to its original position."),
             new("apply-target-draft", applyTargetDraftCommand, false, false, false, false, "Apply only the visible J2000 target fields while the run is inactive; no equipment operation."),
             new("import-planetarium-target", importFromPlanetariumCommand, false, false, false, false, "Import the current planetarium selection using the visible import button."),
+            new("use-planetarium-strategy", usePlanetariumStrategyCommand, false, false, false, false, "Select the visible automatic target strategy while idle; no equipment operation."),
             new("import-framing-target", importFromFramingAssistantCommand, false, false, false, false, "Import the current framing selection using the visible import button."),
             new("start-selected", startSelectedModeCommand, false, selectedStartRequiresArm, false, false, "Invoke the visible Start button for the selected mode."),
             new("restart-real-run", restartWithCurrentConfigurationCommand, false, true, true, true, "Invoke the visible New run command: safely close the old run boundary, retire discoverable stale G3 recovery state with an audit, and start a new real run."),
@@ -3667,13 +4015,23 @@ public sealed class ObservationDockable : DockableVM, IDisposable
                 item.FileName,
                 item.AbsolutePath)).ToArray(),
             SupervisedSlitQualityWarningAuthorized,
-            MainFocus.IsBusy, MainFocus.Status, MainFocus.EvidenceDirectory);
+            MainFocus.IsBusy, MainFocus.Status, MainFocus.EvidenceDirectory,
+            TargetObservability.ToString(), TargetObservabilitySummary, TargetStrategyPrioritySummary,
+            TargetStrategyMetadataSummary, TargetStrategyRuntimeSummary,
+            SelectedWorkspaceTabIndex, SelectedPlanTabIndex, SelectedPreviewTabIndex,
+            SelectedManualTabIndex, ManualAtrInspectionExpanded,
+            calibrationLibraryNavigationOutcome,
+            calibrationLibraryAnchorable is { IsSelected: true, IsVisible: true },
+            observationPanelNavigationOutcome,
+            observationPanelAnchorable is { IsSelected: true, IsVisible: true },
+            Workflow, MainFocus.OptionsSnapshot);
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(
         string commandName,
         string? operatorAttestation,
-        ObservationTargetDraft? targetDraft)
+        ObservationTargetDraft? targetDraft,
+        SepFocusSamplingDraft? focusSampling)
     {
         if (!NinaInstancePolicy.IsMaster(settings))
             return new(false, "PHOTOMETRY_ROLE_FORBIDDEN", "The photometry worker does not expose spectroscopy or shared-equipment commands.", false);
@@ -3721,7 +4079,10 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             return new(false, "UNEXPECTED_TARGET_DRAFT", "Target data is accepted only by apply-target-draft.", false);
         if (binding.Name == "apply-target-draft" && targetDraft is { IsValid: false })
             return new(false, "INVALID_TARGET_DRAFT", "A target name and valid J2000 coordinates in degrees are required.", false);
-        object? commandParameter = binding.Name == "apply-target-draft" ? targetDraft : null;
+        if (focusSampling is not null && binding.Name != "save-main-focus")
+            return new(false, "UNEXPECTED_FOCUS_SAMPLING", "Focus sampling is accepted only by save-main-focus.", false);
+        object? commandParameter = binding.Name == "apply-target-draft" ? targetDraft :
+            binding.Name == "save-main-focus" ? focusSampling : null;
         if (!binding.Command.CanExecute(commandParameter))
         {
             return new ObservationAutomationInvocationResult(
@@ -3867,14 +4228,17 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         }
     }
 
-    private void RaiseCommandStates()
+    private void RaiseCommandStates(bool notifyBridge = true)
     {
         mainFocus?.Refresh();
-        automationBridge?.NotifyStateChanged();
+        // Snapshot rendering refreshes command availability but is not a state mutation.
+        // Preserve its revision so a subsequent guarded UI command can use that snapshot.
+        if (notifyBridge) automationBridge?.NotifyStateChanged();
         AcquisitionPlan?.NotifyState();
         RaisePropertyChanged(nameof(SupervisedSlitQualityWarningAuthorized));
         RaisePropertyChanged(nameof(SupervisedSlitQualityWarningStatusText));
         RaisePropertyChanged(nameof(IsManualAtrToolsAvailable));
+        RaisePropertyChanged(nameof(ManualAtrInspectionExpanded));
         RaisePropertyChanged(nameof(ManualAtrInspectionHeader));
         RaisePropertyChanged(nameof(CanEditSynchronizedPhotometry));
         RaisePropertyChanged(nameof(SynchronizedPhotometryEnabled));
@@ -3908,6 +4272,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         importFromFramingAssistantCommand.RaiseCanExecuteChanged();
         importFromPlanetariumCommand.RaiseCanExecuteChanged();
         applyTargetDraftCommand.RaiseCanExecuteChanged();
+        usePlanetariumStrategyCommand.RaiseCanExecuteChanged();
         bindCurrentAtrCameraCommand.RaiseCanExecuteChanged();
         captureManualAtrSpectrumCommand.RaiseCanExecuteChanged();
         refreshManualUvexStatusCommand.RaiseCanExecuteChanged();
@@ -3934,11 +4299,16 @@ public sealed class ObservationDockable : DockableVM, IDisposable
     private void RaisePreparationProperties()
     {
         RaisePropertyChanged(nameof(AutomaticPreparationIssueCount));
+        RaisePropertyChanged(nameof(PreparationChecklistIssueCount));
+        RaisePropertyChanged(nameof(PreparationChecklistIssues));
         RaisePropertyChanged(nameof(AutomaticPreparationSummary));
         RaisePropertyChanged(nameof(IsTargetPreparationMissing));
         RaisePropertyChanged(nameof(TargetPreparationStatus));
         RaisePropertyChanged(nameof(IsDevicePreparationMissing));
         RaisePropertyChanged(nameof(DevicePreparationStatus));
+        RaisePropertyChanged(nameof(PreparationDeviceSummary));
+        RaisePropertyChanged(nameof(PreparationSafetySummary));
+        RaisePropertyChanged(nameof(SelectedPreparationSafetyCapabilityDescription));
         RaisePropertyChanged(nameof(IsCommissioningPreparationMissing));
         RaisePropertyChanged(nameof(CommissioningPreparationStatus));
         RaisePropertyChanged(nameof(PreparationEvidenceInventorySummary));
@@ -3946,6 +4316,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(NightSetupPreparationStatus));
         RaisePropertyChanged(nameof(PreparationDraftStatus));
         RaisePropertyChanged(nameof(IsSlitChoiceMissing));
+        RaisePropertyChanged(nameof(PreparationSlitStatus));
         RaisePropertyChanged(nameof(IsAutomationPolicyPreparationMissing));
         RaisePropertyChanged(nameof(AutomationPolicyPreparationStatus));
     }
@@ -3988,6 +4359,14 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             return;
         }
 
+        // Progress<T> callbacks can arrive after the coordinator's terminal snapshot.
+        // Do not resurrect the last exposure/solve text after Cancelled/Completed.
+        if (!AllowsStageProgress(RunState))
+        {
+            CurrentOperationText = string.Empty; CurrentOperationPercent = 0;
+            HasCurrentOperationProgress = false; IsRecovering = false;
+            return;
+        }
         var raw = status.Status?.Trim() ?? string.Empty;
         IsRecovering = raw.Contains("将自动恢复", StringComparison.Ordinal) ||
                        raw.Contains("automatic recovery", StringComparison.OrdinalIgnoreCase);
@@ -4012,6 +4391,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             HasCurrentOperationProgress = false;
         }
     }
+
+    internal static bool AllowsStageProgress(ObservationRunState state) =>
+        state is not (ObservationRunState.Idle or ObservationRunState.Cancelled or ObservationRunState.Completed or ObservationRunState.Faulted);
 
     private void ApplyRecommendedImageFilePattern()
     {
@@ -4108,8 +4490,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     private void ReloadMainFocus()
     {
-        mainFocus?.Dispose();
-        mainFocus = null;
+        // NINA reuses a selected autofocus VM when its CLR type is unchanged.
+        // Keep the shared instance and cancel/reload its profile-bound settings instead.
+        mainFocus?.ReloadProfile();
         RaisePropertyChanged(nameof(MainFocus));
     }
 
@@ -4644,6 +5027,8 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         nameof(UvexPluginSettings.ObservationTargetImportedUtc) or
         nameof(UvexPluginSettings.ObservationTargetImportDetails) or
         nameof(UvexPluginSettings.ObservationTargetPositionAngleDegrees) or
+        nameof(UvexPluginSettings.ObservationTargetCatalogMetadataJson) or
+        nameof(UvexPluginSettings.ObservationTargetCatalogMetadata) or
         nameof(UvexPluginSettings.ObservationTargetObservability) => true,
         _ => false,
     };

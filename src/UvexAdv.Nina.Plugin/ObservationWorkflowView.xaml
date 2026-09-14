@@ -1,0 +1,114 @@
+<UserControl x:Class="UvexAdv.Nina.Plugin.ObservationWorkflowView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#0B1422" Focusable="False" MinWidth="280" MinHeight="230">
+  <UserControl.Resources>
+    <Style x:Key="WorkflowToolbarButton" TargetType="Button">
+      <Setter Property="Foreground" Value="#E2E8F0" />
+      <Setter Property="Background" Value="#1C2C40" />
+      <Setter Property="BorderBrush" Value="#40566F" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="7,3" />
+      <Setter Property="Margin" Value="2,0" />
+      <Setter Property="MinHeight" Value="25" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style x:Key="WorkflowNodeButton" TargetType="Button">
+      <Setter Property="Foreground" Value="#E2E8F0" />
+      <Setter Property="BorderThickness" Value="1.5" />
+      <Setter Property="Padding" Value="9,6" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" CornerRadius="5" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.82" /></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="#F8FAFC" /></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <DataTemplate x:Key="WorkflowNodeTemplate">
+      <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="{Binding Label, Mode=OneWay}" Foreground="#F1F5F9" FontSize="12.5" FontWeight="SemiBold"
+                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="35" LineHeight="16" />
+        <TextBlock Grid.Row="1" Text="{Binding StateText, Mode=OneWay}" Foreground="#CBD5E1" FontSize="11"
+                   Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+      </Grid>
+    </DataTemplate>
+    <Style x:Key="WorkflowReadOnlyText" TargetType="TextBox">
+      <Setter Property="IsReadOnly" Value="True" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="#D7E3F1" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
+      <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+  </UserControl.Resources>
+  <Grid Margin="4">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DockPanel Margin="2,1,2,4">
+      <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+        <CheckBox x:Name="FollowCheckBox" IsChecked="True" Foreground="#BAE6FD" VerticalAlignment="Center"
+                  Margin="3,0,8,0" Checked="OnFollowChanged" Unchecked="OnFollowChanged" />
+        <Button x:Name="FitButton" Style="{StaticResource WorkflowToolbarButton}" Click="OnFitClick" />
+        <Button Style="{StaticResource WorkflowToolbarButton}" Content="−" Click="OnZoomOutClick" Width="27" />
+        <TextBlock x:Name="ZoomText" Text="100%" Width="42" TextAlignment="Center" VerticalAlignment="Center" Foreground="#E2E8F0" />
+        <Button Style="{StaticResource WorkflowToolbarButton}" Content="+" Click="OnZoomInClick" Width="27" />
+      </WrapPanel>
+      <StackPanel VerticalAlignment="Center">
+        <TextBlock x:Name="RunHeader" Foreground="#F1F5F9" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+        <TextBlock x:Name="RunSubtitle" Foreground="#9DB0C8" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+      </StackPanel>
+    </DockPanel>
+    <TextBlock Grid.Row="1" x:Name="LegendText" Foreground="#93A7BF" FontSize="11" TextWrapping="Wrap" Margin="2,0,2,5" />
+    <Grid Grid.Row="2" x:Name="BodyGrid">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="0"/></Grid.ColumnDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="190"/></Grid.RowDefinitions>
+      <Border Grid.Row="0" Grid.Column="0" BorderBrush="#31455C" BorderThickness="1" CornerRadius="5" Background="#0D1B2C">
+        <Grid>
+          <ScrollViewer x:Name="GraphScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                        PanningMode="Both" CanContentScroll="False" PreviewMouseWheel="OnCanvasMouseWheel"
+                        PreviewMouseLeftButtonDown="OnCanvasMouseDown" PreviewMouseMove="OnCanvasMouseMove"
+                        PreviewMouseLeftButtonUp="OnCanvasMouseUp" LostMouseCapture="OnCanvasLostCapture">
+            <Canvas x:Name="GraphCanvas" Width="968" Height="326" Background="Transparent">
+              <Canvas.LayoutTransform><ScaleTransform x:Name="GraphScale" ScaleX="1" ScaleY="1" /></Canvas.LayoutTransform>
+            </Canvas>
+          </ScrollViewer>
+          <TextBlock x:Name="EmptyGraphText" Foreground="#9DB0C8" FontSize="13" TextWrapping="Wrap" MaxWidth="390"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18" IsHitTestVisible="False" />
+        </Grid>
+      </Border>
+      <Border x:Name="DetailsPanel" Grid.Row="1" Grid.Column="0" Margin="0,6,0,0" Background="#101F31"
+              BorderBrush="#385169" BorderThickness="1" CornerRadius="5" Padding="7">
+        <Grid>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <DockPanel>
+            <TextBlock x:Name="SelectedStateText" DockPanel.Dock="Right" FontSize="12" FontWeight="SemiBold"
+                       Foreground="#CBD5E1" Margin="8,0,0,0" VerticalAlignment="Center" />
+            <TextBlock x:Name="SelectedTitle" FontSize="13" FontWeight="SemiBold" Foreground="#E2E8F0" TextWrapping="Wrap" />
+          </DockPanel>
+          <TextBlock x:Name="SelectedTimestampText" Grid.Row="1" FontSize="10.5" Foreground="#93A7BF" Margin="0,3,0,5" TextTrimming="CharacterEllipsis" />
+          <TabControl Grid.Row="2" x:Name="DetailsTabs" Background="#0B1726" BorderBrush="#344B63">
+            <TabItem x:Name="ReasonTab"><TextBox x:Name="ReasonText" Style="{StaticResource WorkflowReadOnlyText}" /></TabItem>
+            <TabItem x:Name="MetricsTab"><TextBox x:Name="MetricsText" Style="{StaticResource WorkflowReadOnlyText}" FontFamily="Consolas" FontSize="11" /></TabItem>
+            <TabItem x:Name="TimelineTab"><TextBox x:Name="TimelineText" Style="{StaticResource WorkflowReadOnlyText}" FontSize="11" /></TabItem>
+            <TabItem x:Name="EvidenceTab"><TextBox x:Name="EvidenceText" Style="{StaticResource WorkflowReadOnlyText}" FontSize="11" /></TabItem>
+          </TabControl>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

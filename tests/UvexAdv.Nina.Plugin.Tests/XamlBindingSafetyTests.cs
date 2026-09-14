@@ -46,20 +46,42 @@ public sealed class XamlBindingSafetyTests
     }
 
     [Fact]
-    public void ExpanderVisibilityDoesNotMutateBrightTargetAuthorization()
+    public void AdvancedCategoryNavigationDoesNotMutateBrightTargetAuthorization()
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
 
-        Assert.Matches(
-            "Header=\"超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）\"[^>]*IsExpanded=\"False\"",
-            xaml);
+        var document = System.Xml.Linq.XDocument.Parse(xaml);
+        var advanced = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "TabItem" && element.Attribute("Header")?.Value == "高级设置");
+        Assert.DoesNotContain(advanced.Descendants(), element => element.Name.LocalName == "Expander");
+        var sections = Assert.Single(advanced.Descendants(), element =>
+            element.Name.LocalName == "TabControl" && element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Name" && attribute.Value == "AdvancedSettingsSections"));
+        Assert.Equal("Left", sections.Attribute("TabStripPlacement")?.Value);
+        Assert.Equal("{Binding SelectedAdvancedCategoryIndex, Mode=TwoWay}", sections.Attribute("SelectedIndex")?.Value);
+        Assert.Null(sections.Attribute("SelectedItem"));
+        var categories = sections.Elements().Where(element => element.Name.LocalName == "TabItem").ToArray();
+        Assert.Equal(new[] { "运行与归档", "后台接口", "站点与模拟", "解算与居中", "邻场与导星",
+            "双相机配对", "并行测光", "鬼影辅助", "亮星翼部", "设备绑定" },
+            categories.Select(element => element.Attribute("Header")?.Value));
+        foreach (var category in categories)
+        {
+            var scroll = Assert.Single(category.Elements());
+            Assert.Equal("ScrollViewer", scroll.Name.LocalName);
+            Assert.Equal("Auto", scroll.Attribute("VerticalScrollBarVisibility")?.Value);
+            Assert.Equal("Disabled", scroll.Attribute("HorizontalScrollBarVisibility")?.Value);
+            Assert.Equal("False", scroll.Attribute("CanContentScroll")?.Value);
+            Assert.Equal("VerticalOnly", scroll.Attribute("PanningMode")?.Value);
+        }
+        var bright = categories[8].ToString();
+        Assert.Contains("超亮目标：饱和核的未饱和翼部入缝（例外分支，默认关闭）", bright, StringComparison.Ordinal);
         Assert.DoesNotContain(
             "IsExpanded=\"{Binding BrightTargetWingCentroidEnabled",
-            xaml,
+            bright,
             StringComparison.Ordinal);
         Assert.Contains(
             "IsChecked=\"{Binding BrightTargetWingCentroidEnabled}\"",
-            xaml,
+            bright,
             StringComparison.Ordinal);
     }
 
@@ -198,17 +220,14 @@ public sealed class XamlBindingSafetyTests
             failureTabStart > realtimeTabStart &&
             advancedTabStart > failureTabStart);
         Assert.DoesNotContain("<ScrollViewer", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.DoesNotContain("<RowDefinition Height=\"*\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("x:Name=\"OperationalReadinessSummary\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("自动流程（真实成功路线）", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.Contains("<local:ObservationWorkflowView", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.Contains("Graph=\"{Binding Workflow, Mode=OneWay}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("<Expander", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.DoesNotContain("自动流程（真实成功路线）", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.Contains("G3WcsFreshSolveAuthorizationResidualArcseconds", dock, StringComparison.Ordinal);
         Assert.Contains("大步后允许拍 fresh 验证帧的最大实报终点残差", dock, StringComparison.Ordinal);
-        Assert.Contains("测光相机广域见证", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("N.I.N.A. 大步修正", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewGradeText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("Text=\"{Binding Phd2CalibrationOverviewText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("Text=\"{Binding GhostAssistanceModeText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
-        Assert.Contains("Text=\"{Binding GhostOverviewText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.Contains("目标与定位策略", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
+        Assert.Contains("观测准备", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.DoesNotContain("Text=\"{Binding Phd2CalibrationGradeText}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.DoesNotContain("Text=\"{Binding GhostAssistanceMode}\"", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
         Assert.DoesNotContain("Phd2CalibrationPolicyText", dock[overviewTabStart..manualTabStart], StringComparison.Ordinal);
@@ -240,7 +259,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("Command=\"{Binding SaveCommand}\"", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
         Assert.Contains("x:Name=\"AutomaticPreparationScrollViewer\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("<ScrollViewer", dock[advancedTabStart..], StringComparison.Ordinal);
-        Assert.Contains("Header=\"PHD2 与目标定位策略详情\"", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("Text=\"PHD2 与目标定位策略详情\"", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("旧版测光相机广域运动门（仅保留兼容/取证，不是当前生产路线）", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("2″只约束静态 frame/mount 绑定", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("Phd2CalibrationPolicyText", dock[advancedTabStart..], StringComparison.Ordinal);
@@ -252,17 +271,18 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("不是曝光倒计时", dock[planTabStart..preparationTabStart], StringComparison.Ordinal);
         Assert.Contains("Style=\"{StaticResource PreparationFieldBorder}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("Tag=\"{Binding IsTargetPreparationMissing}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("Content=\"导入完整标定包\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("Content=\"自动生成准备草稿\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
+        Assert.Contains("Content=\"导入完整标定包…\"", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("Content=\"生成准备草稿\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("ItemsSource=\"{Binding PreparationSpectralRegionChoices}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("ItemsSource=\"{Binding PreparationCalibrationReferenceChoices}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding PreparationSafetyCapabilityChoices}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding CommissioningProfiles}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding AtrCameraCandidates}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding G3CameraCandidates}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding QhyCameraCandidates}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
+        foreach (var setting in new[] { "PreparationSafetyCapabilityChoices", "CommissioningProfiles",
+                     "TelescopeCandidates", "AtrCameraCandidates", "G3CameraCandidates", "QhyCameraCandidates" })
+        {
+            Assert.DoesNotContain($"ItemsSource=\"{{Binding {setting}}}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
+            Assert.Contains($"ItemsSource=\"{{Binding {setting}}}\"", dock[advancedTabStart..], StringComparison.Ordinal);
+        }
         Assert.Contains("SelectedValue=\"{Binding ExpectedUvexSlitPosition", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        Assert.Contains("站点、40° 围墙与模拟速度", dock[advancedTabStart..], StringComparison.Ordinal);
+        Assert.Contains("站点、地平线与模拟速度", dock[advancedTabStart..], StringComparison.Ordinal);
         Assert.Contains("HasNoFailure", dock, StringComparison.Ordinal);
         Assert.Contains("HasFailure", dock, StringComparison.Ordinal);
         Assert.Contains("当前没有错误或待处理证据门", dock, StringComparison.Ordinal);
@@ -304,11 +324,12 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("Command=\"{Binding ArmModelAutomationRealControlCommand}\"", dock, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding DisarmModelAutomationRealControlCommand}\"", dock, StringComparison.Ordinal);
 
-        foreach (Match button in Regex.Matches(dock, "<Button\\b(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
+        // A property element such as CheckBox.ContentTemplate is not a control.
+        foreach (Match button in Regex.Matches(dock, "<Button(?=\\s|>)(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
         {
             Assert.Contains("Content=", button.Groups["attributes"].Value, StringComparison.Ordinal);
         }
-        foreach (Match checkBox in Regex.Matches(dock, "<CheckBox\\b(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
+        foreach (Match checkBox in Regex.Matches(dock, "<CheckBox(?=\\s|>)(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
         {
             Assert.Contains("Content=", checkBox.Groups["attributes"].Value, StringComparison.Ordinal);
         }
@@ -360,13 +381,111 @@ public sealed class XamlBindingSafetyTests
 
         var dispatcherStart = source.IndexOf("dispatcher.InvokeAsync(() =>", StringComparison.Ordinal);
         var revisionCheck = source.IndexOf("request.ExpectedRevision.Value != Revision", dispatcherStart, StringComparison.Ordinal);
-        var commandDispatch = source.IndexOf("return commandInvoker(command, request.OperatorAttestation, request.TargetDraft);", revisionCheck, StringComparison.Ordinal);
+        var commandDispatch = source.IndexOf("return commandInvoker(command, request.OperatorAttestation, request.TargetDraft, request.FocusSampling);", revisionCheck, StringComparison.Ordinal);
         Assert.True(dispatcherStart >= 0 && revisionCheck > dispatcherStart && commandDispatch > revisionCheck);
         Assert.DoesNotContain("capturedRevision", source, StringComparison.Ordinal);
         Assert.Contains("dispatcher.InvokeAsync(() => snapshotFactory(Revision))", source, StringComparison.Ordinal);
         Assert.Contains("new(\"apply-target-draft\", applyTargetDraftCommand", bindings, StringComparison.Ordinal);
         Assert.Contains("ApplyDashboard(dashboard, notifyBridge: false)", dockable, StringComparison.Ordinal);
         Assert.Contains("binding.Command.Execute(commandParameter)", dockable, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutomationCalibrationNavigationUsesOnlyTheExistingNativeDock()
+    {
+        var dockable = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
+        var navigation = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "NativeDockNavigation.cs"));
+        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
+        Assert.Contains("public ICommand ShowCalibrationLibraryCommand => showCalibrationLibraryCommand", dockable, StringComparison.Ordinal);
+        Assert.Contains("new(\"show-calibration-library\", showCalibrationLibraryCommand, false, false, false, false,", dockable, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ShowCalibrationLibraryCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("library.IsVisible = true", dockable, StringComparison.Ordinal);
+        Assert.Contains("NativeDockNavigation.ActivateExisting(library)", dockable, StringComparison.Ordinal);
+        Assert.Contains("PanelNotAvailable", dockable, StringComparison.Ordinal);
+        Assert.Contains("application.Dispatcher.CheckAccess()", navigation, StringComparison.Ordinal);
+        Assert.Contains("OfType<DockingManager>()", navigation, StringComparison.Ordinal);
+        Assert.Contains("existing.IsSelected = true", navigation, StringComparison.Ordinal);
+        Assert.DoesNotContain("new Window", navigation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reflection", navigation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Capture", navigation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Connect", navigation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutomationAtrInspectionNavigationReusesVisibleCommandWithoutAcquiring()
+    {
+        var dockable = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
+        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Templates.xaml"));
+        var bridge = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationAutomationBridge.cs"));
+        var commandStart = dockable.IndexOf("showAtrInspectorCommand = new SimpleCommand(() =>", StringComparison.Ordinal);
+        var commandEnd = dockable.IndexOf("});", commandStart, StringComparison.Ordinal);
+        Assert.True(commandStart >= 0 && commandEnd > commandStart);
+        var command = dockable[commandStart..commandEnd];
+        Assert.Contains("SelectedWorkspaceTabIndex = 4", command, StringComparison.Ordinal);
+        Assert.Contains("SelectedPreviewTabIndex = 2", command, StringComparison.Ordinal);
+        Assert.Contains("ManualAtrInspectionExpanded = true", command, StringComparison.Ordinal);
+        Assert.Contains("ActivateObservationPanel();", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Capture", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Connect", command, StringComparison.Ordinal);
+        Assert.Contains("public ICommand ShowAtrInspectorCommand => showAtrInspectorCommand", dockable, StringComparison.Ordinal);
+        Assert.Contains("new(\"show-atr-inspector\", showAtrInspectorCommand, false, false, false, false,", dockable, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ShowAtrInspectorCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("SelectedIndex=\"{Binding SelectedPreviewTabIndex, Mode=TwoWay}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Value=\"{Binding ManualAtrInspectionExpanded, Mode=TwoWay}\"", xaml, StringComparison.Ordinal);
+        var liveStart = xaml.IndexOf("<TabItem Header=\"实时图像\">", StringComparison.Ordinal);
+        var navigationHeaderStart = xaml.IndexOf("<TabItem.Header>", liveStart, StringComparison.Ordinal);
+        var navigationHeaderEnd = xaml.IndexOf("</TabItem.Header>", navigationHeaderStart, StringComparison.Ordinal);
+        Assert.True(navigationHeaderStart > liveStart && navigationHeaderEnd > navigationHeaderStart);
+        var navigationHeader = xaml[navigationHeaderStart..navigationHeaderEnd];
+        Assert.Contains("ShowAtrInspectorCommand", navigationHeader, StringComparison.Ordinal);
+        Assert.Contains("ShowCalibrationLibraryCommand", navigationHeader, StringComparison.Ordinal);
+        foreach (var field in new[] { "SelectedWorkspaceTabIndex", "SelectedPlanTabIndex", "SelectedPreviewTabIndex", "SelectedManualTabIndex", "ManualAtrInspectionExpanded" })
+            Assert.Contains(field, bridge, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TargetStrategyNavigationAlsoActivatesItsExistingObservationDock()
+    {
+        var dockable = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
+        var bridge = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationAutomationBridge.cs"));
+        var start = dockable.IndexOf("showObservationPlanCommand = new SimpleCommand(() =>", StringComparison.Ordinal);
+        var end = dockable.IndexOf("});", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        Assert.Contains("ActivateObservationPanel();", dockable[start..end], StringComparison.Ordinal);
+        var activationStart = dockable.IndexOf("private void ActivateObservationPanel()", StringComparison.Ordinal);
+        var activationEnd = dockable.IndexOf("private async Task ShowCalibrationLibraryAsync()", activationStart, StringComparison.Ordinal);
+        Assert.True(activationStart >= 0 && activationEnd > activationStart);
+        var activation = dockable[activationStart..activationEnd];
+        Assert.Contains("NativeDockNavigation.ActivateExisting(this)", activation, StringComparison.Ordinal);
+        Assert.Contains("PanelNotAvailable", activation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Capture", activation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Connect", activation, StringComparison.Ordinal);
+        Assert.Contains("ObservationPanelNavigationOutcome", bridge, StringComparison.Ordinal);
+        Assert.Contains("ObservationPanelSelected", bridge, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutomationSnapshotRefreshDoesNotInvalidateItsOwnRevision()
+    {
+        var dockable = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
+        var dashboardStart = dockable.IndexOf("private void ApplyDashboard(", StringComparison.Ordinal);
+        var dashboardEnd = dockable.IndexOf("private IReadOnlyList<ObservationAutomationCommandBinding> AutomationCommandBindings()", dashboardStart, StringComparison.Ordinal);
+        Assert.True(dashboardStart >= 0 && dashboardEnd > dashboardStart);
+        var dashboard = dockable[dashboardStart..dashboardEnd];
+
+        // A read deliberately renders the latest dashboard on the dispatcher. Its
+        // non-notifying flag must reach the shared command-state refresh as well.
+        Assert.Contains("ApplyDashboard(dashboard, notifyBridge: false)", dockable, StringComparison.Ordinal);
+        Assert.Contains("RaiseCommandStates(notifyBridge: notifyBridge)", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseCommandStates();", dashboard, StringComparison.Ordinal);
+
+        // Real setters and focus/run callbacks retain the notifying default;
+        // only the explicit snapshot-render path suppresses a revision increment.
+        Assert.Contains("private void RaiseCommandStates(bool notifyBridge = true)", dockable, StringComparison.Ordinal);
+        var refreshStart = dockable.IndexOf("private void RaiseCommandStates(bool notifyBridge = true)", StringComparison.Ordinal);
+        var refreshNotification = dockable.IndexOf("automationBridge?.NotifyStateChanged();", refreshStart, StringComparison.Ordinal);
+        Assert.True(refreshNotification > refreshStart);
+        Assert.Contains("if (notifyBridge) automationBridge?.NotifyStateChanged();", dockable[refreshStart..(refreshNotification + "automationBridge?.NotifyStateChanged();".Length)], StringComparison.Ordinal);
     }
 
     [Fact]

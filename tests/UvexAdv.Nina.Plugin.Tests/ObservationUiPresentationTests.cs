@@ -8,6 +8,14 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationUiPresentationTests
 {
     [Fact]
+    public void IdleDashboardMessageIsNotPresentedAsAnUnknownTechnicalState()
+    {
+        const string raw = "No observation is running.";
+        Assert.Equal("空闲，尚未开始观测。", ObservationUiPresentation.EventMessage(null, null, raw, new CultureInfo("zh-CN")));
+        Assert.Equal(raw, ObservationUiPresentation.EventMessage(null, null, raw, new CultureInfo("en-US")));
+    }
+
+    [Fact]
     public void PriorCrossPierReturnIsNotPresentedAsHashOrStarDetectionFailure()
     {
         var issue = ObservationUiPresentation.Present(ObservationStage.ValidateNightSetup,
@@ -79,6 +87,7 @@ public sealed class ObservationUiPresentationTests
     [InlineData("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED", "已确认返回原锁点")]
     [InlineData("ATR_SAVED_FRAME_TEMPERATURE_INVALID", "未计入合格帧")]
     [InlineData("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", "实际次数、位移、已用时间")]
+    [InlineData("PHD2_LOCK_MANIFEST_UNREADABLE", "运行记录无法读取或校验")]
     [InlineData("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", "导星会话或狭缝证据已失效")]
     [InlineData("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED", "同时确认目标身份")]
     [InlineData("PHD2_SCIENCE_IN_PLACE_CHECK_FAILED", "没有因此重建定位")]
@@ -316,6 +325,7 @@ public sealed class ObservationUiPresentationTests
     [Theory]
     [InlineData("G3_SHORT_UNSATURATED_UNMEASURED", "未饱和短帧")]
     [InlineData("G3_SHORT_UNSATURATED_AMBIGUOUS", "多颗独立恒星")]
+    [InlineData("G3_SEP_PARENT_BLEND_UNRESOLVED", "完整星像在复核帧中持续分裂")]
     public void UnsaturatedShortFrameFailureDoesNotDemandASaturatedCore(string code, string expected)
     {
         var gate = GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", $"Short position confirmation failed: {code}");
@@ -339,5 +349,18 @@ public sealed class ObservationUiPresentationTests
         Assert.Contains("complete low-level", chinese.TechnicalDetails, StringComparison.Ordinal);
         Assert.False(ObservationUiPresentation.ContainsCjk(english.Message));
         Assert.True(ObservationUiPresentation.ContainsCjk(english.TechnicalDetails));
+    }
+
+    [Fact]
+    public void SaturationReasonAndAdaptiveLimitAreVisibleInsteadOfMissingSecondFrame()
+    {
+        var gate=GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED","G3_SEP_SATURATED",
+            new Dictionary<string,double> { ["shortPositionFrames"]=4,["maximumShortPositionFrames"]=6,
+                ["shortExposureMilliseconds"]=1 });
+        var result=ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField,gate,Chinese);
+        Assert.Contains("强星像仍有饱和",result.Summary);
+        Assert.DoesNotContain("第二张",result.Summary);
+        Assert.Contains("4/6",result.AutomaticRecovery);
+        Assert.Contains("本帧短曝光（毫秒）=1",ObservationUiPresentation.FormatMetrics(gate.Metrics!,Chinese));
     }
 }

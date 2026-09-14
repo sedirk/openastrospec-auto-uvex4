@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -31,7 +32,8 @@ public sealed record ObservationTargetImportResult(
     ObservationTargetCoordinates ImportedCoordinates,
     ObservationTargetCoordinates? InitialFramingCoordinates,
     ObservationTargetCoordinates? FramingCenterCoordinates,
-    bool UsedFramingCenter);
+    bool UsedFramingCenter,
+    TargetCatalogMetadata? CatalogMetadata = null);
 
 /// <summary>
 /// The complete state copied from the framing assistant at one instant.
@@ -63,7 +65,8 @@ public sealed record ObservationPlanetariumTargetSnapshot(
     ObservationTargetCoordinates? TargetBodyCoordinates,
     double? PositionAngleDegrees,
     string SourceName,
-    string? SourceDetails = null);
+    string? SourceDetails = null,
+    TargetCatalogMetadata? CatalogMetadata = null);
 
 public interface IObservationFramingTargetSource
 {
@@ -267,7 +270,11 @@ public sealed class ObservationTargetImportService
         // back to "HIP 5447" would collapse the two UI/FITS fields again.
         var targetName = importedDisplayName;
         var sourceName = NormalizeSourceName(snapshot.SourceName, "N.I.N.A. 第三方星图");
-        var details = $"已从 {sourceName} 复制一次当前选择；目标 J2000 {FormatCoordinates(targetBody)}。"
+        var metadata = TargetCatalogClassifier.IsBoundTo(snapshot.CatalogMetadata,
+            new EquatorialTarget(targetName, snapshot.CatalogId ?? string.Empty, targetBody.RightAscensionDegrees, targetBody.DeclinationDegrees))
+            ? snapshot.CatalogMetadata! with { CatalogId = catalogId }
+            : null;
+        var details = $"已从 {sourceName} 复制一次当前选择；目标标准坐标（J2000 轴向）{FormatCoordinates(targetBody)}。"
             + $"目标名称保留星图显示名“{targetName}”，不会再由目录号或坐标名称覆盖。"
             + (string.IsNullOrWhiteSpace(catalogId)
                 ? "没有取得可复用的 ASCII 目录标识，本次已清空旧目录 ID。"
@@ -288,7 +295,8 @@ public sealed class ObservationTargetImportService
             targetBody,
             null,
             null,
-            false);
+            false,
+            metadata);
     }
 
     private static string NormalizeAsciiIdentifier(string? value)

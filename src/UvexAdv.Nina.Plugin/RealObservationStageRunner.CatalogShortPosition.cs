@@ -25,7 +25,11 @@ internal sealed partial class RealObservationStageRunner
         var exposure = preset.DirectTargetGuidingExposureMilliseconds;
         if (exposure is not > 0)
             return Unconfirmed("The clipped formal-WCS frame requires the commissioned short target exposure; none is configured. No new motion was sent.");
+        var exposurePolicy = new G3ShortExposurePolicy(exposure.Value);
 
+        await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
+            "TARGET_BRANCH_FALLBACK", "长帧目录区域过曝，从已标定短曝光开始；饱和时最多降档三次，总计不超过六帧；只复核位置，不改变导星参数或运动预算。",
+            field.FramePath, cancellationToken).ConfigureAwait(false);
         G3ShortPositionMeasurement? previous = null;
         string? previousHash = null, previousFramePath = null, previousReceipt = null;
         DateTimeOffset previousCompletedUtc = default;
@@ -63,10 +67,11 @@ internal sealed partial class RealObservationStageRunner
             {
                 primaryAstrometry = await CatalogPrimaryAstrometryReader.ReadAsync(context.Plan.Target.CatalogId,
                     context.Plan.Target.RightAscensionDegrees, context.Plan.Target.DeclinationDegrees, cancellationToken).ConfigureAwait(false);
-                if (primaryAstrometry is null)
-                    return Unconfirmed("G3_SEP_CATALOG_REFERENCE_UNAVAILABLE: The exact locked catalogue ID could not be verified in ICRS epoch-2000 coordinates with proper motion. No short exposure, component-pair guess or motion was started.");
-                var primary = new NINA.Astrometry.Coordinates(primaryAstrometry.RightAscensionDegrees,
-                    primaryAstrometry.DeclinationDegrees, NINA.Astrometry.Epoch.J2000, NINA.Astrometry.Coordinates.RAType.Degrees);
+                // Catalogue normalization belongs to the planning/import boundary.
+                // A runtime binary witness may describe a companion, never move
+                // only this branch to a different primary coordinate than the plan.
+                var primary = new NINA.Astrometry.Coordinates(context.Plan.Target.RightAscensionDegrees,
+                    context.Plan.Target.DeclinationDegrees, NINA.Astrometry.Epoch.J2000, NINA.Astrometry.Coordinates.RAType.Degrees);
                 var pa = companionReference.PositionAngleDegrees * Math.PI / 180;
                 var companion = new NINA.Astrometry.Coordinates(
                     primary.RADegrees + companionReference.SeparationArcseconds * Math.Sin(pa) / (3600 * Math.Cos(primary.Dec * Math.PI / 180)),
@@ -78,8 +83,9 @@ internal sealed partial class RealObservationStageRunner
                 companionVector = new(projected.X - primaryProjected.X, projected.Y - primaryProjected.Y);
             }
         }
-        for (var attempt = 1; attempt <= G3ShortPositionMeasurementPolicy.MaximumFrames; attempt++)
+        for (var attempt = 1; attempt <= exposurePolicy.MaximumFrames; attempt++)
         {
+            exposure = exposurePolicy.ExposureMilliseconds;
             cancellationToken.ThrowIfCancellationRequested();
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
             var originalBinding = await ValidateG3FieldMountBindingForMotionAsync(context, field, cancellationToken).ConfigureAwait(false);
@@ -94,8 +100,8 @@ internal sealed partial class RealObservationStageRunner
 
             const int shortGain = 0;
             Report(ObservationUiPresentation.Text(
-                $"WCS 已确认目标在视场内；SEP 短帧定位 {attempt}/{G3ShortPositionMeasurementPolicy.MaximumFrames}：{exposure} ms、增益 {shortGain}%。核对完整星像、目录位置与独立新帧；不移动、不重复解算。",
-                $"WCS places the target inside the field; SEP short position check {attempt}/{G3ShortPositionMeasurementPolicy.MaximumFrames}: {exposure} ms, gain {shortGain}%. Verify whole star regions, catalogue position and independent frames; no motion or repeat solve."));
+                $"WCS 已确认目标在视场内；SEP 短帧定位 {attempt}/{exposurePolicy.MaximumFrames}：{exposure} ms、增益 {shortGain}%。核对完整星像、目录位置与独立新帧；不移动、不重复解算。",
+                $"WCS places the target inside the field; SEP short position check {attempt}/{exposurePolicy.MaximumFrames}: {exposure} ms, gain {shortGain}%. Verify whole star regions, catalogue position and independent frames; no motion or repeat solve."));
             var before = CaptureG3FrameMountReadback();
             var capture = await CaptureG3NativeSingleFrameForAcquisitionAsync(
                 new Phd2SingleFrameRequest(exposure.Value, configuration.G3.Binning, shortGain,
@@ -165,12 +171,22 @@ internal sealed partial class RealObservationStageRunner
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise)
                 : G3SepShortPositionPolicy.Measure(sepMeasurements, field.TargetIdentification.PredictedPoint,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
+            var nextExposurePolicy = exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt);
+            var exposureChanged = nextExposurePolicy.ExposureMilliseconds != exposurePolicy.ExposureMilliseconds;
+            var measurementMetrics = measurement.Gate.Metrics is null ? new Dictionary<string, double>()
+                : new Dictionary<string, double>(measurement.Gate.Metrics);
+            measurementMetrics["shortExposureMilliseconds"] = exposure.Value;
+            measurementMetrics["nextShortExposureMilliseconds"] = nextExposurePolicy.ExposureMilliseconds;
+            measurementMetrics["shortExposureReductions"] = nextExposurePolicy.Reductions;
+            measurement = measurement with { Gate = measurement.Gate with { Metrics = measurementMetrics } };
             var measured = measurement.Identification;
             if (previousFramePath is not null && !SameHash(previousHash!,
                     await ComputeFileSha256Async(previousFramePath, cancellationToken).ConfigureAwait(false)))
                 return Unconfirmed("G3_SHORT_FRAME_CHANGED: The first confirmation frame changed; no position was adopted.");
             var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
-                previous, measurement, previousHash, sha, attempt, preset.TargetSearchRadiusPixels);
+                previous, measurement, previousHash, sha, attempt, preset.TargetSearchRadiusPixels, nextExposurePolicy.MaximumFrames);
+            if (measurement.Gate.Code == G3ShortExposurePolicy.SaturatedCode && !exposureChanged)
+                confirmation = confirmation with { RetryAllowed = false };
             var repeatGate = confirmation.RepeatGate;
             var accepted = confirmation.Accepted;
             var positionSpread = confirmation.PositionSpreadPixels;
@@ -189,7 +205,11 @@ internal sealed partial class RealObservationStageRunner
                     sepWorkerSha256,
                     sepModuleSha256,
                     sepMeasurements,
-                    maximumFrames = G3ShortPositionMeasurementPolicy.MaximumFrames,
+                    maximumFrames = nextExposurePolicy.MaximumFrames,
+                    exposurePolicyVersion = G3ShortExposurePolicy.Version,
+                    exposurePolicy,
+                    nextExposurePolicy,
+                    exposureChanged,
                     companionReference,
                     companionVector,
                     measurement,
@@ -221,10 +241,27 @@ internal sealed partial class RealObservationStageRunner
                 },
                 capture.Path, cancellationToken).ConfigureAwait(false);
             receipts.Add(receipt);
+            exposurePolicy = nextExposurePolicy;
             if (!accepted)
             {
                 if (!confirmation.RetryAllowed)
+                {
+                    await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
+                        "TARGET_BRANCH_BLOCKED", $"{confirmation.Gate.Code}: {confirmation.Gate.Message} 未选择伴星、鬼影或未确认位置代替目标。",
+                        capture.Path, cancellationToken).ConfigureAwait(false);
                     return Unconfirmed($"Short position confirmation failed: {confirmation.Gate.Code}: {confirmation.Gate.Message}. Evidence: {receipt}", confirmation.Gate.Metrics);
+                }
+                if (exposureChanged)
+                {
+                    // Reconfirm at the SAME new exposure. Never pair centroids
+                    // across exposure settings; all consumed frames stay logged.
+                    previous = null;
+                    previousHash = previousFramePath = previousReceipt = null;
+                    Report(ObservationUiPresentation.Text(
+                        $"SEP 测到强星像饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张一致新帧，总上限 {exposurePolicy.MaximumFrames} 帧；不移动、不改变导星参数。",
+                        $"SEP measured saturation: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%; require two fresh matching frames, cap {exposurePolicy.MaximumFrames}. No motion or guiding-setting change."));
+                    continue;
+                }
                 if (!confirmation.RetainPreviousMeasurement)
                 {
                     previous = measurement;
@@ -233,8 +270,8 @@ internal sealed partial class RealObservationStageRunner
                     previousReceipt = receipt;
                 }
                 Report(ObservationUiPresentation.Text(
-                    $"短曝光位置复核 {attempt}/{G3ShortPositionMeasurementPolicy.MaximumFrames} 尚未凑齐一致的新帧；保留本帧诊断，在原上限内补拍，不移动、不重置预算。",
-                    $"Short position check {attempt}/{G3ShortPositionMeasurementPolicy.MaximumFrames} needs another consistent fresh position; retain diagnostics and retry within the original cap, without motion or budget reset."));
+                    $"短曝光位置复核 {attempt}/{exposurePolicy.MaximumFrames} 尚未凑齐一致的新帧；保留本帧诊断，在本次上限内补拍，不移动、不重置运动预算。",
+                    $"Short position check {attempt}/{exposurePolicy.MaximumFrames} needs another consistent fresh position; retain diagnostics and retry within this cap, without motion or motion-budget reset."));
                 continue;
             }
 
@@ -247,6 +284,9 @@ internal sealed partial class RealObservationStageRunner
                 Gate = GateResult.Pass("TARGET_CATALOG_WCS_SHORT_REFINED",
                     "Formal WCS retains identity; separately hash-bound, unchanged-pointing short evidence supplies a measured coarse centre and its empirical spread. Not exact placement or focus.", measured.Gate.Metrics),
             };
+            await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
+                "TARGET_BRANCH_PASSED", $"{attempt} 张原预算内短帧完成独立位置复核；分散尺度 {positionSpread:F2}px，仍不是精确入缝。",
+                capture.Path, cancellationToken).ConfigureAwait(false);
             var residual = PixelDistance(identification.Target!.Centroid, field.SlitDetection.Geometry.AcquisitionPoint);
             PublishG3Preview(image, ObservationUiPresentation.Text(
                 $"短曝光位置已复核：距本轮 LED 狭缝中点 {residual:F2}px，位置分散尺度 {positionSpread:F2}px；仅供粗定位/接管，精入缝仍须新帧实测。",

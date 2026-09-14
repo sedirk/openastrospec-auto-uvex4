@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin.UiHarness;
 
@@ -15,6 +16,7 @@ public sealed record ScreenshotScenario(
     public string TemplateKey { get; init; } = ScreenshotRenderer.ProductionTemplateKey;
     public object? AlternateViewModel { get; init; }
     public bool ExercisePlanScrolling { get; init; }
+    public bool ExercisePreparationScrolling { get; init; }
 }
 
 public static class ScenarioCatalog
@@ -22,9 +24,33 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("workflow-idle", 1180, 800, ObservationDockMockViewModel.WorkflowState("idle")),
+        new("workflow-running", 1180, 800, ObservationDockMockViewModel.WorkflowState("running")),
+        new("workflow-fallback", 1040, 850, ObservationDockMockViewModel.WorkflowState("fallback")),
+        new("workflow-blocked", 1040, 850, ObservationDockMockViewModel.WorkflowState("blocked")),
+        new("workflow-cancelling", 1040, 800, ObservationDockMockViewModel.WorkflowState("cancelling")),
+        new("workflow-cancelled", 1040, 800, ObservationDockMockViewModel.WorkflowState("cancelled")),
+        new("workflow-completed", 1180, 800, ObservationDockMockViewModel.WorkflowState("completed")),
+        new("workflow-narrow", 540, 700, ObservationDockMockViewModel.WorkflowState("fallback")),
+        new("workflow-short", 760, 560, ObservationDockMockViewModel.WorkflowState("blocked")),
         new("main-focus", 900, 750, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock() },
         new("main-focus-narrow", 540, 900, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock() },
+        new("main-focus-invalid", 620, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock { MaximumPosition=0, MinimumPosition=0, CanStart=false, AvailabilityMessage="请填写主镜允许的最小、最大焦位；最大值必须大于最小值（当前尚未配置有效范围）。", Status="未启动；不会移动设备。" } },
+        new("main-focus-busy", 620, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock { CanStart=false, AvailabilityMessage="观测正在取消并收尾；请等顶部显示“已取消”后再对焦。", Status="对焦尚未启动。" } },
+        new("main-focus-curve", 760, 630, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock { SelectedTabIndex=1 } },
+        new("main-focus-cancelling", 540, 680, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock { SelectedTabIndex=1, IsBusy=true, AvailabilityMessage="对焦正在运行；请等待完成，或点击取消。", Status="正在取消：停止新采样，等待当前操作结束；仅在安全且位置可信时返回原焦位。" } },
+        new("main-focus-native", 760, 680, ObservationDockMockViewModel.Idle()) { TemplateKey="UvexAdv.Nina.Plugin.SepMainFocusViewModel_Dockable", AlternateViewModel=new MainFocusMock { SelectedTabIndex=1 } },
+        new("main-focus-embedded", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex=1, SelectedManualTabIndex=1 }),
         new("plan-target", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 }),
+        new("target-strategy-auto", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("auto")),
+        new("target-strategy-unknown", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("unknown")),
+        new("target-strategy-catalogue", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("catalogue")),
+        new("target-strategy-fallback", 1040, 850, ObservationDockMockViewModel.TargetStrategy("fallback")),
+        new("target-strategy-busy", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("busy")),
+        new("target-strategy-narrow-bottom", 540, 700, ObservationDockMockViewModel.TargetStrategy("unknown"))
+        {
+            ExercisePlanScrolling = true,
+        },
         new("plan-budget", 1040, 800, ObservationDockMockViewModel.ExposureBudget()),
         new("plan-budget-narrow", 540, 900, ObservationDockMockViewModel.ExposureBudget()),
         new("plan-budget-invalid", 1040, 800, ObservationDockMockViewModel.ExposureBudget(invalid: true)),
@@ -53,6 +79,29 @@ public static class ScenarioCatalog
         },
         new("uvex-manual", 1180, 800, ObservationDockMockViewModel.UvexManual()),
         new("startup-requirements", 1180, 900, ObservationDockMockViewModel.StartupRequirements()),
+        new("preparation-default", 1180, 900, ObservationDockMockViewModel.Preparation()),
+        new("preparation-missing", 1040, 900, ObservationDockMockViewModel.Preparation(missing: true)),
+        new("preparation-ready", 1180, 900, ObservationDockMockViewModel.Preparation(ready: true)),
+        new("preparation-night", 1040, 850, ObservationDockMockViewModel.Preparation(night: true)),
+        new("preparation-busy", 1040, 850, ObservationDockMockViewModel.Preparation(night: true, busy: true)),
+        new("preparation-en", 1040, 900, ObservationDockMockViewModel.Preparation(english: true))
+        {
+            Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("preparation-night-en", 1040, 850, ObservationDockMockViewModel.Preparation(night: true, english: true))
+        {
+            Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("preparation-narrow", 540, 700, ObservationDockMockViewModel.Preparation(missing: true)),
+        new("preparation-narrow-bottom", 540, 700, ObservationDockMockViewModel.Preparation(missing: true))
+        {
+            ExercisePreparationScrolling = true,
+        },
+        new("preparation-night-narrow", 540, 700, ObservationDockMockViewModel.Preparation(night: true)),
+        new("preparation-night-narrow-bottom", 540, 700, ObservationDockMockViewModel.Preparation(night: true))
+        {
+            ExercisePreparationScrolling = true,
+        },
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
         new("recovering", 1180, 800, ObservationDockMockViewModel.Recovering()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
@@ -70,6 +119,9 @@ public static class ScenarioCatalog
         new("qhy-g3-fast-pair", 1180, 900, ObservationDockMockViewModel.QhyG3FastPair()),
         new("narrow", 540, 900, ObservationDockMockViewModel.Narrow()),
         new("advanced", 1180, 1000, ObservationDockMockViewModel.Advanced()),
+        new("advanced-narrow", 540, 700, ObservationDockMockViewModel.Advanced()),
+        .. Enumerable.Range(0, 10).Select(index => new ScreenshotScenario($"advanced-category-{index}", 1040, 800,
+            new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 6, AdvancedCategoryIndex = index })),
         new("photometry-off", 1180, 800, new ObservationDockMockViewModel { SynchronizedPhotometryEnabled = false }),
         new("photometry-worker", 980, 850, ObservationDockMockViewModel.Idle())
         {
@@ -218,7 +270,48 @@ public sealed class ObservationDockMockViewModel
     public Visibility FailurePanelVisibility => FailureVisibility;
     public Visibility IdlePanelVisibility => NoFailureVisibility;
     public int SelectedWorkspaceTabIndex { get; init; }
+    public int SelectedManualTabIndex { get; init; }
     public int SelectedPlanTabIndex { get; init; }
+    public int SelectedPreparationTabIndex { get; set; }
+    public int SelectedAdvancedCategoryIndex { get; set; }
+    public int AdvancedCategoryIndex { get => SelectedAdvancedCategoryIndex; init => SelectedAdvancedCategoryIndex = value; }
+    public ICommand SaveAdvancedSettingsCommand => EnabledCommand;
+    public string AdvancedSettingsSaveStatus => "离线回放：保存按钮只用于布局检查，不写入 Profile。";
+    private ObservationWorkflowGraph? workflow;
+    public ObservationWorkflowGraph Workflow
+    {
+        get => workflow ?? WorkflowFixtures.Create(HasFailure ? "blocked" : IsRunActive ? "running" : "idle");
+        init => workflow = value;
+    }
+    public ICommand ShowWorkflowCommand => EnabledCommand;
+    public static ObservationDockMockViewModel WorkflowState(string scenario)
+    {
+        var graph = WorkflowFixtures.Create(scenario);
+        var stages = graph.Nodes.Where(node => node.Kind == ObservationWorkflowNodeKind.MainStage).ToArray();
+        var completed = stages.Count(node => node.StateKind == ObservationWorkflowNodeState.Passed);
+        var current = stages.FirstOrDefault(node => node.IsCurrent);
+        var next = current is null ? null : stages.FirstOrDefault(node => node.Order == current.Order + 1);
+        var terminal = graph.RunState is ObservationRunState.Completed or ObservationRunState.Cancelled;
+        return new()
+        {
+            Workflow = graph, SelectedWorkspaceTabIndex = 0, TargetName = graph.TargetName,
+            CatalogId = graph.CatalogId, IsSimulationMode = true,
+            ModeText = "自动观测：模拟回放 · 非实拍",
+            RealModeStatusSummary = "模拟界面回放，不检查或授权真实设备；图与运行栏来自同一记录。",
+            RealModeStatus = "当前为模拟回放，不连接设备。",
+            IsRunActive = graph.RunState is not (ObservationRunState.Idle or ObservationRunState.Completed or ObservationRunState.Cancelled),
+            HasFailure = graph.RunState == ObservationRunState.PausedNeedsAttention,
+            PauseReason = graph.RunState == ObservationRunState.PausedNeedsAttention ? current?.Summary ?? "" : "",
+            StateText = ObservationUiPresentation.RunStateName(graph.RunState, CultureInfo.GetCultureInfo("zh-CN")),
+            StatusMessage = current?.Summary ?? graph.RunSummary,
+            CurrentStageText = current?.Label ?? (terminal ? "本轮已结束" : "尚未开始"),
+            NextStageText = terminal ? "不再自动执行" : graph.RunState == ObservationRunState.PausedNeedsAttention
+                ? current?.Label ?? "等待复核" : next?.Label ?? (graph.RunState == ObservationRunState.Idle ? stages[0].Label : "等待当前阶段结束"),
+            ProgressPercent = completed * 100d / stages.Length,
+            ProgressSummary = $"模拟总体阶段 {completed}/{stages.Length} · {completed * 100d / stages.Length:F0}%",
+            OperatorNotice = "仅离线界面回放；没有连接或操作设备。",
+        };
+    }
     public AcquisitionPlanEditor AcquisitionPlan { get; init; } = BudgetEditor(false);
     private static AcquisitionPlanEditor BudgetEditor(bool locked)
     {
@@ -245,8 +338,72 @@ public sealed class ObservationDockMockViewModel
     }
     public int SelectedMainTabIndex => SelectedWorkspaceTabIndex;
     public int SelectedPreviewTabIndex { get; init; }
+    public bool ManualAtrInspectionExpanded { get; set; }
 
     public string TargetName { get; init; } = "Vega";
+    public IReadOnlyList<TargetObservabilityChoice> AvailableTargetObservabilityClasses { get; } =
+    [
+        new(TargetObservabilityClass.DirectStellar, "恒星 · 优先实测星像", "优先本帧星像，必要时 SEP 短曝光，再检查正式 WCS 后备。"),
+        new(TargetObservabilityClass.FaintPointSource, "暗点源 / 类星体 · 目录定位", "依据本轮正式 WCS 定位，不强求目标峰可见。"),
+        new(TargetObservabilityClass.CompactExtended, "紧致星云 / 行星状星云 · 目录定位", "定位目录中心，不用邻星替代。"),
+        new(TargetObservabilityClass.ExtendedNebula, "扩展目标 · 指定坐标取样", "狭缝取样计划坐标，不自动选择最亮结节。"),
+        new(TargetObservabilityClass.InvisibleInG3, "导星图中不可见 · 目录定位", "仍需可信 WCS、狭缝和导星证据。"),
+        new(TargetObservabilityClass.AutoFromPlanetarium, "根据星图自动", "星图资料只推荐路线，新帧仍须验证。"),
+    ];
+    public TargetObservabilityClass TargetObservability { get; set; } = TargetObservabilityClass.DirectStellar;
+    public string TargetObservabilitySummary { get; init; } = "恒星优先：本帧星像 → SEP 短曝光 → 有条件使用正式 WCS 目录几何；不自动改换目标。";
+    public string TargetStrategyPrioritySummary { get; init; } = "1. WCS + 本帧星像 — 唯一目录对应，不选另一颗最亮星。\n2. SEP 短曝光复核 — 长帧过曝时验证，沿用原最多三帧。\n3. 正式 WCS 目录几何 — 只在本轮正式解算有效且局部目标峰未测到时使用。\n4. 有界邻场解算 — 无解时尝试，共用本轮动作、位移、时间和回程预算。";
+    public string TargetStrategyMetadataSummary { get; init; } = "没有与当前目标匹配的星图类别资料。请从第三方星图导入；不会沿用旧目标的类别。";
+    public string TargetStrategyRuntimeSummary { get; init; } = "本轮尚未执行目标定位；优先级是计划，不是成功记录。";
+    public string TargetStrategyRuntimeColor { get; init; } = "#7DD3FC";
+    public string TargetStrategyAttemptHistory { get; init; } = "本轮尚无定位方法执行记录。";
+    public ICommand UsePlanetariumStrategyCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
+
+    public static ObservationDockMockViewModel TargetStrategy(string state) => new()
+    {
+        SelectedWorkspaceTabIndex = state == "fallback" ? 0 : 2,
+        Workflow = WorkflowFixtures.Create(state == "fallback" ? "fallback" : state == "busy" ? "blocked" : "idle"),
+        TargetName = state == "catalogue" ? "M76" : "Almach",
+        CatalogId = state == "catalogue" ? "NGC 650" : "HIP 9640",
+        TargetObservability = TargetObservabilityClass.AutoFromPlanetarium,
+        IsRunActive = state is "busy" or "fallback",
+        ModeText = state is "busy" or "fallback" ? "自动观测：模拟回放 · 运行中" : "自动观测：模拟演练",
+        RealModeStatusSummary = "模拟回放：不连接设备、不授予真实动作权限。",
+        StateText = state is "busy" or "fallback" ? "自动推进" : "空闲",
+        CurrentStageText = state == "fallback" ? "导星相机取场与粗居中" : state == "busy" ? "SEP 短曝光复核" : "尚未开始",
+        NextStageText = state is "fallback" or "busy" ? "PHD2 入缝精调" : "校验本夜配置",
+        ProgressPercent = state is "fallback" or "busy" ? 400d / 11 : 0,
+        ProgressSummary = state is "fallback" or "busy" ? "模拟总体阶段 4/11 · 36%" : "模拟总体阶段 0/11 · 0%",
+        StatusMessage = state == "busy" ? "定位策略已锁定；运行期间不能更改目标或推荐路线。" : "离线策略界面验证；没有调用设备。",
+        TargetObservabilitySummary = state switch
+        {
+            "catalogue" => "星图类型：行星状星云。目录位置优先；不强求目标成为圆形恒星核。",
+            "unknown" => "星图类别未提供；暂按恒星优先尝试，是否可见由新帧决定，不推断为暗目标。",
+            _ => "星图类型：双星，V 2.10。恒星优先；保留主星对应关系，不以伴星替代。",
+        },
+        TargetStrategyMetadataSummary = state switch
+        {
+            "catalogue" => "星图资料：planetary nebula · 星等 10.1 · Stellarium / 本次导入的 M76；仅供策略推荐。",
+            "unknown" => "没有与当前目标匹配的星图类别资料。请从第三方星图导入；手工改目标后旧资料不会沿用。",
+            _ => "星图资料：double star · 星等 2.1 · Stellarium / 本次导入的 Almach；仅供策略推荐。",
+        },
+        TargetStrategyPrioritySummary = state == "catalogue"
+            ? "1. 正式 WCS 目录几何 — 使用计划中心，不把邻近恒星当目标。\n2. 有界邻场解算 — 无解时在原预算内重新取场；不虚构已看到目标峰。"
+            : "1. WCS + 本帧星像 — 必须唯一对应目录目标。\n2. SEP 短曝光复核 — 过曝时最多三张，保留原始帧与失败原因。\n3. 正式 WCS 目录几何 — 同帧解算有效、无局部峰才可后备；不掩盖多星歧义。\n4. 有界邻场解算 — 继承同一动作、位移、耗时及回程预算。",
+        TargetStrategyRuntimeSummary = state switch
+        {
+            "fallback" => "本轮已切换：WCS + 本帧星像 → 正式 WCS 目录几何。原因：当前帧未测到目标峰；同帧正式 WCS 仍有效。保留目录身份，尚未宣称精确入缝。",
+            "busy" => "正在执行：SEP 短曝光复核（第 2/3 张）。触发原因：长曝光过曝；仍核对本轮同一主星。尚未完成定位。",
+            _ => "本轮尚未执行目标定位；以上是计划，不是本轮成功记录。",
+        },
+        TargetStrategyRuntimeColor = state == "fallback" ? "#86EFAC" : "#7DD3FC",
+        TargetStrategyAttemptHistory = state switch
+        {
+            "fallback" => "01:40:01 WCS + 本帧星像：未测到目录目标峰。\n01:40:02 正式 WCS 目录几何：本轮同帧解算有效；保留计划坐标，未声明实测星心。",
+            "busy" => "01:40:01 WCS + 本帧星像：长帧目标区域过曝。\n01:40:02 SEP 短曝光复核：开始第 1/3 张。\n01:40:03 SEP 短曝光复核：正在第 2/3 张；尚未通过。",
+            _ => "本轮尚无定位方法执行记录。",
+        },
+    };
     public string CatalogId { get; init; } = "HD 172167";
     public string NightSetupId { get; init; } = "night-20260818-a";
     public double RightAscensionDegrees { get; init; } = 279.23473479;
@@ -339,9 +496,18 @@ public sealed class ObservationDockMockViewModel
     public string ManualM2NegativeButtonText => $"M2 −{ManualM2StepSize} 步";
     public string ManualM2PositiveButtonText => $"M2 +{ManualM2StepSize} 步";
 
-    public MainFocusMock MainFocus { get; } = new() { IsExpanded=false };
+    public MainFocusMock MainFocus { get; } = new();
+    public ICommand ShowMainFocusCommand => EnabledCommand;
     public int AutomaticPreparationIssueCount { get; init; } = 3;
-    public string AutomaticPreparationSummary { get; init; } = "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。";
+    public int PreparationChecklistIssueCount => ObservationDockable.CountPreparationChecklistIssues(
+        AutomaticPreparationIssueCount, IsTargetPreparationMissing, IsSlitChoiceMissing);
+    public IReadOnlyList<string> PreparationChecklistIssues { get; init; } =
+    [
+        "安装标定：在高级设置 → 设备绑定加载并核验完整标定方案。",
+        "本夜配置：导入锁定配置；草稿不构成启动依据。",
+    ];
+    public string AutomaticPreparationSummary => ObservationDockable.FormatPreparationSummary(
+        PreparationChecklistIssueCount, ObservationStaticTextLocalization.EffectiveCulture);
     public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles { get; init; } =
     [
         new(
@@ -363,14 +529,35 @@ public sealed class ObservationDockMockViewModel
     public DeviceIdentityChoice? SelectedG3CameraCandidate { get; set; }
     public DeviceIdentityChoice? SelectedQhyCameraCandidate { get; set; }
     public bool IsTargetPreparationMissing { get; init; }
-    public string TargetPreparationStatus { get; init; } = "已选择：Vega · J2000 RA 279.23473° / Dec +38.78369°";
+    public string TargetPreparationStatus => IsTargetPreparationMissing
+        ? ObservationUiPresentation.Text("未完成：请选择或导入目标，并确认 J2000 坐标。", "Incomplete: select or import a target and verify its J2000 coordinates.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text(
+            $"已选择：{TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°",
+            $"Selected: {TargetName} · J2000 RA {RightAscensionDegrees:F5}° / Dec {DeclinationDegrees:+0.00000;-0.00000;0.00000}°",
+            ObservationStaticTextLocalization.EffectiveCulture);
     public bool IsDevicePreparationMissing { get; init; }
-    public string DevicePreparationStatus { get; init; } = "已从各设备所有者保存的配置恢复候选；这里只选择期望身份，不会连接设备。";
+    public string DevicePreparationStatus => PreparationDeviceSummary;
+    public string PreparationDeviceSummary => IsDevicePreparationMissing
+        ? ObservationUiPresentation.Text(
+            "期望设备身份尚未齐全；请在“高级设置 → 设备绑定”加载或核对保存的身份。",
+            "Expected device identities are incomplete; load or review saved identities in Advanced settings → Device bindings.",
+            ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text(
+            "已记录赤道仪、光谱相机、PHD2 导星相机和测光相机的期望身份；尚不代表设备已连接或核验通过。",
+            "Expected mount, spectroscopy, PHD2 guide-camera and photometry-camera identities are recorded; this does not mean devices are connected or verified.",
+            ObservationStaticTextLocalization.EffectiveCulture);
+    public string PreparationSafetySummary => SelectedPreparationSafetyCapability == "OperatorWeakSupervision"
+        ? ObservationUiPresentation.Text("有人弱监督；不会自动开关屋顶，明确危险仍阻断。", "Supervised operation; no automatic roof motion, and explicit danger still blocks.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text("全无人监管策略；启动时必须通过环境与安全收尾能力核验。", "Full-unattended policy; live environment and safe-cleanup capabilities must pass startup validation.", ObservationStaticTextLocalization.EffectiveCulture);
     public bool IsCommissioningPreparationMissing { get; init; } = true;
-    public string CommissioningPreparationStatus { get; init; } = "未完成：请选择经过审核的设备标定方案；ID、哈希和运动限额会整体加载，不需要逐项抄写。";
+    public string CommissioningPreparationStatus => IsCommissioningPreparationMissing
+        ? ObservationUiPresentation.Text("标定方案尚待加载或核验；请在“高级设置 → 设备绑定”处理。", "The commissioning setup still needs loading or verification in Advanced settings → Device bindings.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text("已记录标定方案；完整性与适用性仍受启动校验约束。", "A commissioning setup is recorded; integrity and applicability remain subject to startup validation.", ObservationStaticTextLocalization.EffectiveCulture);
     public string PreparationEvidenceInventorySummary { get; init; } = "本机证据：台站运行模板已找到 · PHD2 1 份 · schema-2 本夜配置 0 份 · schema-5 安装标定 0 份 · 完整绑定包 0 份。扫描只读取文件，不连接设备。";
     public bool IsNightSetupPreparationMissing { get; init; } = true;
-    public string NightSetupPreparationStatus { get; init; } = "未完成：尚无可锁定的 schema-2 本夜配置；可先自动生成准备草稿。";
+    public string NightSetupPreparationStatus => IsNightSetupPreparationMissing
+        ? ObservationUiPresentation.Text("尚未选择锁定的本夜配置；请在“本夜配置”导入。准备草稿不能代替锁定配置。", "No locked Night Setup is selected; import one in Night Setup. A preparation draft cannot replace it.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text($"已选择本夜配置：{NightSetupId}；启动时仍需核对实际光学状态。", $"Selected Night Setup: {NightSetupId}; actual optical state still requires validation at startup.", ObservationStaticTextLocalization.EffectiveCulture);
     public IReadOnlyList<PreparationOptionChoice> PreparationSpectralRegionChoices { get; init; } =
     [
         new("VisibleWide", "UVEX 可见光宽谱（推荐）", "中心波长由标定回填。"),
@@ -389,13 +576,19 @@ public sealed class ObservationDockMockViewModel
     public string SelectedPreparationSpectralRegion { get; set; } = "VisibleWide";
     public string SelectedPreparationCalibrationReference { get; set; } = "Vega";
     public string SelectedPreparationSafetyCapability { get; set; } = "OperatorWeakSupervision";
+    public string SelectedPreparationSafetyCapabilityDescription => SelectedPreparationSafetyCapability == "OperatorWeakSupervision"
+        ? ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。缺失的环境能力按项警告降级，不授予无人值守权限；已连接设备明确报告危险仍阻断。不会自动开关屋顶。", "This changes real-run safety requirements, not just draft notes. Missing environment capabilities degrade individually with warnings and never grant unattended authority; explicit danger from a connected device still blocks. No automatic roof motion is allowed.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。真实流程启动后，仅在实时安全门通过时才可开顶；结束或终端故障时需按顺序收镜盖、停放赤道仪并关顶。选择本身不会连接或移动设备。", "This changes real-run safety requirements, not just draft notes. After a real run starts, roof opening requires passing live safety gates; completion or terminal failure requires closing the cover, parking the mount and closing the roof in order. Selection itself does not connect or move equipment.", ObservationStaticTextLocalization.EffectiveCulture);
     public bool PreparationOrderSortingFilterInstalled { get; set; }
     public string PreparationDraftStatus { get; init; } = "尚未生成本次观测配置草稿。";
     public bool IsSlitChoiceMissing { get; init; }
+    public string PreparationSlitStatus => IsSlitChoiceMissing
+        ? ObservationUiPresentation.Text("请选择期望狭缝槽位；选择本身不会移动狭缝轮。", "Select the expected slit slot; the selection itself does not move the wheel.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text($"期望槽位 {ExpectedUvexSlitPosition}；仅为配置要求，不是实时位置或到位证明。", $"Expected slot {ExpectedUvexSlitPosition}; this is a configuration requirement, not live position or arrival evidence.", ObservationStaticTextLocalization.EffectiveCulture);
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
-    public string AutomationPolicyPreparationStatus => IsAutomationPolicyPreparationMissing
-        ? "后台一致性尚未通过；多数项目会在导入设备标定方案与本夜光学设置后自动完成，不需要逐项填写。"
-        : "已通过：后台配置结构、设备所有权和运动限额完整。";
+    public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
+        ? ObservationUiPresentation.Text("当前静态运行参数检查无阻断；不代表实时设备已经就绪。", "Current static run-parameter checks have no blockers; this does not mean live equipment is ready.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text($"静态运行参数有 {AutomaticPreparationIssueCount} 项待处理；请按启动清单定位，详细原因在高级设置。", $"Static run parameters have {AutomaticPreparationIssueCount} outstanding checks; use the preparation checklist, with detailed reasons in Advanced settings.", ObservationStaticTextLocalization.EffectiveCulture);
     public int ExpectedUvexSlitPosition { get; init; } = 2;
     public IReadOnlyList<MockUvexSlitChoice> UvexSlitChoices { get; init; } =
     [
@@ -487,13 +680,19 @@ public sealed class ObservationDockMockViewModel
     public ICommand RefreshCommissioningProfilesCommand => EnabledCommand;
     public ICommand ApplySelectedCommissioningProfileCommand => EnabledCommand;
     public ICommand ShowObservationPlanCommand => EnabledCommand;
+    public ICommand ShowAtrInspectorCommand => EnabledCommand;
+    public ICommand ShowCalibrationLibraryCommand => EnabledCommand;
     public ICommand ShowAcquisitionPlanCommand => EnabledCommand;
     public ICommand ShowStartupRequirementsCommand => EnabledCommand;
     public ICommand ShowManualUvexControlCommand => EnabledCommand;
     public ICommand ShowAdvancedSettingsCommand => EnabledCommand;
+    public ICommand ShowDeviceBindingsSettingsCommand => EnabledCommand;
+    public ICommand ShowSafetySettingsCommand => EnabledCommand;
+    public ICommand ShowPreparationChecklistCommand => EnabledCommand;
+    public ICommand ShowNightSetupPreparationCommand => EnabledCommand;
     public ICommand AutoFillConnectedNinaDevicesCommand => EnabledCommand;
-    public ICommand SelectNightSetupSnapshotCommand => EnabledCommand;
-    public ICommand CreateNightSetupDraftCommand => EnabledCommand;
+    public ICommand SelectNightSetupSnapshotCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
+    public ICommand CreateNightSetupDraftCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
     public ICommand OpenPreparationDraftFolderCommand => DisabledCommand;
     public ICommand RefreshProfileOwnershipCommand => EnabledCommand;
     public ICommand ImportFromFramingAssistantCommand =>
@@ -564,15 +763,81 @@ public sealed class ObservationDockMockViewModel
         IsSimulationMode = false,
         SelectedWorkspaceTabIndex = 3,
         AutomaticPreparationIssueCount = 8,
-        AutomaticPreparationSummary = "准备尚未完成。先处理左侧带红色标记的分组；内部校验不会再作为大段错误显示在主界面。",
         IsDevicePreparationMissing = false,
         IsCommissioningPreparationMissing = true,
         IsNightSetupPreparationMissing = true,
         OperatorNotice = "离线启动条件截图；没有连接任何设备。",
     };
 
+    public static ObservationDockMockViewModel Preparation(
+        bool missing = false, bool ready = false, bool night = false, bool busy = false, bool english = false) => new()
+    {
+        SelectedWorkspaceTabIndex = 3,
+        SelectedPreparationTabIndex = night ? 1 : 0,
+        IsRunActive = busy,
+        IsSimulationMode = true,
+        ModeText = english ? "Automation: simulation" : "自动观测：模拟演练",
+        ModeDescription = english ? "Offline preparation fixture; no equipment is connected." : "离线准备场景；不连接设备。",
+        StateText = english ? "Idle" : busy ? "模拟运行中" : "空闲",
+        StartButtonText = english ? "Start simulation (no equipment)" : busy ? "模拟演练正在运行" : "启动模拟演练（不连接设备）",
+        CurrentStageText = english ? "Not started" : busy ? "锁定本夜配置" : "尚未开始",
+        NextStageText = english ? "Lock Night Setup" : busy ? "广域见证" : "锁定本夜配置",
+        StatusMessage = english ? "Review preparation; this fixture cannot invoke equipment." : busy ? "运行期间锁定本夜设置；可查看其他入口。" : "检查准备项目；离线按钮不执行设备操作。",
+        ProgressSummary = english ? "Overall stages 0/11 · 0%" : "总体阶段 0/11 · 0%",
+        RealModeStatus = english ? "This is offline UI data, not proof of commissioning." : "仅离线界面数据，不代表真实设备准入已验收。",
+        RealModeStatusSummary = english ? "Simulation fixture; no equipment is connected." : "模拟场景；没有连接或操作设备。",
+        OperatorNotice = english ? "Offline UI verification; no device control objects were loaded." : "离线准备截图；没有加载设备控制对象。",
+        ModelAutomationBridgeStatusText = english ? "Backend bridge disabled; no commands can be invoked." : "后台桥已关闭；不执行设备操作。",
+        ModelAutomationLastActivity = english ? "No backend command has been invoked." : "尚无后台按钮调用。",
+        AutomaticPreparationIssueCount = ready ? 0 : missing ? 8 : 3,
+        PreparationChecklistIssues = ready ? [] : english
+            ? ["Commissioning: load and verify the complete setup in Advanced settings → Device bindings.",
+                "Night Setup: import a locked setup; a draft cannot qualify a run for startup.",
+                "Solving and centering: review exposure tiers and bounded motion parameters in Advanced settings."]
+            : missing
+                ? ["观测目标：在观测计划中选择目标并确认 J2000 坐标。",
+                    "设备身份：在高级设置 → 设备绑定核对已保存的选择与所有权。",
+                    "安装标定：在高级设置 → 设备绑定加载并核验完整标定方案。",
+                    "本夜配置：导入锁定配置；草稿不构成启动依据。",
+                    "期望狭缝：在本夜配置中选择有效槽位；选择不会移动设备。",
+                    "解算与居中：在高级设置核对曝光档位及有界运动参数。"]
+                : ["安装标定：在高级设置 → 设备绑定加载并核验完整标定方案。",
+                    "本夜配置：导入锁定配置；草稿不构成启动依据。"],
+        IsTargetPreparationMissing = missing,
+        IsDevicePreparationMissing = missing,
+        IsCommissioningPreparationMissing = !ready,
+        IsNightSetupPreparationMissing = !ready,
+        IsSlitChoiceMissing = missing,
+        PreparationEvidenceInventorySummary = english ? "Local files: station profile and one guiding record; Night Setup and installation evidence are missing."
+            : ready ? "本机证据：台站模板、本夜配置与安装标定齐备；只读取文件。" : "本机证据：台站模板 1 份 · 导星证据 1 份 · 本夜配置 0 份 · 安装标定 0 份。",
+        PreparationDraftStatus = english ? "No preparation draft has been generated." : "尚未生成本次观测配置草稿；生成草稿不会移动设备或曝光。",
+        PreparationSpectralRegionChoices =
+        [
+            new("VisibleWide", english ? "UVEX visible wide spectrum (recommended)" : "UVEX 可见光宽谱（推荐）", english ? "Calibration supplies the central wavelength." : "中心波长由标定回填。"),
+            new("HAlphaRed", english ? "H-alpha red region" : "Hα 红区", english ? "Near H-alpha." : "Hα 附近。"),
+        ],
+        PreparationCalibrationReferenceChoices =
+        [
+            new("Vega", english ? "Bright standard star (Vega, etc.)" : "亮标准星（Vega 等）", english ? "Bright reference star." : "亮参考星。"),
+            new("CompactEmission", english ? "Compact emission-line object / PN" : "紧致发射线天体 / PN", english ? "Known emission lines." : "已知发射线。"),
+        ],
+        PreparationSafetyCapabilityChoices =
+        [
+            new("NinaSafetyStack", english ? "N.I.N.A. safety chain (unattended)" : "N.I.N.A. 安全链（无人值守）", english ? "Complete safety readback required." : "完整安全回读。"),
+            new("OperatorWeakSupervision", english ? "Operator-supervised (default)" : "有人弱监督（默认）", english ? "Missing adapters warn; explicit unsafe reports still block. No unattended authority." : "四类环境适配器缺失仅警告；已连接设备明确报告危险仍阻断；不授予无人值守。"),
+        ],
+        UvexSlitChoices =
+        [
+            new(1, english ? "Slot 1 · nominal 300 µm" : "槽位 1 · 标称 300 µm"),
+            new(2, english ? "Slot 2 · nominal 15 µm" : "槽位 2 · 标称 15 µm"),
+            new(3, english ? "Slot 3 · nominal 25 µm" : "槽位 3 · 标称 25 µm"),
+            new(4, english ? "Slot 4 · nominal 35 µm" : "槽位 4 · 标称 35 µm"),
+        ],
+    };
+
     public static ObservationDockMockViewModel Running() => new()
     {
+        Workflow = WorkflowFixtures.Create("placement"),
         ModeText = "自动观测：真实设备",
         ModeDescription = "全部启动硬门已经通过；流程正在自动推进，人工可随时暂停。",
         RealModeStatus = "✓ 真实模式启动条件已通过",
@@ -610,10 +875,11 @@ public sealed class ObservationDockMockViewModel
 
     public static ObservationDockMockViewModel Recovering() => new()
     {
-        ModeText = "自动观测：真实设备",
+        Workflow = WorkflowFixtures.Create("recovering"),
+        ModeText = "自动观测：模拟回放 · 恢复中",
         ModeDescription = "全部启动硬门已经通过；正在执行同一账本下的有界自动恢复。",
         RealModeStatus = "✓ 真实模式启动条件已通过",
-        RealModeStatusSummary = "真实模式：启动条件已通过。",
+        RealModeStatusSummary = "模拟回放：仅显示恢复记录，不连接或移动设备。",
         StartButtonText = "自动恢复进行中",
         StateText = "正在自动恢复",
         StatusMessage = "G3 新帧受云层影响，保持原位并重新采集不可变证据。",
@@ -625,7 +891,7 @@ public sealed class ObservationDockMockViewModel
         CurrentOperationPercent = 67,
         HasCurrentOperationProgress = true,
         IsRecovering = true,
-        IsSimulationMode = false,
+        IsSimulationMode = true,
         IsRunActive = true,
         SelectedWorkspaceTabIndex = 0,
         OperatorNotice = "恢复不会重置运动、动作、时间或回程预算。",
@@ -766,7 +1032,8 @@ public sealed class ObservationDockMockViewModel
         ProgressPercent = 58,
         IsSimulationMode = false,
         HasFailure = true,
-        SelectedWorkspaceTabIndex = 0,
+        SelectedWorkspaceTabIndex = 6,
+        AdvancedCategoryIndex = 4,
         Phd2CalibrationGradeText = "DegradedSupervised",
         Phd2CalibrationOverviewGradeText = "降级（需人工监督）",
         Phd2CalibrationPolicyText = "phd2-calibration-quality-v1",
@@ -796,7 +1063,8 @@ public sealed class ObservationDockMockViewModel
         ProgressPercent = 56,
         IsSimulationMode = false,
         HasFailure = true,
-        SelectedWorkspaceTabIndex = 0,
+        SelectedWorkspaceTabIndex = 6,
+        AdvancedCategoryIndex = 4,
         Phd2CalibrationGradeText = "Qualified",
         Phd2CalibrationOverviewGradeText = "合格",
         Phd2CalibrationPolicyText = "phd2-calibration-quality-v1",
@@ -825,7 +1093,8 @@ public sealed class ObservationDockMockViewModel
         ProgressPercent = 45,
         IsSimulationMode = false,
         IsRunActive = true,
-        SelectedWorkspaceTabIndex = 0,
+        SelectedWorkspaceTabIndex = 6,
+        AdvancedCategoryIndex = 7,
         GhostAssistanceMode = "AutoIfValidElseSkip",
         GhostAssistanceModeText = "自动（无效时跳过）",
         GhostCalibrationSummaryText = "模式：AutoIfValidElseSkip · 标定：g3-ghost-install-20260818 / A47D9C0F11B2 · 策略：ghost-match-v1 / 16BDA0397F22 · preset 8C64B121A05E。",
@@ -866,6 +1135,7 @@ public sealed class ObservationDockMockViewModel
         IsSimulationMode = false,
         IsRunActive = true,
         SelectedWorkspaceTabIndex = 6,
+        AdvancedCategoryIndex = 5,
         QhyG3FastPairEnabled = true,
         QhyG3FastPairStatus = "已启用候选学习：优先复用 ≤15s 的同位置 QHY WCS；否则只拍 1 张 2s QHY 帧。全过程 0 次赤道仪命令，候选不能直接授权运动。",
         WideToSlitTransferStatus = "自动预定位仍为 Skip；本轮 paired-WCS 只生成 Candidate，需多样本独立验证后才能激活。",
@@ -920,6 +1190,7 @@ public sealed class ObservationDockMockViewModel
         StartButtonText = "启动真实设备自动观测",
         IsSimulationMode = false,
         SelectedWorkspaceTabIndex = 6,
+        AdvancedCategoryIndex = 8,
         BrightTargetWingCentroidEnabled = true,
         BrightTargetMinimumG3ExposureMilliseconds = 125,
         BrightTargetMaximumQhyWcsAgeMinutes = 5,

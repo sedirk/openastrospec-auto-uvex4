@@ -17,6 +17,8 @@ using UvexAdv.Core;
 namespace UvexAdv.Nina.Plugin;
 
 [Export(typeof(IDockableVM))]
+[Export(typeof(UvexCalibrationLibraryDockable))]
+[PartCreationPolicy(CreationPolicy.Shared)]
 public sealed class UvexCalibrationLibraryDockable : DockableVM, IDisposable
 {
     private static readonly JsonSerializerOptions JobJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };

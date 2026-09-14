@@ -28,7 +28,15 @@ public sealed class CatalogShortPositionSourceSafetyTests
         Assert.Contains("if (!confirmation.RetainPreviousMeasurement)",source);
         Assert.Contains("confirmation.Gate.Metrics",source);
         Assert.Contains("previousCompletedUtc = capture.CompletedUtc",source);
-        Assert.Contains("attempt <= G3ShortPositionMeasurementPolicy.MaximumFrames",source);
+        Assert.Contains("attempt <= exposurePolicy.MaximumFrames",source);
+        Assert.Contains("exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt)",source);
+        Assert.Contains("if (exposureChanged)",source);
+        Assert.Contains("previousHash = previousFramePath = previousReceipt = null",source);
+        Assert.Contains("nextExposurePolicy.MaximumFrames",source);
+        Assert.Contains("const int shortGain = 0",source);
+        Assert.Contains("ValidateG3SolveProbeImage(capture, image, exposure.Value",source);
+        Assert.DoesNotContain("SetExposure",source);
+        Assert.DoesNotContain("SetGain",source);
         Assert.Contains("!frameHashes.Add(sha)",source);
         Assert.Contains("capture.CompletedUtc <= previousCompletedUtc",source);
         Assert.Contains("ComputeFileSha256Async(previousFramePath",source);

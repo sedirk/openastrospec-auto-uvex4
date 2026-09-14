@@ -66,6 +66,18 @@ public static partial class ObservationUiPresentation
             ["maximumShortRepeatSeparationPixels"] = "短帧一致性上限（像素）",
             ["shortPositionFrames"] = "短曝光复核帧数",
             ["maximumShortPositionFrames"] = "短曝光复核帧数上限",
+            ["shortExposureMilliseconds"] = "本帧短曝光（毫秒）",
+            ["nextShortExposureMilliseconds"] = "后续短曝光（毫秒）",
+            ["shortExposureReductions"] = "饱和降曝光次数",
+            ["sepSaturatedRoiComponents"] = "识别区饱和星像分量数",
+            ["sepMaximumRoiSaturationFraction"] = "星像最大饱和比例（0–1）",
+            ["sepSaturatedRoiPeakAdu"] = "饱和星像峰值（ADU）",
+            ["sepSaturatedRoiMaximumSnr"] = "饱和星像最大信噪比",
+            ["sepWholeParentPosition"] = "使用完整星像区域定位",
+            ["sepParentComponentCount"] = "SEP 完整区域总数",
+            ["sepParentComponentsTruncated"] = "完整区域列表被截断",
+            ["sepValidRoiParents"] = "识别区合格完整星像数",
+            ["sepSelectedParentChildCount"] = "所选星像内部子峰数",
             ["maximumShortContourSpreadPixels"] = "轮廓一致性上限（像素）",
             ["maximumShortCoreDiameterPixels"] = "饱和星核尺寸上限（像素）",
             ["shortSolidCoreCount"] = "实心星核候选数",
@@ -292,6 +304,7 @@ public static partial class ObservationUiPresentation
         if (!IsChinese(culture)) return CameraRoleLabels.Description(message, culture);
         if (string.IsNullOrWhiteSpace(code))
         {
+            if (string.Equals(message, "No observation is running.", StringComparison.Ordinal)) return "空闲，尚未开始观测。";
             if (ContainsCjk(message) && !ContainsEnglishSentence(message)) return CameraRoleLabels.Description(message, culture);
             return "运行组件返回了未分类的技术状态；原始消息已保留在时间线技术详情中。";
         }
@@ -313,6 +326,7 @@ public static partial class ObservationUiPresentation
             "RUN_CANCELLED" => "自动观测已取消，原始证据仍保留。",
             "RUN_COMPLETED" => "自动观测与必要收尾已完成。",
             "STAGE_STARTED" => $"开始执行：{StageName(resolvedStage, culture)}。",
+            "STAGE_COMPLETED" => $"阶段已通过：{StageName(resolvedStage, culture)}。",
             "STAGE_PASSED" => $"已完成：{StageName(resolvedStage, culture)}。",
             _ when code.EndsWith("_STARTED", StringComparison.Ordinal) => $"已开始：{StageName(resolvedStage, culture)}。",
             _ when code.EndsWith("_PASSED", StringComparison.Ordinal) ||
@@ -444,6 +458,7 @@ public static partial class ObservationUiPresentation
             "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED" => "入缝新帧未在本轮时限内达到所选质量策略；已保留回程时间，没有重新解算或追加运动",
             "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED" => "入缝新帧未在本轮时限内达到所选质量策略；已确认返回原锁点并停止导星，没有再做无预算的全场重建",
             "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" => "本轮入缝账本的剩余预算不足；请查看实际次数、位移、已用时间和原始原因，不代表继承了前夜用量",
+            "PHD2_LOCK_MANIFEST_UNREADABLE" => "PHD2 锁点关联的运行记录无法读取或校验；请查看原始原因中的运行日期和文件，不代表本帧导星质量不合格",
             "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星证据需要重建，但原精调预算不能授权新的移动；未启动回退定位，已保存光谱保留",
             "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED" => "试拍前的导星会话或狭缝证据已失效；需要有界复核，不能用旧证据开始下一帧",
             "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；没有追加移动或曝光",
@@ -591,9 +606,11 @@ public static partial class ObservationUiPresentation
             gate.Metrics?.TryGetValue("shortPositionFrames", out var frames) == true)
         {
             var used = frames.ToString("0", CultureInfo.InvariantCulture);
+            var limit = gate.Metrics.TryGetValue("maximumShortPositionFrames", out var maximum)
+                ? maximum.ToString("0", CultureInfo.InvariantCulture) : G3ShortPositionMeasurementPolicy.MaximumFrames.ToString();
             return chinese
-                ? $"本阶段已记录 {used}/{G3ShortPositionMeasurementPolicy.MaximumFrames} 张短曝光复核帧；单帧图像不足允许在此上限内补拍，多颗独立恒星歧义不会自动选星。此次仍未获可靠位置，已停止；未移动、未重新解算、未重置预算。"
-                : $"This stage recorded {used}/{G3ShortPositionMeasurementPolicy.MaximumFrames} short confirmation frames; single-frame shape failures can retry within this cap. No reliable position was confirmed, so it stopped without motion, repeat solving or budget reset.";
+                ? $"本阶段已记录 {used}/{limit} 张短曝光复核帧；图像不足可有界补拍，饱和可有界降曝光，降档后须重新取得两张一致新帧。此次仍未获可靠位置，已停止；未移动、未重新解算、未重置运动预算。"
+                : $"This stage recorded {used}/{limit} short confirmation frames. Image-only retries and saturation exposure reductions are bounded; a changed exposure requires a new matching pair. No reliable position was confirmed, so it stopped without motion, repeat solving or motion-budget reset.";
         }
         var plan = ObservationAutomaticRecoveryPolicy.For(stage, gate);
         if (plan.IsRecoverable)
@@ -637,8 +654,10 @@ public static partial class ObservationUiPresentation
             _ when raw.Contains("G3_SEP_WORKER_FAILED", StringComparison.Ordinal) => "SEP 图像测量失败；没有回退到旧检测算法",
             _ when raw.Contains("G3_SEP_INPUT_CHANGED", StringComparison.Ordinal) => "SEP 程序或原始帧在测量期间发生变化",
             _ when raw.Contains("G3_SEP_INVALID_COVERAGE", StringComparison.Ordinal) => "SEP 候选列表不完整，不能据此确认目标唯一性",
+            _ when raw.Contains("G3_SEP_SATURATED", StringComparison.Ordinal) => "识别区强星像仍有饱和，本次降曝光或帧数限额已到；未用旁边的弱小候选替代目标",
             _ when raw.Contains("G3_SEP_UNMEASURED", StringComparison.Ordinal) => "SEP 尚未提取到信号与像素支撑充分的未饱和星像",
             _ when raw.Contains("G3_SEP_AMBIGUOUS", StringComparison.Ordinal) => "SEP 星像分量尚不能唯一关联到目录目标",
+            _ when raw.Contains("G3_SEP_PARENT_BLEND_UNRESOLVED", StringComparison.Ordinal) => "完整星像在复核帧中持续分裂，尚缺独立的未分裂新帧或目录主星证据，不能仅按同一父区域排除混叠",
             _ when raw.Contains("G3_SHORT_UNSATURATED_UNMEASURED", StringComparison.Ordinal) => "尚未在未饱和短帧中测出符合轮廓和局部信噪比要求的星像",
             _ when raw.Contains("G3_SHORT_UNSATURATED_AMBIGUOUS", StringComparison.Ordinal) => "短帧中仍有多颗独立恒星候选，不能唯一对应目标",
             _ when raw.Contains("G3_SHORT_CONTOUR_BLENDED", StringComparison.Ordinal) => "内外层轮廓尺寸或长短轴比异常，不能确认独立星点",
