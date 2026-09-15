@@ -36,7 +36,8 @@ public sealed record ObservationDashboardSnapshot(
     ObservationPlan? LockedPlan = null,
     string LockedRunAdapter = "unknown",
     IReadOnlyList<ObservationDashboardEvidence>? WorkflowEvidence = null,
-    bool WorkflowHistoryTruncated = false);
+    bool WorkflowHistoryTruncated = false,
+    ObservationAcquisitionProgress? AcquisitionProgress = null);
 
 [Export(typeof(ObservationCoordinatorHost))]
 [PartCreationPolicy(CreationPolicy.Shared)]
@@ -58,6 +59,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private string dashboardRunAdapter = "unknown";
     private readonly List<ObservationDashboardEvidence> workflowEvidence = new();
     private bool workflowHistoryTruncated;
+    private ObservationAcquisitionProgress? acquisitionProgress;
     private object? activeRunReservation;
     private RealObservationRunOwnershipLease? realRunOwnershipLease;
     private bool persistenceFailureLatched;
@@ -309,6 +311,20 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
     }
 
+    public void PublishAcquisitionProgress(ObservationAcquisitionProgress next)
+    {
+        EventHandler<ObservationDashboardSnapshot>? handler;
+        ObservationDashboardSnapshot dashboard;
+        lock (sync)
+        {
+            if (coordinator.Snapshot.ObservationRunId != next.ObservationRunId) return;
+            acquisitionProgress = next;
+            dashboard = CreateDashboardLocked();
+            handler = DashboardChanged;
+        }
+        handler?.Invoke(this, dashboard);
+    }
+
     public void PublishEvidence(
         string kind,
         string absolutePath,
@@ -453,6 +469,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
             gates.Clear();
             evidence.Clear();
             dashboardPlan = plan;
+            acquisitionProgress = null;
             dashboardRunAdapter = metadata.Labels?.TryGetValue("adapter", out var adapter) == true ? adapter : "unknown";
             workflowEvidence.Clear();
             workflowHistoryTruncated = false;
@@ -525,7 +542,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
         manifestRunId is not null && manifestRunId == snapshot.ObservationRunId ? manifestPath : null,
         planMatchesRun ? dashboardPlan : null,
         planMatchesRun ? dashboardRunAdapter : "unknown",
-        workflowEvidence.ToArray(), workflowHistoryTruncated);
+        workflowEvidence.ToArray(), workflowHistoryTruncated,
+        acquisitionProgress?.ObservationRunId == snapshot.ObservationRunId ? acquisitionProgress : null);
     }
 
     private static ObservationPreview EmptyPreview(ObservationPreviewChannel channel, string caption) =>

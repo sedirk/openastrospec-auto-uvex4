@@ -32,6 +32,12 @@
 
 ## 为什么不能相信 `AtTargetTemp`
 
+若仅发生下载图像的 `CCD-TEMP=0`、而同一 owner 的新鲜实温正常，0.4.0.205 已加入
+[首次保存前的温度元数据确认](atr-temperature-metadata-20260916.md)。它通过 N.I.N.A.
+已持有的相机有界读取真实温度，保留原始零值和确认来源，不断连、不重设制冷，
+也不修改任何已保存 FITS。它与本文的制冷会话恢复是两条不同路径；持续零值或
+真实升温不会被放行，旧的温度异常帧也不会追溯计为合格科学帧。
+
 Advanced API 2.2.15.2 的 `AtTargetTemp` 是用当前 `Temperature == TemperatureSetPoint` 计算的。当两个失效读数同时为 `0` 时，它会返回 `true`；Profile 中缓存的 `TargetTemp=-10` 也不能证明相机实际收到了这个设定值。
 
 恢复验收只使用：

@@ -2567,6 +2567,32 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return initial;
         }
 
+        // GetInfo is N.I.N.A.'s periodically updated telemetry, not a direct
+        // atomic ASCOM read. A single suspect date must not stop a healthy
+        // guide and reconnect the telescope in the middle of science.
+        var confirmation = new MountClockReadbackConfirmation();
+        var lastClock = initial;
+        Report("赤道仪时钟读数异常，先等待连续有效读回；保持现有导星，不重连设备。");
+        for (var sample = 0; sample < MountClockReadbackConfirmation.MaximumSamples; sample++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            lastClock = ValidateMountClock();
+            if (confirmation.Observe(lastClock))
+            {
+                await WriteAuditBestEffortAsync("mount-clock-readback-confirmed-without-reconnect",
+                    new { initial, confirmed = lastClock, samples = sample + 1, guidingStopped = false,
+                        telescopeReconnected = false, motionIssued = false }).ConfigureAwait(false);
+                return lastClock;
+            }
+        }
+        if (!MountClockReadbackConfirmation.MayReconnect((ObservationStage)Volatile.Read(ref executingStage),
+            phd2SlitPlacementSession is not null))
+            return GateResult.Unknown("MOUNT_CLOCK_RECHECK_REQUIRED",
+                $"赤道仪时钟异常在 8 秒只读复核后仍未取得连续有效读回；未重连赤道仪或主动停止导星，未开新曝光。请在空闲边界校时后重新定位。原始原因：{initial.Message} 最新读回：{lastClock.Message}",
+                lastClock.Metrics);
+
+        // Reconnection is a Night Setup operation, never an exposure prerequisite.
         // OnStep receives workstation UTC from N.I.N.A. when its ASCOM
         // connection is established. A long-lived N.I.N.A. session can
         // therefore retain a mount UTCDate that is days old even though the
@@ -13305,7 +13331,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var evidenceReason = selectedTierValidatedByThisFrame
                 ? $"Fresh {probeExposure:G4}s probe passed the spectral-trace clipping, contrast and SNR gates."
                 : decision.Reason;
-            var savedTemperature = await SaveAtrImageAsync(
+            var savedProbe = await SaveAtrImageAsync(
                 probe,
                 attemptedAtrProbeFrames,
                 selectedTierValidatedByThisFrame,
@@ -13314,10 +13340,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 evidenceReason,
                 cancellationToken).ConfigureAwait(false);
             retainedAtrProbeFrames++;
-            if (savedTemperature.Disposition != GateDisposition.Passed)
+            if (savedProbe.TemperatureGate.Disposition != GateDisposition.Passed)
             {
                 PublishFrameCounters();
-                return new StageResult(savedTemperature);
+                return new StageResult(savedProbe.TemperatureGate);
             }
             if (selectedTierValidatedByThisFrame) acceptedAtrProbeFrames++;
             PublishFrameCounters();
@@ -13359,6 +13385,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     selectedAtrExposureSeconds = probeExposure;
                     atrReprobeRequired = false;
                     context.Set("atrSelectedExposureSeconds", probeExposure);
+                    await CreditFinalProbeAsync(context, probe, savedProbe, probeExposure, cancellationToken).ConfigureAwait(false);
                     UpdateRemainingScienceDuration(context, probeExposure);
                     await WriteAuditBestEffortAsync("atr-signal-limited-longest-safe-tier", new
                     {
@@ -13382,6 +13409,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 selectedAtrExposureSeconds = probeExposure;
                 atrReprobeRequired = false;
                 context.Set("atrSelectedExposureSeconds", probeExposure);
+                await CreditFinalProbeAsync(context, probe, savedProbe, probeExposure, cancellationToken).ConfigureAwait(false);
                 UpdateRemainingScienceDuration(context, probeExposure);
                 return Passed("ATR_PROBE_TIER_VALIDATED", evidenceReason, decision.Metrics);
             }
@@ -13460,6 +13488,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     return Attention(ObservationStage.RunScienceBlock, "ATR_TIER_NOT_SELECTED", "Automatic reprobe advanced without selecting an ATR exposure tier.");
                 }
                 exposure = reselectedExposure;
+                if (savedAtrFrames >= configuration.Atr.ScienceFrameCount) break;
             }
             UpdateRemainingScienceDuration(context, exposure);
             var protectedPlan = context.Plan with { PlannedDuration = context.RemainingWorstCaseDuration ?? context.Plan.PlannedDuration };
@@ -13489,8 +13518,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // An exposure attempt is provenance even when capture, conversion, or save
             // subsequently fails. Persist it before opening the shutter.
             PublishFrameCounters();
+            PublishAcquisitionProgress(context);
             var acceptedIndex = savedAtrFrames + 1;
-            Report($"ATR 科学曝光 accepted {acceptedIndex}/{configuration.Atr.ScienceFrameCount} · attempt {attemptedAtrFrames}/{configuration.Atr.MaximumScienceAttempts} · {exposure:G4}s", savedAtrFrames / (double)configuration.Atr.ScienceFrameCount);
+            Report($"准备科学帧 {acceptedIndex}/{configuration.Atr.ScienceFrameCount} · 已验收 {savedAtrFrames} 张 · 尝试 {attemptedAtrFrames}/{configuration.Atr.MaximumScienceAttempts} · {exposure:G4}s", savedAtrFrames / (double)configuration.Atr.ScienceFrameCount);
             var captured = await CaptureAtrImageAsync(
                 context,
                 exposure,
@@ -13503,7 +13533,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ObservationStaticTextLocalization.EffectiveCulture),
                 captured.Metrics.TraceSpatialCenterPixel, captured.Metrics.TraceSpatialHalfWidthPixels);
             var quality = ValidateAtrScienceMetrics(captured.Metrics);
-            var savedTemperature = await SaveAtrImageAsync(
+            var savedScience = await SaveAtrImageAsync(
                 captured,
                 attemptedAtrFrames,
                 quality.Disposition == GateDisposition.Passed,
@@ -13512,12 +13542,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 quality.Message,
                 cancellationToken).ConfigureAwait(false);
             retainedAtrScienceFrames++;
-            if (savedTemperature.Disposition != GateDisposition.Passed)
+            if (savedScience.TemperatureGate.Disposition != GateDisposition.Passed)
             {
                 atrReprobeRequired = true;
                 selectedAtrExposureSeconds = null;
                 PublishFrameCounters();
-                return new StageResult(savedTemperature);
+                PublishAcquisitionProgress(context);
+                return new StageResult(savedScience.TemperatureGate);
             }
             if (quality.Severity == GateSeverity.Warning) atrWarningFrames++;
             context.Set("atrAttemptedFrames", attemptedAtrFrames);
@@ -13526,6 +13557,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 PublishFrameCounters();
                 atrReprobeRequired = true;
                 selectedAtrExposureSeconds = null;
+                PublishAcquisitionProgress(context);
                 await WriteAuditBestEffortAsync("atr-science-frame-rejected", new
                 {
                     context.Plan.ObservationRunId,
@@ -13557,17 +13589,22 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 continue;
             }
             savedAtrFrames++;
+            acceptedAtrExposureSeconds += captured.Metrics.ExposureSeconds;
             context.Set("atrSavedFrames", savedAtrFrames);
             context.Set("atrAcceptedFrames", savedAtrFrames);
             PublishFrameCounters();
+            PublishAcquisitionProgress(context);
             UpdateRemainingScienceDuration(context, exposure);
         }
 
         Report("ATR 科学曝光块完成", 1);
+        PublishAcquisitionProgress(context, "Complete");
         var scienceMetrics = new Dictionary<string, double>
         {
             ["acceptedFrames"] = savedAtrFrames,
-            ["retainedFrames"] = retainedAtrScienceFrames,
+            ["retainedFrames"] = retainedAtrScienceFrames + reusedAtrProbeFrames,
+            ["reusedProbeFrames"] = reusedAtrProbeFrames,
+            ["acceptedExposureSeconds"] = acceptedAtrExposureSeconds,
             ["attemptedFrames"] = attemptedAtrFrames,
             ["warningFrames"] = atrWarningFrames,
             ["exposureSeconds"] = exposure,
@@ -13575,11 +13612,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         return atrWarningFrames > 0 || (configuration.Qhy.SynchronizedPhotometryEnabled && !qhyAvailableForRun)
             ? Warning(
                 "ATR_SCIENCE_BLOCK_COMPLETE_WITH_WARNINGS",
-                $"Accepted {savedAtrFrames}/{retainedAtrScienceFrames} retained ATR585M science FITS at {exposure:G4}s. {atrWarningFrames} frame(s) were retained with low-signal warnings; synchronized QHY coverage was {(qhyAvailableForRun ? "available" : "unavailable")}.",
+                $"Accepted {savedAtrFrames}/{retainedAtrScienceFrames + reusedAtrProbeFrames} retained science FITS, including {reusedAtrProbeFrames} final probes; accepted integration {acceptedAtrExposureSeconds:G6}s. {atrWarningFrames} frame(s) have low-signal warnings; synchronized photometry was {(qhyAvailableForRun ? "available" : "unavailable")}.",
                 scienceMetrics)
             : Passed(
                 "ATR_SCIENCE_BLOCK_COMPLETE",
-                $"Accepted {savedAtrFrames}/{retainedAtrScienceFrames} retained ATR585M science FITS through N.I.N.A. ImageSaveMediator at {exposure:G4}s.",
+                $"Accepted {savedAtrFrames}/{retainedAtrScienceFrames + reusedAtrProbeFrames} retained science FITS through N.I.N.A. ImageSaveMediator, including {reusedAtrProbeFrames} final probes; accepted integration {acceptedAtrExposureSeconds:G6}s.",
                 scienceMetrics);
     }
 
@@ -14664,6 +14701,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ["atrProbeAttemptedFrames"] = Volatile.Read(ref attemptedAtrProbeFrames),
                 ["atrProbeRetainedFrames"] = Volatile.Read(ref retainedAtrProbeFrames),
                 ["atrProbeAcceptedFrames"] = Volatile.Read(ref acceptedAtrProbeFrames),
+                ["atrScienceReusedProbeFrames"] = Volatile.Read(ref reusedAtrProbeFrames),
+                ["atrAcceptedExposureMilliseconds"] = (long)Math.Round(acceptedAtrExposureSeconds * 1000),
             }));
     }
 
@@ -14697,9 +14736,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             captureToken, context.Plan.NightSetupId, imageType, context.Plan.Target.CatalogId.Trim(), HeaderSchemaVersion: 2);
         var identityHeaders = AtrFitsProvenance.CreateIdentityHeaders(provenance);
         var guideBeforeExposure = phd2.Snapshot;
+        PublishAcquisitionProgress(context, "Exposing", stageRole, captureToken, exposureSeconds);
         var exposure = await imagingMediator.CaptureImage(sequence, cancellationToken, progress, reason).ConfigureAwait(false);
+        PublishAcquisitionProgress(context, "Processing", stageRole, captureToken, exposureSeconds);
         var image = await exposure.ToImageData(progress, cancellationToken).ConfigureAwait(false);
         var guideAfterExposure = phd2.Snapshot;
+        await ConfirmAtrTemperatureMetadataBeforeFirstSaveAsync(image, context.Plan.ExpectedAtrCameraId,
+            captureToken, cancellationToken).ConfigureAwait(false);
         // Retain why an exposure interval did or did not preserve continuity.
         // A later Guiding state alone cannot erase a real intervening epoch loss.
         await WriteAuditBestEffortAsync("atr-exposure-guide-continuity", new
@@ -14755,7 +14798,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             context.Plan.ExpectedAtrCameraId);
     }
 
-    private async Task<GateResult> SaveAtrImageAsync(
+    private async Task<AtrSavedImage> SaveAtrImageAsync(
         AtrCapture capture,
         int attemptNumber,
         bool qualityAccepted,
@@ -14809,7 +14852,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             var temperatureGate = AtrCoolingReadinessPolicy.EvaluateSavedFrame(
                 provenance.Headers, configuration.Atr.TargetTemperatureC,
-                ReadAtrCoolingReadiness(capture.ExpectedCameraId));
+                await ReadAtrPostSaveTemperatureAsync(capture, cancellationToken).ConfigureAwait(false));
             if (temperatureGate.Disposition != GateDisposition.Passed)
             {
                 qualityAccepted = false;
@@ -14818,10 +14861,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 qualityMessage = temperatureGate.Message;
                 Volatile.Write(ref atrStableTemperatureEstablished, 0);
             }
-            host.PublishEvidence(
-                capture.Role == CaptureSequence.ImageTypes.LIGHT ? "atr-science-fits" : "atr-probe-fits",
-                path,
-                metadata: new Dictionary<string, string>
+            var metadata = new Dictionary<string, string>
                 {
                     ["captureId"] = capture.CaptureToken,
                     ["role"] = capture.Role,
@@ -14833,6 +14873,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     ["temperatureQualityCode"] = temperatureGate.Code,
                     ["fitsTemperatureC"] = provenance.Headers.GetValueOrDefault("CCD-TEMP", "Unavailable"),
                     ["fitsSetPointC"] = provenance.Headers.GetValueOrDefault("SET-TEMP", "Unavailable"),
+                    ["nativeDownloadTemperatureC"] = provenance.Headers.GetValueOrDefault("UVEXTN", "Unchanged"),
+                    ["temperatureMetadataSource"] = provenance.Headers.GetValueOrDefault("UVEXTSRC", "NINA-NATIVE"),
+                    ["temperatureConfirmedUtc"] = provenance.Headers.GetValueOrDefault("UVEXTUTC", "Unavailable"),
                     ["fitsProvenanceVerified"] = true.ToString(CultureInfo.InvariantCulture),
                     ["targetName"] = capture.Provenance.TargetName,
                     ["stageRole"] = capture.Provenance.StageRole,
@@ -14863,8 +14906,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         !session.FreshGuidingWindowReplacedSettle &&
                         !session.SlitPrecisionWarningActive &&
                         IsUnattendedPhd2ScienceAuthority(session.Quality, session.GuideMode)).ToString(CultureInfo.InvariantCulture),
-                });
-            return temperatureGate;
+                };
+            host.PublishEvidence(capture.Role == CaptureSequence.ImageTypes.LIGHT ? "atr-science-fits" : "atr-probe-fits",
+                path, metadata: metadata);
+            return new AtrSavedImage(temperatureGate, path, metadata);
         }
         finally
         {

@@ -30,7 +30,7 @@ namespace UvexAdv.Nina.Plugin;
 [Export(typeof(ObservationDockable))]
 [PartCreationPolicy(CreationPolicy.Shared)]
 [SupportedOSPlatform("windows")]
-public sealed class ObservationDockable : DockableVM, IDisposable
+public sealed partial class ObservationDockable : DockableVM, IDisposable
 {
     private static readonly IReadOnlyList<UvexSlitChoice> SlitChoices =
     [
@@ -2286,6 +2286,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
 
     public void Dispose()
     {
+        acquisitionProgressTimer?.Stop();
         mainFocus?.Dispose();
         automationBridge.Dispose();
         host.DashboardChanged -= OnDashboardChanged;
@@ -3703,6 +3704,7 @@ public sealed class ObservationDockable : DockableVM, IDisposable
         // This does not connect, expose or create another camera owner.
         RefreshAtrManualStatus();
         var run = dashboard.Run;
+        ApplyAcquisitionDashboard(dashboard);
         Workflow = ObservationWorkflowProjection.Build(dashboard);
         RaisePropertyChanged(nameof(Workflow));
         if (targetStrategyRunId != run.ObservationRunId)
@@ -4024,7 +4026,9 @@ public sealed class ObservationDockable : DockableVM, IDisposable
             calibrationLibraryAnchorable is { IsSelected: true, IsVisible: true },
             observationPanelNavigationOutcome,
             observationPanelAnchorable is { IsSelected: true, IsVisible: true },
-            Workflow, MainFocus.OptionsSnapshot);
+            Workflow, MainFocus.OptionsSnapshot, dashboard.AcquisitionProgress,
+            ObservationAcquisitionPresentation.Build(dashboard.AcquisitionProgress, dashboard.Run.ObservationRunId,
+                dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture));
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(

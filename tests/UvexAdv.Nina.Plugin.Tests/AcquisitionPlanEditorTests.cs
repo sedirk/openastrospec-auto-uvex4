@@ -119,7 +119,8 @@ public sealed class AcquisitionPlanEditorTests
         var editor = Editor();
         Assert.Contains("30 分钟", editor.BudgetSummary);
         Assert.Contains("1 小时", editor.BudgetSummary);
-        Assert.Contains("不含试拍", editor.BudgetSummary);
+        Assert.Contains("不含其他试拍", editor.BudgetSummary);
+        Assert.Contains("含通过科学验收的最终试拍", editor.BudgetSummary);
         Assert.Contains("不是曝光硬截止", editor.PlanningWarning);
         editor.PlanningMinutes = "120";
         Assert.Empty(editor.PlanningWarning);

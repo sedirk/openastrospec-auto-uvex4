@@ -103,6 +103,14 @@ public static class ScenarioCatalog
             ExercisePreparationScrolling = true,
         },
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
+        new("science-progress", 1040, 800, ObservationDockMockViewModel.ScienceProgress()),
+        new("science-progress-narrow", 540, 700, ObservationDockMockViewModel.ScienceProgress()),
+        new("science-progress-short", 760, 560, ObservationDockMockViewModel.ScienceProgress()),
+        new("science-progress-en", 1040, 800, ObservationDockMockViewModel.ScienceProgress(english: true)) { Culture = CultureInfo.GetCultureInfo("en-US") },
+        new("science-progress-saving", 1040, 800, ObservationDockMockViewModel.ScienceProgress("Processing")),
+        new("science-progress-paused", 1040, 800, ObservationDockMockViewModel.ScienceProgress("Paused")),
+        new("science-progress-probe", 1040, 800, ObservationDockMockViewModel.ScienceProgress("Probe")),
+        new("science-progress-complete", 1040, 800, ObservationDockMockViewModel.ScienceProgress("Complete")),
         new("recovering", 1180, 800, ObservationDockMockViewModel.Recovering()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
         new("atr-live", 1040, 700, ObservationDockMockViewModel.AtrLive()),
@@ -214,6 +222,7 @@ public sealed class ObservationDockMockViewModel
     public double ProgressPercent { get; init; }
     public string ProgressSummary { get; init; } = "总体阶段 0/11 · 0%";
     public string CurrentOperationText { get; init; } = string.Empty;
+    public ObservationAcquisitionPresentation Acquisition { get; init; } = ObservationAcquisitionPresentation.Empty;
     public double CurrentOperationPercent { get; init; }
     public bool HasCurrentOperationText => !string.IsNullOrWhiteSpace(CurrentOperationText);
     public bool HasCurrentOperationProgress { get; init; }
@@ -872,6 +881,28 @@ public sealed class ObservationDockMockViewModel
         LatestEvidenceSummary = "21:42:31 · g3-solve · g3-solve-overlay.png",
         LatestEvidencePath = @"C:\UVEX-ADV\runs\simulated-running\g3-solve-overlay.png"
     };
+
+    public static ObservationDockMockViewModel ScienceProgress(string phase = "Exposing", bool english = false)
+    {
+        var now = DateTimeOffset.Parse("2026-09-15T16:00:00Z");
+        var state = phase == "Paused" ? ObservationRunState.PausedNeedsAttention : phase == "Complete" ? ObservationRunState.Completed : ObservationRunState.RunningAuto;
+        var p = new ObservationAcquisitionProgress("preview", 3, phase == "Complete" ? 3 : phase == "Probe" ? 0 : 1, 2, 6,
+            phase == "Probe" ? 0 : 1, phase == "Complete" ? 1800 : phase == "Probe" ? 0 : 600,
+            phase == "Probe" ? null : 600, phase == "Probe" ? "Exposing" : phase,
+            phase == "Probe" ? "PROBE" : "SCIENCE", "capture", now.AddSeconds(-120), 600);
+        return new()
+        {
+            ModeText = english ? "Automatic observation · Replay" : "自动观测 · 离线回放",
+            StateText = english ? state.ToString() : phase == "Paused" ? "已暂停" : phase == "Complete" ? "已完成" : "自动推进",
+            StatusMessage = "", CurrentStageText = english ? "Science acquisition" : "光谱相机科学曝光与健康监测",
+            NextStageText = english ? "Finalize" : "收尾", ProgressPercent = 82,
+            ProgressSummary = english ? "Stages 9/11 · 82%" : "总体阶段 9/11 · 82%",
+            IsRunActive = state == ObservationRunState.RunningAuto,
+            Acquisition = ObservationAcquisitionPresentation.Build(p, "preview", state, now, CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN")),
+            SelectedWorkspaceTabIndex = 4, SelectedPreviewTabIndex = 2,
+            AtrPreviewImage = PreviewImageFactory.CreateAtrSpectrum(),
+        };
+    }
 
     public static ObservationDockMockViewModel Recovering() => new()
     {

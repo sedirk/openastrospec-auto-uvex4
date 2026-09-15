@@ -752,6 +752,16 @@
               </Style>
             </ProgressBar.Style>
           </ProgressBar>
+          <Border Background="#102D3C" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="7,4" Margin="0,3,0,4"
+                  Visibility="{Binding Acquisition.Visible, Converter={StaticResource ObservationBoolToVisibility}}">
+            <StackPanel>
+              <TextBlock Text="{Binding Acquisition.Summary}" FontWeight="SemiBold" Foreground="#E0F2FE" TextWrapping="Wrap" />
+              <ProgressBar Style="{StaticResource ObservationProgressBar}" Minimum="0" Maximum="100" Value="{Binding Acquisition.BlockPercent, Mode=OneWay}" Foreground="#2DD4BF" Margin="0,4,0,3" />
+              <TextBlock Text="{Binding Acquisition.Timing}" Foreground="#BAE6FD" TextWrapping="Wrap" FontSize="12" />
+              <ProgressBar Style="{StaticResource ObservationProgressBar}" Minimum="0" Maximum="100" Value="{Binding Acquisition.FramePercent, Mode=OneWay}"
+                           IsIndeterminate="{Binding Acquisition.FrameIndeterminate, Mode=OneWay}" Foreground="#38BDF8" Margin="0,3,0,0" />
+            </StackPanel>
+          </Border>
           <WrapPanel>
             <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsSimulationMode}" Content="模拟" Command="{Binding SelectSimulationModeCommand}" ToolTip="模拟自动观测；只切换模式，不会连接或移动设备。" />
             <Button Style="{StaticResource ObservationModeButton}" Tag="{Binding IsRealMode}" Content="真实" Command="{Binding SelectRealModeCommand}" ToolTip="真实自动观测；只选择执行方式，不是设备连接按钮。" />

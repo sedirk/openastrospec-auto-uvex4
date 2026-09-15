@@ -488,7 +488,23 @@ public sealed class ObservationRunJournalStore
                         $"Immutable evidence path '{evidence.AbsolutePath}' was presented with a different SHA-256.");
                 }
 
-                return current;
+                // A qualified final probe may acquire an additional science-use
+                // reference. Preserve its original PROBE provenance and dedupe
+                // that extra reference, not just the immutable file path.
+                var source = samePath.Metadata;
+                var use = evidence.Metadata;
+                var finalProbeUse = samePath.Kind == "atr-probe-fits" && evidence.Kind == "atr-science-fits" &&
+                    source?.GetValueOrDefault("fitsProvenanceVerified") == "True" &&
+                    source.GetValueOrDefault("stageRole") == "PROBE" &&
+                    !string.IsNullOrWhiteSpace(source.GetValueOrDefault("captureId")) &&
+                    source.GetValueOrDefault("observationRunId") == current.ObservationRunId &&
+                    use?.GetValueOrDefault("scienceReusedFromProbe") == "True" &&
+                    use.GetValueOrDefault("qualityAccepted") == "True" &&
+                    use.GetValueOrDefault("stageRole") == "PROBE" &&
+                    use.GetValueOrDefault("captureId") == source.GetValueOrDefault("captureId") &&
+                    use.GetValueOrDefault("observationRunId") == current.ObservationRunId;
+                if (!finalProbeUse || current.Evidence.Any(item => item.Kind == evidence.Kind &&
+                    string.Equals(item.AbsolutePath, evidence.AbsolutePath, StringComparison.OrdinalIgnoreCase))) return current;
             }
 
             var now = DateTimeOffset.UtcNow;

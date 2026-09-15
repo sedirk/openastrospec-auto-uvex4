@@ -1148,7 +1148,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private bool IsGuidingStable()",
             "private bool IsDegradedSupervisedScience()");
         var atrSave = MethodBody(
-            "private async Task<GateResult> SaveAtrImageAsync(",
+            "private async Task<AtrSavedImage> SaveAtrImageAsync(",
             "private SpectralProbeMetrics MeasureSpectralProbe(");
 
         Assert.Contains("RealSlitPlacementAuthority.IndependentMountTransform", start, StringComparison.Ordinal);
@@ -1170,7 +1170,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     public void WindSampledScienceRequiresFreshGuidingWindowBeforeEveryAtrCapture()
     {
         var capture = MethodBody("private async Task<AtrCapture> CaptureAtrImageAsync(",
-            "private async Task<GateResult> SaveAtrImageAsync(");
+            "private async Task<AtrSavedImage> SaveAtrImageAsync(");
         Assert.True(capture.IndexOf("VerifyWindSampledGuidingBeforeAtrAsync", StringComparison.Ordinal) <
             capture.IndexOf("imagingMediator.CaptureImage", StringComparison.Ordinal));
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", capture, StringComparison.Ordinal);

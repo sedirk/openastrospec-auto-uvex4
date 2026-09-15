@@ -89,7 +89,9 @@ internal sealed record ObservationAutomationSnapshot(
     string ObservationPanelNavigationOutcome = "NotRequested",
     bool ObservationPanelSelected = false,
     ObservationWorkflowGraph? Workflow = null,
-    UvexAdv.Observatory.SepMainFocusOptions? MainFocusOptions = null);
+    UvexAdv.Observatory.SepMainFocusOptions? MainFocusOptions = null,
+    ObservationAcquisitionProgress? AcquisitionProgress = null,
+    ObservationAcquisitionPresentation? Acquisition = null);
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,

@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-15.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-16.md) ·
 [SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
 [acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
@@ -34,19 +34,26 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-15 closeout](docs/closeout-2026-09-15.md) covers **0.4.0.203**, now
-installed and checked in native N.I.N.A. panels. It brings traceable read-only
-workflow nodes, target-acquisition priorities, flatter preparation/settings pages,
-SEP focus recovery, consistent catalogue coordinates and fresh-field registration
-for catalogue-guided slit placement. The final checks passed **2,055 .NET tests,
-66 reduction tests and 45 SEP/transport tests**; 83 UI scenes were rendered and
-reviewed. N.I.N.A. was normally closed after the operator ended the night.
+The [2026-09-16 closeout](docs/closeout-2026-09-16.md) covers installed **0.4.0.205**.
+It adds qualified final-trial reuse as science, visible frame/integration progress,
+read-only confirmation before mount-clock lifecycle actions, and bounded fresh
+temperature confirmation before the first FITS save for the known zero-reading
+symptom. Final checks passed **2,107 .NET tests and 66 reduction tests**; 91 UI
+scenes and three native N.I.N.A. panels were reviewed. N.I.N.A. was normally closed
+after the operator reported the hardware stowed and ended the night.
+
+On .204, WR152 produced an accepted 600-second final trial plus an accepted
+600-second science exposure. A third saved 600-second exposure remains rejected
+for conflicting temperature evidence; no raw file or historical acceptance was
+rewritten. **The .205 temperature-confirmation branch and a complete new-version
+on-sky run still require acceptance.** The earlier node-view, focus, preparation
+and catalogue work retains its [September 15 evidence](docs/closeout-2026-09-15.md).
 
 The Star Focuser trial on .199 **verified the original focus position**; it did
 not demonstrate an improved candidate or a universally optimal backlash setting.
-.203's corrected WR152 import and saved-frame registration replay passed, but
-**its complete on-sky catalogue/slit/science route remains unaccepted** after clouds
-ended testing. The [September 13 milestone](docs/closeout-2026-09-13.md)—Mirach,
+The .203 corrected WR152 import and saved-frame registration replay passed;
+these are not substitutes for a complete version-specific on-sky run.
+The [September 13 milestone](docs/closeout-2026-09-13.md)—Mirach,
 Gamma Cas and Almach, separate supervised 11/11 runs on .181/.183/.190, nine
 hash-checked science FITS—retains its original version scope and slit-quality
 warnings. It was not an uninterrupted queue, dual-N.I.N.A. worker acceptance,

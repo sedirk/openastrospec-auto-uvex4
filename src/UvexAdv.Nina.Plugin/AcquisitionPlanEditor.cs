@@ -79,8 +79,8 @@ public sealed class AcquisitionPlanEditor : INotifyPropertyChanged
             if (!TryValidate(out var value, out _)) return Text("修正输入后显示曝光预算。", "Correct the inputs to display the exposure budget.");
             var tiers = ParseLadder(value!.ExposureLadderSeconds);
             return Text(
-                $"合格科学累计：{Duration(tiers.Min() * value.ScienceFrames)} ～ {Duration(tiers.Max() * value.ScienceFrames)}；实际为合格张数 × 选中档位。\n正式尝试曝光上界：{Duration(tiers.Max() * value.MaximumAttempts)}（含可能不合格的正式帧，不含试拍、读出、定位和恢复）。",
-                $"Accepted science integration: {Duration(tiers.Min() * value.ScienceFrames)} – {Duration(tiers.Max() * value.ScienceFrames)}; actual total is accepted frames × selected tier.\nScience-attempt exposure ceiling: {Duration(tiers.Max() * value.MaximumAttempts)} (includes rejected science attempts; excludes probes, readout, acquisition and recovery).");
+                $"合格科学累计：{Duration(tiers.Min() * value.ScienceFrames)} ～ {Duration(tiers.Max() * value.ScienceFrames)}；按每张合格帧的实际曝光累加，含通过科学验收的最终试拍。\n正式尝试曝光上界：{Duration(tiers.Max() * value.MaximumAttempts)}（含复用试拍及失败的正式尝试；不含其他试拍、读出、定位和恢复）。",
+                $"Accepted science integration: {Duration(tiers.Min() * value.ScienceFrames)} – {Duration(tiers.Max() * value.ScienceFrames)}; sums each accepted exposure, including qualified final trials.\nScience-attempt exposure ceiling: {Duration(tiers.Max() * value.MaximumAttempts)} (includes credited trials and rejected science attempts; excludes other probes, readout, acquisition and recovery).");
         }
     }
 

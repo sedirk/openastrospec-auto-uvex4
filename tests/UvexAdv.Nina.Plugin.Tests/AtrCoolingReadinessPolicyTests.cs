@@ -45,14 +45,14 @@ public sealed class AtrCoolingReadinessPolicyTests
     public void BothProductionFrameKindsCheckSavedTemperatureBeforeAcceptanceCounters()
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        foreach (var pair in new[] { ("retainedAtrProbeFrames++;", "acceptedAtrProbeFrames++;"),
-                                     ("retainedAtrScienceFrames++;", "savedAtrFrames++;" ) })
+        foreach (var pair in new[] { ("retainedAtrProbeFrames++;", "acceptedAtrProbeFrames++;", "savedProbe.TemperatureGate"),
+                                     ("retainedAtrScienceFrames++;", "savedAtrFrames++;", "savedScience.TemperatureGate" ) })
         {
             var retained = source.IndexOf(pair.Item1, StringComparison.Ordinal);
             var accepted = source.IndexOf(pair.Item2, retained, StringComparison.Ordinal);
             Assert.True(retained > 0 && accepted > retained);
-            Assert.Contains("savedTemperature.Disposition != GateDisposition.Passed", source[retained..accepted]);
-            Assert.Contains("return new StageResult(savedTemperature)", source[retained..accepted]);
+            Assert.Contains($"{pair.Item3}.Disposition != GateDisposition.Passed", source[retained..accepted]);
+            Assert.Contains($"return new StageResult({pair.Item3})", source[retained..accepted]);
         }
         var verification = source.IndexOf("var temperatureGate = AtrCoolingReadinessPolicy.EvaluateSavedFrame(", StringComparison.Ordinal);
         var publish = source.IndexOf("host.PublishEvidence(", verification, StringComparison.Ordinal);

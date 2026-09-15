@@ -1,6 +1,33 @@
 # Known issues
 
-## Current closeout boundary (2026-09-15, installed 0.4.0.203)
+## Current closeout boundary (2026-09-16, installed 0.4.0.205)
+
+The [September 16 closeout](closeout-2026-09-16.md) records final-probe science
+reuse, frame/integration progress, mount-clock readback confirmation and the
+first-save temperature-metadata fix. N.I.N.A. was normally closed after the owner
+reported the hardware stowed; no new observing run was started during closeout.
+
+- .204's WR152 run accepted a 600-second final probe and a 600-second native
+  science frame. The third saved 600-second frame remains temperature-rejected;
+  the block did not complete. The original PROBE file and its added science-use
+  reference are one observation: downstream stacking must deduplicate by capture
+  identity/file, and scanning only LIGHT directories misses reused trials.
+- The .205 zero-temperature confirmation uses fresh readings from N.I.N.A.'s
+  existing camera owner before first save. Original temperature and confirmation
+  provenance remain recorded. It is not a continuous exposure-temperature trace,
+  an SDK/firmware fix or authority to accept old temperature-invalid FITS. Its
+  new on-sky branch still awaits validation; persistent zeros or real warming
+  remain stopping conditions.
+- Read-only clock rechecks avoid destroying guiding on a transient cached date.
+  Persistent clock failure still blocks the next exposure; this is not a general
+  recovery of real LostLock or a reset of the inherited fine-motion budget.
+- ETA means estimated remaining integration, not guaranteed wall-clock finish;
+  readout, checks and retries are excluded. It is suspended while paused. Acceptance
+  is counted only after saved-frame checks, never when the countdown reaches zero.
+- No complete .205 on-sky run, dual-N.I.N.A. worker acceptance, calibrated spectra,
+  precision photometry or unattended-operation certification is claimed.
+
+## Historical closeout boundary (2026-09-15, installed 0.4.0.203)
 
 The [September 15 closeout](closeout-2026-09-15.md) records the installed package,
 native-panel and coordinate-import checks, saved-frame replay, full software

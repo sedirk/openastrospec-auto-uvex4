@@ -8,6 +8,29 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class ObservationRunJournalStoreTests
 {
     [Fact]
+    public async Task FinalProbeScienceReferenceSurvivesPersistenceExactlyOnceWithoutRewritingSource()
+    {
+        await using var temporary = new TemporaryDirectory();
+        var store = new ObservationRunJournalStore(Path.Combine(temporary.Path, "manifest.json"));
+        var plan = CreatePlan();
+        await store.InitializeAsync(plan, ObservationRunLockedMetadata.Empty);
+        var metadata = new Dictionary<string, string> { ["captureId"] = "probe-id", ["stageRole"] = "PROBE",
+            ["fitsProvenanceVerified"] = "True", ["observationRunId"] = plan.ObservationRunId };
+        var probe = new EvidenceReference("atr-probe-fits", Path.Combine(temporary.Path, "original-probe.fits"), Hash(1), DateTimeOffset.UtcNow, metadata);
+        await store.PublishEvidenceAsync(probe);
+        var use = probe with { Kind = "atr-science-fits", Metadata = new Dictionary<string, string>(metadata)
+            { ["scienceReusedFromProbe"] = "True", ["qualityAccepted"] = "True" } };
+        var credited = await store.PublishEvidenceAsync(use);
+        var duplicate = await store.PublishEvidenceAsync(use);
+        Assert.Equal(2, credited.Evidence.Count); Assert.Equal(credited.Revision, duplicate.Revision);
+        Assert.Equal("PROBE", credited.Evidence[0].Metadata!["stageRole"]);
+        Assert.False(credited.Evidence[0].Metadata!.ContainsKey("scienceReusedFromProbe"));
+        Assert.Equal(probe.AbsolutePath, credited.Evidence[1].AbsolutePath);
+        Assert.Equal(2, (await store.ReadAsync())!.Evidence.Count);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.PublishEvidenceAsync(use with { Sha256 = Hash(2) }));
+    }
+
+    [Fact]
     public async Task TemporaryNonDeleteSharingReaderRetriesTheSameAtomicRevision()
     {
         if (!OperatingSystem.IsWindows()) return;

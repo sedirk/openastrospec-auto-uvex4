@@ -7,6 +7,16 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScreenshotRendererTests
 {
+    [Theory]
+    [InlineData("science-progress")][InlineData("science-progress-narrow")][InlineData("science-progress-short")]
+    [InlineData("science-progress-saving")][InlineData("science-progress-paused")][InlineData("science-progress-probe")][InlineData("science-progress-complete")]
+    public void AcquisitionProgressUsesProductionPresentationAndIsVisible(string name)
+    {
+        var result = RenderPhotometry(name);
+        var p = ScenarioCatalog.Select(name).Single().ViewModel.Acquisition;
+        Assert.Contains(p.Summary, result.VisibleTexts);
+        Assert.Contains(p.Timing, result.VisibleTexts);
+    }
     // Native NINA chart resources are application-scoped. Render every scenario on
     // one long-lived STA, matching a real WPF host rather than switching UI threads.
     private static readonly System.Collections.Concurrent.BlockingCollection<Action> UiActions = new();
