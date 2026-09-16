@@ -122,6 +122,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private PlateSolveEvidence? lastQhySolve;
     private G3FieldState? lastG3Field;
     private C11MainFocusOwnerSnapshot? currentC11MainFocusOwner;
+    private readonly C11RunFocusLock c11RunFocusLock = new();
     private long? validatedG3GuideConnectionEpoch;
     private long? validatedG3GuideEpoch;
     private Phd2SlitPlacementSession? phd2SlitPlacementSession;
@@ -648,7 +649,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                             // not evidence that a new guide epoch would help.
                             // Preserve its actual gate and do not stop/rebuild
                             // equipment merely because the optical check failed.
-                            return (false, new StageResult(ex.Gate));
+                            // A structured StarLost during this read-only check
+                            // is the same reviewed lost-guide recovery case as
+                            // loss before the check. All other gates still stop.
+                            if (ex.Gate.Code != "GUIDING_LOST")
+                                return (false, new StageResult(ex.Gate));
                         }
                         catch (Exception ex)
                         {
@@ -1387,7 +1392,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (mountClockGate.Disposition != GateDisposition.Passed) return mountClockGate;
 
         var c11FocusOwner = ReadC11MainFocusOwner();
-        var c11FocusOwnerGate = C11MainFocusPolicy.ValidateLockedPosition(c11FocusOwner, nightSetup.Value);
+        var c11FocusOwnerGate = c11RunFocusLock.CaptureOrValidate(c11FocusOwner, nightSetup.Value);
         if (c11FocusOwnerGate.Disposition != GateDisposition.Passed) return c11FocusOwnerGate;
         currentC11MainFocusOwner = c11FocusOwner;
 
@@ -1478,7 +1483,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (profileEvidenceGate.Disposition != GateDisposition.Passed) return profileEvidenceGate;
 
         var c11Focus = ReadC11MainFocusOwner();
-        var c11OwnerGate = C11MainFocusPolicy.ValidateLockedPosition(c11Focus, nightSetup.Value);
+        var c11OwnerGate = c11RunFocusLock.Validate(c11Focus, nightSetup.Value);
         if (c11OwnerGate.Disposition != GateDisposition.Passed) return c11OwnerGate;
 
         var focusEvidence = focusDomainEvidence.BuildLiveFocusDomains(
@@ -1517,7 +1522,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             phdProfileEvidence!,
             qhySetupState,
             focusDomains: focusEvidence.FocusDomains,
-            evaluatedUtc: DateTimeOffset.UtcNow);
+            evaluatedUtc: DateTimeOffset.UtcNow,
+            c11RunStartPositionSteps: c11RunFocusLock.Position);
         var requireScienceTemperature = Volatile.Read(ref atrScienceTemperatureRequired) != 0;
         foreach (var deferred in liveSetupGates.Where(gate =>
                      gate.Disposition != GateDisposition.Passed &&
@@ -1559,6 +1565,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             uvexPort = uvexStatus!.PortName,
             c11FocuserDeviceId = c11Focus.DeviceId,
             c11FocuserPositionSteps = c11Focus.PositionSteps,
+            c11RunStartPositionSteps = c11RunFocusLock.Position,
+            c11HistoricalPositionSteps = nightSetup.Value.FocusDomains?.Single(f => f.Role == FocusDomainRole.C11Main).StartPositionSteps,
+            c11FocusQualityInherited = false,
             g3SaturationAdu = configuration.G3.SaturationAdu,
             gs350FocusMetricDeferred = currentQhyFocusMetric is null,
             atrPreCoolingInParallel = !requireScienceTemperature,
@@ -2779,7 +2788,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             focuser.DisplayName,
             focuser.DriverInfo,
             focuser.DriverVersion,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow, focuser.IsMoving);
     }
 
     private async Task RequireImmediatePhysicalActionGatesAsync(
@@ -4990,7 +4999,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             : brightTarget
             ? $"G3 bright-target branch identified one unique saturated target from its unsaturated wings after {searchAttempts} bounded search attempt(s); short-frame plate solve success={field.Solve?.Result.Success == true}, paired slit contrast {field.SlitDetection.ContrastSigma:F2}σ. The target frame is excluded from focus."
             : catalogWcsTarget
-            ? $"Formal G3 WCS projected the catalogue coordinate for a faint/non-stellar target after {searchAttempts} bounded neighbouring-field attempt(s) and {wcsCenteringAttempts} direct WCS correction(s); paired slit contrast is {field.SlitDetection.ContrastSigma:F2}σ. No target peak or target-flux threshold was applied."
+            ? $"Catalogue identity retained after {searchAttempts} neighbouring-field attempt(s) and {wcsCenteringAttempts} WCS correction(s); coarse position authority: {field.TargetIdentification.Gate.Code}. This authority alone does not classify target brightness or prove exact slit placement; fresh PHD2 measurement remains required."
             : wcsCenteringAttempts > 0
                 ? $"G3 WCS recentering placed the catalog target inside the field after {wcsCenteringAttempts} bounded N.I.N.A. correction(s); fresh paired slit contrast {field.SlitDetection.ContrastSigma:F2}σ and target residual {field.TargetIdentification.PredictionResidualPixels:F2} px."
             : searchAttempts == 0
@@ -5181,11 +5190,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 // it only allows the bounded neighbouring-field recovery to
                 // distinguish a genuinely sparse target field from a transient
                 // no-WCS exposure.  The solve-only image is never promoted.
-                return await CaptureAndAnalyzeG3Async(
+                var handoffField = await CaptureAndAnalyzeG3Async(
                     context,
                     cancellationToken,
                     solveLadderProbe: probe,
                     motionPrediction: motionPrediction).ConfigureAwait(false);
+                return G3CatalogReferenceHandoff.Preserve(handoffField, motionPrediction?.CatalogRegistrationReference,
+                    UsesCatalogWcsTargetAuthority(context));
             }
             return G3FieldState.Failed(probe.Gate, probe.FramePath, probe.Image, probe.Solve, probe.MountBinding);
         }
@@ -5199,6 +5210,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             cancellationToken,
             trustedSolveProbe: probe,
             solveLadderProbe: probe).ConfigureAwait(false);
+        // Retain the actual solved image and independent reference stars BEFORE
+        // a later motion/unsolved arrival replaces FramePath and Image. A mount
+        // command or a short target-check frame is not a catalogue reference.
+        if (UsesCatalogWcsTargetAuthority(context) && solvedField.Solve?.Result.Success == true &&
+            solvedField.Frame is not null && solvedField.MountBinding is not null)
+            solvedField = solvedField with
+            {
+                CatalogRegistrationReference = await CatalogReferenceAsync(context, solvedField, cancellationToken).ConfigureAwait(false)
+            };
         return await RefineClippedCatalogPositionAsync(context, solvedField, cancellationToken).ConfigureAwait(false);
     }
 
@@ -5491,7 +5511,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // window, hand it to the normal fresh PHD2 measurement path now.
             // Unknown/ambiguous/clipped pixels and intermediate approaches still
             // run PL3; a predicted coordinate alone never takes this shortcut.
-            if (motionPrediction is { AllowUnsolvedTargetHandoff: true } && !contentIsOverexposed && content.HasCoherentSource &&
+            if (!UsesCatalogWcsTargetAuthority(context) &&
+                motionPrediction is { AllowUnsolvedTargetHandoff: true } && !contentIsOverexposed && content.HasCoherentSource &&
                 g3SlitGeometryRunCache is { } handoffSlit &&
                 handoffSlit.ObservationRunId == context.Plan.ObservationRunId &&
                 commissioning?.Value.Phd2SlitPlacement is { } handoffPreset)
@@ -5514,7 +5535,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         handoffSlit.SlitDetection.Geometry.AcquisitionPoint, properties.Width, properties.Height,
                         handoffPreset.MaximumAcquisitionResidualPixels))
                 {
-                    shortHandoffConfirmationAttempted = true; // One per ladder, not one per longer tier.
+                    shortHandoffConfirmationAttempted = true; // One bounded SEP sequence per correction, not per tier.
                     var confirmed = await ConfirmSaturatedG3HandoffWithShortExposureAsync(
                         context, motionPrediction, measuredTarget, captured.Path, probeMountBinding, shortExposure.Value,
                         handoffPreset, handoffSlit.SlitDetection.Geometry, attempts.AsReadOnly(), cancellationToken).ConfigureAwait(false);
@@ -7577,7 +7598,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     commandResidual,
                     inverse.InverseResidualPixels,
                     estimatedArrivalSolve.Coordinates,
-                    AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach);
+                    AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach,
+                    CatalogRegistrationReference: currentField.CatalogRegistrationReference);
             }
             catch (Exception ex)
             {
@@ -9348,7 +9370,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var slitSeed = commissioning.SlitGeometry;
         var focusOwnerBefore = ReadC11MainFocusOwner();
         if (nightSetup is null) throw new InvalidOperationException("Night Setup snapshot is not loaded.");
-        var focusOwnerBeforeGate = C11MainFocusPolicy.ValidateLockedPosition(focusOwnerBefore, nightSetup.Value);
+        var focusOwnerBeforeGate = c11RunFocusLock.Validate(focusOwnerBefore, nightSetup.Value);
         if (focusOwnerBeforeGate.Disposition != GateDisposition.Passed)
         {
             return G3FieldState.Failed(focusOwnerBeforeGate);
@@ -9678,7 +9700,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 SlitIdentityEvidencePath: slitIdentityEvidencePath);
         }
         var focusOwnerAfter = ReadC11MainFocusOwner();
-        var focusOwnerAfterGate = C11MainFocusPolicy.ValidateLockedPosition(focusOwnerAfter, nightSetup.Value);
+        var focusOwnerAfterGate = c11RunFocusLock.Validate(focusOwnerAfter, nightSetup.Value);
         if (focusOwnerAfterGate.Disposition != GateDisposition.Passed)
         {
             return G3FieldState.Failed(
@@ -10344,7 +10366,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var focusOwnerAfter = ReadC11MainFocusOwner();
-        var focusOwnerAfterGate = C11MainFocusPolicy.ValidateLockedPosition(focusOwnerAfter, nightSetup.Value);
+        var focusOwnerAfterGate = c11RunFocusLock.Validate(focusOwnerAfter, nightSetup.Value);
         if (focusOwnerAfterGate.Disposition != GateDisposition.Passed ||
             focusOwnerAfter.PositionSteps != focusOwnerBefore.PositionSteps)
         {
@@ -10431,15 +10453,24 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     cancellationToken).ConfigureAwait(false);
                 if (predictionAuthorized)
                 {
-                    var handoffTargetPoint = probe.MeasuredPostWcsTarget?.Target?.Centroid ?? predictedTarget;
+                    var handoffTargetPoint = UsesCatalogWcsTargetAuthority(context) ? predictedTarget
+                        : probe.MeasuredPostWcsTarget?.Target?.Centroid ?? predictedTarget;
                     var identification = TargetIdentification.FromCatalogWcs(
                         handoffTargetPoint,
                         properties.Width,
                         properties.Height,
                         $"The fresh target field need not solve after a direct return from a formally solved overlapping field. The preceding PL3/mount prediction has {motionPrediction.MaximumUncertaintyPixels:F2}px bounded uncertainty and is evaluated against the unchanged run-cached detector-fixed slit geometry.");
+                    if (!UsesCatalogWcsTargetAuthority(context) && probe.MeasuredPostWcsTarget is { } measured)
+                        identification = identification with
+                        {
+                            BoundShortPositionEvidencePath = measured.BoundShortPositionEvidencePath,
+                            CatalogPositionSpreadPixels = measured.CatalogPositionSpreadPixels,
+                            Gate = GateResult.Pass("TARGET_CATALOG_IDENTITY_MEASURED_HANDOFF",
+                                "Original catalogue/WCS identity retained; fresh measured coarse position, not a motion prediction or completed slit placement.", measured.Gate.Metrics),
+                        };
                     var motionCaption = probe.MeasuredPostWcsTarget is not null
                         ? $"G3 近邻返回：新帧实测目标 ({handoffTargetPoint.X:F1},{handoffTargetPoint.Y:F1}) 已在原取场窗口；省去重复解算，交给 PHD2 获取新目标/狭缝残差后精调。"
-                        : $"G3 邻场 PL3 直接回目标：预测目标 ({predictedTarget.X:F1},{predictedTarget.Y:F1})，缓存狭缝 ({cache.SlitDetection.Geometry.AcquisitionPoint.X:F1},{cache.SlitDetection.Geometry.AcquisitionPoint.Y:F1})，残差 {predictedResidual:F1}px；目标场无需再次解算或重复 HDR，立即交给 PHD2 精确入缝。";
+                        : $"G3 邻场 PL3 返回：预测目标 ({predictedTarget.X:F1},{predictedTarget.Y:F1})，缓存狭缝 ({cache.SlitDetection.Geometry.AcquisitionPoint.X:F1},{cache.SlitDetection.Geometry.AcquisitionPoint.Y:F1})，预测残差 {predictedResidual:F1}px（非实测）；保留目录身份，PHD2 仍须新帧测量，不代表已经入缝。";
                     PublishG3Preview(
                         probe.Image,
                         motionCaption,
@@ -10826,7 +10857,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var currentFocusOwner = ReadC11MainFocusOwner();
-        var currentFocusGate = C11MainFocusPolicy.ValidateLockedPosition(currentFocusOwner, nightSetup.Value);
+        var currentFocusGate = c11RunFocusLock.Validate(currentFocusOwner, nightSetup.Value);
         if (currentFocusGate.Disposition != GateDisposition.Passed || currentFocusOwner.PositionSteps != focusOwnerAfter.PositionSteps)
         {
             return G3FieldState.Failed(
@@ -14237,7 +14268,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         host.PublishPreview(
             ObservationPreviewChannel.G3SlitField,
             ObservationPreviewRenderer.RenderG3(image, slit, target, guideStar),
-            caption);
+            caption + (slit?.IlluminationExtent is { IsValid: true } extent
+                ? $" · 狭缝图例：虚线 LED可见段 {extent.LengthPixels:F0}px（非物理全长）；实线中央段 {slit.LengthPixels:F0}px；十字为入缝锚点。"
+                : slit is not null ? $" · 实线仅为中央参考段 {slit.LengthPixels:F0}px；完整可见长度尚未确认。" : string.Empty));
 
     private void PublishAtrPreview(IImageData image, string caption, double traceCenter, double traceHalfWidth) =>
         host.PublishPreview(
@@ -14389,6 +14422,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     aperture.LongExposureSaturatedFraction,
                     aperture.LongExposureValidFraction,
                     aperture.LongExposureDynamicRangeAdu,
+                    aperture.ExtentAnalysis,
                     physicalApertureGeometry = aperture.Geometry,
                     reflectedEdgeGeometry = aperture.ReflectiveEdgeGeometry,
                 },
@@ -14503,6 +14537,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     centerY = slit.Geometry.AcquisitionPoint.Y,
                     slit.Geometry.AngleDegrees,
                     slit.Geometry.LengthPixels,
+                    slit.Geometry.IlluminationExtent,
                     slit.Geometry.WidthPixels,
                     slit.Geometry.UncertaintyPixels,
                     slit.ContrastSigma,
@@ -14715,7 +14750,21 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         var identity = ValidateAtrCameraIdentity(context.Plan.ExpectedAtrCameraId);
         if (identity.Disposition != GateDisposition.Passed) throw new InvalidOperationException(identity.Message);
-        await VerifyWindSampledGuidingBeforeAtrAsync(context, cancellationToken).ConfigureAwait(false);
+        var receipt = preExposureReceipt;
+        preExposureReceipt = null;
+        var usedRecoveryWindow = receipt?.TryConsume(context.Plan.ObservationRunId,
+            phd2SlitPlacementSession?.LastMeasurement.Frame.Sha256 ?? string.Empty,
+            phd2.Snapshot, DateTimeOffset.UtcNow, IsGuidingStable()) == true;
+        if (!usedRecoveryWindow)
+            await VerifyWindSampledGuidingBeforeAtrAsync(context, cancellationToken).ConfigureAwait(false);
+        else
+            await WriteAuditBestEffortAsync("phd2-pre-atr-window-consumed-once", new
+            {
+                context.Plan.ObservationRunId,
+                source = phd2SlitPlacementSession!.LastMeasurement.Frame.Path,
+                maximumAgeSeconds = Phd2PreExposureReceipt.MaximumAge.TotalSeconds,
+                duplicateWindowSkipped = true, staleFrameAccepted = false,
+            }).ConfigureAwait(false);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         var sequence = new CaptureSequence
         {
@@ -14736,6 +14785,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             captureToken, context.Plan.NightSetupId, imageType, context.Plan.Target.CatalogId.Trim(), HeaderSchemaVersion: 2);
         var identityHeaders = AtrFitsProvenance.CreateIdentityHeaders(provenance);
         var guideBeforeExposure = phd2.Snapshot;
+        phd2.ThrowIfGuideOutputFailed();
+        if (!IsGuidingStable())
+            throw new PhysicalActionGateException(GateResult.Unknown(
+                guideBeforeExposure.AppState == Phd2AppState.LostLock ? "GUIDING_LOST" : "GUIDING_UNSTABLE",
+                "The owner guide state changed after the optical window and before opening the ATR exposure; no exposure was started."));
         PublishAcquisitionProgress(context, "Exposing", stageRole, captureToken, exposureSeconds);
         var exposure = await imagingMediator.CaptureImage(sequence, cancellationToken, progress, reason).ConfigureAwait(false);
         PublishAcquisitionProgress(context, "Processing", stageRole, captureToken, exposureSeconds);
@@ -16501,7 +16555,8 @@ internal sealed record G3WcsMotionPrediction(
     double CommandResidualArcseconds,
     double InverseResidualPixels,
     Coordinates EstimatedFieldCenter,
-    bool AllowUnsolvedTargetHandoff = true);
+    bool AllowUnsolvedTargetHandoff = true,
+    G3CatalogRegistrationReference? CatalogRegistrationReference = null);
 
 internal sealed record AtrCapture(
     IImageData Image,

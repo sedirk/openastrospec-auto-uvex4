@@ -98,6 +98,24 @@ public sealed class Phd2CaptureException : Phd2Exception
     public Phd2AppState? RejectedBeforeMutationState { get; }
 }
 
+/// <summary>Owner-reported loss, not silence from the camera or an inferred weather diagnosis.</summary>
+public sealed class Phd2GuidingFrameLostException : Phd2Exception
+{
+    public Phd2GuidingFrameLostException(Phd2StateSnapshot snapshot, Phd2GuideStep? lostFrame = null)
+        : base($"PHD2 reported LostLock/StarLost while obtaining fresh guiding evidence; " +
+            $"frame={(lostFrame ?? snapshot.LastGuideStep)?.Frame}, " +
+            $"SNR={(lostFrame ?? snapshot.LastGuideStep)?.Snr}, " +
+            $"error={(lostFrame ?? snapshot.LastGuideStep)?.ErrorCode}. " +
+            "This is not a camera-frame timeout; no stale image was accepted.")
+    {
+        Snapshot = snapshot;
+        LostFrame = lostFrame ?? snapshot.LastGuideStep;
+    }
+
+    public Phd2StateSnapshot Snapshot { get; }
+    public Phd2GuideStep? LostFrame { get; }
+}
+
 /// <summary>
 /// PHD2 completed a native <c>find_star</c> JSON-RPC request successfully but
 /// returned no candidate point. This is deliberately distinct from transport,

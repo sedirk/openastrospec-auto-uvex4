@@ -7,6 +7,17 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2StageFailurePolicyTests
 {
+    [Fact]
+    public void TypedLostStarUsesExistingBoundedRecoveryNotTimeoutClassification()
+    {
+        var error = new Phd2GuidingFrameLostException(Phd2StateSnapshot.Disconnected with
+            { IsConnected = true, AppState = Phd2AppState.LostLock });
+        Assert.Equal("GUIDING_LOST", Phd2StageFailurePolicy.CodeFor(error));
+        var plan = ObservationAutomaticRecoveryPolicy.For(ObservationStage.SelectAtrExposure,
+            GateResult.Unknown("GUIDING_LOST", error.Message));
+        Assert.True(plan.IsRecoverable);
+        Assert.Equal(1, plan.MaximumAttempts);
+    }
     [Theory]
     [InlineData("PHD2_GUIDE_OUTPUT_UNAVAILABLE")]
     [InlineData("PHD2_GUIDE_OUTPUT_RETURN_PENDING")]

@@ -17,7 +17,8 @@ public static class CatalogFieldRegistration
             image.ParentComponentsTruncated || image.MotionAuthorized || image.TargetIdentityConfirmed)
             throw new InvalidOperationException("G3_CATALOG_REGISTRATION_SEP_COVERAGE: Complete measurement-only SEP parents are required.");
         // Use connected SEP parents, not multiple local peaks within one
-        // irregular PSF. Hot pixels and saturated/clipped regions cannot vote.
+        // irregular PSF. Support filters reject isolated impulses, but do NOT
+        // prove that extended fixed-pattern patches are optical stars.
         return image.ParentComponents.Where(c => c.SepFlags == 0 && c.Flux > 0 && c.Snr >= 5 &&
                 c.SaturatedFraction == 0 && c.Npix >= 9 && c.RawSupportPixels >= 3 &&
                 c.Bbox[0] >= 8 && c.Bbox[1] >= 8 && c.Bbox[0]+c.Bbox[2] <= image.Width-8 &&
@@ -41,9 +42,27 @@ public static class CatalogFieldRegistration
         bool Usable(StarCandidate star, PixelPoint excluded) => Finite(star.Centroid) &&
             double.IsFinite(star.SignalToNoise) && star.SignalToNoise >= 5 && star.SaturatedFraction == 0 &&
             star.EdgeDistancePixels >= 8 && Distance(star.Centroid, excluded) > 20 &&
-            GuideStarSelector.DistanceToSlit(star.Centroid, slit) > slit.WidthPixels / 2 + 5;
-        var a = reference.Where(s => Usable(s, cataloguePoint)).OrderByDescending(s => s.SignalToNoise).Take(80).ToArray();
-        var b = current.Where(s => Usable(s, predicted)).OrderByDescending(s => s.SignalToNoise).Take(80).ToArray();
+            GuideStarSelector.DistanceToGuideExclusion(star.Centroid, slit) > slit.WidthPixels / 2 + 5;
+        var a = reference.Where(s => Usable(s, cataloguePoint)).ToArray();
+        var b = current.Where(s => Usable(s, predicted)).ToArray();
+        var fixedReferenceCount = 0;
+        var fixedCurrentCount = 0;
+        if (Distance(expectedTranslation, new(0, 0)) > 4 * matchTolerance)
+        {
+            // A commanded/read-back offset is NOT optical proof. If detector
+            // features have not moved despite a clearly resolved expected sky
+            // shift, neither "the mount did not move" nor "all stars match at
+            // zero" is safe to infer. Exclude these correspondences before the
+            // SNR cap so hot-pattern matches cannot outvote the moving field.
+            var originalA = a;
+            var originalB = b;
+            a = originalA.Where(s => !originalB.Any(t => Distance(s.Centroid, t.Centroid) <= matchTolerance)).ToArray();
+            b = originalB.Where(s => !originalA.Any(t => Distance(s.Centroid, t.Centroid) <= matchTolerance)).ToArray();
+            fixedReferenceCount = originalA.Length - a.Length;
+            fixedCurrentCount = originalB.Length - b.Length;
+        }
+        a = a.OrderByDescending(s => s.SignalToNoise).Take(80).ToArray();
+        b = b.OrderByDescending(s => s.SignalToNoise).Take(80).ToArray();
         if (a.Length < 3 || b.Length < 3) return Failed("Fewer than three independent unsaturated reference stars; no target/nucleus snap was attempted.");
         var hypotheses = new List<(PixelPoint Shift, int Count, double Scatter)>();
         foreach (var left in a)
@@ -76,7 +95,8 @@ public static class CatalogFieldRegistration
         return new(GateResult.Pass("G3_CATALOG_FIELD_REGISTERED",
             "Catalogue sample point transferred by fresh independent field stars; not a detected target centroid.",
             new Dictionary<string, double> { ["registrationStars"] = best.Count, ["registrationScatterPixels"] = best.Scatter,
-                ["translationX"] = best.Shift.X, ["translationY"] = best.Shift.Y }),
+                ["translationX"] = best.Shift.X, ["translationY"] = best.Shift.Y,
+                ["fixedReferenceExcluded"] = fixedReferenceCount, ["fixedCurrentExcluded"] = fixedCurrentCount }),
             target, best.Shift, best.Count, best.Scatter);
     }
 

@@ -77,7 +77,8 @@ internal static class LockedNightSetupSnapshotLoader
         Phd2ProfileBindingSnapshot phdEvidence,
         QhyCameraStatus qhy,
         IReadOnlyList<LiveFocusDomainState>? focusDomains = null,
-        DateTimeOffset? evaluatedUtc = null)
+        DateTimeOffset? evaluatedUtc = null,
+        int? c11RunStartPositionSteps = null)
     {
         var setup = snapshot.Value;
         var atrId = ReadString(atr, "DeviceId");
@@ -106,7 +107,7 @@ internal static class LockedNightSetupSnapshotLoader
         var gates = NightSetupCompatibility.Evaluate(
             setup,
             live,
-            evaluatedUtc: evaluatedUtc).ToList();
+            evaluatedUtc: evaluatedUtc, c11RunStartPositionSteps: c11RunStartPositionSteps).ToList();
         gates.Add(string.IsNullOrWhiteSpace(readout)
             ? GateResult.Unknown("ATR_READOUT_MODE", "N.I.N.A. does not expose the active ATR readout mode; it cannot be inferred from the expected value.")
             : string.Equals(readout, setup.Atr585m.ReadoutMode, StringComparison.Ordinal)

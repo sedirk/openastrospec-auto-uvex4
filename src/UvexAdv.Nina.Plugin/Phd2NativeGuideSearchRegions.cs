@@ -25,12 +25,16 @@ internal static class Phd2NativeGuideSearchRegions
         if (width <= 2 * edge || height <= 2 * edge) return [];
         var regions = new List<Phd2Rectangle> { new(edge, edge, width - 2 * edge, height - 2 * edge) };
         var angle = slit.AngleDegrees * Math.PI / 180;
-        var halfX = Math.Abs(Math.Cos(angle) * slit.LengthPixels / 2) + slit.WidthPixels / 2 + slitGuard + 1;
-        var halfY = Math.Abs(Math.Sin(angle) * slit.LengthPixels / 2) + slit.WidthPixels / 2 + slitGuard + 1;
+        var (start, end) = GuideStarSelector.GuideExclusionBounds(slit);
+        if (!double.IsFinite(start) || !double.IsFinite(end) || end - start > 4d * Math.Max(width, height)) return [];
+        var exclusionCenter = new PixelPoint(slit.AcquisitionPoint.X + Math.Cos(angle) * (start + end) / 2,
+            slit.AcquisitionPoint.Y + Math.Sin(angle) * (start + end) / 2);
+        var halfX = Math.Abs(Math.Cos(angle) * (end - start) / 2) + slit.WidthPixels / 2 + slitGuard + 1;
+        var halfY = Math.Abs(Math.Sin(angle) * (end - start) / 2) + slit.WidthPixels / 2 + slitGuard + 1;
         var exclusions = new List<Phd2Rectangle>
         {
             Box(target, targetGuard + 1, targetGuard + 1),
-            Box(slit.AcquisitionPoint, halfX, halfY),
+            Box(exclusionCenter, halfX, halfY),
         };
         exclusions.AddRange(rejectedPoints.Select(p => Box(p, Math.Max(edgeGuard, 20), Math.Max(edgeGuard, 20))));
         if (saturatedStructureExclusions is not null) exclusions.AddRange(saturatedStructureExclusions);

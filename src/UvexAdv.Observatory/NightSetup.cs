@@ -120,7 +120,8 @@ public static class NightSetupCompatibility
         NightSetupRecord setup,
         LiveSetupState live,
         double temperatureToleranceC = 0.5,
-        DateTimeOffset? evaluatedUtc = null)
+        DateTimeOffset? evaluatedUtc = null,
+        int? c11RunStartPositionSteps = null)
     {
         var gates = new List<GateResult>();
         AddIdentity(gates, "ATR_IDENTITY", setup.Atr585m.StableDeviceId, live.AtrCameraId);
@@ -144,7 +145,7 @@ public static class NightSetupCompatibility
         AddIdentity(gates, "PHD2_PROFILE", setup.Phd2ProfileName, live.Phd2ProfileName);
         AddIdentity(gates, "G3_IDENTITY", setup.G3StableDeviceId, live.G3CameraId);
         AddIdentity(gates, "QHY_IDENTITY", setup.QhyMiniCam8m.StableDeviceId, live.QhyCameraId);
-        AddFocusDomainGates(gates, setup, live.FocusDomains, evaluatedUtc ?? DateTimeOffset.UtcNow);
+        AddFocusDomainGates(gates, setup, live.FocusDomains, evaluatedUtc ?? DateTimeOffset.UtcNow, c11RunStartPositionSteps);
         return gates.AsReadOnly();
     }
 
@@ -152,7 +153,8 @@ public static class NightSetupCompatibility
         List<GateResult> gates,
         NightSetupRecord setup,
         IReadOnlyList<LiveFocusDomainState>? liveDomains,
-        DateTimeOffset evaluatedUtc)
+        DateTimeOffset evaluatedUtc,
+        int? c11RunStartPositionSteps)
     {
         if (setup.SchemaVersion == NightSetupRecord.LegacySchemaVersion)
         {
@@ -260,9 +262,9 @@ public static class NightSetupCompatibility
                     identityMatches && topologyMatches && actual.NativePositionVerified;
                 gates.Add(nativeOffsetVerified
                     ? GateResult.Pass(code + "_POSITION", "The photometry N.I.N.A. owner verified the current bounded native filter-offset endpoint; it is not substituted for the locked reference position.")
-                    : position == expected.StartPositionSteps
+                    : position == (role == FocusDomainRole.C11Main ? c11RunStartPositionSteps ?? expected.StartPositionSteps : expected.StartPositionSteps)
                     ? GateResult.Pass(code + "_POSITION", $"{role} live position matches the locked start position {position} steps.")
-                    : GateResult.Fail(code + "_POSITION", $"{role} live position {position} does not match locked start position {expected.StartPositionSteps}."));
+                    : GateResult.Fail(code + "_POSITION", $"{role} live position {position} does not match locked start position {(role == FocusDomainRole.C11Main ? c11RunStartPositionSteps ?? expected.StartPositionSteps : expected.StartPositionSteps)}."));
             }
         }
     }

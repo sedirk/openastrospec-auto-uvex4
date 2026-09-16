@@ -20,7 +20,7 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-09-16.md) ·
+[最新软件/实机收口](docs/closeout-2026-09-16-evening.md) ·
 [SEP 检测与主镜对焦](docs/sep-main-mirror-focus-commissioning.md) ·
 [采集计划／曝光预算](docs/acquisition-plan.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
@@ -29,11 +29,15 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-09-16 收口说明](docs/closeout-2026-09-16.md)汇总已安装的 **0.4.0.205**：
-增加合格最终试拍的科学用途复用、顶部科学帧／积分进度，修复长曝后校时主动破坏
-导星的衔接，并为特定温度零值冲突增加首次保存前的有界实温复核。
-最终 **2,107 项 .NET、66 项后处理测试通过**，91 个 UI 场景和三处 N.I.N.A. 原生
-面板已检查。用户报告硬件归位、结束本夜测试后，N.I.N.A. 已正常退出。
+[2026-09-16 晚间收口](docs/closeout-2026-09-16-evening.md)汇总已安装的 **0.4.0.209**：
+主镜焦位改为每轮独立锁定，不再因轮次间调焦错误失效 UVEX 内部校准；保留目录／短帧
+交接，区分 PHD2 丢星与真正取帧超时，并将 LED 可见狭缝长度与入缝锚点分开显示。
+最终 **2,152 项 .NET、66 项后处理测试通过**，93 个 UI 场景和三处已安装的 N.I.N.A.
+原生面板已检查。用户完成硬件归位后，N.I.N.A. 已正常重启，保持**空闲、真实控制未授权、
+设备断开**，没有恢复观测。此前自动对焦缺少可比星像的问题及 .209 完整天空运行仍待验收。
+
+[当天凌晨 .205 收口](docs/closeout-2026-09-16.md)保留最终试拍科学复用、积分进度、
+校时衔接及首次保存前温度复核的历史证据。
 
 .204 的 WR152 实拍已接受一张 600 秒最终试拍及一张 600 秒正式科学帧；第三张已保存
 的 600 秒曝光仍因温度证据冲突未获接受，没有改写原始文件或历史验收结果。

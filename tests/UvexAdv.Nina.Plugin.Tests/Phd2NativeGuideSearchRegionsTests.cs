@@ -7,6 +7,19 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2NativeGuideSearchRegionsTests
 {
     [Fact]
+    public void LedExtentExcludesAsymmetricTailBeyondCommissionedCentralSegment()
+    {
+        var slit = new SlitGeometry("slit", new(817, 426), -2, 410, 3.5, .5, "G3", 1, 1)
+        { IlluminationExtent = new(-364, 540, 36, false, false) };
+        var regions = Phd2NativeGuideSearchRegions.Build(1920, 1080, new(817, 426), 60, slit, 20, 10, [], []);
+        Assert.NotEmpty(regions);
+        foreach (var r in regions)
+        for (var y = r.Y; y < r.Y + r.Height; y += 8)
+        for (var x = r.X; x < r.X + r.Width; x += 8)
+            Assert.True(GuideStarSelector.DistanceToGuideExclusion(new(x, y), slit) > 11.75);
+    }
+
+    [Fact]
     public void RegionsExcludeHaloFiniteSlitEdgesAndRejectedPointsWithoutRankingStars()
     {
         var target = new PixelPoint(837, 410);

@@ -1,11 +1,29 @@
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin.UiHarness;
 
 internal static class PreviewImageFactory
 {
+    public static ImageSource CreateMeasuredSlitExtent()
+    {
+        // Fixture pixels only; the overlay is the actual production renderer.
+        var pixels = new byte[1920 * 1080];
+        var random = new Random(209);
+        for (var y = 0; y < 1080; y++)
+        for (var x = 0; x < 1920; x++)
+        {
+            var across = y - (426.8 - Math.Tan(2 * Math.PI / 180) * (x - 817.5));
+            var dark = x is > 445 and < 1390 ? 35 * Math.Exp(-across * across / 6) : 0;
+            pixels[y * 1920 + x] = (byte)Math.Clamp(90 + random.Next(-15, 16) - dark, 0, 255);
+        }
+        var bitmap = BitmapSource.Create(1920, 1080, 96, 96, PixelFormats.Gray8, null, pixels, 1920);
+        var slit = new SlitGeometry("offline-fixture", new(817.5, 426.8), -2, 410, 3.5, .5, "G3", 1, 1)
+        { IlluminationExtent = new(-372, 572, 36, false, false) };
+        return ObservationPreviewRenderer.RenderG3Bitmap(bitmap, slit);
+    }
     private const int Width = 960;
     private const int Height = 420;
 

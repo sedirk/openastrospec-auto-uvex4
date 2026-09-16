@@ -1270,6 +1270,20 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
+    public void CatalogueOnlyMotionHandoffCarriesRealWcsReferenceAndCannotSnapToVisiblePeak()
+    {
+        var wrapper = MethodBody("private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        Assert.Contains("CatalogReferenceAsync(context, solvedField", wrapper);
+        Assert.Contains("G3CatalogReferenceHandoff.Preserve(handoffField, motionPrediction?.CatalogRegistrationReference", wrapper);
+        var ladder = MethodBody("private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private GateResult ValidateG3SolveProbeImage(");
+        Assert.Contains("if (!UsesCatalogWcsTargetAuthority(context) &&", ladder);
+        Assert.Contains("CatalogRegistrationReference: currentField.CatalogRegistrationReference", Source);
+        Assert.Contains("var handoffTargetPoint = UsesCatalogWcsTargetAuthority(context) ? predictedTarget", Source);
+    }
+
+    [Fact]
     public void DurableG3RestartConnectsAndChecksInterlocksBeforeReturning()
     {
         var body = MethodBody(

@@ -28,3 +28,4 @@ Current accepted decisions:
 - [ADR-0015: Persist an explicitly selected supervised slit-quality policy](0015-persistent-supervised-slit-quality-policy.md)
 - [ADR-0016: Verified configurable UVEX serial binding](0016-verified-configurable-uvex-serial-binding.md)
 - [ADR-0017: Standing authorization to repair reported blockers and restart N.I.N.A.](0017-standing-blocker-repair-and-nina-restart.md)
+- [ADR-0018: Run-local main-telescope focus, independent of UVEX calibration](0018-run-local-main-focus-position.md)

@@ -112,6 +112,16 @@ Before the first target, the software creates and locks a **Night Setup** record
 
 The sequence validates actual device state against this record. It must not silently change the optical configuration between a standard and science target. An intentional change creates a new setup identifier and a separate calibration context.
 
+Under owner-requested ADR-0018 (2026-09-16), an intentional **between-run C11 main
+telescope focus adjustment** is recorded in a new immutable run-local focus lock,
+not treated as a change to UVEX internal M2/grating/slit calibration. The original
+Night Setup and its hash remain unchanged. A new runner reads the stopped owner
+position within declared limits; subsequent checks require that same position.
+Fresh target/WCS/slit/guide evidence is mandatory, and historical C11 optical
+quality is not transferred to the new position. A position change during a run
+still stops continuation; Resume cannot rebase this lock. This narrow exception
+does not apply to UVEX M2, the grating, slit, camera geometry or GS350 focus.
+
 Bias and dark masters may be reused across nights when camera identity, gain, offset, readout mode, binning, ROI, temperature tolerance, exposure policy, and provenance are compatible. “Cooled camera” permits cross-night reuse; it does not permit incompatible calibration frames.
 
 ## 5. Canonical per-target workflow

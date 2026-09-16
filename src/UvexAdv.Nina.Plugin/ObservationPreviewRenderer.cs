@@ -16,7 +16,13 @@ internal static class ObservationPreviewRenderer
         PixelPoint? target = null,
         PixelPoint? guideStar = null)
     {
-        var source = image.RenderBitmapSource().Clone();
+        return RenderG3Bitmap(image.RenderBitmapSource(), slit, target, guideStar);
+    }
+
+    internal static BitmapSource RenderG3Bitmap(BitmapSource bitmap, SlitGeometry? slit = null,
+        PixelPoint? target = null, PixelPoint? guideStar = null)
+    {
+        var source = bitmap.Clone();
         var overlay = new DrawingGroup
         {
             ClipGeometry = new RectangleGeometry(new Rect(0, 0, source.PixelWidth, source.PixelHeight)),
@@ -31,6 +37,22 @@ internal static class ObservationPreviewRenderer
                 var dx = Math.Cos(angle) * slit.LengthPixels / 2d;
                 var dy = Math.Sin(angle) * slit.LengthPixels / 2d;
                 var center = new Point(slit.AcquisitionPoint.X, slit.AcquisitionPoint.Y);
+                if (slit.IlluminationExtent is { IsValid: true } extent)
+                {
+                    var visiblePen = new Pen(Brushes.Cyan, 2) { DashStyle = DashStyles.Dash };
+                    Point Endpoint(double along) => new(center.X + Math.Cos(angle) * along,
+                        center.Y + Math.Sin(angle) * along);
+                    drawing.DrawLine(visiblePen, Endpoint(extent.StartOffsetPixels), Endpoint(extent.EndOffsetPixels));
+                    foreach (var bound in new[] { extent.StartOffsetPixels, extent.EndOffsetPixels })
+                    {
+                        var end = Endpoint(bound);
+                        drawing.DrawLine(visiblePen, end + new Vector(-Math.Sin(angle) * 8, Math.Cos(angle) * 8),
+                            end - new Vector(-Math.Sin(angle) * 8, Math.Cos(angle) * 8));
+                    }
+                    DrawLabel(drawing,
+                        $"虚线：LED可见段 {extent.LengthPixels:F0}px（非物理全长）；实线：标定中央段 {slit.LengthPixels:F0}px；十字：入缝锚点",
+                        new Point(12, source.PixelHeight - 30), Brushes.Cyan);
+                }
                 drawing.DrawLine(
                     new Pen(Brushes.DeepSkyBlue, Math.Max(2, slit.WidthPixels)),
                     new Point(center.X - dx, center.Y - dy),

@@ -1000,6 +1000,8 @@ public sealed partial class Phd2Client : IPhd2Client
             ThrowIfGuideOutputFailed();
             var destinationPath = Path.GetFullPath(request.DestinationPath);
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+            if (appState == Phd2AppState.LostLock)
+                throw new Phd2GuidingFrameLostException(Snapshot);
             if (appState != Phd2AppState.Guiding)
             {
                 throw new Phd2CaptureException(
@@ -1011,7 +1013,13 @@ public sealed partial class Phd2Client : IPhd2Client
             var startingFrame = baseline.LastGuideStep?.Frame;
             using var frameWaiter = RegisterEventWaiter(message =>
             {
-                if (message.Name != "GuideStep" || message.Sequence <= baseline.EventSequence)
+                if (message.Sequence <= baseline.EventSequence) return false;
+                // StarLost is a completed camera frame without a usable guide
+                // centroid. Waiting only for GuideStep masks this as a timeout.
+                if (message.Name == "StarLost")
+                    throw new Phd2GuidingFrameLostException(Snapshot, ParseGuideStep(message.Payload));
+                EnsureSameGuidingEpoch(baseline, "while waiting for a fresh guide frame");
+                if (message.Name != "GuideStep")
                 {
                     return false;
                 }
@@ -1020,6 +1028,8 @@ public sealed partial class Phd2Client : IPhd2Client
                 return candidate.Frame.HasValue &&
                     (!startingFrame.HasValue || candidate.Frame.Value > startingFrame.Value);
             });
+            // Close the state-change gap between baseline read and registration.
+            EnsureSameGuidingEpoch(baseline, "after registering the fresh-frame waiter");
             var guideStepEvent = await WaitForEventAsync(
                     frameWaiter,
                     "fresh guiding-frame evidence",
@@ -1744,12 +1754,20 @@ public sealed partial class Phd2Client : IPhd2Client
 
     public async Task<Phd2AppState> GetAppStateAsync(CancellationToken cancellationToken)
     {
+        var before = Snapshot;
         var result = await InvokeAsync("get_app_state", parameters: null, cancellationToken).ConfigureAwait(false);
         var appState = result.ValueKind == JsonValueKind.String
             ? ParseAppState(result.GetString())
             : Phd2AppState.Unknown;
-        UpdateSnapshot(current => ApplyObservedAppState(current, appState));
-        return appState;
+        // An asynchronous RPC continuation may run after a newer StarLost,
+        // pause or stop event was processed. Its older "Guiding" reply must not
+        // resurrect that invalidated epoch. A subsequent query can reconcile.
+        UpdateSnapshot(current =>
+            current.ConnectionEpoch != before.ConnectionEpoch || current.GuideEpoch != before.GuideEpoch ||
+            current.AppState != before.AppState || current.Phd2Paused != before.Phd2Paused ||
+            current.AutomationPaused != before.AutomationPaused
+                ? current : ApplyObservedAppState(current, appState));
+        return Snapshot.AppState;
     }
 
     private TimeSpan ExposureBoundLoopingFrameTimeout(int exposureMilliseconds, int frameCount = 1)
@@ -1765,7 +1783,10 @@ public sealed partial class Phd2Client : IPhd2Client
     private void EnsureSameGuidingEpoch(Phd2StateSnapshot baseline, string phase)
     {
         var current = Snapshot;
+        if (current.AppState == Phd2AppState.LostLock)
+            throw new Phd2GuidingFrameLostException(current);
         if (!current.IsConnected || current.AppState != Phd2AppState.Guiding ||
+            current.AutomationPaused || current.Phd2Paused ||
             current.ConnectionEpoch != baseline.ConnectionEpoch || current.GuideEpoch != baseline.GuideEpoch)
         {
             throw new Phd2CaptureException(

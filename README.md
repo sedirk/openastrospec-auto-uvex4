@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-16.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-09-16-evening.md) ·
 [SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
 [acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
@@ -34,13 +34,19 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [2026-09-16 closeout](docs/closeout-2026-09-16.md) covers installed **0.4.0.205**.
-It adds qualified final-trial reuse as science, visible frame/integration progress,
-read-only confirmation before mount-clock lifecycle actions, and bounded fresh
-temperature confirmation before the first FITS save for the known zero-reading
-symptom. Final checks passed **2,107 .NET tests and 66 reduction tests**; 91 UI
-scenes and three native N.I.N.A. panels were reviewed. N.I.N.A. was normally closed
-after the operator reported the hardware stowed and ended the night.
+The [September 16 evening closeout](docs/closeout-2026-09-16-evening.md) covers
+installed **0.4.0.209**: run-local main-telescope focus independent of UVEX internal
+calibration, preserved catalogue/short-frame handoff, structured PHD2 star-loss
+handling, and measured LED-visible slit extent distinct from the placement anchor.
+Final checks passed **2,152 .NET tests and 66 reduction tests**; 93 UI scenes and
+three installed native N.I.N.A. panels were reviewed. After the operator stowed
+the hardware, N.I.N.A. was normally restarted and left **idle, disarmed, with its
+equipment disconnected**. No observation was resumed. The separate autofocus
+comparable-star failure and a complete .209 on-sky run remain unvalidated.
+
+The [morning .205 closeout](docs/closeout-2026-09-16.md) retains the earlier
+final-trial science reuse, frame/integration progress, mount-clock lifecycle and
+first-save temperature-confirmation evidence.
 
 On .204, WR152 produced an accepted 600-second final trial plus an accepted
 600-second science exposure. A third saved 600-second exposure remains rejected

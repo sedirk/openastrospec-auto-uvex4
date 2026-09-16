@@ -6,6 +6,113 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2GuidingFrameEvidenceTests
 {
     [Fact]
+    public async Task InFlightGuidingStatusReplyCannotOverwriteObservedStarLost()
+    {
+        var observedLoss = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            await session.SendEventAsync(new { Event = "StarLost", Frame = 47, SNR = 2.9, ErrorCode = 2 }, token);
+            await observedLoss.Task.WaitAsync(token);
+            await session.ReplyResultAsync(request, "Guiding", token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        client.EventReceived += (_, message) => { if (message.Name == "StarLost") observedLoss.TrySetResult(); };
+        await client.ConnectAsync(CancellationToken.None);
+        Assert.Equal(Phd2AppState.LostLock, await client.GetAppStateAsync(CancellationToken.None));
+        Assert.Equal(Phd2AppState.LostLock, client.Snapshot.AppState);
+    }
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(100, false)]
+    [InlineData(100, true)]
+    public async Task StarLostIsNotMaskedByTimeoutOrLaterRecoveredFrame(int delayMs, bool recover)
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            await using var server = new FakePhd2Server(async (session, token) =>
+            {
+                var state = await session.ReadRequestAsync(token);
+                await session.ReplyResultAsync(state, "Guiding", token);
+                await Task.Delay(delayMs, token);
+                await session.SendEventAsync(new { Event = "StarLost", Frame = 47, SNR = 2.9, ErrorCode = 2 }, token);
+                if (recover)
+                    await session.SendEventAsync(new { Event = "GuideStep", Frame = 48, SNR = 50.0, ErrorCode = 0 }, token);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            });
+            await using var client = CreateClient(server);
+            await client.ConnectAsync(CancellationToken.None);
+            var path = Path.Combine(directory, "must-not-exist.fit");
+            var error = await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() =>
+                client.SaveCurrentGuidingFrameAsync(new(path, TimeSpan.FromSeconds(5)), CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(47L, error.LostFrame!.Frame);
+            Assert.Equal(2.9, error.LostFrame.Snr);
+            Assert.False(File.Exists(path));
+            Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task OwnerAlreadyLostLockReportsTypedLossWithoutWaitingOrSaving()
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var state = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(state, "LostLock", token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() =>
+            client.SaveCurrentGuidingFrameAsync(new(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.fit"),
+                TimeSpan.FromSeconds(1)), CancellationToken.None));
+        Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task ActualSilenceStillTimesOutWithoutAcquiringLostLockRecovery()
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var state = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(state, "Guiding", token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var error = await Assert.ThrowsAsync<Phd2CommandTimeoutException>(() =>
+            client.SaveCurrentGuidingFrameAsync(new(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.fit"),
+                TimeSpan.FromMilliseconds(100)), CancellationToken.None));
+        Assert.Equal("fresh guiding-frame evidence", error.Operation);
+        Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Theory]
+    [InlineData("GuidingStopped")]
+    [InlineData("Paused")]
+    public async Task TerminalOwnerEventRejectsWaitingFrameBeforeTimeout(string eventName)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var state = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(state, "Guiding", token);
+            await Task.Delay(100, token);
+            await session.SendEventAsync(new { Event = eventName }, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        await Assert.ThrowsAsync<Phd2CaptureException>(() =>
+            client.SaveCurrentGuidingFrameAsync(new(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.fit"),
+                TimeSpan.FromSeconds(5)), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
     public async Task SavesOnlyAfterFreshGuideStepWithoutChangingCaptureOrGuiding()
     {
         var directory = CreateTemporaryDirectory();

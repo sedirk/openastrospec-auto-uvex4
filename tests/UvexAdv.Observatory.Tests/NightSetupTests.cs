@@ -5,6 +5,23 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class NightSetupTests
 {
+    [Fact]
+    public void C11RunPositionDoesNotChangeUvexOrGs350LocksOrIdentity()
+    {
+        var setup = CreateSetup();
+        var live = CreateLiveFocusStates(setup).Select(f => f with { PositionSteps = f.PositionSteps - 50 }).ToArray();
+        var gates = NightSetupCompatibility.Evaluate(setup, CreateLiveSetup(live), c11RunStartPositionSteps: 44950);
+        Assert.Equal(GateDisposition.Passed, gates.Single(g => g.Code == "FOCUS_C11_MAIN_POSITION").Disposition);
+        Assert.Equal(GateDisposition.Failed, gates.Single(g => g.Code == "FOCUS_GS350_WIDE_FIELD_POSITION").Disposition);
+        Assert.Equal(GateDisposition.Failed, gates.Single(g => g.Code == "FOCUS_UVEX_SPECTRAL_POSITION").Disposition);
+        gates = NightSetupCompatibility.Evaluate(setup, CreateLiveSetup(live), c11RunStartPositionSteps: 44949);
+        Assert.Equal(GateDisposition.Failed, gates.Single(g => g.Code == "FOCUS_C11_MAIN_POSITION").Disposition);
+        live = live.Select(f => f.Role == FocusDomainRole.C11Main ? f with { LogicalDeviceId = "wrong" } : f).ToArray();
+        gates = NightSetupCompatibility.Evaluate(setup, CreateLiveSetup(live), c11RunStartPositionSteps: 44950);
+        Assert.Equal(GateDisposition.Failed, gates.Single(g => g.Code == "FOCUS_C11_MAIN_IDENTITY").Disposition);
+        Assert.Equal(45000, setup.FocusDomains!.Single(f => f.Role == FocusDomainRole.C11Main).StartPositionSteps);
+    }
+
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]

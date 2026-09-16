@@ -100,6 +100,7 @@ public sealed class ObservationUiPresentationTests
     [InlineData("G3_DESTINATION_PIER_SIDE_CHANGE", "未发送跨侧转向")]
     [InlineData("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", "低增益短曝光")]
     [InlineData("G3_CATALOG_WCS_AUTHORITY_INVALID", "目录/WCS 目标几何证据格式无效")]
+    [InlineData("G3_CATALOG_REFERENCE_MISSING", "原始 WCS 参考星场未传递")]
     [InlineData("G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID", "饱和目标的目录身份")]
     [InlineData("PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED", "有界补拍次数已经用尽")]
     [InlineData("PHD2_FRESH_GUIDE_WINDOW_DEADLINE", "剩余时间不足以取得完整")]

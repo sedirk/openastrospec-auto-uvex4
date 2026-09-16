@@ -34,6 +34,8 @@ internal static class C11MainFocusPolicy
                 "C11_MAIN_FOCUSER_POSITION_UNAVAILABLE",
                 $"N.I.N.A. Star Focuser Pro returned the non-attestable position {snapshot.PositionSteps} steps.");
         }
+        if (snapshot.IsMoving)
+            return GateResult.Unknown("C11_MAIN_FOCUSER_MOVING", "主镜电调焦仍在移动；等待停止后才能锁定本轮焦位。");
 
         return GateResult.Pass(
             "C11_MAIN_FOCUSER_OWNER_VALID",
@@ -43,7 +45,8 @@ internal static class C11MainFocusPolicy
 
     public static GateResult ValidateLockedPosition(
         C11MainFocusOwnerSnapshot snapshot,
-        NightSetupRecord setup)
+        NightSetupRecord setup,
+        int? runStartPosition = null)
     {
         ArgumentNullException.ThrowIfNull(setup);
         var ownerGate = ValidateOwner(snapshot);
@@ -60,21 +63,25 @@ internal static class C11MainFocusPolicy
         }
 
         var expected = bindings[0];
-        if (snapshot.PositionSteps != expected.StartPositionSteps)
+        if (expected.Limits is null || snapshot.PositionSteps < expected.Limits.MinimumPositionSteps ||
+            snapshot.PositionSteps > expected.Limits.MaximumPositionSteps)
+            return GateResult.Fail("C11_MAIN_FOCUSER_OUTSIDE_LIMITS", "主镜当前焦位超出已声明的设备行程；未移动。");
+        var lockedPosition = runStartPosition ?? expected.StartPositionSteps;
+        if (snapshot.PositionSteps != lockedPosition)
         {
             return GateResult.Fail(
                 "C11_MAIN_FOCUSER_POSITION_MISMATCH",
-                $"N.I.N.A. Star Focuser Pro is at {snapshot.PositionSteps} steps, but the locked Night Setup requires {expected.StartPositionSteps} steps. No automatic focus motion was issued.",
+                $"主镜当前 {snapshot.PositionSteps} 步与本轮锁定焦位 {lockedPosition} 步不一致；须结束旧轮再启动，以重新取得目标/入缝证据。未移动主镜，也不要求重做光谱仪内部标定。",
                 new Dictionary<string, double>
                 {
                     ["positionSteps"] = snapshot.PositionSteps,
-                    ["lockedPositionSteps"] = expected.StartPositionSteps,
+                    ["lockedPositionSteps"] = lockedPosition,
                 });
         }
 
         return GateResult.Pass(
             "C11_MAIN_FOCUSER_LOCK_MATCHED",
-            $"N.I.N.A. Star Focuser Pro position matches the locked C11/Gemini main-focus position {snapshot.PositionSteps} steps.",
+            $"主镜本轮焦位 {snapshot.PositionSteps} 步保持不变；仅位置一致，不代表对焦质量通过。",
             new Dictionary<string, double> { ["positionSteps"] = snapshot.PositionSteps });
     }
 
@@ -118,4 +125,20 @@ internal sealed record C11MainFocusOwnerSnapshot(
     string? DisplayName,
     string? DriverInfo,
     string? DriverVersion,
-    DateTimeOffset ReadUtc);
+    DateTimeOffset ReadUtc,
+    bool IsMoving = false);
+
+/// <summary>New runner captures once; Resume cannot replace a focus lock or reuse old optical quality.</summary>
+internal sealed class C11RunFocusLock
+{
+    public int? Position { get; private set; }
+    public GateResult CaptureOrValidate(C11MainFocusOwnerSnapshot snapshot, NightSetupRecord setup)
+    {
+        var gate = C11MainFocusPolicy.ValidateLockedPosition(snapshot, setup, Position ?? snapshot.PositionSteps);
+        if (gate.Disposition == GateDisposition.Passed) Position ??= snapshot.PositionSteps;
+        return gate;
+    }
+    public GateResult Validate(C11MainFocusOwnerSnapshot snapshot, NightSetupRecord setup) => Position is { } position
+        ? C11MainFocusPolicy.ValidateLockedPosition(snapshot, setup, position)
+        : GateResult.Unknown("C11_MAIN_FOCUSER_RUN_LOCK_MISSING", "尚未取得本轮主镜实际焦位；未使用历史焦位代替。");
+}

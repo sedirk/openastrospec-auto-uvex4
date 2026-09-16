@@ -5,8 +5,11 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed partial class RealObservationStageRunner
 {
+    private Phd2PreExposureReceipt? preExposureReceipt;
+
     private async Task<bool> TryVerifyScienceInPlaceAsync(ObservationContext context, CancellationToken cancellationToken)
     {
+        preExposureReceipt = null;
         if (phd2SlitPlacementSession is not { } session || lastG3Field is null || !IsGuidingStable()) return false;
         var loaded = await Phd2LockShiftPendingStore.LoadAsync(
             Phd2LockShiftPendingPath(context.Plan.ObservationRunId), cancellationToken).ConfigureAwait(false);
@@ -29,7 +32,11 @@ internal sealed partial class RealObservationStageRunner
                 guidingStopped = false, motionIssued = false, budgetReset = false,
                 phd2.Snapshot.LastConfigurationChange },
             phd2SlitPlacementSession!.LastMeasurement.Frame.Path, cancellationToken).ConfigureAwait(false);
-        return IsGuidingStable();
+        if (!IsGuidingStable()) return false;
+        var verifiedFrame = phd2SlitPlacementSession!.LastMeasurement.Frame;
+        preExposureReceipt = new(context.Plan.ObservationRunId, verifiedFrame.Sha256,
+            verifiedFrame.CompletedUtc, phd2.Snapshot);
+        return true;
     }
 
     private async Task<GateResult?> CheckScienceRebuildBudgetAsync(ObservationContext context, CancellationToken token)

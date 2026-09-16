@@ -8,6 +8,17 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 public sealed class ScreenshotRendererTests
 {
     [Theory]
+    [InlineData("g3-slit-extent")]
+    [InlineData("g3-slit-extent-narrow")]
+    public void VisibleSlitExtentUsesProductionOverlayAndExplicitNonPhysicalCaption(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.True(result.PreviewViewportWidth > 100);
+        Assert.True(result.PreviewViewportHeight > 100);
+        Assert.Contains(result.VisibleTexts, text => text.Contains("可见段非物理全长", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("science-progress")][InlineData("science-progress-narrow")][InlineData("science-progress-short")]
     [InlineData("science-progress-saving")][InlineData("science-progress-paused")][InlineData("science-progress-probe")][InlineData("science-progress-complete")]
     public void AcquisitionProgressUsesProductionPresentationAndIsVisible(string name)

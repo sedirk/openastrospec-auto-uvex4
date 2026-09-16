@@ -3248,8 +3248,8 @@ internal sealed partial class RealObservationStageRunner
                 slitUvexBefore?.SlitIlluminationLedState == UvexOutputState.Off &&
                     slitUvexAfter?.SlitIlluminationLedState == UvexOutputState.Off,
                 nightSetup is not null &&
-                    C11MainFocusPolicy.ValidateLockedPosition(slitFocusBefore, nightSetup.Value).Disposition == GateDisposition.Passed &&
-                    C11MainFocusPolicy.ValidateLockedPosition(slitFocusAfter, nightSetup.Value).Disposition == GateDisposition.Passed &&
+                    c11RunFocusLock.Validate(slitFocusBefore, nightSetup.Value).Disposition == GateDisposition.Passed &&
+                    c11RunFocusLock.Validate(slitFocusAfter, nightSetup.Value).Disposition == GateDisposition.Passed &&
                     slitFocusBefore.PositionSteps == slitFocusAfter.PositionSteps,
                 await ComputeFileSha256Async(runLedSlit.SourceFramePath, cancellationToken).ConfigureAwait(false),
                 await ComputeFileSha256Async(runLedSlit.SlitIdentityEvidencePath, cancellationToken).ConfigureAwait(false),
@@ -3271,7 +3271,7 @@ internal sealed partial class RealObservationStageRunner
                 guide,
                 target,
                 slit,
-                GuideStarSelector.DistanceToSlit(guideLocal, slitDetection.Geometry),
+                GuideStarSelector.DistanceToGuideExclusion(guideLocal, slitDetection.Geometry),
                 TargetIdentityConfirmed: true,
                 exposureMilliseconds,
                 CommissionedMinimumExposureApplied: exposureMatched,
@@ -3568,7 +3568,7 @@ internal sealed partial class RealObservationStageRunner
                 Math.Min(selectedLocal.X, preset.RoiWidth - 1 - selectedLocal.X),
                 Math.Min(selectedLocal.Y, preset.RoiHeight - 1 - selectedLocal.Y));
             var targetDistance = PixelDistance(selectedLocal, target.Centroid);
-            var slitDistance = GuideStarSelector.DistanceToSlit(selectedLocal, choice.Field.SlitDetection.Geometry);
+            var slitDistance = GuideStarSelector.DistanceToGuideExclusion(selectedLocal, choice.Field.SlitDetection.Geometry);
             var insideFrame = selectedLocal.X >= 0 && selectedLocal.X < preset.RoiWidth &&
                               selectedLocal.Y >= 0 && selectedLocal.Y < preset.RoiHeight;
             var insideSaturatedStructure = saturatedStructureExclusions.Any(item =>
@@ -4365,6 +4365,28 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private async Task VerifyWindSampledGuidingBeforeAtrAsync(
+        ObservationContext context,
+        CancellationToken cancellationToken,
+        bool forceFreshWindow = false)
+    {
+        try
+        {
+            await VerifyWindSampledGuidingBeforeAtrCoreAsync(context, cancellationToken, forceFreshWindow).ConfigureAwait(false);
+        }
+        catch (Phd2GuidingFrameLostException ex)
+        {
+            // Only structured owner evidence enters the existing science
+            // recovery policy. Transport silence must not acquire this route.
+            await PublishRunJsonEvidenceAsync("phd2-pre-atr-star-lost",
+                "PHD2 reported a lost guide star during a fresh optical window, not a camera timeout",
+                new { ex.Snapshot.ConnectionEpoch, ex.Snapshot.GuideEpoch, ex.LostFrame,
+                    cameraTimeoutInferred = false, staleFrameAccepted = false },
+                lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
+            throw new PhysicalActionGateException(GateResult.Unknown("GUIDING_LOST", ex.Message));
+        }
+    }
+
+    private async Task VerifyWindSampledGuidingBeforeAtrCoreAsync(
         ObservationContext context,
         CancellationToken cancellationToken,
         bool forceFreshWindow = false)

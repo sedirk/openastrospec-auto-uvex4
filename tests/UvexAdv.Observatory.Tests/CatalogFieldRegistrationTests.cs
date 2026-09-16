@@ -46,4 +46,27 @@ public sealed class CatalogFieldRegistrationTests
         var current = Reference.Concat(Reference.Select(s=>s with {Centroid=new(s.Centroid.X+10,s.Centroid.Y)})).ToArray();
         Assert.NotEqual(GateDisposition.Passed,Register(current).Gate.Disposition);
     }
+
+    [Fact]
+    public void StrongStationaryPatternCannotOutvoteStarsAfterResolvedMovement()
+    {
+        var fixedPattern = Enumerable.Range(0, 90).Select(i => Star(20 + i % 15 * 35, 20 + i / 15 * 35, 1000)).ToArray();
+        StarCandidate[] moving = [Star(92,380), Star(182,412), Star(370,440), Star(510,365)];
+        var shifted = moving.Select(s => s with { Centroid = new(s.Centroid.X - 55, s.Centroid.Y + 10) }).ToArray();
+        var result = CatalogFieldRegistration.Measure(fixedPattern.Concat(moving).ToArray(),
+            fixedPattern.Concat(shifted).ToArray(), new(400,300), new(-60,10), 100,2,700,600,
+            new("slit",new(340,310),0,100,3,.5,"camera",1,1));
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        Assert.Equal(-55,result.Translation.X,8);
+        Assert.Equal(345,result.Target.X,8); // measured, not commanded -60
+        Assert.Equal(90,result.Gate.Metrics!["fixedReferenceExcluded"]);
+    }
+
+    [Fact]
+    public void OnlyStationaryMatchesAfterLargeExpectedMoveAreNotProofOfNoMotion()
+    {
+        var result = CatalogFieldRegistration.Measure(Reference, Reference, new(150,150), new(-60,10), 100,2,
+            300,300,new("slit",new(90,160),0,100,3,.5,"camera",1,1));
+        Assert.NotEqual(GateDisposition.Passed,result.Gate.Disposition);
+    }
 }

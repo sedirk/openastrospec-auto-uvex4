@@ -60,7 +60,10 @@ public sealed record SlitDarkApertureHdrAnalysis(
     double ShortExposureSaturatedFraction,
     double LongExposureSaturatedFraction,
     double LongExposureValidFraction,
-    double LongExposureDynamicRangeAdu);
+    double LongExposureDynamicRangeAdu)
+{
+    public SlitIlluminationExtentAnalysis? ExtentAnalysis { get; init; }
+}
 
 /// <summary>
 /// Measures the physical, dark slit aperture from a short/long LED HDR pair.
@@ -73,6 +76,29 @@ public static class SlitDarkApertureHdrAnalyzer
     public const string MeasurementModelId = "UVEX-DARK-APERTURE-TWO-EDGE-HDR-V1";
 
     public static SlitDarkApertureHdrAnalysis Analyze(
+        MonochromeFrame shortLedOff,
+        MonochromeFrame shortLedOn,
+        MonochromeFrame longLedOff,
+        MonochromeFrame longLedOn,
+        SlitGeometry seed,
+        SlitDarkApertureHdrOptions? options = null)
+    {
+        // Measure width/identity using the original central ROI. Enlarging it
+        // first would dilute the cross profile and alter the commissioned fit.
+        ArgumentNullException.ThrowIfNull(seed);
+        var result = AnalyzeCore(shortLedOff, shortLedOn, longLedOff, longLedOn,
+            seed with { IlluminationExtent = null }, options);
+        if (result.Gate.Disposition != GateDisposition.Passed) return result;
+        var extent = SlitIlluminationExtentAnalyzer.Analyze(shortLedOff, shortLedOn,
+            longLedOff, longLedOn, result.ReflectiveEdgeGeometry);
+        return result with
+        {
+            ExtentAnalysis = extent,
+            Geometry = result.Geometry with { IlluminationExtent = extent.Extent },
+        };
+    }
+
+    private static SlitDarkApertureHdrAnalysis AnalyzeCore(
         MonochromeFrame shortLedOff,
         MonochromeFrame shortLedOn,
         MonochromeFrame longLedOff,

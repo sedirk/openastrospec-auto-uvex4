@@ -103,6 +103,8 @@ public static class ScenarioCatalog
             ExercisePreparationScrolling = true,
         },
         new("running", 1180, 800, ObservationDockMockViewModel.Running()),
+        new("g3-slit-extent", 1180, 800, ObservationDockMockViewModel.SlitExtent()),
+        new("g3-slit-extent-narrow", 640, 800, ObservationDockMockViewModel.SlitExtent()),
         new("science-progress", 1040, 800, ObservationDockMockViewModel.ScienceProgress()),
         new("science-progress-narrow", 540, 700, ObservationDockMockViewModel.ScienceProgress()),
         new("science-progress-short", 760, 560, ObservationDockMockViewModel.ScienceProgress()),
@@ -880,6 +882,16 @@ public sealed class ObservationDockMockViewModel
         EvidenceRows = RunningEvidence(),
         LatestEvidenceSummary = "21:42:31 · g3-solve · g3-solve-overlay.png",
         LatestEvidencePath = @"C:\UVEX-ADV\runs\simulated-running\g3-solve-overlay.png"
+    };
+
+    public static ObservationDockMockViewModel SlitExtent() => new()
+    {
+        SelectedWorkspaceTabIndex = 4, SelectedPreviewTabIndex = 1,
+        ModeText = "离线回放 · 狭缝长度", StateText = "未启动",
+        StatusMessage = "照明可见段与已标定中央段分开显示；入缝锚点未移动。",
+        G3PreviewImage = PreviewImageFactory.CreateMeasuredSlitExtent(),
+        G3PreviewCaption = "虚线：LED可见段 944 px；实线：标定中央段 410 px；十字：入缝锚点。可见段非物理全长，不扩大入缝范围。",
+        G3PreviewMetadata = "离线合成像素 · 生产叠加渲染器 · 非实拍证据",
     };
 
     public static ObservationDockMockViewModel ScienceProgress(string phase = "Exposing", bool english = false)

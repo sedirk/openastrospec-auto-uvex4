@@ -1,6 +1,37 @@
 # Known issues
 
-## Current closeout boundary (2026-09-16, installed 0.4.0.205)
+## Current closeout boundary (2026-09-16 evening, installed 0.4.0.209)
+
+The [evening closeout](closeout-2026-09-16-evening.md) records .206–.209 source,
+saved-frame and no-motion LED checks, installation and idle native-panel checks.
+N.I.N.A. is left running idle/disarmed with equipment disconnected, as requested;
+this is not a resumed observation or a new sky-acceptance result.
+
+- [ADR-0018](adr/0018-run-local-main-focus-position.md) separates between-run main
+  telescope focus changes from UVEX internal calibration. The new run-local lock
+  does **not** establish optical focus quality. The September 16 autofocus failure
+  at step 4940 still needs a same-star/aperture solution and new sky verification;
+  do not report it as repaired by relaxing the historical position lock.
+- Catalogue references survive an unsolved arrival, and a bounded SEP short-frame
+  handoff avoids repeating the complete exposure ladder. Fixed detector patterns
+  cannot establish a moving sky-field registration. Prediction alone still cannot
+  authorize exact slit placement; cloud, ambiguous matches and lack of fresh
+  evidence remain valid stopping conditions.
+- Structured PHD2 `StarLost` is not a camera timeout. Only the reviewed lost-guide
+  path can enter bounded recovery; silent timeouts do not automatically restart
+  owners. A matching recovery window can be consumed once within five seconds,
+  with live guide-state checks retained immediately before science exposure.
+- The LED-visible slit extent is **not the mechanical full length**. Two 10/20 ms
+  no-motion groups measured 936 and 944 px versus the old 410 px central segment;
+  endpoint resolution is ±36 px and illumination depth changes the weak ends.
+  Extent expands display/guide exclusion, not the acquisition anchor, slit width
+  calibration, motion range or placement tolerance. See the
+  [component evidence](reports/2026-09-16-slit-visible-extent.md).
+- No complete .209 sky run, new autofocus success, dual-N.I.N.A. worker acceptance,
+  calibrated spectra or unattended-operation certification is claimed. The .205
+  temperature-confirmation sky branch below also remains unaccepted.
+
+## Historical closeout boundary (2026-09-16 morning, installed 0.4.0.205)
 
 The [September 16 closeout](closeout-2026-09-16.md) records final-probe science
 reuse, frame/integration progress, mount-clock readback confirmation and the

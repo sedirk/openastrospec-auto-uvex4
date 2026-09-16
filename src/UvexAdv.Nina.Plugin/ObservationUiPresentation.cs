@@ -480,6 +480,8 @@ public static partial class ObservationUiPresentation
             "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED" => "PHD2 已用完旁星有界重选次数，仍未找到满足几何限制的导星星",
             "G3_FRAME_REUSED" => "精调阶段拒绝复用旧 G3 残差帧；每次位移后都必须取得新帧",
             "G3_CATALOG_WCS_AUTHORITY_INVALID" => "目录/WCS 目标几何证据格式无效，不能据此授权入缝位移",
+            "G3_CATALOG_REFERENCE_MISSING" => "目录定位的原始 WCS 参考星场未传递到精调接管；这是参考证据衔接问题，不是星等不合格，未用附近亮峰替代目标",
+            "G3_POST_WCS_SHORT_UNCONFIRMED" => "小范围修正后，SEP 短帧未确认一致的近缝目标；已保留目录与狭缝，未重复整套解算，未把预测位置当成实测入缝",
             "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID" => "饱和目标的目录身份、实心核质心或光通量不适用标记不一致，不能据此授权入缝位移",
             "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED" => "连续 fresh 导星帧仍无法可靠辨认物理狭缝，有界补拍次数已经用尽",
             "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" => "微调阶段的剩余时间不足以取得完整的新目标/狭缝测量窗口；不是已测整组导星精度不合格",

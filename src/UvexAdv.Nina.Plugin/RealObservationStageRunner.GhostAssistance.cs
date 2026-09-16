@@ -515,8 +515,8 @@ internal sealed partial class RealObservationStageRunner
         if (bindings.Length != 1)
             return GhostFocusResolution.Failed($"The locked Night Setup contains {bindings.Length} independent C11 focus bindings; exactly one is required.");
         var focus = bindings[0];
-        var ownerBeforeGate = C11MainFocusPolicy.ValidateLockedPosition(ownerBefore, nightSetup.Value);
-        var ownerAfterGate = C11MainFocusPolicy.ValidateLockedPosition(ownerAfter, nightSetup.Value);
+        var ownerBeforeGate = c11RunFocusLock.Validate(ownerBefore, nightSetup.Value);
+        var ownerAfterGate = c11RunFocusLock.Validate(ownerAfter, nightSetup.Value);
         var failures = new List<string>();
         if (ownerBeforeGate.Disposition != GateDisposition.Passed) failures.Add(ownerBeforeGate.Message);
         if (ownerAfterGate.Disposition != GateDisposition.Passed) failures.Add(ownerAfterGate.Message);

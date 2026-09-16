@@ -7,6 +7,22 @@ internal sealed record G3CatalogRegistrationReference(string FramePath, string F
     string RunId, long ConnectionEpoch, string PierSide, int Width, int Height,
     PixelPoint CataloguePoint, IReadOnlyList<StarCandidate> Stars);
 
+internal static class G3CatalogReferenceHandoff
+{
+    internal static G3FieldState Preserve(G3FieldState arrival, G3CatalogRegistrationReference? reference, bool catalogOnly)
+    {
+        if (!catalogOnly || arrival.Gate.Disposition != GateDisposition.Passed) return arrival;
+        if (arrival.CatalogRegistrationReference is not null) return arrival;
+        if (reference is null)
+            return arrival with { Gate = GateResult.Unknown("G3_CATALOG_REFERENCE_MISSING",
+                "目录定位的原始 WCS 参考星场未传递到接管阶段；未把运动预测或目标附近亮峰当成目录参考。") };
+        // Preserve the original point, pixels' hash and independent stars, not
+        // the arrival prediction. Registration rechecks run/owner/pier/detector
+        // and immutable pixels before measuring any fresh fine residual.
+        return arrival with { CatalogRegistrationReference = reference };
+    }
+}
+
 internal sealed partial class RealObservationStageRunner
 {
     private static async Task<IReadOnlyList<StarCandidate>> CatalogRegistrationStarsAsync(

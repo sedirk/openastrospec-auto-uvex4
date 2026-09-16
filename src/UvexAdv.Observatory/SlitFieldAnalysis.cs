@@ -150,7 +150,12 @@ public sealed record SlitGeometry(
     double UncertaintyPixels,
     string CameraIdentity,
     int BinningX,
-    int BinningY);
+    int BinningY)
+{
+    // Display/ordinary-guide exclusion only; LengthPixels remains the
+    // commissioned central usable segment and AcquisitionPoint the aim point.
+    public SlitIlluminationExtent? IlluminationExtent { get; init; }
+}
 
 public sealed record SlitLocusDetection(
     GateResult Gate,
@@ -483,6 +488,10 @@ public static class GuideStarSelector
         }
 
         var effectivePolicy = policy ?? new GuideStarSelectionPolicy();
+        if (slit.IlluminationExtent is { IsValid: true } &&
+            DistanceToGuideExclusion(nativeSelection, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
+            return new GuideStarSelection(GateResult.Fail("PHD2_NATIVE_GUIDE_REJECTED",
+                "PHD2 native selection lies within the measured LED/slit guard; missing local morphology cannot revoke this geometric exclusion."), null, 0);
         var matches = candidates
             .Select(candidate => (Candidate: candidate, Distance: Distance(candidate.Centroid, nativeSelection)))
             .Where(item => item.Distance <= matchRadiusPixels)
@@ -520,7 +529,7 @@ public static class GuideStarSelector
             geometryFailures.Add("selection is too close to a detector edge");
         if (Distance(nativeSelection, target.Centroid) < targetGuard)
             geometryFailures.Add($"selection is inside the {targetGuard:F0}px target/halo guard");
-        if (DistanceToSlit(nativeSelection, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
+        if (DistanceToGuideExclusion(nativeSelection, slit) < slit.WidthPixels / 2 + effectivePolicy.SlitGuardPixels)
             geometryFailures.Add("selection is inside the physical-slit guard");
 
         if (geometryFailures.Count > 0)
@@ -564,7 +573,7 @@ public static class GuideStarSelector
             .Where(candidate => double.IsFinite(candidate.SaturatedFraction) && candidate.SaturatedFraction <= policy.MaximumSaturatedFraction)
             .Where(candidate => candidate.EdgeDistancePixels >= policy.MinimumEdgeDistancePixels)
             .Where(candidate => Distance(candidate.Centroid, targetPoint) >= effectiveTargetGuardPixels)
-            .Where(candidate => DistanceToSlit(candidate.Centroid, slit) >= slit.WidthPixels / 2 + policy.SlitGuardPixels)
+            .Where(candidate => DistanceToGuideExclusion(candidate.Centroid, slit) >= slit.WidthPixels / 2 + policy.SlitGuardPixels)
             .Select(candidate => (
                 Candidate: candidate,
                 Score: candidate.SignalToNoise /
@@ -590,6 +599,30 @@ public static class GuideStarSelector
     {
         var closest = ClosestPointOnSlit(point, slit);
         return Distance(point, closest);
+    }
+
+    /// <summary>Conservative guide exclusion includes faint observed extensions.
+    /// This deliberately does not change ClosestPointOnSlit or placement authority.</summary>
+    public static double DistanceToGuideExclusion(PixelPoint point, SlitGeometry slit)
+    {
+        var (start, end) = GuideExclusionBounds(slit);
+        var angle = slit.AngleDegrees * Math.PI / 180;
+        var along = Math.Cos(angle) * (point.X - slit.AcquisitionPoint.X) +
+            Math.Sin(angle) * (point.Y - slit.AcquisitionPoint.Y);
+        var nearest = Math.Clamp(along, start, end);
+        return Distance(point, new PixelPoint(slit.AcquisitionPoint.X + Math.Cos(angle) * nearest,
+            slit.AcquisitionPoint.Y + Math.Sin(angle) * nearest));
+    }
+
+    public static (double Start, double End) GuideExclusionBounds(SlitGeometry slit)
+    {
+        var start = -slit.LengthPixels / 2; var end = slit.LengthPixels / 2;
+        if (slit.IlluminationExtent is { IsValid: true } extent)
+        {
+            start = Math.Min(start, extent.StartOffsetPixels - extent.EndpointUncertaintyPixels);
+            end = Math.Max(end, extent.EndOffsetPixels + extent.EndpointUncertaintyPixels);
+        }
+        return (start, end);
     }
 
     /// <summary>

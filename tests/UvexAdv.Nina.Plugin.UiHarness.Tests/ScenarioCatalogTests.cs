@@ -134,7 +134,9 @@ public sealed class ScenarioCatalogTests
         string[] preparation = ["preparation-default", "preparation-missing", "preparation-ready", "preparation-night", "preparation-busy",
             "preparation-en", "preparation-night-en", "preparation-narrow", "preparation-narrow-bottom", "preparation-night-narrow", "preparation-night-narrow-bottom"];
         string[] science = ["science-progress", "science-progress-narrow", "science-progress-short", "science-progress-en", "science-progress-saving", "science-progress-paused", "science-progress-probe", "science-progress-complete"];
-        var expected = existing.Concat(added).Concat(preparation).Concat(science).Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
+        var expected = existing.Concat(added).Concat(preparation).Concat(science)
+            .Concat(new[] { "g3-slit-extent", "g3-slit-extent-narrow" })
+            .Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());
