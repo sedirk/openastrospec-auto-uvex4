@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using UvexAdv.Observatory;
+using UvexAdv.Spectroscopy;
 
 namespace UvexAdv.Nina.Plugin.UiHarness;
 
@@ -94,6 +95,22 @@ internal static class PreviewImageFactory
         }
         return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new DrawingImage(plot),
             focusRegion: new Rect(0, Height * 0.35, Width, Height * 0.3));
+    }
+
+    public static ImageSource CreateReducedAtrSpectrum(bool missing = false)
+    {
+        var original = (BitmapSource)CreateAtrSpectrum();
+        var raw = Enumerable.Range(0, 960).Select(x => (double?)(2000 + 300 * Math.Sin(x / 180d) +
+            1800 * Math.Exp(-Math.Pow((x - 580) / 5d, 2)))).ToArray();
+        var cleaned = raw.ToArray();
+        raw[340] += 7000;
+        for (var i = 740; i < 750; i++) raw[i] = cleaned[i] = null;
+        if (missing)
+            return ObservationPreviewLayers.Attach(original.Clone(), spectrum: ObservationPreviewRenderer.RenderSpectrum(
+                Enumerable.Repeat(double.NaN, 960).ToArray(), null, "未检测到可靠谱带 · 无伪造曲线"));
+        return ObservationPreviewRenderer.WithReducedSpectrum(original, new ReductionPreviewResult(
+            1, "reduction-live-preview-v1", true, false, false, "aspired-tophat", cleaned, raw,
+            Enumerable.Repeat<double?>(20, 960).ToArray(), 1, 10, "test", []));
     }
 
     private static DrawingVisual CreateStarField(int seed, bool defocused, out DrawingContext context)

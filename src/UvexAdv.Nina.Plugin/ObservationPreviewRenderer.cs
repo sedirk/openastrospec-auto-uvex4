@@ -75,7 +75,23 @@ internal static class ObservationPreviewRenderer
         return ObservationPreviewLayers.Attach(source, overlay: new DrawingImage(overlay));
     }
 
-    public static BitmapSource RenderAtr(IImageData image, ImageRoi roi, double traceCenter = double.NaN, double traceHalfWidth = double.NaN)
+    internal static ushort[] CopyAtrRoi(IImageData image, ImageRoi roi, DispersionAxis axis)
+    {
+        roi.Validate(image.Properties.Width, image.Properties.Height);
+        var raw = image.Data.FlatArray;
+        var width = axis == DispersionAxis.Horizontal ? roi.Width : roi.Height;
+        var height = axis == DispersionAxis.Horizontal ? roi.Height : roi.Width;
+        var copy = new ushort[checked(width * height)];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+            copy[y * width + x] = axis == DispersionAxis.Horizontal
+                ? raw[(roi.Y + y) * image.Properties.Width + roi.X + x]
+                : raw[(roi.Y + x) * image.Properties.Width + roi.X + y];
+        return copy;
+    }
+
+    public static BitmapSource RenderAtr(IImageData image, ImageRoi roi, double traceCenter = double.NaN,
+        double traceHalfWidth = double.NaN, DispersionAxis axis = DispersionAxis.Horizontal)
     {
         var source = image.RenderBitmapSource();
         roi.Validate(source.PixelWidth, source.PixelHeight);
@@ -84,71 +100,87 @@ internal static class ObservationPreviewRenderer
             new Int32Rect(roi.X, roi.Y, roi.Width, roi.Height));
         // The scientific pixels remain a camera-sized bitmap. The 1D curve is
         // a separate vector view, not part of the contrast/zoom input bitmap.
-        var plot = new DrawingGroup();
-        using (var drawing = plot.Open())
-        {
-            var spectrum = ExtractMeanSpectrum(image, roi);
-            var plotRect = new Rect(0, 0, 1200, 180);
-            drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), new Pen(Brushes.SlateGray, 1), plotRect);
-            DrawSpectrum(drawing, spectrum, plotRect);
-        }
+        var values = CopyAtrRoi(image, roi, axis);
+        var spectrum = SpectrumQuickLook.Extract(values,
+            axis == DispersionAxis.Horizontal ? roi.Width : roi.Height,
+            axis == DispersionAxis.Horizontal ? roi.Height : roi.Width,
+            traceCenter, traceHalfWidth, Math.Pow(2, Math.Clamp(image.Properties.BitDepth, 1, 16)) - 1);
+        var plot = RenderSpectrum(spectrum, null, string.Empty);
         Rect? focusRegion = null;
         if (double.IsFinite(traceCenter) && double.IsFinite(traceHalfWidth) && traceHalfWidth > 0 &&
-            traceCenter > roi.Y && traceCenter < roi.Y + roi.Height)
+            axis == DispersionAxis.Horizontal && traceCenter > 0 && traceCenter < roi.Height)
         {
             var padding = Math.Max(64, traceHalfWidth * 3);
-            var top = Math.Max(0, traceCenter - roi.Y - padding);
-            var bottom = Math.Min(roi.Height, traceCenter - roi.Y + padding);
+            var top = Math.Max(0, traceCenter - padding);
+            var bottom = Math.Min(roi.Height, traceCenter + padding);
             focusRegion = new Rect(0, top, roi.Width, bottom - top);
         }
         // Only a suggested viewport; the original ROI bitmap and science data
         // remain intact and the operator can switch back to the full frame.
-        return ObservationPreviewLayers.Attach(cropped, spectrum: new DrawingImage(plot), focusRegion: focusRegion);
+        return ObservationPreviewLayers.Attach(cropped, spectrum: plot, focusRegion: focusRegion,
+            spectrumDescription: "基础快览：谱带求和 − 两侧天空；未清理 · ADU / 孔径 · 未标定",
+            englishSpectrumDescription: "Quick look: aperture sum minus sky; uncleaned · ADU / aperture · uncalibrated");
     }
 
-    private static double[] ExtractMeanSpectrum(IImageData image, ImageRoi roi)
+    internal static BitmapSource WithReducedSpectrum(BitmapSource original, ReductionPreviewResult result)
     {
-        var values = image.Data.FlatArray;
-        var imageWidth = image.Properties.Width;
-        var rowStride = Math.Max(1, roi.Height / 240);
-        var spectrum = new double[roi.Width];
-        var rows = 0;
-        for (var y = roi.Y; y < roi.Y + roi.Height; y += rowStride)
-        {
-            for (var x = 0; x < roi.Width; x++) spectrum[x] += values[y * imageWidth + roi.X + x];
-            rows++;
-        }
-        if (rows > 0)
-        {
-            for (var x = 0; x < spectrum.Length; x++) spectrum[x] /= rows;
-        }
-        return spectrum;
+        var layers = ObservationPreviewLayers.For(original);
+        var plot = RenderSpectrum(result.Flux.Select(v => v ?? double.NaN).ToArray(),
+            result.RawFlux.Select(v => v ?? double.NaN).ToArray(),
+            string.Empty);
+        return ObservationPreviewLayers.Attach(original.Clone(), layers?.Overlay, plot, layers?.FocusRegion,
+            $"青：后期提取（{result.Backend}） · 灰：未清理孔径 · ADU / 孔径；无光谱平滑",
+            $"Cyan: reduced ({result.Backend}) · Gray: uncleaned aperture · ADU / aperture; no spectral smoothing");
     }
 
-    private static void DrawSpectrum(DrawingContext drawing, IReadOnlyList<double> spectrum, Rect rect)
+    internal static DrawingImage RenderSpectrum(IReadOnlyList<double> spectrum, IReadOnlyList<double>? raw, string label)
+    {
+        var plot = new DrawingGroup();
+        using var drawing = plot.Open();
+        drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), new Pen(Brushes.SlateGray, 1), new Rect(0, 0, 1200, 210));
+        DrawLabel(drawing, label, new Point(12, 6), Brushes.LightGray, 24);
+        var finite = spectrum.Where(double.IsFinite).OrderBy(value => value).ToArray();
+        if (finite.Length < 2)
+        {
+            DrawLabel(drawing, "本帧没有可靠谱带或有效天空区；不生成伪光谱。", new Point(50, 80), Brushes.Orange, 28);
+            return new DrawingImage(plot);
+        }
+        var low = finite[0];
+        var high = finite[^1];
+        if (!(high > low)) high = low + 1;
+        var rect = new Rect(110, 36, 1060, 142);
+        // The vector plot is displayed at 90 DIPs tall. Keep axis labels legible
+        // after that vertical scaling instead of reducing them to 5-pixel text.
+        DrawLabel(drawing, high.ToString("G4", CultureInfo.InvariantCulture), new Point(4, 27), Brushes.LightSlateGray, 22);
+        DrawLabel(drawing, low.ToString("G4", CultureInfo.InvariantCulture), new Point(4, 158), Brushes.LightSlateGray, 22);
+        DrawLabel(drawing, "0", new Point(110, 182), Brushes.LightSlateGray, 22);
+        DrawLabel(drawing, (spectrum.Count - 1).ToString(CultureInfo.InvariantCulture) + " px", new Point(1050, 182), Brushes.LightSlateGray, 22);
+        drawing.PushClip(new RectangleGeometry(rect));
+        if (raw is not null) DrawSpectrum(drawing, raw, rect, low, high, new Pen(Brushes.SlateGray, .8));
+        DrawSpectrum(drawing, spectrum, rect, low, high, new Pen(Brushes.Turquoise, 1.2));
+        drawing.Pop();
+        return new DrawingImage(plot);
+    }
+
+    private static void DrawSpectrum(DrawingContext drawing, IReadOnlyList<double> spectrum, Rect rect, double low, double high, Pen pen)
     {
         if (spectrum.Count < 2) return;
-        var finite = spectrum.Where(double.IsFinite).OrderBy(value => value).ToArray();
-        if (finite.Length == 0) return;
-        var low = Percentile(finite, 0.02);
-        var high = Percentile(finite, 0.995);
-        if (!(high > low)) high = low + 1;
         var geometry = new StreamGeometry();
         using (var context = geometry.Open())
         {
-            var step = Math.Max(1, spectrum.Count / (int)Math.Max(1, rect.Width));
             var started = false;
-            for (var index = 0; index < spectrum.Count; index += step)
+            for (var index = 0; index < spectrum.Count; index++)
             {
+                if (!double.IsFinite(spectrum[index])) { started = false; continue; }
                 var x = rect.Left + index / (double)(spectrum.Count - 1) * rect.Width;
-                var normalized = Math.Clamp((spectrum[index] - low) / (high - low), 0, 1);
+                var normalized = (spectrum[index] - low) / (high - low);
                 var point = new Point(x, rect.Bottom - normalized * rect.Height);
                 if (!started) { context.BeginFigure(point, false, false); started = true; }
                 else context.LineTo(point, true, false);
             }
         }
         geometry.Freeze();
-        drawing.DrawGeometry(null, new Pen(Brushes.Turquoise, 1.5), geometry);
+        drawing.DrawGeometry(null, pen, geometry);
     }
 
     private static void DrawCrosshair(DrawingContext drawing, Point center, Brush brush, double radius)
@@ -176,11 +208,4 @@ internal static class ObservationPreviewRenderer
         drawing.DrawText(formatted, point);
     }
 
-    private static double Percentile(IReadOnlyList<double> sorted, double fraction)
-    {
-        var index = Math.Clamp(fraction, 0, 1) * (sorted.Count - 1);
-        var lower = (int)Math.Floor(index);
-        var upper = (int)Math.Ceiling(index);
-        return lower == upper ? sorted[lower] : sorted[lower] + (index - lower) * (sorted[upper] - sorted[lower]);
-    }
 }

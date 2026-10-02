@@ -6,6 +6,47 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed partial class RealObservationStageRunner
 {
     private int phd2CoarseHandoffRecoveryAttempts;
+    private Phd2LockShiftPendingState? phd2SettledHandoffBudget;
+
+    private async Task<StageResult> WaitForPostCalibrationMountIdleAsync(
+        Phd2DependencyRebuildStopProof stopProof, string expectedPierSide,
+        CancellationToken cancellationToken)
+    {
+        Report("PHD2 校准已通过并停止采集；等待赤道仪导星脉冲结束及连续静止读回，再重新获取目标（最多 15 秒）");
+        var samples = new List<object>();
+        var gate = await Phd2MountIdleWait.WaitAsync(async token =>
+        {
+            await phd2.GetAppStateAsync(token).ConfigureAwait(false);
+            if (!stopProof.IsCurrent(phd2.Snapshot))
+                return GateResult.Unknown("PHD2_REBUILD_STOP_UNCONFIRMED",
+                    "The stopped PHD2 connection/guide epoch changed during the mount handoff; no capture or motion was issued.");
+            var mountGate = ValidateG3SearchMountState(expectedPierSide);
+            samples.Add(new { timestampUtc = DateTimeOffset.UtcNow, mountGate.Code,
+                connectionEpoch = phd2.Snapshot.ConnectionEpoch, guideEpoch = phd2.Snapshot.GuideEpoch });
+            return mountGate;
+        }, cancellationToken).ConfigureAwait(false);
+        var evidence = await PublishRunJsonEvidenceAsync("phd2-post-calibration-mount-idle",
+            "Read-only mount pulse drain after confirmed PHD2 stop",
+            new { gate, samples, expectedPierSide, stopProof.ConnectionEpoch, stopProof.GuideEpoch,
+                maximumWaitSeconds = Phd2MountIdleWait.MaximumWait.TotalSeconds,
+                requiredQuietSeconds = Phd2MountIdleWait.QuietPeriod.TotalSeconds,
+                originalBudgetsPreserved = true, motionOrCaptureIssued = false },
+            stopProof.EvidencePath, cancellationToken).ConfigureAwait(false);
+        return new StageResult(gate, evidence);
+    }
+
+    private double Phd2HandoffResidualPixels(G3FieldState field,
+        Phd2SlitPlacementCommissioningPreset preset)
+    {
+        var initial = preset.HandoffResidualPixels(
+            field.Gate.Disposition == GateDisposition.Passed &&
+            field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null &&
+            field.TargetIdentification.HasCatalogPositionRefinement);
+        return phd2SettledHandoffBudget is not { } spent ? initial :
+            Phd2CoarseHandoffPolicy.LimitToRemainingLedger(initial, preset.BuildMotionLimits(),
+                preset.CalibrationQualityPolicy.DegradedMaximumLockShiftScale, preset.MaximumResidualGrowthPixels,
+                spent.AttemptsUsed, spent.CumulativeCommandedPixels, DateTimeOffset.UtcNow - spent.StartedUtc);
+    }
 
     private bool NeedsG3CoarseCentering(G3FieldState field) =>
         commissioning?.Value.Phd2SlitPlacement is { } preset &&
@@ -14,7 +55,7 @@ internal sealed partial class RealObservationStageRunner
         G3WcsRecoveryPolicy.NeedsCoarseCentering(field.Gate,
             field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null,
             PixelDistance(target.Centroid, field.SlitDetection.Geometry.AcquisitionPoint) +
-            field.TargetIdentification.CatalogPositionSpreadPixels, preset.CoarseHandoffResidualPixels);
+            field.TargetIdentification.CatalogPositionSpreadPixels, Phd2HandoffResidualPixels(field, preset));
 
     private async Task<StageResult> HandleDeniedPhd2AcquisitionBudgetAsync(
         ObservationContext context, Phd2SlitPlacementSession session,

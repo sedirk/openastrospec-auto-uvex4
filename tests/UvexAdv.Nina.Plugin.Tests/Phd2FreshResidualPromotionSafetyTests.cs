@@ -11,6 +11,27 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
         "RealObservationStageRunner.Phd2SlitPlacement.cs"));
 
     [Fact]
+    public void CoherentContinuationOnlyChangesTheWaitVetoNotCompletionOrDispatchAuthority()
+    {
+        AssertOrdered(Source,
+            "Phd2SlitLockShiftPlanner.PlanOutboundStage(",
+            "var measuredSupervisedGeometry = HasSupervisedScienceOptIn() &&",
+            "var correctionWindow = Phd2PlacementGuideWindowPolicy.EvaluateCorrectionWindow(",
+            "session.GuideMode, measuredSupervisedGeometry, plan.IsAllowed, plan.IsComplete,",
+            "var existingLockNotReached = !correctionWindow.CanContinue &&",
+            "if (!plan.IsAllowed && !supervisedSlitPrecisionWarning)",
+            "if (plan.IsComplete || supervisedSlitPrecisionWarning)",
+            "var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(",
+            "if (!nextAcquisitionBudget.IsAllowed)",
+            "var stage = plan.Stage!;",
+            "var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(",
+            "var chargedLedger = ledger with",
+            "exact = await phd2.SetExactLockPositionAsync(");
+        Assert.Contains("preset.MaximumGuideLockResidualPixels, completionTolerance, requiredCompletionFrames)", Source);
+        Assert.Contains("!Phd2PlacementGuideWindowPolicy.AllWithinTolerance(completionResiduals, completionTolerance)", Source);
+    }
+
+    [Fact]
     public void WholeTripDenialCannotFallThroughToAnIndividuallyAffordableDispatch()
     {
         var body = Slice(Source,

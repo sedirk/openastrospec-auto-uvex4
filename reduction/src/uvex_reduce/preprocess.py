@@ -762,6 +762,8 @@ def _clean_cosmic_rays(
     image: np.ndarray,
     mask: np.ndarray,
     detector: DetectorConfig,
+    *,
+    variance: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int]:
     from astropy.nddata import CCDData
     from ccdproc import cosmicray_lacosmic
@@ -784,6 +786,7 @@ def _clean_cosmic_rays(
         cleantype="medmask",
         fsmode="median",
         gain_apply=False,
+        invar=variance,
         verbose=False,
     )
     cosmic_mask = np.asarray(cleaned.mask, dtype=bool) & ~mask

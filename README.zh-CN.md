@@ -20,7 +20,10 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-09-16-evening.md) ·
+[最新软件/实机收口](docs/closeout-2026-10-03.md) ·
+[原生光谱整夜序列](docs/native-spectroscopy-night-sequence.md) ·
+[光谱中天翻转](docs/native-spectroscopy-meridian-flip.md) ·
+[实时光谱提取预览](docs/live-spectrum-preview.md) ·
 [SEP 检测与主镜对焦](docs/sep-main-mirror-focus-commissioning.md) ·
 [采集计划／曝光预算](docs/acquisition-plan.md) ·
 [操作员 SOP](docs/observatory-automation-sop.md) ·
@@ -29,7 +32,19 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-09-16 晚间收口](docs/closeout-2026-09-16-evening.md)汇总已安装的 **0.4.0.209**：
+[2026-10-03 收口](docs/closeout-2026-10-03.md)汇总 **0.4.0.210–223**：
+N.I.N.A. 原生整夜／目标序列和光谱专用翻转触发器、复用后处理的实时光谱预览、
+有界定位／导星／ATR 温控恢复，以及持久化完成后的通知。
+已安装 **0.4.0.223** 与本次重建的 41 个发布文件完全一致；
+**2,387 项 .NET、75 项后处理测试及 Ruff 通过**。
+用户归位硬件后，本轮仅释放相机并正常退出 N.I.N.A.，没有另起观测或移动设备，也未重启软件。
+
+历史 **.220** 有一轮监督观测完成，接受三张 600 秒科学帧，其中一张复用最终试拍。
+该证据不代表 .223 实天验收：最后的 .223 EW Lac 轮次在导星视场获取阶段被取消，
+未进入新增修正窗口。新版完整天空流程、原生多目标／翻转／自动整夜收口及无人值守安全
+仍须分别验收，不能以测试或旧版本成功替代。
+
+历史[2026-09-16 晚间收口](docs/closeout-2026-09-16-evening.md)汇总当时安装的 **0.4.0.209**：
 主镜焦位改为每轮独立锁定，不再因轮次间调焦错误失效 UVEX 内部校准；保留目录／短帧
 交接，区分 PHD2 丢星与真正取帧超时，并将 LED 可见狭缝长度与入缝锚点分开显示。
 最终 **2,152 项 .NET、66 项后处理测试通过**，93 个 UI 场景和三处已安装的 N.I.N.A.

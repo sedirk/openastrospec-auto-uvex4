@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -137,6 +138,12 @@ public static class ObservationStaticTextLocalization
                 continue;
             }
 
+            // Runtime-rendered controls own their language and text lifecycle.
+            // Do not cache their first idle snapshot as a translatable literal.
+            if (current.ReadLocalValue(IsEnabledProperty) is false)
+            {
+                continue;
+            }
             ApplyElement(current, culture);
 
             if (current is FrameworkElement or FrameworkContentElement)
@@ -231,7 +238,10 @@ public static class ObservationStaticTextLocalization
 
     private static void ApplyElement(DependencyObject element, CultureInfo culture)
     {
-        if (element is TextBlock)
+        // Native N.I.N.A. ComboBoxItem templates wrap a ContentPresenter in
+        // an InlineUIContainer. Setting Text (even to "") destroys that child
+        // and makes every popup choice blank. Localize its descendants instead.
+        if (element is TextBlock text && !text.Inlines.Any(inline => inline is not Run))
         {
             ApplyProperty(element, TextBlock.TextProperty, culture);
         }

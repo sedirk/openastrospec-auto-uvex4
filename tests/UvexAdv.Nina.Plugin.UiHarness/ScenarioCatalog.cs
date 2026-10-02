@@ -24,6 +24,15 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("atr-cooling-wait", 1040, 800, CoolingWait()),
+        new("atr-cooling-wait-narrow", 540, 800, CoolingWait()),
+        new("native-meridian", 660, 270, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyMeridianPanel", AlternateViewModel=new NativeMeridianMock() },
+        new("native-meridian-narrow", 420, 340, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyMeridianPanel", AlternateViewModel=new NativeMeridianMock() },
+        new("native-meridian-en", 540, 340, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyMeridianPanel", AlternateViewModel=new NativeMeridianMock { FlipStatus="Simulation: mount verified; accepted 2/5; reacquiring field / slit / guiding." }, Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-failure-popup", 470, 160, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeFailurePolicySelector", AlternateViewModel=new NativeFailurePolicyMock() },
+        new("native-failure-popup-en", 470, 160, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeFailurePolicySelector", AlternateViewModel=new NativeFailurePolicyMock { FailurePolicy=UvexAdv.Nina.Plugin.SpectroscopyTargetFailurePolicy.SkipQualityFailure }, Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-night", 960, 420, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-night-narrow", 540, 540, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
         new("workflow-idle", 1180, 800, ObservationDockMockViewModel.WorkflowState("idle")),
         new("workflow-running", 1180, 800, ObservationDockMockViewModel.WorkflowState("running")),
         new("workflow-fallback", 1040, 850, ObservationDockMockViewModel.WorkflowState("fallback")),
@@ -116,9 +125,16 @@ public static class ScenarioCatalog
         new("recovering", 1180, 800, ObservationDockMockViewModel.Recovering()),
         new("atr-manual", 1280, 850, ObservationDockMockViewModel.AtrManual()),
         new("atr-live", 1040, 700, ObservationDockMockViewModel.AtrLive()),
+        new("atr-reduced", 1040, 750, ObservationDockMockViewModel.AtrLive(reduced: true)),
+        new("atr-reduced-narrow", 600, 720, ObservationDockMockViewModel.AtrLive(reduced: true)),
+        new("atr-reduced-missing", 1040, 750, ObservationDockMockViewModel.AtrLive(reduced: true, missing: true)),
         new("atr-levels", 1040, 700, ObservationDockMockViewModel.AtrLive()),
         new("atr-narrow", 640, 800, ObservationDockMockViewModel.AtrLive()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
+        new("post-calibration-pulse", 1180, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
+        new("post-calibration-pulse-narrow", 760, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
+        new("post-calibration-blend", 1180, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure(blend: true)),
+        new("post-calibration-blend-narrow", 760, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure(blend: true)),
         new("failure-en", 1180, 800, ObservationDockMockViewModel.EnglishFailure())
         {
             Culture = CultureInfo.GetCultureInfo("en-US")
@@ -176,6 +192,20 @@ public static class ScenarioCatalog
     ];
 
     public static IReadOnlyCollection<string> Names => Scenarios.Select(item => item.Name).ToArray();
+
+    private static ObservationDockMockViewModel CoolingWait() => new()
+    {
+        IsRunActive = true,
+        StateText = "自动推进",
+        StatusMessage = "等待相机制冷，尚无 ATR 试拍帧；并行测光不代表光谱已经开始。",
+        CurrentStageText = "光谱试拍与曝光选择",
+        NextStageText = "科学曝光与监测",
+        CurrentOperationText = AtrCoolingRecoveryPolicy.DescribeWait(
+            AtrCoolingReadinessPolicy.Evaluate(new AtrCoolingTelemetry(true, "atr", true, true, 0, -10, 60), "atr", -10),
+            TimeSpan.FromMinutes(7), 0, CultureInfo.GetCultureInfo("zh-CN")),
+        ProgressPercent = 73,
+        ProgressSummary = "总阶段 8/11 · 73%",
+    };
 
     public static IReadOnlyList<ScreenshotScenario> Select(string? name) =>
         name is null
@@ -940,6 +970,29 @@ public sealed class ObservationDockMockViewModel
         OperatorNotice = "恢复不会重置运动、动作、时间或回程预算。",
     };
 
+    public static ObservationDockMockViewModel PostCalibrationPulseFailure(bool blend = false)
+    {
+        const string code = "POST_CALIBRATION_G3_REACQUISITION_BLOCKED";
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit,
+            GateResult.Unknown(code, blend
+                ? "PHD2 recalibration passed: G3_CATALOG_SHORT_POSITION_UNCONFIRMED: G3_SEP_PARENT_BLEND_UNRESOLVED: Both parents split."
+                : "PHD2 recalibration passed, but the mandatory fresh G3 acquisition route did not: G3_SEARCH_PULSE_GUIDING_ACTIVE: The mount reports active pulse guiding.",
+                blend ? new Dictionary<string,double> { ["shortPositionFrames"]=5,["maximumShortPositionFrames"]=5 } : null),
+            CultureInfo.GetCultureInfo("zh-CN"));
+        return new()
+        {
+            StateText = "已暂停，需要处理", IsSimulationMode = true, HasFailure = true,
+            SelectedWorkspaceTabIndex = 5, CurrentStageText = "PHD2 精确送入狭缝中点",
+            ProgressPercent = 45, ProgressSummary = "总体阶段 5/11 · 45%",
+            LastFailureCode = code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = "PHD2 精确送入狭缝中点 · 校准已通过，交接受阻",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            OperatorNotice = "离线故障重放；没有连接设备或发出动作。",
+        };
+    }
+
     public static ObservationDockMockViewModel Failure() => new()
     {
         ModeText = "自动观测：真实设备",
@@ -1021,7 +1074,7 @@ public sealed class ObservationDockMockViewModel
         G3PreviewMetadata = "22:17:05 UTC · 2 s · four bounded selections",
     };
 
-    public static ObservationDockMockViewModel AtrLive() => new()
+    public static ObservationDockMockViewModel AtrLive(bool reduced = false, bool missing = false) => new()
     {
         ModeText = "自动观测：真实设备 · 有人弱监督",
         IsSimulationMode = false,
@@ -1033,8 +1086,8 @@ public sealed class ObservationDockMockViewModel
         SelectedWorkspaceTabIndex = 4,
         SelectedPreviewTabIndex = 2,
         IsManualAtrToolsAvailable = false,
-        AtrPreviewImage = PreviewImageFactory.CreateAtrSpectrum(),
-        AtrPreviewCaption = "科学帧 1/3 · 60 s · 峰值 36,240 ADU · 截断 0.00% · 信号指标 114.7",
+        AtrPreviewImage = reduced ? PreviewImageFactory.CreateReducedAtrSpectrum(missing) : PreviewImageFactory.CreateAtrSpectrum(),
+        AtrPreviewCaption = reduced ? (missing ? "本帧未检测到可靠谱带；后期预览不可用，未伪造提取成功。" : "科学帧 1/3 · 后期预览 aspired-tophat；清理候选 1 像素，缺测 10 列；未做暗场/平场/波长/响应标定。") : "科学帧 1/3 · 60 s · 峰值 36,240 ADU · 截断 0.00% · 信号指标 114.7",
         AtrManualCameraStatus = "已连接并匹配：光谱相机。",
         OperatorNotice = "离线界面验收；没有连接设备或曝光。",
     };

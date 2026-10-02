@@ -25,7 +25,10 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-09-16-evening.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-03.md) ·
+[native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
+[spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
+[live spectrum preview](docs/live-spectrum-preview.md) ·
 [SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
 [acquisition plan / exposure budget](docs/acquisition-plan.md) ·
 [operator SOP](docs/observatory-automation-sop.md) ·
@@ -34,7 +37,23 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [September 16 evening closeout](docs/closeout-2026-09-16-evening.md) covers
+The [October 3 closeout](docs/closeout-2026-10-03.md) consolidates **0.4.0.210–223**:
+native night/target sequencing and the dedicated spectroscopy meridian trigger,
+reduction-backed live previews, bounded acquisition/guiding/ATR cooling recovery,
+and durable-completion notifications. The installed **0.4.0.223** package matches
+all 41 rebuilt deployment files. **2,387 .NET tests, 75 reduction tests and Ruff
+passed**. After the operator stowed the hardware, this software-only closeout
+released the cameras and normally exited N.I.N.A.; no new observation or motion
+was started, and N.I.N.A. was not restarted.
+
+A supervised **.220** run completed with three accepted 600-second frames,
+including one reused final trial. That is version-specific evidence, not .223
+acceptance. The last .223 EW Lac run was cancelled during guide-field acquisition;
+it did not reach the new correction-window policy. Complete .223 sky acquisition,
+native multi-target/meridian/automatic night closure and unattended safety remain
+separate commissioning requirements.
+
+The historical [September 16 evening closeout](docs/closeout-2026-09-16-evening.md) covers
 installed **0.4.0.209**: run-local main-telescope focus independent of UVEX internal
 calibration, preserved catalogue/short-frame handoff, structured PHD2 star-loss
 handling, and measured LED-visible slit extent distinct from the placement anchor.

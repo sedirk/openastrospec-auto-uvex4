@@ -30,6 +30,14 @@ public sealed class CatalogShortPositionSourceSafetyTests
         Assert.Contains("previousCompletedUtc = capture.CompletedUtc",source);
         Assert.Contains("attempt <= exposurePolicy.MaximumFrames",source);
         Assert.Contains("exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt)",source);
+        Assert.Contains("AfterConfirmation(confirmation, measurement, attempt, frame.SaturationLevel)",source);
+        Assert.Contains("blendExposureIncreased,",source);
+        Assert.Contains("shortBlendExposureIncreases",source);
+        Assert.Contains("AfterUnmeasured(measurement, attempt", source);
+        Assert.Contains("G3ShortExposurePolicy.RecognitionPeak(frame", source);
+        Assert.Contains("field.Image?.MetaData.Image.ExposureTime * 1000", source);
+        Assert.Contains("previous?.Gate.Disposition != GateDisposition.Passed", source);
+        Assert.Contains("signalExposureIncreased,", source);
         Assert.Contains("if (exposureChanged)",source);
         Assert.Contains("previousHash = previousFramePath = previousReceipt = null",source);
         Assert.Contains("nextExposurePolicy.MaximumFrames",source);
@@ -52,10 +60,10 @@ public sealed class CatalogShortPositionSourceSafetyTests
         var runner=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.cs"));
         Assert.Contains("RefineClippedCatalogPositionAsync(context, solvedField",runner);
         Assert.Contains("currentField.TargetIdentification.HasCatalogPositionRefinement",runner);
-        Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= placementPreset.CoarseHandoffResidualPixels",runner);
+        Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= Phd2HandoffResidualPixels(currentField, placementPreset)",runner);
         Assert.Contains("coarseResidualPixels + lastG3Field.TargetIdentification.CatalogPositionSpreadPixels",runner);
         var handoff=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.Handoff.cs"));
-        Assert.Contains("field.TargetIdentification.CatalogPositionSpreadPixels, preset.CoarseHandoffResidualPixels",handoff);
+        Assert.Contains("field.TargetIdentification.CatalogPositionSpreadPixels, Phd2HandoffResidualPixels(field, preset)",handoff);
         Assert.Contains("attempts.Count == 0 ? \"G3_SEARCH_NOT_STARTED_RETURNED\"",runner);
     }
 }

@@ -33,6 +33,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     private readonly UvexPluginSettings settings;
     private readonly RealObservationStageRunnerFactory realRunnerFactory;
     private SequencerStageBridge? activeBridge;
+    private CancellationTokenSource? targetLifetime;
     private bool useRealMode;
     private InputTarget target;
 
@@ -42,13 +43,17 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         INighttimeCalculator nighttimeCalculator,
         ObservationCoordinatorHost host,
         RealObservationStageRunnerFactory realRunnerFactory)
+        : this(profileService, nighttimeCalculator, host, realRunnerFactory, new UvexPluginSettings(profileService)) { }
+
+    internal UvexTargetObservationContainer(IProfileService profileService, INighttimeCalculator nighttimeCalculator,
+        ObservationCoordinatorHost host, RealObservationStageRunnerFactory realRunnerFactory, UvexPluginSettings settings)
         : base(new SequentialStrategy())
     {
         this.profileService = profileService;
         this.nighttimeCalculator = nighttimeCalculator;
         this.host = host;
         this.realRunnerFactory = realRunnerFactory;
-        settings = new UvexPluginSettings(profileService);
+        this.settings = settings;
         target = CreateTarget(profileService);
         AttachTarget(target);
         NighttimeData = nighttimeCalculator.Calculate(null);
@@ -78,6 +83,10 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         DeclinationDegrees = copy.DeclinationDegrees;
         Target.PositionAngle = copy.Target.PositionAngle;
         DurationMinutes = copy.DurationMinutes;
+        ScienceFrames = copy.ScienceFrames;
+        MaximumScienceAttempts = copy.MaximumScienceAttempts;
+        FixedExposureSeconds = copy.FixedExposureSeconds;
+        FailurePolicy = copy.FailurePolicy;
         NightSetupId = copy.NightSetupId;
         SiteLatitudeDegrees = copy.SiteLatitudeDegrees;
         SiteLongitudeDegreesEast = copy.SiteLongitudeDegreesEast;
@@ -158,6 +167,16 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     [JsonProperty]
     public double DurationMinutes { get; set; }
 
+    [JsonProperty] public int ScienceFrames { get; set; }
+    [JsonProperty] public int MaximumScienceAttempts { get; set; }
+    [JsonProperty] public double FixedExposureSeconds { get; set; }
+    [JsonProperty] public SpectroscopyTargetFailurePolicy FailurePolicy { get; set; }
+    [JsonIgnore] public IReadOnlyList<SpectroscopyFailurePolicyChoice> AvailableFailurePolicies => SpectroscopyFailurePolicyChoice.Choices;
+    [JsonIgnore] public string LastOutcome { get; private set; } = "未执行";
+
+    private NativeSequencePlan TargetSequencePlan() => new(ScienceFrames, MaximumScienceAttempts,
+        FixedExposureSeconds, LatitudeDegrees: SiteLatitudeDegrees, LongitudeDegrees: SiteLongitudeDegreesEast);
+
     [JsonProperty]
     public string NightSetupId { get; set; } = string.Empty;
 
@@ -215,6 +234,70 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        // The coordinator finishes each acquisition segment before a flip.
+        // Keep a target-wide token so native Interrupt also stops that handoff.
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (Interlocked.CompareExchange(ref targetLifetime, lifetime, null) is not null)
+            throw new InvalidOperationException("该光谱目标已有执行中的任务。");
+        try { await ExecuteOwnedAsync(progress, lifetime.Token).ConfigureAwait(false); }
+        finally { Interlocked.CompareExchange(ref targetLifetime, null, lifetime); }
+    }
+
+    private async Task ExecuteOwnedAsync(IProgress<ApplicationStatus> progress, CancellationToken token)
+    {
+        var night = Parent as UvexNightSequenceContainer;
+        if (night is { IsActive: false }) throw new InvalidOperationException("整夜容器没有取得执行权。");
+        if (night?.StopFollowingTargets == true)
+        {
+            LastOutcome = "未执行：本夜已停止。";
+            RaisePropertyChanged(nameof(LastOutcome));
+            return;
+        }
+        night?.BeginTarget(TargetName);
+        try
+        {
+            var scopeIssues = SpectroscopyMeridianFlipTrigger.ScopeIssues(this).ToArray();
+            if (scopeIssues.Length != 0) throw new InvalidOperationException(string.Join(" ", scopeIssues));
+            var scope = SpectroscopyMeridianFlipTrigger.InScope(this).ToArray();
+            var flip = scope.OfType<SpectroscopyMeridianFlipTrigger>().SingleOrDefault();
+            var flipConfiguration = flip?.ConfigurationKey;
+            if (flip is not null && !flip.Validate()) throw new InvalidOperationException(string.Join(" ", flip.Issues));
+            var nativePlan = night?.ApplyNight(TargetSequencePlan()) ?? TargetSequencePlan();
+            var realMode = UseRealMode;
+            void VerifyScope()
+            {
+                if (UseRealMode != realMode || flip?.ConfigurationKey != flipConfiguration ||
+                    !scope.SequenceEqual(SpectroscopyMeridianFlipTrigger.InScope(this)))
+                    throw new InvalidOperationException("目标的模式或翻转触发器作用域已改变；不继续启动曝光。");
+            }
+            NativeMeridianSession? meridian = realMode && flip is not null ? new(nativePlan, seconds =>
+            {
+                VerifyScope();
+                return flip.IsDue(seconds);
+            }) { VerifyScope = VerifyScope } : null;
+            // The second segment is a new production runner with no old optical
+            // state. The night retains the exclusive lease throughout the flip.
+            while (await ExecuteTargetAsync(progress, token, night, meridian, flip, flipConfiguration).ConfigureAwait(false))
+            {
+                token.ThrowIfCancellationRequested();
+                foreach (var item in Items) item.ResetProgress();
+            }
+            LastOutcome = "完成";
+        }
+        catch when (night is { HasRecordedCurrentTarget: true } && host.Dashboard.Run.State is ObservationRunState.Faulted or ObservationRunState.Cancelled)
+        {
+            // The original manifest/gate and stop readbacks have already been
+            // recorded by the night owner. Native child sequencing may proceed
+            // only when that owner explicitly accepted the quality skip.
+            LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" : "质量失败，已确认停止并跳过。";
+        }
+        finally { RaisePropertyChanged(nameof(LastOutcome)); }
+    }
+
+    private async Task<bool> ExecuteTargetAsync(IProgress<ApplicationStatus> progress, CancellationToken token,
+        UvexNightSequenceContainer? night, NativeMeridianSession? meridian = null,
+        SpectroscopyMeridianFlipTrigger? flip = null, string? flipConfiguration = null)
+    {
         NinaInstancePolicy.RequireMaster(settings);
         var authorization = ObservationAutomationPolicy.AuthorizeExecutionMode(
             UseRealMode,
@@ -236,18 +319,31 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
                     $"UVEX observation ended in {dashboard.Run.State}: {dashboard.Run.StatusMessage}"));
             }
         };
-        host.DashboardChanged += dashboardHandler;
-        ApplyStageStatuses(host.Dashboard);
         RealObservationStageRunner? realRunner = null;
         RealRunConfiguration? lockedConfiguration = null;
-        if (UseRealMode) lockedConfiguration = realRunnerFactory.CaptureConfiguration(settings);
-        var plan = BuildPlan(lockedConfiguration);
+        var sequencePlan = meridian?.RemainingPlan() ?? night?.ApplyNight(TargetSequencePlan()) ?? TargetSequencePlan();
+        if (UseRealMode)
+        {
+            lockedConfiguration = realRunnerFactory.CaptureConfiguration(settings);
+            night?.CheckConfiguration(lockedConfiguration);
+            lockedConfiguration = lockedConfiguration.WithSequencePlan(sequencePlan);
+        }
+        var plan = meridian?.TargetPlan is { } originalTarget
+            ? originalTarget with { ObservationRunId = Guid.NewGuid().ToString("N"), PlannedStartUtc = DateTimeOffset.UtcNow }
+            : BuildPlan(lockedConfiguration);
+        if (meridian is not null) meridian.TargetPlan ??= plan;
         IObservationStageRunner inner = UseRealMode
             ? realRunner = realRunnerFactory.Create(host, settings, progress, lockedConfiguration)
             : new SimulatedObservationStageRunner(host, Math.Clamp(SimulationStageMilliseconds, 250, 30_000), progress);
-        using var bridge = new SequencerStageBridge(inner);
+        if (realRunner is not null) realRunner.NativeMeridian = meridian;
+        using var bridge = new SequencerStageBridge(inner)
+        { EndRunOnGateFailure = night is not null, BoundaryGate = sequencePlan.StopGateNow };
         activeBridge = bridge;
-        var coordinatorRun = host.RunAsync(plan, bridge, token);
+        host.DashboardChanged += dashboardHandler;
+        ApplyStageStatuses(host.Dashboard);
+        var coordinatorRun = host.RunAsync(plan, bridge, token, night);
+        var continueAfterFlip = false;
+        string? boundaryFailure = null;
         try
         {
             // This is deliberately base.Execute: N.I.N.A.'s SequentialStrategy,
@@ -263,7 +359,36 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
                     $"UVEX coordinator ended in {host.Dashboard.Run.State}: {host.Dashboard.Run.StatusMessage}"));
             }
             await ninaSequenceRun.ConfigureAwait(false);
+            if (!bridge.HasCompletedFinalMarker && !coordinatorRun.IsCompleted)
+            {
+                // A native condition may end its block without executing every
+                // marker. Join the coordinator; never leave it waiting forever.
+                night?.StopAtNativeConditionBoundary();
+                host.Cancel();
+                bridge.Abort(new OperationCanceledException("Native sequence conditions ended the target block."));
+            }
             await coordinatorRun.ConfigureAwait(false);
+            if (meridian is not null && realRunner is not null && host.Dashboard.Run.State == ObservationRunState.Completed)
+            {
+                realRunner.RecordMeridianSegment(meridian, plan.ObservationRunId);
+                if (meridian.Requested)
+                {
+                    LastOutcome = $"中天翻转中 · 已接受 {meridian.Accepted}/{meridian.Original.ScienceFrames} 张，保留已用尝试 {meridian.Attempts} 次";
+                    RaisePropertyChanged(nameof(LastOutcome));
+                    try
+                    {
+                        await realRunner.PerformNativeMeridianFlipAsync(flip!, meridian, flipConfiguration!, token).ConfigureAwait(false);
+                        continueAfterFlip = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        boundaryFailure = $"NATIVE_MERIDIAN_HANDOFF_FAILED: {ex.Message}";
+                        LastOutcome = boundaryFailure;
+                        RaisePropertyChanged(nameof(LastOutcome));
+                        throw;
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -277,20 +402,32 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
             activeBridge = null;
             host.DashboardChanged -= dashboardHandler;
             ApplyStageStatuses(host.Dashboard);
-            if (realRunner is not null) await realRunner.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                if (night is not null && !continueAfterFlip) await night.RecordTargetAsync(TargetName, host.Dashboard, realRunner,
+                    FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure).ConfigureAwait(false);
+            }
+            finally { if (realRunner is not null) await realRunner.DisposeAsync().ConfigureAwait(false); }
         }
         var final = host.Dashboard.Run;
         if (final.State != ObservationRunState.Completed)
         {
             throw new InvalidOperationException($"UVEX Target Observation ended in {final.State}: {final.StatusMessage}");
         }
-        Report(progress, UseRealMode ? "UVEX Target Observation 真实流程完成" : "UVEX Target Observation 模拟完成", 1);
+        Report(progress, continueAfterFlip ? "翻转完成；重新执行定位/入缝并续拍剩余科学帧" :
+            UseRealMode ? "UVEX Target Observation 真实流程完成" : "UVEX Target Observation 模拟完成", continueAfterFlip ? 0 : 1);
+        return continueAfterFlip;
     }
 
     public override Task Interrupt()
     {
+        try { Volatile.Read(ref targetLifetime)?.Cancel(); }
+        catch (ObjectDisposedException) { /* The same target just completed. */ }
         activeBridge?.Abort(new OperationCanceledException("N.I.N.A. interrupted UVEX Target Observation."));
         host.Cancel();
+        // During the flip the segment dashboard is already Completed. Tell
+        // the night explicitly this is ordinary cancel, not normal closeout.
+        if (Parent is UvexNightSequenceContainer { IsActive: true } night) return night.Interrupt();
         return Task.CompletedTask;
     }
 
@@ -298,7 +435,9 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     {
         var childrenValid = base.Validate();
         Issues.Clear();
+        foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(this)) Issues.Add(issue);
         foreach (var issue in BuildPlan().Validate()) Issues.Add(issue);
+        foreach (var issue in TargetSequencePlan().Validate()) Issues.Add(issue);
         if (SimulationStageMilliseconds is < 250 or > 30_000)
         {
             Issues.Add("Simulation stage duration must be between 250 and 30000 milliseconds.");
@@ -385,6 +524,8 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         RightAscensionDegrees = settings.ObservationRightAscensionDegrees;
         DeclinationDegrees = settings.ObservationDeclinationDegrees;
         DurationMinutes = settings.ObservationDurationMinutes;
+        ScienceFrames = settings.AtrScienceFrameCount;
+        MaximumScienceAttempts = settings.AtrScienceMaximumAttempts;
         NightSetupId = settings.ObservationNightSetupId;
         SiteLatitudeDegrees = settings.ObservatoryLatitudeDegrees;
         SiteLongitudeDegreesEast = settings.ObservatoryLongitudeDegreesEast;
@@ -484,8 +625,23 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         foreach (var trigger in Triggers) trigger.AttachNewParent(this);
     }
 
+    [System.Runtime.Serialization.OnDeserializing]
+    private void ClearFactoryDefaultsForTemplate(System.Runtime.Serialization.StreamingContext context)
+    {
+        // N.I.N.A. clones a populated MEF prototype before Json.NET Populate.
+        // Without this, each template load appends another eleven markers.
+        Items.Clear(); Conditions.Clear(); Triggers.Clear();
+    }
+
+    [System.Runtime.Serialization.OnDeserialized]
+    private void ReattachTemplateChildren(System.Runtime.Serialization.StreamingContext context) => AttachChildren();
+
     private void ApplyStageStatuses(ObservationDashboardSnapshot dashboard)
     {
+        // SequentialStrategy selects CREATED children. Publishing RUNNING on
+        // a not-yet-dispatched marker races that selector and skips a stage.
+        // While bridged, native Run alone owns the executable child statuses.
+        if (activeBridge is not null) return;
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is not null && !dispatcher.CheckAccess())
         {

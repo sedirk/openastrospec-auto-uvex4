@@ -8,6 +8,44 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationUiPresentationTests
 {
     [Fact]
+    public void PostCalibrationNestedBlendShowsTheImageProblemAndUsedRetryWindow()
+    {
+        var gate=GateResult.Unknown("POST_CALIBRATION_G3_REACQUISITION_BLOCKED",
+            "PHD2 recalibration passed: G3_CATALOG_SHORT_POSITION_UNCONFIRMED: G3_SEP_PARENT_BLEND_UNRESOLVED: Both parents split.",
+            new Dictionary<string,double> { ["shortPositionFrames"]=5,["maximumShortPositionFrames"]=5 });
+        var p=ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit,gate,Chinese);
+        Assert.Contains("PHD2 校准已通过",p.Summary);
+        Assert.Contains("多个子峰",p.Summary);
+        Assert.Contains("5/5",p.AutomaticRecovery);
+        Assert.Contains("一次延长曝光",p.AutomaticRecovery);
+        Assert.DoesNotContain("没有经过审核",p.AutomaticRecovery);
+    }
+    [Fact]
+    public void PostCalibrationReacquisitionShowsPassedCalibrationAndActualPulseBlocker()
+    {
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit,
+            GateResult.Unknown("POST_CALIBRATION_G3_REACQUISITION_BLOCKED",
+                "PHD2 recalibration passed, but the mandatory fresh G3 acquisition route did not: G3_SEARCH_PULSE_GUIDING_ACTIVE: The mount reports active pulse guiding."),
+            CultureInfo.GetCultureInfo("zh-CN"));
+        Assert.Contains("校准已通过", issue.Summary);
+        Assert.Contains("导星脉冲正在执行", issue.Summary);
+        Assert.DoesNotContain("校准证据未通过", issue.Summary);
+        Assert.Contains("IsPulseGuiding", issue.Recommendation);
+        Assert.Contains("G3_SEARCH_PULSE_GUIDING_ACTIVE", issue.TechnicalDetails);
+    }
+
+    [Fact]
+    public void MountStopTimeoutIsNotPresentedAsCalibrationQualityFailure()
+    {
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit,
+            GateResult.Unknown(Phd2MountIdleWait.TimeoutCode, "Mount idle was not confirmed."),
+            CultureInfo.GetCultureInfo("zh-CN"));
+        Assert.Contains("等待上限", issue.Summary);
+        Assert.Contains("未重复校准", issue.AutomaticRecovery);
+        Assert.Contains("不要反复校准", issue.Recommendation);
+    }
+
+    [Fact]
     public void IdleDashboardMessageIsNotPresentedAsAnUnknownTechnicalState()
     {
         const string raw = "No observation is running.";

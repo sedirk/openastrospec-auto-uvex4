@@ -41,6 +41,28 @@ internal sealed record RealRunConfiguration(
     NightSetupRunBinding NightSetup,
     bool AllowSupervisedSlitQualityWarning = false)
 {
+    public NativeSequencePlan? SequencePlan { get; init; }
+
+    public RealRunConfiguration WithSequencePlan(NativeSequencePlan plan)
+    {
+        var issues = plan.Validate();
+        if (issues.Count > 0) throw new ArgumentException(string.Join(" ", issues), nameof(plan));
+        var configured = this with
+        {
+            SequencePlan = plan,
+            Atr = Atr with
+            {
+                ScienceFrameCount = plan.ScienceFrames,
+                MaximumScienceAttempts = plan.MaximumAttempts,
+                ExposureLadderSeconds = plan.FixedExposureSeconds > 0
+                    ? Array.AsReadOnly(new[] { plan.FixedExposureSeconds }) : Atr.ExposureLadderSeconds,
+                ProbeExposureSeconds = plan.FixedExposureSeconds > 0 ? plan.FixedExposureSeconds : Atr.ProbeExposureSeconds,
+            },
+        };
+        return configured with { ActionConfigurationSha256 = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { Actions = configured.ToActionPayload(), Sequence = plan })))) };
+    }
+
     public static RealRunConfiguration Capture(
         UvexPluginSettings settings,
         PlateSolverRunConfiguration plateSolver,
@@ -300,7 +322,11 @@ internal sealed record RealRunConfiguration(
         string currentNinaImageFilePattern,
         out string actualSha256)
     {
-        try { actualSha256 = Capture(settings, currentPlateSolver, currentNinaImageFilePattern).ActionConfigurationSha256; }
+        try
+        {
+            var current = Capture(settings, currentPlateSolver, currentNinaImageFilePattern);
+            actualSha256 = (SequencePlan is null ? current : current.WithSequencePlan(SequencePlan)).ActionConfigurationSha256;
+        }
         catch { actualSha256 = string.Empty; return false; }
         return string.Equals(ActionConfigurationSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
     }
@@ -333,6 +359,7 @@ internal sealed record RealRunConfiguration(
                 currentPlateSolver,
                 currentNinaImageFilePattern,
                 currentEnvironmentDevices);
+            if (SequencePlan is not null) current = current.WithSequencePlan(SequencePlan);
             actualSha256 = current.ActionConfigurationSha256;
             differenceSummary = DescribeActionDifferences(current);
             return string.Equals(ActionConfigurationSha256, actualSha256, StringComparison.OrdinalIgnoreCase);

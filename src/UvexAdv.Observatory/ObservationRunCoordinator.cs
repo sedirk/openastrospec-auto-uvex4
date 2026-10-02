@@ -1,5 +1,11 @@
 namespace UvexAdv.Observatory;
 
+/// <summary>Native night sequences must terminate failed targets instead of waiting forever.</summary>
+public interface IObservationTerminalGatePolicy
+{
+    bool EndRunOnGateFailure { get; }
+}
+
 public interface IObservationStageRunner
 {
     Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken cancellationToken);
@@ -230,6 +236,16 @@ public sealed class ObservationRunCoordinator : IDisposable
 
                 if (!result.CanAdvance)
                 {
+                    if (runner is IObservationTerminalGatePolicy { EndRunOnGateFailure: true })
+                    {
+                        // Stop-only cleanup. The night owner separately decides
+                        // whether checked idle permits another target or closeout.
+                        // Keep the original gate and failed target, never call it success.
+                        await runner.OnCancelledAsync(context, cancellationToken).ConfigureAwait(false);
+                        SetState(plan.ObservationRunId, ObservationRunState.Faulted, stage, null,
+                            result.Gate.Message, result.Gate.Message, result.Gate.Code, stageIndex);
+                        return;
+                    }
                     await PauseForAttentionAsync(plan, runner, context, stage, result.Gate.Message, result.Gate.Code, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
@@ -341,6 +357,8 @@ public sealed class ObservationRunCoordinator : IDisposable
         string code,
         CancellationToken cancellationToken)
     {
+        if (runner is IObservationTerminalGatePolicy { EndRunOnGateFailure: true })
+            throw new InvalidOperationException($"{code}: {reason}");
         lock (sync)
         {
             pauseRequested = true;

@@ -292,7 +292,7 @@
           <DockPanel>
             <TextBlock x:Name="SpectrumOrientationNote" DockPanel.Dock="Right" Foreground="#94A3B8" Margin="10,0,0,0" />
             <TextBlock x:Name="SpectrumTitle" Foreground="#7DD3FC" TextWrapping="Wrap"
-                       ToolTip="空间方向抽样平均，仅诊断；图像拉伸不改变曲线。蓝端和红端以 Night Setup 为准。" />
+                       ToolTip="只读诊断预览：沿谱带提取并扣除天空；可用时复用后期引擎清理及提取。灰线为未清理孔径对照。缺测处断线；无波长/响应标定，不参与曝光验收。图像拉伸不改变曲线。" />
           </DockPanel>
           <Image x:Name="SpectrumImageElement" Height="90" Margin="0,4,0,0" Stretch="Fill" />
         </StackPanel>

@@ -69,6 +69,10 @@ public static partial class ObservationUiPresentation
             ["shortExposureMilliseconds"] = "本帧短曝光（毫秒）",
             ["nextShortExposureMilliseconds"] = "后续短曝光（毫秒）",
             ["shortExposureReductions"] = "饱和降曝光次数",
+            ["shortBlendExposureIncreases"] = "分裂星像延长曝光次数",
+            ["shortSignalExposureIncreases"] = "未检出目标增曝光次数",
+            ["shortRecognitionPeakAdu"] = "识别区原始峰值（ADU）",
+            ["shortSignalExposureCeilingMilliseconds"] = "信号复核曝光上限（毫秒）",
             ["sepSaturatedRoiComponents"] = "识别区饱和星像分量数",
             ["sepMaximumRoiSaturationFraction"] = "星像最大饱和比例（0–1）",
             ["sepSaturatedRoiPeakAdu"] = "饱和星像峰值（ADU）",
@@ -446,6 +450,9 @@ public static partial class ObservationUiPresentation
     {
         var description = effectiveCode switch
         {
+            "POST_CALIBRATION_G3_REACQUISITION_BLOCKED" => "PHD2 校准已通过，但校准后重新获取目标失败；不是校准质量未通过，请查看原始获取失败原因",
+            "G3_SEARCH_PULSE_GUIDING_ACTIVE" => "赤道仪仍报告导星脉冲正在执行；未启动新的 G3 获取或定位移动",
+            "PHD2_STOP_MOUNT_IDLE_TIMEOUT" => "PHD2 已停止采集，但赤道仪导星脉冲结束及连续静止读回未在等待上限内确认；未重新取场或移动",
             "STAGE_EXCEPTION" => "当前阶段发生未分类异常，流程已在动作边界停止",
             "PHD2_GUIDING_FRAME_TIMEOUT" => "PHD2 未在有界等待内交付新的导星帧，不能确认当前目标位置；这不是目标太暗或导星精度不合格的判定",
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
@@ -498,6 +505,7 @@ public static partial class ObservationUiPresentation
             "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" => "G3 邻场搜索未找到可接受目标，赤道仪已返回保存的搜索起点",
             "G3_SEARCH_NOT_STARTED_RETURNED" => "邻场搜索尚未执行：首步前置检查未通过，赤道仪已确认返回保存的起点；请查看预算数值与原始原因，不是已搜索但未找到目标",
             "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" => ShortPositionIssue(raw),
+            "G3_SEP_PARENT_BLEND_UNRESOLVED" => "短曝光星像持续被 SEP 分成多个子峰；位置接近，但还不能排除邻星混叠，未把整个混合光斑直接当作目标",
             "G3_MOTION_CRASH_RETURN_BLOCKED" => raw.Contains("G3_SEARCH_PIER_SIDE_CHANGED", StringComparison.Ordinal)
                 ? "上轮回程记录与赤道仪当前侧别不同；不能执行跨侧旧位移，尚未确认旧回程到位。不是哈希不一致或星点识别失败"
                 : "上轮回程尚未取得到位确认；请查看原始回程原因，不能通过重启直接视为完成",
@@ -512,6 +520,7 @@ public static partial class ObservationUiPresentation
             "G3_DESTINATION_PIER_SIDE_CHANGE" => "驱动预测目的地会改变赤道仪侧别；未发送跨侧转向，旧运动账本保留",
             "G3_DESTINATION_PIER_SIDE_QUERY_FAILED" => "赤道仪目的地侧别查询失败；尚未发送本次转向，请查看驱动原始错误",
             "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已返回起点，没有继续邻场搜索",
+            "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED" => "目标已确认，但小幅修正后的实测位置未收敛；已返回起点，不再重复邻场搜索。请核对赤道仪的小幅运动响应及回差",
             "G3_MOTION_RETURN_INTERMEDIATE_RESIDUAL_LIMIT" => "G3 回原中间段未进入严格 2″ 命令包络；已保存 fresh 读回并停止后续回程段",
             "G3_GUIDING_RECOVERY_STOP_CHANGED" or "G3_GUIDING_RECOVERY_STOP_REQUIRED" => "导星中断后的停止证明缺失或已失效；为避免与 PHD2 同时驱动赤道仪，没有发送回程",
             "G3_GUIDING_RECOVERY_CONTEXT_INVALID" or "G3_GUIDING_RECOVERY_LEDGER_CHANGED" or "G3_GUIDING_RECOVERY_OWNER_CHANGED" => "导星后回程的设备身份或原运动账本已改变；没有覆盖账本或接续运动",
@@ -541,6 +550,12 @@ public static partial class ObservationUiPresentation
             "UVEX_SLIT_ILLUMINATION_ON_UNVERIFIED" => "狭缝定位 LED 的开启命令已经完成，但有界状态回读仍未确认开启；未采集任何 ON 帧",
             "NINA_EQUIPMENT_CONNECT_EXCEPTION" => "N.I.N.A. 设备连接阶段发生异常，尚未取得完整身份读回",
             "ATR_NOT_CONNECTED" or "ATR_CONNECT_FAILED" => "ATR585M 未连接或连接尝试失败，不能开始光谱曝光",
+            "ATR_COOLING_RECOVERY_EXHAUSTED" => "ATR 已重新设温并重连同一相机各一次，温度读回仍无改善；未开始光谱曝光",
+            "ATR_SCIENCE_TEMPERATURE_TIMEOUT" => "ATR 等待制冷超时，尚未得到连续稳定的实测温度；未开始光谱曝光",
+            "ATR_COOLING_RECOVERY_CAMERA_BUSY" => "ATR 正在曝光、读出或被其他任务占用；未重连、未中断采集",
+            "ATR_COOLING_RECOVERY_OWNER_CHANGED" => "ATR 或当前 Profile 的设备身份已改变；未自动切换设备",
+            "ATR_COOLING_FRESH_READ_FAILED" => "ATR 当前拥有者的实时温度读回失败；未用缓存温度放行曝光",
+            _ when effectiveCode.StartsWith("ATR_COOLING_RECOVERY_", StringComparison.Ordinal) => "ATR 空闲制冷恢复未完成；未开始曝光，请查看原始连接/停止确认原因",
             "TELESCOPE_NOT_CONNECTED" or "TELESCOPE_CONNECT_FAILED" => "赤道仪未连接或连接尝试失败，不能转向或修正",
             "TELESCOPE_TRACKING_ENABLE_TIMEOUT" => "已请求恒星时跟踪，但在规定时间内没有得到启用读回",
             "TELESCOPE_TRACKING_ENABLE_FAILED" => "恒星时跟踪启用失败，目录转向尚未开始",
@@ -563,6 +578,8 @@ public static partial class ObservationUiPresentation
             _ => "当前质量门未通过；程序没有把不确定状态当作成功",
         };
 
+        if (outerCode == "POST_CALIBRATION_G3_REACQUISITION_BLOCKED" && effectiveCode != outerCode)
+            description = "PHD2 校准已通过，校准后重新获取目标受阻：" + description;
         var nested = !string.Equals(outerCode, effectiveCode, StringComparison.Ordinal)
             ? $"（内部代码 {effectiveCode}）"
             : string.Empty;
@@ -604,15 +621,20 @@ public static partial class ObservationUiPresentation
 
     private static string Recovery(ObservationStage stage, GateResult gate, bool chinese)
     {
-        if (gate.Code == "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" &&
+        if (gate.Code == Phd2MountIdleWait.TimeoutCode)
+            return chinese
+                ? "已在同一运行预算内有界等待读回；未重复校准、重启设备、重置运动账本或忽略正在执行的脉冲。"
+                : "Readbacks were awaited within a bounded handoff and the original run budget; no recalibration, device restart, ledger reset or active-pulse bypass was performed.";
+        if ((gate.Code == "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" ||
+             EffectiveCode(gate.Code, gate.Message) == "G3_SEP_PARENT_BLEND_UNRESOLVED") &&
             gate.Metrics?.TryGetValue("shortPositionFrames", out var frames) == true)
         {
             var used = frames.ToString("0", CultureInfo.InvariantCulture);
             var limit = gate.Metrics.TryGetValue("maximumShortPositionFrames", out var maximum)
                 ? maximum.ToString("0", CultureInfo.InvariantCulture) : G3ShortPositionMeasurementPolicy.MaximumFrames.ToString();
             return chinese
-                ? $"本阶段已记录 {used}/{limit} 张短曝光复核帧；图像不足可有界补拍，饱和可有界降曝光，降档后须重新取得两张一致新帧。此次仍未获可靠位置，已停止；未移动、未重新解算、未重置运动预算。"
-                : $"This stage recorded {used}/{limit} short confirmation frames. Image-only retries and saturation exposure reductions are bounded; a changed exposure requires a new matching pair. No reliable position was confirmed, so it stopped without motion, repeat solving or motion-budget reset.";
+                ? $"本阶段已记录 {used}/{limit} 张位置复核帧；可有界补拍、饱和降曝光，未检出且有余量时增曝光，持续分裂可一次延长曝光；换档后须重新取得两张一致新帧，混叠检查不跳过。此次仍未获可靠位置，已停止；未移动、未重新解算、未重置运动预算。"
+                : $"This stage recorded {used}/{limit} position confirmation frames. Bounded retries may reduce saturated exposures, increase unmeasured exposures with raw headroom, or once lengthen a persistently split exposure; a new pair and unchanged blend checks are required. No reliable position was confirmed; no motion, repeat solve or motion-budget reset.";
         }
         var plan = ObservationAutomaticRecoveryPolicy.For(stage, gate);
         if (plan.IsRecoverable)
@@ -713,6 +735,14 @@ public static partial class ObservationUiPresentation
     private static string Recommendation(ObservationStage stage, string outerCode, string effectiveCode, bool chinese)
     {
         var code = effectiveCode;
+        if (code is "G3_SEARCH_PULSE_GUIDING_ACTIVE" or Phd2MountIdleWait.TimeoutCode)
+            return chinese
+                ? "查看 PHD2 停止回执、赤道仪 IsPulseGuiding / Slewing 读回及驱动脉冲错误。只有本轮停止身份仍有效、导星脉冲结束且静止读回通过后才能重取目标；不要反复校准或忽略运动标志。"
+                : "Inspect the PHD2 stop receipt, mount IsPulseGuiding / Slewing readbacks and driver pulse errors. Reacquire only after the same stopped-owner identity and idle mount are confirmed; do not recalibrate repeatedly or ignore motion flags.";
+        if (outerCode == "POST_CALIBRATION_G3_REACQUISITION_BLOCKED")
+            return chinese
+                ? "校准本身已通过。查看内部 G3 获取失败代码、新帧、目标身份及原运动预算；不要将重新获取失败误当成需要再次校准。"
+                : "Calibration itself passed. Inspect the inner G3 acquisition code, fresh frame, target identity and original motion budget; reacquisition failure does not by itself require recalibration.";
         if (code is "G3_MOTION_CRASH_RETURN_BLOCKED" or "G3_MOTION_CROSS_PIER_ORIGIN_UNCONFIRMED")
             return chinese
                 ? "查看上轮回程原始原因，以及当前侧别、起点残差和读回漂移。新一轮启动只在最后绝对回程已稳定到位时自动结束旧记录；否则需要人工确认设备位置并选择恢复方式，不能靠重启或删除账本绕过，也不需要为此重调星点检测。"
@@ -764,6 +794,7 @@ public static partial class ObservationUiPresentation
     {
         if (string.IsNullOrWhiteSpace(raw) || outerCode is not (
                 "STAGE_EXCEPTION" or
+                "POST_CALIBRATION_G3_REACQUISITION_BLOCKED" or
                 "PHD2_SLIT_PLACEMENT_FAILED_SAFE")) return outerCode;
         var candidates = MachineCodeRegex().Matches(raw)
             .Select(match => match.Value)

@@ -67,9 +67,13 @@ internal static class AtrCoolingReadinessPolicy
         {
             return GateResult.Unknown("ATR_COOLING_UNSUPPORTED", "The connected ATR585M does not report controllable cooling.");
         }
+        var metrics = new Dictionary<string, double> { ["targetTemperatureC"] = targetTemperatureC };
+        if (double.IsFinite(telemetry.TemperatureC)) metrics["temperatureC"] = telemetry.TemperatureC;
+        if (double.IsFinite(telemetry.TemperatureSetPointC)) metrics["temperatureSetPointC"] = telemetry.TemperatureSetPointC;
+        if (double.IsFinite(telemetry.CoolerPowerPercent)) metrics["coolerPowerPercent"] = telemetry.CoolerPowerPercent;
         if (!telemetry.CoolerOn)
         {
-            return GateResult.Unknown("ATR_COOLER_OFF", "ATR585M cooler is not on.");
+            return GateResult.Unknown("ATR_COOLER_OFF", "ATR585M cooler is not on.", metrics);
         }
         if (!double.IsFinite(telemetry.TemperatureC) ||
             !double.IsFinite(telemetry.TemperatureSetPointC) ||
@@ -78,22 +82,15 @@ internal static class AtrCoolingReadinessPolicy
         {
             return GateResult.Unknown(
                 "ATR_COOLING_TELEMETRY_INCOHERENT",
-                "ATR585M temperature, set-point or cooler-power telemetry is not coherent.");
+                "ATR585M temperature, set-point or cooler-power telemetry is not coherent.", metrics);
         }
         if (Math.Abs(telemetry.TemperatureSetPointC - targetTemperatureC) > SetPointToleranceC)
         {
             return GateResult.Unknown(
                 "ATR_COOLING_SETPOINT_NOT_APPLIED",
-                $"ATR585M reports set-point {telemetry.TemperatureSetPointC:F2} °C; waiting for commanded {targetTemperatureC:F2} °C.");
+                $"ATR585M reports set-point {telemetry.TemperatureSetPointC:F2} °C; waiting for commanded {targetTemperatureC:F2} °C.", metrics);
         }
 
-        var metrics = new Dictionary<string, double>
-        {
-            ["temperatureC"] = telemetry.TemperatureC,
-            ["temperatureSetPointC"] = telemetry.TemperatureSetPointC,
-            ["coolerPowerPercent"] = telemetry.CoolerPowerPercent,
-            ["targetTemperatureC"] = targetTemperatureC,
-        };
         return Math.Abs(telemetry.TemperatureC - targetTemperatureC) <= TemperatureToleranceC
             ? GateResult.Pass(
                 "ATR_SCIENCE_TEMPERATURE_READY",

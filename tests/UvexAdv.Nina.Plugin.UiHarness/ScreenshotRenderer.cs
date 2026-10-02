@@ -32,6 +32,8 @@ public sealed record ScreenshotRenderResult(
     public WorkflowLayoutDiagnostics? WorkflowLayout { get; init; }
     public AdvancedLayoutDiagnostics? AdvancedLayout { get; init; }
     public PreparationLayoutDiagnostics? PreparationLayout { get; init; }
+    public IReadOnlyList<string> NativePopupTexts { get; init; } = [];
+    public bool NativeSelectionRoundTrips { get; init; }
 }
 
 public sealed record WorkflowLayoutDiagnostics(int NodeCount, int ExpanderCount,
@@ -122,6 +124,14 @@ public static class ScreenshotRenderer
         host.SetValue(TextElement.ForegroundProperty, new SolidColorBrush(Color.FromRgb(226, 232, 240)));
         host.SetValue(TextElement.FontFamilyProperty, new FontFamily("Segoe UI"));
         host.Resources.MergedDictionaries.Add(OfflineNightTheme.Create());
+        if (scenario.TemplateKey == "NativeFailurePolicySelector")
+        {
+            // Load the installed N.I.N.A. template, including its TextBlock +
+            // InlineUIContainer wrapper. Default WPF ComboBox styles hid this bug.
+            host.Resources.MergedDictionaries.Add(new ResourceDictionary
+            { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/ComboBox.xaml") });
+            ((ContentControl)host.Child).VerticalContentAlignment = VerticalAlignment.Top;
+        }
 
         BitmapSource bitmap;
         IReadOnlyList<string> visibleTexts = [];
@@ -132,6 +142,8 @@ public static class ScreenshotRenderer
         WorkflowLayoutDiagnostics? workflowLayout = null;
         AdvancedLayoutDiagnostics? advancedLayout = null;
         PreparationLayoutDiagnostics? preparationLayout = null;
+        IReadOnlyList<string> nativePopupTexts = [];
+        bool nativeSelectionRoundTrips = false;
         var window = new Window
         {
             Width = scenario.Width,
@@ -190,6 +202,35 @@ public static class ScreenshotRenderer
                 96,
                 PixelFormats.Pbgra32);
             target.Render(host);
+            if (scenario.TemplateKey == "NativeFailurePolicySelector")
+            {
+                var combo = Descendants<ComboBox>(host).Single();
+                var model = (NativeFailurePolicyMock)scenario.AlternateViewModel!;
+                var original = model.FailurePolicy;
+                combo.SelectedValue = SpectroscopyTargetFailurePolicy.SkipQualityFailure;
+                combo.GetBindingExpression(System.Windows.Controls.Primitives.Selector.SelectedValueProperty)!.UpdateSource();
+                nativeSelectionRoundTrips = model.FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure;
+                combo.SelectedValue = SpectroscopyTargetFailurePolicy.EndNight;
+                combo.GetBindingExpression(System.Windows.Controls.Primitives.Selector.SelectedValueProperty)!.UpdateSource();
+                nativeSelectionRoundTrips &= model.FailurePolicy == SpectroscopyTargetFailurePolicy.EndNight;
+                combo.SelectedValue = original;
+                combo.IsDropDownOpen = true;
+                PumpLoadedAndRender(window.Dispatcher);
+                var popup = (System.Windows.Controls.Primitives.Popup)combo.Template.FindName("Popup", combo);
+                var child = (FrameworkElement)popup.Child;
+                // Repeat localization just as the real host does on later loads.
+                ObservationStaticTextLocalization.LocalizeSubtree(child, scenario.Culture);
+                child.UpdateLayout();
+                nativePopupTexts = Descendants<TextBlock>(child).Where(x => x.IsVisible && !string.IsNullOrWhiteSpace(x.Text))
+                    .Select(x => x.Text).Distinct().ToArray();
+                var drawing = new DrawingVisual();
+                using (var context = drawing.RenderOpen())
+                {
+                    context.DrawRectangle(new VisualBrush(child), null, new Rect(14, 52, child.ActualWidth, child.ActualHeight));
+                }
+                target.Render(drawing);
+                combo.IsDropDownOpen = false;
+            }
             target.Freeze();
             bitmap = target;
             visibleTexts = Descendants<TextBlock>(host)
@@ -223,6 +264,8 @@ public static class ScreenshotRenderer
             WorkflowLayout = workflowLayout,
             AdvancedLayout = advancedLayout,
             PreparationLayout = preparationLayout,
+            NativePopupTexts = nativePopupTexts,
+            NativeSelectionRoundTrips = nativeSelectionRoundTrips,
         };
     }
 
@@ -578,6 +621,12 @@ internal static class OfflineNightTheme
         app.Resources["ProfileService"] = mock;
         app.Resources["ButtonBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(61, 209, 195));
         app.Resources["NotificationWarningBrush"] = new SolidColorBrush(Colors.Goldenrod);
+        app.Resources["PrimaryBrush"] = new SolidColorBrush(Color.FromRgb(226, 232, 240));
+        app.Resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(62, 89, 108));
+        app.Resources["BackgroundBrush"] = new SolidColorBrush(Color.FromRgb(31, 45, 52));
+        app.Resources["ButtonBackgroundSelectedBrush"] = new SolidColorBrush(Color.FromRgb(0, 145, 132));
+        app.Resources["ButtonForegroundBrush"] = app.Resources["PrimaryBrush"];
+        app.Resources["ButtonForegroundDisabledBrush"] = new SolidColorBrush(Colors.Gray);
         var dictionary = new ResourceDictionary { ["ProfileService"] = mock };
         app.Resources.MergedDictionaries.Add(dictionary); // Keep the weak-cache target alive for this render process.
         NINA.WPF.Base.Utility.SharedResourceDictionary.SharedDictionaries[

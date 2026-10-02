@@ -427,12 +427,7 @@ public partial class ObservationWorkflowView : UserControl
 
     private void OnCanvasMouseDown(object sender, MouseButtonEventArgs args)
     {
-        var source = args.OriginalSource as DependencyObject;
-        while (source is not null && source != GraphScroll)
-        {
-            if (source is Button || source is System.Windows.Controls.Primitives.ScrollBar) return;
-            source = VisualTreeHelper.GetParent(source);
-        }
+        if (!CanStartCanvasPan(args.OriginalSource as DependencyObject, GraphScroll)) return;
         FollowCheckBox.IsChecked = false;
         fitOnResize = false;
         panOrigin = args.GetPosition(GraphScroll);
@@ -441,6 +436,27 @@ public partial class ObservationWorkflowView : UserControl
         GraphScroll.CaptureMouse();
         GraphScroll.Cursor = Cursors.Hand;
         args.Handled = true;
+    }
+
+    internal static bool CanStartCanvasPan(DependencyObject? source, DependencyObject canvasBoundary)
+    {
+        // Text hit-testing can return a Run/Span (ContentElement), not a Visual.
+        // Walk its content ancestry before resuming the visual tree, otherwise
+        // clicking node text crashes the dispatcher or steals the button click.
+        while (source is not null && source != canvasBoundary)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase or
+                System.Windows.Controls.Primitives.ScrollBar or System.Windows.Documents.Hyperlink) return false;
+            source = source switch
+            {
+                ContentElement content => ContentOperations.GetParent(content) ??
+                    (content as FrameworkContentElement)?.Parent,
+                Visual or System.Windows.Media.Media3D.Visual3D => VisualTreeHelper.GetParent(source) ??
+                    LogicalTreeHelper.GetParent(source),
+                _ => LogicalTreeHelper.GetParent(source),
+            };
+        }
+        return source == canvasBoundary;
     }
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs args)

@@ -1,6 +1,41 @@
 # Known issues
 
-## Current closeout boundary (2026-09-16 evening, installed 0.4.0.209)
+## Current closeout boundary (2026-10-03, installed 0.4.0.223)
+
+The [October 3 closeout](closeout-2026-10-03.md) records the .210–.223 source,
+offline checks, installed-package equivalence and software-only shutdown.
+N.I.N.A. is **closed**, not running idle; no observation was resumed.
+
+- A supervised .220 catalogue-target run completed with three accepted 600-second
+  frames, one a reused final probe. Its warning-quality policy and version remain
+  attached to that result. The last .223 EW Lac run was cancelled during G3 field
+  acquisition; it did not exercise the new correction window or reach ATR science.
+- The .223 off-slit correction window only authorizes the next bounded small step
+  when fresh, identity-matched frames support a coherent endpoint. It does not
+  declare slit placement complete, extend the 300-second ledger or remove the
+  final tolerance. Full new-version sky acceptance remains pending.
+- Native multi-target nights, the dedicated spectroscopy meridian trigger and
+  automatic night closure have source/simulator/UI coverage, not completed real
+  multi-target, flip or fault-injected shutdown commissioning. Ordinary deep-sky
+  motion triggers are not interchangeable with the spectroscopy trigger. Weak
+  supervision cannot authorize roof closure; home is not park.
+- ATR bounded reconnect is only through its existing N.I.N.A. owner after idle
+  confirmation. A zero-temperature driver readback is not proof that the sensor
+  is actually at zero, nor authority to relabel previously rejected FITS.
+- Improved live extraction is a quick-look product, not a wavelength/response
+  calibrated spectrum or a science acceptance gate. A failed/missing Python
+  worker falls back visibly; raw inputs are preserved.
+- The .223 ATR manual single-frame panel instantiated at the cancelled/idle
+  boundary, but its heading still reported automatic-observation ownership.
+  Cancellation-to-caption refresh needs a separate check. No manual exposure was
+  started to test that cosmetic/availability discrepancy during closeout.
+- The last N.I.N.A. session contains ASCOM shutter-state and ToupTek setpoint errors
+  from the earlier user-started run. No XAML/BindingExpression/dispatcher exception
+  was found for this panel check; this is not a claim that the whole log is clean.
+- The earlier same-star autofocus failure, dual-N.I.N.A. worker acceptance,
+  calibrated spectroscopy and unattended certification remain separate open work.
+
+## Historical closeout boundary (2026-09-16 evening, installed 0.4.0.209)
 
 The [evening closeout](closeout-2026-09-16-evening.md) records .206–.209 source,
 saved-frame and no-motion LED checks, installation and idle native-panel checks.

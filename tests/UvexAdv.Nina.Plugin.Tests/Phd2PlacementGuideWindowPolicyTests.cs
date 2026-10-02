@@ -5,6 +5,18 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2PlacementGuideWindowPolicyTests
 {
+    [Fact]
+    public void Wr136UnfinishedLockWaitsBeforeAnotherCommandOrBudgetVeto()
+    {
+        foreach (var window in new double[][] { [13.99, 11.41, 13.44], [12.11, 11.93, 4.69], [10.52, 10.81, 12.10] })
+        {
+            Assert.True(Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(window, 2, true, true, "LOCK_SHIFT_STAGE_READY"));
+            Assert.True(Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(window, 2, true, false, "SLIT_LOCK_RETURN_CUMULATIVE_RESERVE"));
+        }
+        Assert.False(Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock([1.2, 1.9, 0.8], 2, true, true, "LOCK_SHIFT_STAGE_READY"));
+        Assert.False(Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock([12, 11, 13], 2, true, false, "G3_TARGET_IDENTITY_INVALID"));
+        Assert.False(Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock([12, 11, 13], 2, false, true, "LOCK_SHIFT_STAGE_READY"));
+    }
     private static SlitGeometry Slit(double angle = 0, double length = 410) =>
         new("run-led", new PixelPoint(817.595607783773, 430.3780275505807), angle, length, 3, 0.5, "guide", 1, 1);
 

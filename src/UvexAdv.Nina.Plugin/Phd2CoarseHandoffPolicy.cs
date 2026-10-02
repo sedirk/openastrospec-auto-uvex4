@@ -5,6 +5,43 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>Coarse-routing advice, not permission to send a lock or mount command.</summary>
 internal static class Phd2CoarseHandoffPolicy
 {
+    internal static double LimitToRemainingLedger(double initialRadius, Phd2LockShiftLimits limits,
+        double minimumStageScale, double residualGrowthAllowance,
+        int attemptsUsed, double cumulativePixels, TimeSpan elapsed)
+    {
+        if (attemptsUsed < 0 || !double.IsFinite(cumulativePixels) || cumulativePixels < 0 || elapsed < TimeSpan.Zero)
+            return 0;
+        var remaining = limits with
+        {
+            MaximumAttempts = limits.MaximumAttempts - attemptsUsed,
+            MaximumCumulativePixels = limits.MaximumCumulativePixels - cumulativePixels,
+            MaximumElapsed = limits.MaximumElapsed - elapsed,
+        };
+        // With no motion left, only already-on-slit geometry can be handed
+        // over for read-only verification. This does not fund another move.
+        if (remaining.MaximumAttempts <= 0 || remaining.MaximumCumulativePixels <= 0 || remaining.MaximumElapsed <= TimeSpan.Zero)
+            return Math.Min(initialRadius, limits.TargetOnSlitTolerancePixels);
+        return Math.Min(initialRadius, MaximumInitialResidual(remaining, minimumStageScale, residualGrowthAllowance));
+    }
+
+    public static double SelectHandoffRadius(bool measuredTargetConfirmed, double catalogRadius,
+        double measuredSearchRadius, Phd2LockShiftLimits limits, double minimumStageScale,
+        double residualGrowthAllowance)
+    {
+        if (!double.IsFinite(catalogRadius) || catalogRadius <= 0 ||
+            !double.IsFinite(measuredSearchRadius) || measuredSearchRadius <= 0)
+            throw new ArgumentException("Finite positive target-recognition radii are required.");
+        // Catalog-only positioning keeps its commissioned narrow routing radius.
+        // An independently measured target may use the existing round-trip envelope.
+        // Neither route grants a lock command: the live planner still checks the
+        // qualified calibration, fresh measurement and inherited remaining ledger.
+        var recognitionRadius = measuredTargetConfirmed
+            ? Math.Min(measuredSearchRadius, limits.MaximumAcquisitionResidualPixels)
+            : catalogRadius;
+        return Math.Min(recognitionRadius,
+            MaximumInitialResidual(limits, minimumStageScale, residualGrowthAllowance));
+    }
+
     public static double MaximumInitialResidual(
         Phd2LockShiftLimits limits, double minimumStageScale, double residualGrowthAllowance)
     {

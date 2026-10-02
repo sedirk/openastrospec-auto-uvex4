@@ -382,6 +382,20 @@ public sealed class ObservationRunCoordinatorTests
         Assert.DoesNotContain(ObservationRunState.Cancelled, states);
     }
 
+    [Fact]
+    public async Task NativeNightFailedGateStopsWithoutPauseOrFaultMotionAndKeepsFailure()
+    {
+        using var coordinator = new ObservationRunCoordinator();
+        var runner = new FakeRunner { FailOnceAt = ObservationStage.CoarseCenter, EndRunOnGateFailure = true };
+        await coordinator.StartAsync(CreatePlan(), runner).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ObservationRunState.Faulted, coordinator.Snapshot.State);
+        Assert.Equal(1, runner.CancelledCount);
+        Assert.Equal(0, runner.PausedCount);
+        Assert.Equal(0, runner.FaultedCount);
+        Assert.DoesNotContain(ObservationStage.AcquireG3SlitField, runner.Executed);
+        Assert.NotEqual("RUN_COMPLETED", coordinator.Snapshot.RecentEvents.Last().Code);
+    }
+
     private static ObservationPlan CreatePlan()
     {
         var start = DateTimeOffset.UtcNow;
@@ -436,8 +450,9 @@ public sealed class ObservationRunCoordinatorTests
             Task.FromResult(new StageResult(GateResult.Pass("PASS", "passed")));
     }
 
-    private sealed class FakeRunner : AcknowledgingTestRunner
+    private sealed class FakeRunner : AcknowledgingTestRunner, IObservationTerminalGatePolicy
     {
+        public bool EndRunOnGateFailure { get; init; }
         private bool failed;
         public List<ObservationStage> Executed { get; } = new();
         public ObservationStage? FailOnceAt { get; init; }

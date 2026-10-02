@@ -361,9 +361,49 @@ public sealed partial class Phd2Client : IPhd2Client
     {
         ValidateCalibrationRequirement(requirement);
 
+        var snapshotBefore = Snapshot;
         var profileBefore = await GetProfileAsync(cancellationToken).ConfigureAwait(false);
         var calibration = await GetCalibrationDataAsync(cancellationToken).ConfigureAwait(false);
+        var timestamp = requirement.CalibrationTimestampUtc;
+        var timestampSource = "Configured";
+        string? nativeAgeFailure = null;
+        if (requirement.RuntimeProof is { } runtimeProof &&
+            runtimeProof.Matches(profileBefore, calibration, snapshotBefore, Snapshot))
+        {
+            timestamp = runtimeProof.StartedUtc;
+            timestampSource = "ObservedNativeRecalibration";
+        }
+        else if (requirement.ReadNativeCalibrationTimestamp)
+        {
+            timestamp = null;
+            timestampSource = "NativeExportUnconfirmed";
+            try
+            {
+                // A returned filename can only be read on this machine. Do not
+                // map a remote server's path onto unrelated local settings.
+                if (!string.Equals(options.Host, "localhost", StringComparison.OrdinalIgnoreCase) &&
+                    !(System.Net.IPAddress.TryParse(options.Host, out var address) && System.Net.IPAddress.IsLoopback(address)))
+                    throw new InvalidDataException("Native calibration age export requires a local PHD2 endpoint.");
+                var exportResult = await InvokeAsync("export_config_settings", null, cancellationToken).ConfigureAwait(false);
+                var path = exportResult.GetProperty("filename").GetString();
+                if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) ||
+                    path.StartsWith(@"\\", StringComparison.Ordinal) ||
+                    !string.Equals(Path.GetFileName(path), "phd2_settings.txt", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Native calibration export returned an unsupported local path.");
+                var file = new FileInfo(path);
+                if (!file.Exists || file.Length > 4 * 1024 * 1024 || file.LinkTarget is not null)
+                    throw new InvalidDataException("Native calibration export is unavailable or exceeds the diagnostic size bound.");
+                timestamp = Phd2NativeCalibrationAge.Read(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false),
+                    profileBefore, calibration, System.Globalization.CultureInfo.CurrentCulture, TimeZoneInfo.Local);
+                timestampSource = "PHD2.export_config_settings:scope/calibration/orig_timestamp";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                nativeAgeFailure = $"Native original calibration time could not be bound to active calibration: {ex.Message}";
+            }
+        }
         var profileAfter = await GetProfileAsync(cancellationToken).ConfigureAwait(false);
+        var snapshotAfter = Snapshot;
         var evaluatedUtc = DateTimeOffset.UtcNow;
         var failures = new List<string>();
         var indeterminate = new List<string>();
@@ -383,10 +423,16 @@ public sealed partial class Phd2Client : IPhd2Client
                 $"{requirement.ProfileId}/'{requirement.ProfileName}'");
         }
 
+        if (!snapshotBefore.IsConnected || !snapshotAfter.IsConnected ||
+            snapshotBefore.ConnectionEpoch != snapshotAfter.ConnectionEpoch ||
+            snapshotBefore.CalibrationChangeSequence != snapshotAfter.CalibrationChangeSequence)
+            failures.Add("PHD2 connection or calibration changed during calibration validation");
+
+        if (nativeAgeFailure is not null) indeterminate.Add(nativeAgeFailure);
         TimeSpan? age = null;
-        if (requirement.CalibrationTimestampUtc.HasValue)
+        if (timestamp.HasValue)
         {
-            age = evaluatedUtc - requirement.CalibrationTimestampUtc.Value;
+            age = evaluatedUtc - timestamp.Value;
             if (age < TimeSpan.Zero)
             {
                 failures.Add("calibration timestamp is in the future");
@@ -447,7 +493,13 @@ public sealed partial class Phd2Client : IPhd2Client
             age,
             orthogonalityError,
             failures,
-            indeterminate);
+            indeterminate)
+        {
+            CalibrationTimestampUtc = timestamp,
+            CalibrationTimestampSource = timestampSource,
+            ConnectionEpoch = snapshotAfter.ConnectionEpoch,
+            CalibrationChangeSequence = snapshotAfter.CalibrationChangeSequence,
+        };
         UpdateSnapshot(current => current with { CalibrationValidation = validation });
         return validation;
     }
@@ -2045,6 +2097,9 @@ public sealed partial class Phd2Client : IPhd2Client
         {
             EventSequence = message.Sequence,
             LastEventUtc = message.ReceivedUtc,
+            CalibrationChangeSequence = message.Name is "StartCalibration" or "CalibrationComplete" or
+                "CalibrationFailed" or "CalibrationDataFlipped"
+                    ? message.Sequence : current.CalibrationChangeSequence,
         };
 
         return message.Name switch

@@ -216,7 +216,9 @@ public sealed record G3AcquisitionMotionState(
     // Search diversification only, never movement/identity authority. Omitting
     // zero preserves the canonical SHA of older schema-2 ledger payloads.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    int FailedNeighbourApproaches = 0)
+    int FailedNeighbourApproaches = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    int NearTargetResponseRetries = 0)
 {
     // Schema 2 changes persisted offsets to the versioned TAN projection.
     // Older outstanding ledgers fail closed instead of being geometrically
@@ -287,6 +289,8 @@ public sealed record G3AcquisitionMotionState(
         if (CorrectionAttempts < 0 || CorrectionAttempts > MaximumCorrectionAttempts) issues.Add("Consumed correction attempts are outside the declared limit.");
         if (FailedNeighbourApproaches < 0 || FailedNeighbourApproaches > CorrectionAttempts)
             issues.Add("Failed neighbour approaches must be bounded by already charged correction attempts.");
+        if (NearTargetResponseRetries < 0 || NearTargetResponseRetries > 1 || NearTargetResponseRetries > CorrectionAttempts)
+            issues.Add("Near-target response retry must be bounded by one already charged correction attempt.");
         if (Phase != G3AcquisitionMotionPhase.SettledBudgetLedger &&
             (!Positive(CommandMagnitudeArcseconds) || CommandMagnitudeArcseconds > MaximumSingleCorrectionArcseconds + 1e-9))
         {

@@ -1,6 +1,8 @@
 <UserControl x:Class="UvexAdv.Nina.Plugin.ObservationWorkflowView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:UvexAdv.Nina.Plugin"
+             local:ObservationStaticTextLocalization.IsEnabled="False"
              Background="#0B1422" Focusable="False" MinWidth="280" MinHeight="230">
   <UserControl.Resources>
     <Style x:Key="WorkflowToolbarButton" TargetType="Button">

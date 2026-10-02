@@ -198,6 +198,16 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 
 ## 7. Required sequence model
 
+Under [ADR-0019](../adr/0019-native-spectroscopy-night-sequences.md), the explicit
+native spectroscopy night container may sequence multiple canonical target runs.
+Inside that scope only, normal target finalization reconciles acquisition/guiding
+and defers cover/park/roof closure to the night owner. That owner reserves device
+orchestration through target gaps, keeps the full safety subscription active,
+records each target outcome, and performs checked final closure once. Saved target
+exposure/count settings do not mutate the Profile. Ordinary cancellation still
+authorizes no mechanical closeout; explicit end-night and commissioned unsafe
+shutdown are separate operations. Weak supervision does not gain roof authority.
+
 The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Target Observation` container composes reusable items rather than putting all logic in one command:
 
 1. Validate and lock Night Setup.

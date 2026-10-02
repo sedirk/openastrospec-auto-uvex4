@@ -26,9 +26,10 @@ internal sealed partial class RealObservationStageRunner
         if (exposure is not > 0)
             return Unconfirmed("The clipped formal-WCS frame requires the commissioned short target exposure; none is configured. No new motion was sent.");
         var exposurePolicy = new G3ShortExposurePolicy(exposure.Value);
+        var sourceExposureMilliseconds = field.Image?.MetaData.Image.ExposureTime * 1000 ?? double.NaN;
 
         await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
-            "TARGET_BRANCH_FALLBACK", "长帧目录区域过曝，从已标定短曝光开始；饱和时最多降档三次，总计不超过六帧；只复核位置，不改变导星参数或运动预算。",
+            "TARGET_BRANCH_FALLBACK", "长帧目录区域过曝，从已标定短曝光开始；饱和降档，未检出且有亮度余量时有界增曝光（不超过原解算曝光及5秒），持续分裂可一次延长复核；总计不超过六帧，换档后重新确认两张新帧，不改变导星参数或运动预算。",
             field.FramePath, cancellationToken).ConfigureAwait(false);
         G3ShortPositionMeasurement? previous = null;
         string? previousHash = null, previousFramePath = null, previousReceipt = null;
@@ -172,18 +173,42 @@ internal sealed partial class RealObservationStageRunner
                 : G3SepShortPositionPolicy.Measure(sepMeasurements, field.TargetIdentification.PredictedPoint,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
             var nextExposurePolicy = exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt);
+            var rawRoiPeak = G3ShortExposurePolicy.RecognitionPeak(frame,
+                field.TargetIdentification.PredictedPoint, preset.TargetSearchRadiusPixels);
+            // Keep a good same-exposure anchor across a transient missed frame.
+            // Exposure search is needed only while there is NO valid position.
+            if (previous?.Gate.Disposition != GateDisposition.Passed)
+                nextExposurePolicy = nextExposurePolicy.AfterUnmeasured(measurement, attempt,
+                    rawRoiPeak, frame.SaturationLevel, sourceExposureMilliseconds);
+            var signalExposureIncreased = nextExposurePolicy.SignalExposureIncreases > exposurePolicy.SignalExposureIncreases;
             var exposureChanged = nextExposurePolicy.ExposureMilliseconds != exposurePolicy.ExposureMilliseconds;
             var measurementMetrics = measurement.Gate.Metrics is null ? new Dictionary<string, double>()
                 : new Dictionary<string, double>(measurement.Gate.Metrics);
             measurementMetrics["shortExposureMilliseconds"] = exposure.Value;
             measurementMetrics["nextShortExposureMilliseconds"] = nextExposurePolicy.ExposureMilliseconds;
             measurementMetrics["shortExposureReductions"] = nextExposurePolicy.Reductions;
+            measurementMetrics["shortSignalExposureIncreases"] = nextExposurePolicy.SignalExposureIncreases;
+            measurementMetrics["shortRecognitionPeakAdu"] = double.IsFinite(rawRoiPeak) ? rawRoiPeak : -1;
+            measurementMetrics["shortSignalExposureCeilingMilliseconds"] = double.IsFinite(sourceExposureMilliseconds)
+                ? Math.Min(sourceExposureMilliseconds, G3ShortExposurePolicy.MaximumSignalExposureMilliseconds) : -1;
             measurement = measurement with { Gate = measurement.Gate with { Metrics = measurementMetrics } };
             var measured = measurement.Identification;
             if (previousFramePath is not null && !SameHash(previousHash!,
                     await ComputeFileSha256Async(previousFramePath, cancellationToken).ConfigureAwait(false)))
                 return Unconfirmed("G3_SHORT_FRAME_CHANGED: The first confirmation frame changed; no position was adopted.");
             var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
+                previous, measurement, previousHash, sha, attempt, preset.TargetSearchRadiusPixels, nextExposurePolicy.MaximumFrames);
+            var blendExposurePolicy = nextExposurePolicy.AfterConfirmation(confirmation, measurement, attempt, frame.SaturationLevel);
+            var blendExposureIncreased = blendExposurePolicy.ExposureMilliseconds > nextExposurePolicy.ExposureMilliseconds;
+            if (blendExposureIncreased)
+            {
+                nextExposurePolicy = blendExposurePolicy;
+                exposureChanged = true;
+                measurementMetrics["nextShortExposureMilliseconds"] = nextExposurePolicy.ExposureMilliseconds;
+            }
+            measurementMetrics["shortBlendExposureIncreases"] = nextExposurePolicy.BlendExposureIncreases;
+            // Re-evaluate the bounded retry decision, never the blend verdict.
+            confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
                 previous, measurement, previousHash, sha, attempt, preset.TargetSearchRadiusPixels, nextExposurePolicy.MaximumFrames);
             if (measurement.Gate.Code == G3ShortExposurePolicy.SaturatedCode && !exposureChanged)
                 confirmation = confirmation with { RetryAllowed = false };
@@ -210,6 +235,8 @@ internal sealed partial class RealObservationStageRunner
                     exposurePolicy,
                     nextExposurePolicy,
                     exposureChanged,
+                    blendExposureIncreased,
+                    signalExposureIncreased,
                     companionReference,
                     companionVector,
                     measurement,
@@ -257,7 +284,11 @@ internal sealed partial class RealObservationStageRunner
                     // across exposure settings; all consumed frames stay logged.
                     previous = null;
                     previousHash = previousFramePath = previousReceipt = null;
-                    Report(ObservationUiPresentation.Text(
+                    Report(signalExposureIncreased ? ObservationUiPresentation.Text(
+                        $"SEP 短帧未检出目标且未饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；仅增曝光寻找信号，仍须两张独立新帧确认，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",
+                        $"SEP target unmeasured with unsaturated raw headroom: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%. Image-only signal search; require two independent new frames, cap {exposurePolicy.MaximumFrames}; no motion.") : blendExposureIncreased ? ObservationUiPresentation.Text(
+                        $"SEP 短帧星像持续分裂，亮度有余量：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张独立新帧，仍检查混叠与 4px 一致性，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",
+                        $"Persistent SEP sub-peaks with exposure headroom: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%. Require a new independent pair with unchanged blend and 4px consistency checks, cap {exposurePolicy.MaximumFrames}; no motion.") : ObservationUiPresentation.Text(
                         $"SEP 测到强星像饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张一致新帧，总上限 {exposurePolicy.MaximumFrames} 帧；不移动、不改变导星参数。",
                         $"SEP measured saturation: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%; require two fresh matching frames, cap {exposurePolicy.MaximumFrames}. No motion or guiding-setting change."));
                     continue;

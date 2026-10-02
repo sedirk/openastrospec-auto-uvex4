@@ -8,6 +8,61 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(35.4359007393, 37.1583296727, 2.49, 3.4679939326, .3826551718)]
+    [InlineData(30.5223701788, 35.2387409441, 1.4248683292, 1.5234874450, .3819118812)]
+    public void RecordedOctoberSmallResponseCanReplanOnceWithoutClaimingArrival(
+        double before, double after, double priorSpread, double freshSpread, double pixelScale)
+    {
+        Assert.True(G3WcsRecoveryPolicy.CanRetryNearTargetResponse(true, true, true, true,
+            before, after, priorSpread, freshSpread, pixelScale, 2, 100, 0));
+        Assert.False(G3WcsRecoveryPolicy.CanRetryNearTargetResponse(true, true, true, true,
+            before, after, priorSpread, freshSpread, pixelScale, 2, 100, 1));
+        Assert.False(G3WcsRecoveryPolicy.RecheckExistingCoarseHandoffBeforeImprovement(
+            GateResult.Pass("G3_CATALOG_SHORT_POSITION_CONFIRMED", "measured"), true, after + freshSpread, 20));
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true, 35, 37, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, false, true, true, 35, 37, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, false, true, 35, 37, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, false, 35, 37, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 60, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 101, 99, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 100, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, double.NaN, 1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 37, -1, 1, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 37, 1, double.PositiveInfinity, .38, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 37, 1, 1, 0, 2, 100, 0)]
+    [InlineData(true, true, true, true, 35, 37, 1, 1, .38, 0, 100, 0)]
+    [InlineData(true, true, true, true, 35, 37, 1, 1, .38, 2, 100, -1)]
+    public void UncertainIdentityDivergenceInvalidDataOrSpentRetryCannotReplan(
+        bool prior, bool fresh, bool solve, bool direct, double before, double after,
+        double priorSpread, double freshSpread, double scale, double tolerance, double radius, int used) =>
+        Assert.False(G3WcsRecoveryPolicy.CanRetryNearTargetResponse(prior, fresh, solve, direct,
+            before, after, priorSpread, freshSpread, scale, tolerance, radius, used));
+
+    [Fact]
+    public void ProductionRetryRetainsLedgerAndReentersAllMotionGates()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var start = source.IndexOf("if (G3WcsRecoveryPolicy.CanRetryNearTargetResponse", StringComparison.Ordinal);
+        var end = source.IndexOf("// A positively identified", start, StringComparison.Ordinal);
+        var branch = source[start..end];
+        Assert.Contains("NearTargetResponseRetries = state.NearTargetResponseRetries + 1", branch);
+        Assert.Contains("PersistG3AcquisitionMotionAsync", branch);
+        Assert.Contains("continue;", branch);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", branch);
+        Assert.DoesNotContain("CorrectionAttempts =", branch);
+        Assert.DoesNotContain("StartedUtc =", branch);
+        Assert.DoesNotContain("SettledBudgetLedger", branch);
+        Assert.Contains("NearTargetResponseRetries = lineageCopies.Max(copy => copy.NearTargetResponseRetries)", source);
+        var stop = source.IndexOf("if (nearTargetResponseStopGate is not null)", end, StringComparison.Ordinal);
+        var search = source.IndexOf("if (localSearchBudgetExhausted", stop, StringComparison.Ordinal);
+        Assert.True(stop > end && search > stop);
+        Assert.Contains("return new StageResult(nearTargetResponseStopGate", source[stop..search]);
+    }
+
+    [Theory]
     [InlineData(2483.907, 723.311, 1109.418, 650.0697)]
     [InlineData(2496.0975, 281.3333, 1059.4627, 642.0132)]
     public void RecordedAlmachNeighbourSuccessAdvancesRatherThanChasingOutsideAnchor(

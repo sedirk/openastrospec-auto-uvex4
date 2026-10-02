@@ -959,6 +959,82 @@ public sealed class Phd2SlitPlacementCommissioningTests
             source.RecoveryContextSha256));
     }
 
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("same-run", false)]
+    [InlineData("current-copy", false)]
+    [InlineData("not-terminal", false)]
+    [InlineData("paused", false)]
+    [InlineData("faulted", false)]
+    [InlineData("completed", false)]
+    [InlineData("not-returned", false)]
+    [InlineData("different-lock", false)]
+    [InlineData("different-request", false)]
+    [InlineData("bad-state", false)]
+    [InlineData("cancelled-after-new-run", false)]
+    [InlineData("new-run-after-verification", false)]
+    public void CancelledSourceBudgetClosesOnlyAfterVerifiedReturnInLaterExplicitRun(string scenario, bool expected)
+    {
+        // Replay the 2026-10-02 lifecycle without a device: old clock expired,
+        // source cancelled, later run verified the return with counters intact.
+        var start = DateTimeOffset.Parse("2026-10-02T12:36:47.904116Z");
+        var ended = DateTimeOffset.Parse("2026-10-02T12:51:12Z");
+        var created = DateTimeOffset.Parse("2026-10-02T13:30:49Z");
+        var verified = DateTimeOffset.Parse("2026-10-02T13:33:30Z");
+        var source = CreateState("old-run", Phd2LockShiftPendingPhase.SettledBudgetLedger) with
+        {
+            CurrentLockX = 100, CurrentLockY = 100,
+            RequestedLockX = 100, RequestedLockY = 100,
+            AttemptsUsed = 2, CumulativeCommandedPixels = 24.994594831366094,
+            MaximumAttempts = 8, StartedUtc = start, CreatedUtc = start, UpdatedUtc = verified,
+        };
+        ObservationRunState? terminal = ObservationRunState.Cancelled;
+        switch (scenario)
+        {
+            case "not-terminal": terminal = null; break;
+            case "paused": terminal = ObservationRunState.PausedNeedsAttention; break;
+            case "faulted": terminal = ObservationRunState.Faulted; break;
+            case "completed": terminal = ObservationRunState.Completed; break;
+            case "not-returned": source = source with { Phase = Phd2LockShiftPendingPhase.ReturnRequired }; break;
+            case "different-lock": source = source with { CurrentLockX = 101 }; break;
+            case "different-request": source = source with { RequestedLockY = 101 }; break;
+            case "bad-state": source = source with { AttemptsUsed = -1 }; break;
+            case "cancelled-after-new-run": ended = created.AddSeconds(1); break;
+            case "new-run-after-verification": created = verified.AddSeconds(1); break;
+        }
+        var before = source;
+        Assert.Equal(expected, Phd2LockShiftBudgetHandoff.CanCloseCancelledSourceAsHistory(
+            source, terminal, ended, scenario == "same-run" ? "old-run" : "new-run", created,
+            scenario == "current-copy"));
+        Assert.Equal(before, source);
+        Assert.Equal(start, source.ToPlannerLedger().StartedUtc);
+        Assert.Equal(24.994594831366094, source.CumulativeCommandedPixels);
+    }
+
+    [Fact]
+    public void CancelledBudgetClosureIsBetweenFreshReturnVerificationAndCheckedStopReacquisition()
+    {
+        var returnBody = Section("private async Task<StageResult> ReturnPhd2LockToOriginCoreAsync(",
+            "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
+        var verify = returnBody.IndexOf("await finalVerification(actual", StringComparison.Ordinal);
+        var handoff = returnBody.IndexOf("await PersistCurrentRunPhd2BudgetHandoffAsync", StringComparison.Ordinal);
+        var persist = returnBody.IndexOf("WriteAtomicAsync(path, settledState", StringComparison.Ordinal);
+        var stop = returnBody.IndexOf("await StopPhdAfterOriginReachedWithRetryAsync", StringComparison.Ordinal);
+        Assert.True(verify >= 0 && handoff > verify && persist > handoff && stop > persist);
+        var boundary = Section("private async Task<GateResult> PersistCurrentRunPhd2BudgetHandoffAsync(",
+            "private static bool CanUseIndependentFallbackAfterPhd2Preflight");
+        Assert.Contains("sourceManifest.TerminalState, sourceManifest.UpdatedUtc", boundary);
+        Assert.Contains("currentManifest.CreatedUtc, existing.State is not null", boundary);
+        Assert.Contains("host.RealRunOwnershipGate()", boundary);
+        Assert.Contains("phd2-cancelled-source-return-closed", boundary);
+        Assert.Contains("checkedStopAndFreshAcquisitionStillRequired = true", boundary);
+        Assert.Contains("CreateCurrentRunSettledCopy", boundary);
+        var recovery = Section("private async Task<StageResult?> RecoverOutstandingPhd2LockBeforePlacementAsync(",
+            "private async Task CapturePhd2HomeBoundaryBeforeCatalogSlewAsync(");
+        Assert.Contains("if (!reacquired.CanAdvance)", recovery);
+        Assert.Contains("PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED", recovery);
+    }
+
     [Fact]
     public void EveryGuidePathRechecksFieldBindingAndRecoveryGradesCalibrationBeforeGuide()
     {

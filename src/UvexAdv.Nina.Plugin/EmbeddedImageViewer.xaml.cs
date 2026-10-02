@@ -40,6 +40,10 @@ public partial class EmbeddedImageViewer : UserControl
     private static string T(string chinese, string english) =>
         ObservationUiPresentation.Text(chinese, english, ObservationStaticTextLocalization.EffectiveCulture);
 
+    private static string SpectrumDescription(ObservationPreviewLayers? layers) =>
+        T(layers?.SpectrumDescription ?? "即时 1D 光谱 · 仅诊断",
+            layers?.EnglishSpectrumDescription ?? "Live 1D spectrum · diagnostic only");
+
     private Point dragStart;
     private double horizontalOffsetAtDragStart;
     private double verticalOffsetAtDragStart;
@@ -331,6 +335,7 @@ public partial class EmbeddedImageViewer : UserControl
         SpectralRegionToggle.Visibility = layers?.FocusRegion is null ? Visibility.Collapsed : Visibility.Visible;
         AnnotationImageElement.Source = layers?.Overlay;
         SpectrumImageElement.Source = layers?.Spectrum;
+        SpectrumTitle.Text = SpectrumDescription(layers);
         SpectrumPanel.Visibility = layers?.Spectrum is null ? Visibility.Collapsed : Visibility.Visible;
 
         if (hasImage)
@@ -490,7 +495,7 @@ public partial class EmbeddedImageViewer : UserControl
                 ? T("自动拉伸：开", "Auto stretch: on")
                 : T("自动拉伸：关", "Auto stretch: off");
             AutoStretchButton.BorderBrush = automaticStretch ? Brushes.DeepSkyBlue : new SolidColorBrush(Color.FromRgb(82, 100, 122));
-            SpectrumTitle.Text = T("即时 1D 光谱 · 仅诊断", "Live 1D spectrum · diagnostic only");
+            SpectrumTitle.Text = SpectrumDescription(ObservationPreviewLayers.For(PreviewImage));
             SpectrumOrientationNote.Text = T("横轴：像素 · 未标定", "X: pixel · uncalibrated");
         }
         finally

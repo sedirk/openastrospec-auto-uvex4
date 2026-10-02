@@ -104,7 +104,36 @@ public sealed record Phd2CalibrationRequirement(
     double MaximumOrthogonalityErrorDegrees = 15,
     double MinimumAxisRatePixelsPerSecond = 0.001,
     double MaximumAxisRatePixelsPerSecond = 1000,
-    bool RequireKnownAge = true);
+    bool RequireKnownAge = true)
+{
+    public Phd2RuntimeCalibrationProof? RuntimeProof { get; init; }
+    // Local native export supplies original calibration age across client restarts.
+    // It exports diagnostics only; it never imports/mutates the PHD2 profile.
+    public bool ReadNativeCalibrationTimestamp { get; init; }
+}
+
+// A locally observed native recalibration supplies age, never quality authority.
+// Rebind its time only against a fresh readback in the same calibration/connection.
+public sealed record Phd2RuntimeCalibrationProof(
+    Phd2Profile Profile,
+    Phd2CalibrationData Calibration,
+    long ConnectionEpoch,
+    long CalibrationChangeSequence,
+    DateTimeOffset StartedUtc)
+{
+    public bool Matches(Phd2Profile profile, Phd2CalibrationData calibration,
+        Phd2StateSnapshot before, Phd2StateSnapshot after) =>
+        before.IsConnected && after.IsConnected &&
+        before.ConnectionEpoch == ConnectionEpoch && after.ConnectionEpoch == ConnectionEpoch &&
+        before.CalibrationChangeSequence == CalibrationChangeSequence &&
+        after.CalibrationChangeSequence == CalibrationChangeSequence &&
+        profile == Profile && Calibration.Calibrated && calibration.Calibrated &&
+        calibration.RaRatePixelsPerSecond is { } rate && double.IsFinite(rate) && rate > 0 &&
+        // PHD2 adjusts active RA rate for current declination when guiding starts.
+        // All native base geometry/parity/Dec rate/calibration-declination must match;
+        // the fresh active RA rate is still checked by the normal quality gates.
+        calibration == Calibration with { RaRatePixelsPerSecond = rate };
+}
 
 public sealed record Phd2CalibrationValidation(
     Phd2Profile Profile,
@@ -115,6 +144,11 @@ public sealed record Phd2CalibrationValidation(
     IReadOnlyList<string> Failures,
     IReadOnlyList<string> IndeterminateReasons)
 {
+    public string CalibrationTimestampSource { get; init; } = "Configured";
+    public DateTimeOffset? CalibrationTimestampUtc { get; init; }
+    public long ConnectionEpoch { get; init; }
+    public long CalibrationChangeSequence { get; init; }
+
     public Phd2ValidationStatus Status => Failures.Count > 0
         ? Phd2ValidationStatus.Invalid
         : IndeterminateReasons.Count > 0
@@ -232,6 +266,8 @@ public sealed record Phd2StateSnapshot(
     Phd2GuideOutputStatus? GuideOutput = null,
     Phd2ConfigurationChangeEvidence? LastConfigurationChange = null)
 {
+    public long CalibrationChangeSequence { get; init; }
+
     public bool HasCurrentSuccessfulSettle =>
         IsConnected &&
         !AutomationPaused &&

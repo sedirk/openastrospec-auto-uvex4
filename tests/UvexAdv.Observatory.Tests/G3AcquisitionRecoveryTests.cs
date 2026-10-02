@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Xunit;
 
@@ -339,14 +340,18 @@ public sealed class G3AcquisitionRecoveryTests
                 CorrectionAttempts = 1,
                 CumulativeMotionArcseconds = 30,
             };
-            var retained = original with { FailedNeighbourApproaches = 1 };
+            var retained = original with { FailedNeighbourApproaches = 1, NearTargetResponseRetries = 1 };
             Assert.Empty(retained.Validate());
             await G3AcquisitionMotionStore.WriteAtomicAsync(path, retained);
             var loaded = await G3AcquisitionMotionStore.LoadAsync(path);
             Assert.Null(loaded.Error);
             Assert.Equal(retained, loaded.State);
-            Assert.Equal(original, loaded.State! with { FailedNeighbourApproaches = 0 });
+            Assert.Equal(original, loaded.State! with { FailedNeighbourApproaches = 0, NearTargetResponseRetries = 0 });
             Assert.Contains("failedNeighbourApproaches", await File.ReadAllTextAsync(path));
+            Assert.Contains("nearTargetResponseRetries", await File.ReadAllTextAsync(path));
+            Assert.DoesNotContain("nearTargetResponseRetries", JsonSerializer.Serialize(original));
+            Assert.NotEmpty((original with { NearTargetResponseRetries = -1 }).Validate());
+            Assert.NotEmpty((original with { NearTargetResponseRetries = 2 }).Validate());
             Assert.NotEmpty((original with { FailedNeighbourApproaches = -1 }).Validate());
             Assert.NotEmpty((original with { FailedNeighbourApproaches = original.CorrectionAttempts + 1 }).Validate());
         }

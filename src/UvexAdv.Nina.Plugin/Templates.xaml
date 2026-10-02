@@ -5,6 +5,12 @@
                     xmlns:seq="clr-namespace:UvexAdv.Nina.Plugin.SequenceItems"
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
+  <DataTemplate x:Key="NativeFailurePolicySelector">
+    <ComboBox x:Name="NativeFailurePolicyCombo" ItemsSource="{Binding AvailableFailurePolicies}"
+              DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding FailurePolicy}"
+              MinWidth="245" Margin="6,0" VerticalAlignment="Top" Foreground="{DynamicResource PrimaryBrush}"
+              local:ObservationStaticTextLocalization.IsEnabled="True" />
+  </DataTemplate>
   <DataTemplate x:Key="SepMainFocusPanel"><local:SepMainFocusView /></DataTemplate>
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.SepMainFocusViewModel_Dockable"><local:SepMainFocusView NativeToolbar="True" Height="470" /></DataTemplate>
   <DataTemplate x:Key="UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable">
@@ -740,7 +746,7 @@
                      Visibility="{Binding HasPauseReason, Converter={StaticResource ObservationBoolToVisibility}}" />
           <ProgressBar Style="{StaticResource ObservationProgressBar}" Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}" Margin="0,4,0,2" />
           <TextBlock Text="{Binding CurrentOperationText, StringFormat=当前操作：{0}}" Foreground="#BAE6FD"
-                     ToolTip="{Binding CurrentOperationText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                     ToolTip="{Binding CurrentOperationText}" TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis"
                      Visibility="{Binding HasCurrentOperationText, Converter={StaticResource ObservationBoolToVisibility}}" />
           <ProgressBar Minimum="0" Maximum="100" Value="{Binding CurrentOperationPercent, Mode=OneWay}" Margin="0,2,0,3"
                        Visibility="{Binding HasCurrentOperationProgress, Converter={StaticResource ObservationBoolToVisibility}}">
@@ -2222,6 +2228,31 @@
   <DataTemplate DataType="{x:Type seq:MoveFocusItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="相对步数"/><TextBox Width="80" Text="{Binding DeltaSteps}"/></StackPanel></DataTemplate>
   <DataTemplate DataType="{x:Type seq:MaintenanceModeItem}"><CheckBox local:ObservationStaticTextLocalization.IsEnabled="True" Content="进入维护模式（取消为退出）" IsChecked="{Binding EnterMaintenance}"/></DataTemplate>
 
+  <DataTemplate x:Key="NativeSpectroscopyNightPanel">
+        <StackPanel Margin="6">
+          <TextBlock Text="整夜光谱：按下方目标顺序执行，目标间不关盖、不关顶，整夜结束统一收口。" TextWrapping="Wrap" FontWeight="Bold"/>
+          <TextBlock Text="把 UVEX4 目标观测拖入此处，可复制、调整顺序并保存原生模板。真实模式必须先通过完整安全链；停放不等于机械回零。" TextWrapping="Wrap" Margin="0,4"/>
+          <WrapPanel Margin="0,4">
+            <CheckBox Content="晨光结束" IsChecked="{Binding StopAtDawn}" Margin="0,0,8,0"/>
+            <TextBlock Text="太阳高度 °" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding DawnSunAltitudeDegrees}" Width="55" Margin="4,0,12,0"/>
+            <TextBlock Text="截止时间（含时区，可留空）" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding EndAtIso8601}" Width="240" Margin="4,0" ToolTip="例如 2026-09-21T05:00:00+08:00"/>
+          </WrapPanel>
+          <TextBlock Text="普通截止在阶段/已保存帧边界停止，不截断长曝；安全事件立即停止。普通取消不发机械收口命令。" TextWrapping="Wrap" Margin="0,4"/>
+          <Button Content="结束本夜并收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
+          <TextBlock Text="{Binding NightState}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,6"/>
+          <TextBlock Text="{Binding JournalPath}" TextWrapping="Wrap" Opacity="0.7"/>
+        </StackPanel>
+  </DataTemplate>
+  <HierarchicalDataTemplate DataType="{x:Type seq:UvexNightSequenceContainer}" ItemsSource="{Binding Items}">
+    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
+      <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
+        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyNightPanel}"/>
+      </ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
+    </ninaSeq:HierarchicalSequenceContainerView>
+  </HierarchicalDataTemplate>
+
   <HierarchicalDataTemplate DataType="{x:Type seq:UvexTargetObservationContainer}" ItemsSource="{Binding Items}">
     <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
       <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
@@ -2243,7 +2274,19 @@
             <CheckBox Content="此序列请求 REAL 模式" IsChecked="{Binding UseRealMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
           </StackPanel>
           <TextBlock Text="{Binding ExecutionModeWarning}" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,5" />
-          <TextBlock Text="无人值守自动推进；失败自动暂停，支持恢复、取消与人工接管。" TextWrapping="Wrap" FontStyle="Italic" />
+          <TextBlock Text="单独运行：失败暂停；放入整夜容器：按本目标失败策略结束或跳过。所有目标共用已验证的定位、入缝和科学曝光流程。" TextWrapping="Wrap" />
+          <WrapPanel Margin="0,6">
+            <TextBlock Text="合格科学帧" VerticalAlignment="Center"/><TextBox Text="{Binding ScienceFrames}" Width="55" Margin="4,0,10,0"/>
+            <TextBlock Text="最多尝试" VerticalAlignment="Center"/><TextBox Text="{Binding MaximumScienceAttempts}" Width="55" Margin="4,0,10,0"/>
+            <TextBlock Text="固定曝光 / 秒（0 = 自动选档）" VerticalAlignment="Center"/><TextBox Text="{Binding FixedExposureSeconds}" Width="65" Margin="4,0"/>
+          </WrapPanel>
+          <WrapPanel Margin="0,3">
+            <TextBlock Text="整夜失败策略" VerticalAlignment="Center"/>
+            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeFailurePolicySelector}"/>
+            <TextBlock Text="{Binding LastOutcome}" VerticalAlignment="Center" Margin="8,0"/>
+          </WrapPanel>
+          <TextBlock Text="光谱单目标完整流程（11 阶段）。翻转请将目标放入光谱整夜序列，添加 OpenAstroSpec · 光谱中天翻转；不要混用普通翻转触发器。"
+                     TextWrapping="Wrap" Margin="0,3" Opacity="0.85"/>
           <WrapPanel Margin="0,5,0,0">
             <TextBlock Text="目标" VerticalAlignment="Center"/><TextBox Width="125" Text="{Binding TargetName}" Margin="4,0,9,0"/>
             <TextBlock Text="RA°" VerticalAlignment="Center"/><TextBox Width="75" Text="{Binding RightAscensionDegrees}" Margin="4,0,9,0"/>
@@ -2261,6 +2304,17 @@
     </ninaSeq:HierarchicalSequenceContainerView>
   </HierarchicalDataTemplate>
 
+  <DataTemplate x:Key="NativeSpectroscopyMeridianPanel">
+    <StackPanel Margin="5" MaxWidth="650" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <TextBlock Text="逐帧翻转 · 保存 → 停止采集 → N.I.N.A. 翻转 → 重新定位 / 入缝 / 导星 → 续拍剩余帧" TextWrapping="Wrap" FontWeight="SemiBold"/>
+      <TextBlock Text="使用 N.I.N.A. 的翻转时机与镜筒侧设置；不调用 ATR 主相机居中或普通自动对焦。此触发器仅用于光谱整夜序列，模拟不移动设备。" TextWrapping="Wrap" Margin="0,5"/>
+      <WrapPanel><TextBlock Text="保存与测光边界余量 / 秒" VerticalAlignment="Center"/><TextBox Width="70" Margin="8,0" Text="{Binding BoundaryReserveSeconds, UpdateSourceTrigger=PropertyChanged}"/></WrapPanel>
+      <TextBlock Text="{Binding FlipStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+    </StackPanel>
+  </DataTemplate>
+  <DataTemplate DataType="{x:Type seq:SpectroscopyMeridianFlipTrigger}">
+    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyMeridianPanel}"/>
+  </DataTemplate>
   <DataTemplate DataType="{x:Type seq:ObservationStageMarkerItem}">
     <ninaSeq:SequenceBlockView local:ObservationStaticTextLocalization.IsEnabled="True">
       <ninaSeq:SequenceBlockView.SequenceItemContent>

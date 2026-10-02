@@ -19,6 +19,13 @@ $requiredFiles = @(
     'UvexAdv.Protocol.dll',
     'UvexAdv.Qhy.Core.dll',
     'UvexAdv.Spectroscopy.dll'
+    'ReductionPreview\live_preview_worker.py'
+    'ReductionPreview\src\uvex_reduce\live_preview.py'
+    'ReductionPreview\src\uvex_reduce\extraction.py'
+    'ReductionPreview\src\uvex_reduce\preprocess.py'
+    'ReductionPreview\src\uvex_reduce\config.py'
+    'ReductionPreview\src\uvex_reduce\models.py'
+    'ReductionPreview\src\uvex_reduce\__init__.py'
 )
 foreach ($requiredFile in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $ArtifactDirectory $requiredFile) -PathType Leaf)) {

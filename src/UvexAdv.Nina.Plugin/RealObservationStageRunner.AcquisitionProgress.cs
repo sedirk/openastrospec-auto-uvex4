@@ -11,10 +11,13 @@ internal sealed partial class RealObservationStageRunner
 
     private void PublishAcquisitionProgress(ObservationContext context, string phase = "Ready", string role = "",
         string? captureId = null, double exposureSeconds = 0) =>
-        host.PublishAcquisitionProgress(new(context.Plan.ObservationRunId, configuration.Atr.ScienceFrameCount,
+        PublishNativeSequenceProgress(new(context.Plan.ObservationRunId, configuration.Atr.ScienceFrameCount,
             savedAtrFrames, attemptedAtrFrames, configuration.Atr.MaximumScienceAttempts,
             reusedAtrProbeFrames, acceptedAtrExposureSeconds, selectedAtrExposureSeconds,
             phase, role, captureId, phase == "Exposing" ? DateTimeOffset.UtcNow : null, exposureSeconds));
+
+    private void PublishNativeSequenceProgress(ObservationAcquisitionProgress local) =>
+        host.PublishAcquisitionProgress(NativeMeridian?.Aggregate(local) ?? local);
 
     private async Task CreditFinalProbeAsync(ObservationContext context, AtrCapture probe, AtrSavedImage saved,
         double selectedExposure, CancellationToken token)

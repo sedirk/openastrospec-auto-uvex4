@@ -2,6 +2,8 @@ using System.ComponentModel.Composition;
 using System.Runtime.Versioning;
 using NINA.Core.Model;
 using NINA.Equipment.Interfaces;
+using NINA.Equipment.Model;
+using NINA.Equipment.Interfaces.ViewModel;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Image.Interfaces;
 using NINA.PlateSolving.Interfaces;
@@ -112,6 +114,24 @@ public sealed class RealObservationStageRunnerFactory
     internal NinaSepMainFocusHardware CreateMainFocusHardware(UvexPluginSettings settings, UvexAdv.Observatory.SepMainFocusOptions options)
         => new(profileService, focuserMediator, telescopeMediator, cameraMediator, domeMediator,
             flatDeviceMediator, safetyMonitorMediator, imageDataFactory, settings, options);
+
+    internal IDisposable WatchNightSafety(Action unsafeCallback)
+    {
+        EventHandler<IsSafeEventArgs> handler = (_, e) =>
+        {
+            if (e.IsSafe) return;
+            try { cameraMediator.AbortExposure(); }
+            catch { /* The owner records stop/closeout readback failures. */ }
+            unsafeCallback();
+        };
+        safetyMonitorMediator.IsSafeChanged += handler;
+        return new SafetySubscription(() => safetyMonitorMediator.IsSafeChanged -= handler);
+    }
+
+    private sealed class SafetySubscription(Action unsubscribe) : IDisposable
+    {
+        public void Dispose() => unsubscribe();
+    }
 
     private NinaEnvironmentDeviceSelection CaptureEnvironmentDeviceSelection()
     {

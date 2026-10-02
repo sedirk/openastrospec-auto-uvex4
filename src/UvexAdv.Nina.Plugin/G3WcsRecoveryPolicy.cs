@@ -6,6 +6,29 @@ namespace UvexAdv.Nina.Plugin;
 public static class G3WcsRecoveryPolicy
 {
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
+    public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
+
+    // One additional fresh-WCS correction may absorb a small, uncertain optical
+    // response. This is NOT backlash calibration, a gain multiplier, handoff
+    // authority or a new motion allowance. The normal outbound/return gates run
+    // again, and the retry count is persisted across acquisition families.
+    public static bool CanRetryNearTargetResponse(
+        bool priorMeasured, bool freshMeasured, bool hasFreshFormalSolve,
+        bool directUnsegmentedMove, double priorResidualPixels, double freshResidualPixels,
+        double priorSpreadPixels, double freshSpreadPixels, double pixelScaleArcseconds,
+        double arrivalToleranceArcseconds, double recognitionRadiusPixels, int retriesUsed) =>
+        priorMeasured && freshMeasured && hasFreshFormalSolve && directUnsegmentedMove && retriesUsed == 0 &&
+        double.IsFinite(priorResidualPixels) && priorResidualPixels > 0 &&
+        double.IsFinite(freshResidualPixels) && freshResidualPixels > 0 &&
+        double.IsFinite(priorSpreadPixels) && priorSpreadPixels >= 0 &&
+        double.IsFinite(freshSpreadPixels) && freshSpreadPixels >= 0 &&
+        double.IsFinite(pixelScaleArcseconds) && pixelScaleArcseconds > 0 &&
+        double.IsFinite(arrivalToleranceArcseconds) && arrivalToleranceArcseconds > 0 &&
+        double.IsFinite(recognitionRadiusPixels) && recognitionRadiusPixels > 0 &&
+        priorResidualPixels + priorSpreadPixels <= recognitionRadiusPixels &&
+        freshResidualPixels + freshSpreadPixels <= recognitionRadiusPixels &&
+        freshResidualPixels - priorResidualPixels <= priorSpreadPixels + freshSpreadPixels +
+            arrivalToleranceArcseconds / pixelScaleArcseconds;
 
     public static bool CompletedSolvedNeighbourApproach(bool isNeighbourApproach,
         double commandScale, bool hasFreshFormalSolve, double priorRemainingArcseconds,

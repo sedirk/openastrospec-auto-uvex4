@@ -430,6 +430,18 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
+    public void RuntimeCalibrationTimeIsBoundToFreshNativeReadbackNotExactCompensatedRate()
+    {
+        var body = MethodBody(Source,
+            "private Phd2CalibrationRequirement PhdCalibrationRequirement(",
+            "private async Task EnsurePhdConnectedAsync(");
+        Assert.Contains("RuntimeProof = runtimeCalibrationTimestampUtc.HasValue ? null : localPhd2CalibrationProof", body);
+        Assert.DoesNotContain("snapshot.CalibrationValidation?.Calibration ==", body);
+        Assert.Contains("new Phd2RuntimeCalibrationProof(", Phd2SlitPlacementSource);
+        Assert.Contains("calibration.CalibrationChangeSequence", Phd2SlitPlacementSource);
+    }
+
+    [Fact]
     public void ForcedPhd2CalibrationInvalidatesPreCalibrationFieldBeforeExactLock()
     {
         var body = MethodBody(
@@ -1197,12 +1209,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(");
 
         Assert.Contains("G3WcsRecoveryPolicy.NeedsCoarseCentering", acquire, StringComparison.Ordinal);
-        Assert.Contains("coarseResidualPixels + lastG3Field.TargetIdentification.CatalogPositionSpreadPixels, placementPreset.CoarseHandoffResidualPixels", acquire, StringComparison.Ordinal);
+        Assert.Contains("coarseResidualPixels + lastG3Field.TargetIdentification.CatalogPositionSpreadPixels, Phd2HandoffResidualPixels(lastG3Field, placementPreset)", acquire, StringComparison.Ordinal);
         Assert.Contains("RunG3WcsCenteringAsync", acquire, StringComparison.Ordinal);
         Assert.Contains("G3WcsTargetProjector.SolveCenterForTargetAtPixel", wcs, StringComparison.Ordinal);
         Assert.Contains("inverse.DesiredG3Center", wcs, StringComparison.Ordinal);
-        Assert.Contains("targetToSlitResidualPixels + currentField.TargetIdentification.CatalogPositionSpreadPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
-        Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= placementPreset.CoarseHandoffResidualPixels", wcs, StringComparison.Ordinal);
+        Assert.Contains("targetToSlitResidualPixels + currentField.TargetIdentification.CatalogPositionSpreadPixels <= Phd2HandoffResidualPixels(currentField, placementPreset)", wcs, StringComparison.Ordinal);
+        Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= Phd2HandoffResidualPixels(currentField, placementPreset)", wcs, StringComparison.Ordinal);
         Assert.Contains("direct-to-slit", wcs, StringComparison.Ordinal);
         Assert.Contains("G3CatalogTargetPositionPolicy.ProjectionDestination", wcs, StringComparison.Ordinal);
         Assert.Contains("PixelDistance(adoptedTargetPixel, desiredTargetPixel)", wcs, StringComparison.Ordinal);
@@ -1324,6 +1336,21 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("$rawRunUpdatedUtc -is [DateTime]", source, StringComparison.Ordinal);
         Assert.Contains("$runUpdatedUtc = [DateTimeOffset]$rawRunUpdatedUtc", source, StringComparison.Ordinal);
         Assert.Contains("$runUpdatedUtc -ge $startContext.DispatchUtc", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RestartRecoveryReadsNativeOriginalCalibrationAgeAndPreservesPreGuideGate()
+    {
+        var requirement = MethodBody("private Phd2CalibrationRequirement PhdCalibrationRequirement(",
+            "private async Task EnsurePhdConnectedAsync(");
+        Assert.Contains("ReadNativeCalibrationTimestamp = !runtimeCalibrationTimestampUtc.HasValue", requirement, StringComparison.Ordinal);
+        var placement = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var start = placement.IndexOf("private async Task<StageResult> RecoverPersistedPhd2LockToOriginAsync(", StringComparison.Ordinal);
+        var readback = placement.IndexOf("phd2-lock-recovery-calibration-readback", start, StringComparison.Ordinal);
+        var rejection = placement.IndexOf("PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID", start, StringComparison.Ordinal);
+        var guide = placement.IndexOf("phd2.GuideAndSettleAsync(", start, StringComparison.Ordinal);
+        Assert.True(readback > start && rejection > readback && guide > rejection);
+        Assert.Contains("originalMotionLedgerPreserved = true, guideOrRecalibrationCommandSent = false", placement, StringComparison.Ordinal);
     }
 
     private static string MethodBody(string startMarker, string endMarker)

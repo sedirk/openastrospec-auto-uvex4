@@ -13,6 +13,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Same source modules as the offline reducer, not a second implementation. -->
+    <Content Include="..\..\reduction\src\uvex_reduce\*.py" Link="ReductionPreview\src\uvex_reduce\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\reduction\live_preview_worker.py" Link="ReductionPreview\live_preview_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- UseWindowsForms is needed only for the shell NotifyIcon. Do not let
          its SDK-level implicit imports shadow WPF Point/Size/Brush types. -->
     <Using Remove="System.Drawing" />

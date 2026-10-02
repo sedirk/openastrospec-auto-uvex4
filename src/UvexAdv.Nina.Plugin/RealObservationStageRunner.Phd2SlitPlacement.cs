@@ -14,7 +14,7 @@ internal sealed partial class RealObservationStageRunner
     private bool phd2AgedCalibrationRefreshAttempted;
     private sealed record Phd2HomeBoundaryProof(string RunId, string TelescopeId, DateTimeOffset VerifiedUtc, string EvidencePath);
     private Phd2HomeBoundaryProof? phd2HomeBoundaryProof;
-    private (Phd2CalibrationData Calibration, long ConnectionEpoch, DateTimeOffset StartedUtc)? localPhd2CalibrationProof;
+    private Phd2RuntimeCalibrationProof? localPhd2CalibrationProof;
     private StageResult ReusePhd2SlitPlacementGuiding(Phd2SlitPlacementSession session)
     {
         var snapshot = phd2.Snapshot;
@@ -773,6 +773,12 @@ internal sealed partial class RealObservationStageRunner
         var activeCalibrationBeforeGuide = await phd2.ValidateCalibrationAsync(
             preset.CalibrationQualityPolicy.ApplyHardRejectionCeilings(PhdCalibrationRequirement()),
             cancellationToken).ConfigureAwait(false);
+        await PublishRunJsonEvidenceAsync(
+            "phd2-lock-recovery-calibration-readback",
+            "Fresh owner calibration age and geometry checked before any recovery guide command",
+            new { state.LineageId, calibration = activeCalibrationBeforeGuide,
+                originalMotionLedgerPreserved = true, guideOrRecalibrationCommandSent = false },
+            item.Path, cancellationToken).ConfigureAwait(false);
         if (activeCalibrationBeforeGuide.Status != Phd2ValidationStatus.Valid)
         {
             return Attention(
@@ -1319,6 +1325,7 @@ internal sealed partial class RealObservationStageRunner
                         });
                 }
                 inheritedSettledBudget = currentLedger;
+                phd2SettledHandoffBudget = currentLedger;
             }
             else
             {
@@ -1438,10 +1445,11 @@ internal sealed partial class RealObservationStageRunner
         initialTarget = guideChoice.Field.TargetIdentification.Target
             ?? throw new InvalidOperationException("Fresh guide-selection frame passed without a target identity.");
         var takeoverResidual = PixelDistance(initialTarget.Centroid, lastG3Field.SlitDetection.Geometry.AcquisitionPoint);
-        if (!forceRecalibration && takeoverResidual > preset.CoarseHandoffResidualPixels &&
+        if (!forceRecalibration && takeoverResidual + guideChoice.Field.TargetIdentification.CatalogPositionSpreadPixels >
+            Phd2HandoffResidualPixels(guideChoice.Field, preset) &&
             guideChoice.Field.TargetIdentification.PredictionResidualPixels > preset.CoarseHandoffResidualPixels)
             return await ReacquireG3ForPhd2HandoffAsync(context, "PHD2_WCS_TAKEOVER_POSITION_CHANGED",
-                $"接管新帧的实测目标距原预测 {guideChoice.Field.TargetIdentification.PredictionResidualPixels:F2}px，距狭缝 {takeoverResidual:F2}px，超出 {preset.CoarseHandoffResidualPixels:F2}px 粗定位交接范围。",
+                $"接管新帧的实测目标距原预测 {guideChoice.Field.TargetIdentification.PredictionResidualPixels:F2}px，距狭缝 {takeoverResidual:F2}px，超出 {Phd2HandoffResidualPixels(guideChoice.Field, preset):F2}px 粗定位交接范围。",
                 postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken).ConfigureAwait(false);
         try
         {
@@ -1591,7 +1599,9 @@ internal sealed partial class RealObservationStageRunner
 
             if (forceRecalibration)
             {
-                localPhd2CalibrationProof = (calibration.Calibration, phd2.Snapshot.ConnectionEpoch, recalibrationStartedUtc!.Value);
+                localPhd2CalibrationProof = new Phd2RuntimeCalibrationProof(
+                    calibration.Profile, calibration.Calibration, calibration.ConnectionEpoch,
+                    calibration.CalibrationChangeSequence, recalibrationStartedUtc!.Value);
                 // Calibration pulses invalidate every pre-calibration target,
                 // slit and mount binding even when PHD2 normally returns very
                 // close to its origin. This is the ordering used by both
@@ -1617,6 +1627,7 @@ internal sealed partial class RealObservationStageRunner
                     lastG3Field?.FramePath,
                     cancellationToken).ConfigureAwait(false);
                 await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+                var calibrationStopPierSide = telescopeMediator.GetInfo().SideOfPier.ToString();
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
                 var calibrationStopEvidence = await PublishRunJsonEvidenceAsync(
                     "phd2-calibration-stop-confirmed", "Owned native recalibration checked-stopped before fresh acquisition",
@@ -1631,6 +1642,9 @@ internal sealed partial class RealObservationStageRunner
                         "本轮原生标定后的停止状态或连接身份未确认；未开始重新取场。");
                 automaticRebuildStopProof = calibrationStop;
                 lastG3Field = null;
+                var mountIdle = await WaitForPostCalibrationMountIdleAsync(
+                    calibrationStop, calibrationStopPierSide, cancellationToken).ConfigureAwait(false);
+                if (!mountIdle.CanAdvance) return mountIdle;
                 var reacquired = await AcquireG3SlitFieldAsync(
                     context,
                     cancellationToken,
@@ -1640,7 +1654,8 @@ internal sealed partial class RealObservationStageRunner
                     return new StageResult(
                         GateResult.Unknown(
                             "POST_CALIBRATION_G3_REACQUISITION_BLOCKED",
-                            $"PHD2 recalibration passed, but the mandatory fresh G3 acquisition route did not: {reacquired.Gate.Code}: {reacquired.Gate.Message}"),
+                            $"PHD2 recalibration passed, but the mandatory fresh G3 acquisition route did not: {reacquired.Gate.Code}: {reacquired.Gate.Message}",
+                            reacquired.Gate.Metrics),
                         reacquired.EvidencePath,
                         reacquired.Metadata);
                 }
@@ -1800,6 +1815,19 @@ internal sealed partial class RealObservationStageRunner
                         item.Measurement.TargetIdentityConfirmed &&
                         item.Measurement.TargetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection);
                 var canWaitWithoutNewMotion = Phd2PlacementGuideWindowPolicy.CanWaitWithoutNewMotion(plan.IsAllowed, plan.Code);
+                var correctionWindow = Phd2PlacementGuideWindowPolicy.EvaluateCorrectionWindow(
+                    targetCompletionWindow.Select(item => item.Measurement).ToArray(), ledger.CurrentLockPosition,
+                    session.GuideMode, measuredSupervisedGeometry, plan.IsAllowed, plan.IsComplete,
+                    preset.MaximumGuideLockResidualPixels, completionTolerance, requiredCompletionFrames);
+                // A supervised optical window may retain a tracking warning,
+                // but that is not permission to chase an unfinished lock shift.
+                // Wait under the SAME deadline/return reserve before budgeting
+                // another motion (including when a transient frame vetoed it).
+                var existingLockNotReached = !correctionWindow.CanContinue && Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(
+                    targetCompletionWindow.Select(item => PointDistance(
+                        item.Measurement.GuideStar, ledger.CurrentLockPosition)).ToArray(),
+                    preset.MaximumGuideLockResidualPixels, measuredSupervisedGeometry,
+                    plan.IsAllowed, plan.Code);
                 // Near the slit, do not spend another exact-lock action chasing
                 // each wind/seeing sample. This envelope authorizes only waiting,
                 // never science or additional movement. Acceptance stays exact.
@@ -1822,7 +1850,7 @@ internal sealed partial class RealObservationStageRunner
                         completionResiduals, completionTolerance, preset.MaximumResidualGrowthPixels,
                         preset.MaximumAcquisitionResidualPixels));
                 if (!supervisedSlitPrecisionWarning && (nativeCorrectionPending || completionWindowUnstable ||
-                    nearSlitTrackingWarning || (transientResidualGrowthWarning && canWaitWithoutNewMotion)))
+                    nearSlitTrackingWarning || existingLockNotReached || (transientResidualGrowthWarning && canWaitWithoutNewMotion)))
                 {
                     var completionLimits = preset.BuildMotionLimits();
                     var recoveryDistanceUpper = PointDistance(ledger.OriginLockPosition, ledger.CurrentLockPosition) +
@@ -1855,7 +1883,9 @@ internal sealed partial class RealObservationStageRunner
                     // the full return. Four windows are not a physical safety
                     // boundary and must not force an early wind-induced return.
                     completionWindowRetries++;
-                    Report(transientResidualGrowthWarning || nearSlitTrackingWarning
+                    Report(existingLockNotReached
+                        ? "PHD2 尚未跟上当前锁点：保持原生导星等待新帧，不追加精调、不重置预算；原回程时间继续保留。"
+                        : transientResidualGrowthWarning || nearSlitTrackingWarning
                         ? "导星扰动警告：保持当前锁点和原生导星，先补取整组新帧；不因短时残差增长立即回程，也不追加追逐扰动的移锁。"
                         : nativeCorrectionPending
                         ? "目标偏差与原生导星偏差相符，现有锁点无需重复移动；保持 PHD2 导星并有界补取新帧，等待实际纠偏。"
@@ -1877,7 +1907,8 @@ internal sealed partial class RealObservationStageRunner
                         new
                         {
                             completionWindowRetries, boundedByOriginalDeadline = true, nativeCorrectionPending,
-                            nearSlitTrackingWarning, transientResidualGrowthWarning,
+                            nearSlitTrackingWarning, transientResidualGrowthWarning, existingLockNotReached,
+                            correctionWindow,
                             completionDeadline, reservedReturnAttempts,
                             plannerCode = plan.Code,
                             residuals = targetCompletionWindow.Select(item => PointDistance(
@@ -1972,6 +2003,8 @@ internal sealed partial class RealObservationStageRunner
                         cancellationToken).ConfigureAwait(false);
 
                 var stage = plan.Stage!;
+                if (correctionWindow.CanContinue)
+                    Report($"PHD2 当前帧已回到现锁点附近（{correctionWindow.LatestGuideResidualPixels:F2}px）；整组新帧修正终点分散 {correctionWindow.MaximumEndpointSpreadPixels:F2}px，在原剩余预算内继续小步入缝。尚未确认入缝完成。");
                 var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(
                     context,
                     lastG3Field,
@@ -2017,6 +2050,7 @@ internal sealed partial class RealObservationStageRunner
                         stage.AppliedLockShiftScale,
                         stage.AppliedResidualToleranceScale,
                         stage.RequiredFreshResiduals,
+                        correctionWindow,
                         sourceFrameSha256 = stage.SourceFrameSha256,
                         topologyFingerprintSha256 = stage.TopologyFingerprintSha256,
                         registryProfileMutationAllowed = false,
@@ -4637,6 +4671,48 @@ internal sealed partial class RealObservationStageRunner
             return GateResult.Unknown(
                 "PHD2_LOCK_HANDOFF_CURRENT_COPY_UNREADABLE",
                 $"The current-run canonical PHD2 ledger cannot be validated: {existing.Error}");
+        }
+
+        var sourceManifest = await new ObservationRunJournalStore(Path.Combine(
+            SlitPlacementObservationsRoot(), settledForeignState.ObservationRunId, "manifest.json"))
+            .ReadAsync(cancellationToken).ConfigureAwait(false);
+        var currentManifest = await new ObservationRunJournalStore(Path.Combine(
+            SlitPlacementObservationsRoot(), context.Plan.ObservationRunId, "manifest.json"))
+            .ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (sourceManifest is null || currentManifest is null ||
+            sourceManifest.ObservationRunId != settledForeignState.ObservationRunId ||
+            currentManifest.ObservationRunId != context.Plan.ObservationRunId)
+            return GateResult.Unknown("PHD2_LOCK_HANDOFF_MANIFEST_MISSING",
+                "Return verified, but source/current run history cannot establish the budget boundary. No new placement budget was created.");
+
+        if (Phd2LockShiftBudgetHandoff.CanCloseCancelledSourceAsHistory(
+                settledForeignState, sourceManifest.TerminalState, sourceManifest.UpdatedUtc,
+                context.Plan.ObservationRunId, currentManifest.CreatedUtc, existing.State is not null))
+        {
+            var ownerGate = host.RealRunOwnershipGate();
+            if (ownerGate.Disposition != GateDisposition.Passed) return ownerGate;
+            // No current-run copy: the caller persists the returned source, then
+            // checked-stops PHD2 and reacquires G3 before any new placement.
+            // A crash before that persistence leaves the original debt open.
+            await PublishRunJsonEvidenceAsync(
+                "phd2-cancelled-source-return-closed",
+                "Cancelled observation's verified return closes its historical budget, not a new run's placement window",
+                new
+                {
+                    sourceRunId = settledForeignState.ObservationRunId,
+                    currentRunId = context.Plan.ObservationRunId,
+                    sourceManifest.TerminalState,
+                    sourceEndedUtc = sourceManifest.UpdatedUtc,
+                    currentRunCreatedUtc = currentManifest.CreatedUtc,
+                    returnedSource = settledForeignState,
+                    oldCountersAndClockPreserved = true,
+                    currentRunBudgetCopyCreated = false,
+                    checkedStopAndFreshAcquisitionStillRequired = true,
+                    placementAuthorized = false,
+                }, settledForeignState.LastFramePath, cancellationToken).ConfigureAwait(false);
+            Report("已取消旧运行的回程已核验；旧次数、位移和计时保留在历史记录，不再转给本轮。确认停止并重建目标场后，本轮独立开始精调。");
+            return GateResult.Pass("PHD2_LOCK_CANCELLED_SOURCE_RETURN_CLOSED",
+                "The cancelled source's return is verified. Preserve its historical ledger without copying its expired clock into the later explicit observation.");
         }
         if (existing.State is not null)
         {

@@ -4,6 +4,28 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class AtrPreCoolingRunnerSafetyTests
 {
+    [Fact]
+    public void RecoveryUsesIdleBoundNativeOwnerAndStopsOldCoolingBeforeReconnect()
+    {
+        var recovery = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.AtrCoolingRecovery.cs"));
+        Assert.Contains("profileService.ActiveProfile.CameraSettings.Id != expectedId", recovery);
+        Assert.Contains("ReferenceEquals(expectedProfile, profileService.ActiveProfile)", recovery);
+        Assert.Contains("ReferenceEquals(owner, cameraMediator.GetDevice())", recovery);
+        Assert.Contains("info.IsExposing || info.CameraState", recovery);
+        Assert.Contains("!cameraMediator.IsFreeToCapture(captureBlock)", recovery);
+        Assert.Contains("cameraMediator.RegisterCaptureBlock(captureBlock)", recovery);
+        Assert.Contains("cameraMediator.ReleaseCaptureBlock(captureBlock)", recovery);
+        var wait = recovery.IndexOf("await oldTask.WaitAsync", StringComparison.Ordinal);
+        var disconnect = recovery.IndexOf("await cameraMediator.Disconnect()", StringComparison.Ordinal);
+        var connect = recovery.IndexOf("await cameraMediator.Connect()", StringComparison.Ordinal);
+        var cool = recovery.IndexOf("cameraMediator.CoolCamera(", StringComparison.Ordinal);
+        Assert.True(wait >= 0 && disconnect > wait && connect > disconnect && cool > connect);
+        Assert.Contains("token.ThrowIfCancellationRequested()", recovery[disconnect..connect]);
+        Assert.Contains("ReadFreshAtrOwnerAsync(owner, expectedId, expectedId, token)", recovery);
+        Assert.Contains("stableTemperatureClaimed = false", recovery);
+        Assert.DoesNotContain("CaptureImage", recovery);
+        Assert.DoesNotContain("telescopeMediator", recovery);
+    }
     private static readonly string Source = File.ReadAllText(Path.Combine(
         AppContext.BaseDirectory,
         "Sources",

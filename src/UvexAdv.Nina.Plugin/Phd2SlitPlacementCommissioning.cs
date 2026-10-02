@@ -173,6 +173,11 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         Phd2CoarseHandoffPolicy.MaximumInitialResidual(BuildMotionLimits(),
             CalibrationQualityPolicy.DegradedMaximumLockShiftScale, MaximumResidualGrowthPixels));
 
+    public double HandoffResidualPixels(bool measuredTargetConfirmed) =>
+        Phd2CoarseHandoffPolicy.SelectHandoffRadius(measuredTargetConfirmed,
+            MaximumAcquisitionResidualPixels, TargetSearchRadiusPixels, BuildMotionLimits(),
+            CalibrationQualityPolicy.DegradedMaximumLockShiftScale, MaximumResidualGrowthPixels);
+
     public int ExposureFor(Phd2SlitGuideMode resolvedMode) => resolvedMode switch
     {
         Phd2SlitGuideMode.OffSlitGuideStar when GuideMode is

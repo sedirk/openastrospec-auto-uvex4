@@ -7,6 +7,103 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScreenshotRendererTests
 {
+    [Fact]
+    public void StaticLocalizationCannotRestoreIdleHeaderOverLiveWorkflow()
+    {
+        RunOnUiThread(() =>
+        {
+            var view = new ObservationWorkflowView();
+            var host = new System.Windows.Controls.ContentControl { Content = view };
+            view.Graph = ScenarioCatalog.Select("workflow-idle").Single().ViewModel.Workflow;
+            ObservationStaticTextLocalization.LocalizeSubtree(host);
+            view.Graph = ScenarioCatalog.Select("workflow-running").Single().ViewModel.Workflow;
+            var header = (System.Windows.Controls.TextBlock)view.FindName("RunHeader");
+            var running = header.Text;
+            Assert.DoesNotContain("未启动", running);
+            ObservationStaticTextLocalization.LocalizeSubtree(host);
+            Assert.Equal(running, header.Text);
+            Assert.Contains(view.Graph.TargetName, header.Text);
+        });
+    }
+
+    [Theory]
+    [InlineData("atr-cooling-wait")]
+    [InlineData("atr-cooling-wait-narrow")]
+    public void CoolingWaitExplicitlySaysNoSpectralExposureHasStarted(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, text => text.Contains("光谱曝光尚未开始", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, text => text.Contains("−10", StringComparison.Ordinal) || text.Contains("-10", StringComparison.Ordinal));
+    }
+    [Fact]
+    public void WorkflowTextHitTestingHandlesContentElementsAndPreservesButtons()
+    {
+        RunOnUiThread(() =>
+        {
+            var run = new System.Windows.Documents.Run("节点文字");
+            var span = new System.Windows.Documents.Span(run);
+            var text = new System.Windows.Controls.TextBlock(span);
+            var button = new System.Windows.Controls.Button { Content = text };
+            var boundary = new System.Windows.Controls.ScrollViewer { Content = button };
+            Assert.False(ObservationWorkflowView.CanStartCanvasPan(run, boundary));
+            Assert.False(ObservationWorkflowView.CanStartCanvasPan(button, boundary));
+            button.Content = null;
+            boundary.Content = text;
+            Assert.True(ObservationWorkflowView.CanStartCanvasPan(run, boundary));
+            Assert.True(ObservationWorkflowView.CanStartCanvasPan(boundary, boundary));
+            Assert.False(ObservationWorkflowView.CanStartCanvasPan(new System.Windows.Documents.Run("detached"), boundary));
+            Assert.False(ObservationWorkflowView.CanStartCanvasPan(new System.Windows.DependencyObject(), boundary));
+            Assert.False(ObservationWorkflowView.CanStartCanvasPan(new System.Windows.Controls.Primitives.ScrollBar(), boundary));
+        });
+    }
+    [Theory]
+    [InlineData("native-failure-popup", "结束本夜并收口", "质量失败且停止确认后跳过")]
+    [InlineData("native-failure-popup-en", "End night and close out", "Skip quality failure after confirmed stop")]
+    public void NativePopupPreservesBothLabelsAndEnumSelection(string scenario, string end, string skip)
+    {
+        var result = RenderPhotometry(scenario);
+        Assert.Contains(end, result.NativePopupTexts);
+        Assert.Contains(skip, result.NativePopupTexts);
+        Assert.Contains(scenario.EndsWith("-en", StringComparison.Ordinal) ? skip : end, result.VisibleTexts);
+        Assert.True(result.NativeSelectionRoundTrips);
+    }
+
+    [Fact]
+    public void LocalizingInlineHostDoesNotDeleteItsContentPresenter()
+    {
+        RunOnUiThread(() =>
+        {
+            var presenter = new System.Windows.Controls.ContentPresenter { Content = "结束本夜并收口" };
+            var wrapper = new System.Windows.Controls.TextBlock();
+            var inline = new System.Windows.Documents.InlineUIContainer(presenter);
+            wrapper.Inlines.Add(inline);
+            UvexAdv.Nina.Plugin.ObservationStaticTextLocalization.LocalizeSubtree(wrapper);
+            Assert.Same(inline, Assert.Single(wrapper.Inlines));
+            Assert.Same(presenter, inline.Child);
+        });
+    }
+    [Theory]
+    [InlineData("native-night")]
+    [InlineData("native-night-narrow")]
+    public void NativeNightEditorShowsDeadlineCloseoutAndRuntimeWithoutExpanders(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, x => x.Contains("结束本夜并收口", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("普通取消", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("目标 2/3", StringComparison.Ordinal));
+    }
+    [Theory]
+    [InlineData("atr-reduced")]
+    [InlineData("atr-reduced-narrow")]
+    [InlineData("atr-reduced-missing")]
+    public void ReducedPreviewUsesProductionVectorPlotAndDisclosesItsStatus(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.True(result.PreviewViewportWidth > 100);
+        Assert.Contains(result.VisibleTexts, text => text.Contains(name.EndsWith("missing", StringComparison.Ordinal)
+            ? "未检测到可靠谱带" : "未做暗场/平场/波长/响应标定", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("g3-slit-extent")]
     [InlineData("g3-slit-extent-narrow")]
@@ -345,6 +442,27 @@ public sealed class ScreenshotRendererTests
         Assert.Contains(result.VisibleTexts, text => text.Contains("等待当前帧", StringComparison.Ordinal));
         Assert.DoesNotContain(result.VisibleTexts, text => text.Contains("fixture-manifest", StringComparison.Ordinal));
         Assert.DoesNotContain(result.VisibleTexts, text => text.Contains("Photometry · Running", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("native-meridian")]
+    [InlineData("native-meridian-narrow")]
+    [InlineData("native-meridian-en")]
+    public void MeridianPanelExplainsSavedFrameBoundaryAndDoesNotHideOptions(string scenario)
+    {
+        var result = RenderPhotometry(scenario);
+        Assert.Contains(result.VisibleTexts, s => s.Contains("2/5", StringComparison.Ordinal));
+        if (scenario.EndsWith("-en", StringComparison.Ordinal))
+        {
+            Assert.Contains(result.VisibleTexts, s => s.Contains("Remaining frames", StringComparison.Ordinal));
+            Assert.Contains("Save / photometry boundary margin (s)", result.VisibleTexts);
+            Assert.DoesNotContain(result.VisibleTexts, s => Regex.IsMatch(s, "[\\u3400-\\u9fff]"));
+        }
+        else
+        {
+            Assert.Contains(result.VisibleTexts, s => s.Contains("续拍剩余帧", StringComparison.Ordinal));
+            Assert.Contains("保存与测光边界余量 / 秒", result.VisibleTexts);
+        }
     }
 
     private static ScreenshotRenderResult RenderPhotometry(string scenario)

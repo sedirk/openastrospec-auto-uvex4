@@ -535,6 +535,27 @@ internal static class Phd2LockShiftBudgetHandoff
 {
     private const double Epsilon = 1e-9;
 
+    // Called only after the production return verifier has passed. Cancellation
+    // alone never closes physical debt. Once that debt is verified, however, a
+    // previously cancelled observation is history, not a continuation budget for
+    // a later explicit run (even when the requested target is unchanged).
+    public static bool CanCloseCancelledSourceAsHistory(
+        Phd2LockShiftPendingState settledSource,
+        ObservationRunState? sourceTerminalState,
+        DateTimeOffset sourceEndedUtc,
+        string currentRunId,
+        DateTimeOffset currentRunCreatedUtc,
+        bool currentCopyExists) =>
+        sourceTerminalState == ObservationRunState.Cancelled && !currentCopyExists &&
+        !string.IsNullOrWhiteSpace(currentRunId) &&
+        !string.Equals(settledSource.ObservationRunId, currentRunId, StringComparison.Ordinal) &&
+        sourceEndedUtc >= settledSource.StartedUtc && sourceEndedUtc < currentRunCreatedUtc &&
+        currentRunCreatedUtc <= settledSource.UpdatedUtc &&
+        settledSource.Validate().Count == 0 &&
+        settledSource.Phase == Phd2LockShiftPendingPhase.SettledBudgetLedger &&
+        Distance(settledSource.CurrentLockX, settledSource.CurrentLockY, settledSource.OriginLockX, settledSource.OriginLockY) <= Epsilon &&
+        Distance(settledSource.RequestedLockX, settledSource.RequestedLockY, settledSource.OriginLockX, settledSource.OriginLockY) <= Epsilon;
+
     public static Phd2LockShiftPendingState CreateCurrentRunSettledCopy(
         Phd2LockShiftPendingState settledSource,
         string currentObservationRunId,

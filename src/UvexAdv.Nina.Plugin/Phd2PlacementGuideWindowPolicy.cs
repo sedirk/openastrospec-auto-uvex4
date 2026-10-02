@@ -7,8 +7,74 @@ internal sealed record Phd2SlitApertureResidual(
     double MidpointPixels, double AlongSlitPixels, double CrossSlitPixels,
     double HalfLengthPixels, double UncertaintyPixels);
 
+internal sealed record Phd2CorrectionWindowDecision(
+    bool CanContinue, string Code, double? LatestGuideResidualPixels = null,
+    double? MaximumEndpointSpreadPixels = null);
+
 internal static class Phd2PlacementGuideWindowPolicy
 {
+    // Motion continuation is not final slit/guide-quality acceptance. For an
+    // explicitly supervised off-slit guide, common image motion cancels in
+    // guide + slit - target. Use EVERY frame to check that absolute endpoint,
+    // and require the latest guide measurement to have reached the existing
+    // lock before dispatching another already-authorized bounded stage.
+    internal static Phd2CorrectionWindowDecision EvaluateCorrectionWindow(
+        IReadOnlyList<Phd2SlitFieldMeasurement> samples, Phd2Point currentLock,
+        Phd2SlitGuideMode guideMode, bool supervised, bool planAllowed, bool planComplete,
+        double guideTolerance, double endpointTolerance, int requiredFrames)
+    {
+        if (!supervised || guideMode != Phd2SlitGuideMode.OffSlitGuideStar || !planAllowed || planComplete)
+            return new(false, "CORRECTION_WINDOW_NOT_APPLICABLE");
+        if (samples.Count < Math.Max(3, requiredFrames) || !Finite(currentLock) ||
+            !double.IsFinite(guideTolerance) || guideTolerance <= 0 ||
+            !double.IsFinite(endpointTolerance) || endpointTolerance <= 0)
+            return new(false, "CORRECTION_WINDOW_INVALID");
+
+        var topology = samples[0].TopologyFingerprintSha256;
+        var frames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var endpoints = new List<Phd2Point>();
+        DateTimeOffset? previousTime = null;
+        foreach (var sample in samples)
+        {
+            if (!sample.GuidePositionMeasuredInFrame || !sample.TargetIdentityConfirmed ||
+                !HasMeasuredPositionAuthority(sample.TargetPositionAuthority) ||
+                !Finite(sample.GuideStar) || !Finite(sample.TargetCentroid) || !Finite(sample.RecognizedSlitAcquisitionPoint) ||
+                string.IsNullOrWhiteSpace(topology) || sample.TopologyFingerprintSha256 != topology ||
+                string.IsNullOrWhiteSpace(sample.FrameSha256) || !frames.Add(sample.FrameSha256) ||
+                (previousTime.HasValue && sample.CapturedUtc <= previousTime.Value))
+                return new(false, "CORRECTION_WINDOW_EVIDENCE_INVALID");
+            previousTime = sample.CapturedUtc;
+            var endpoint = new Phd2Point(
+                sample.GuideStar.X + sample.RecognizedSlitAcquisitionPoint.X - sample.TargetCentroid.X,
+                sample.GuideStar.Y + sample.RecognizedSlitAcquisitionPoint.Y - sample.TargetCentroid.Y);
+            if (!Finite(endpoint)) return new(false, "CORRECTION_WINDOW_EVIDENCE_INVALID");
+            endpoints.Add(endpoint);
+        }
+
+        var guideResidual = Distance(samples[^1].GuideStar, currentLock);
+        var spread = 0d;
+        for (var i = 0; i < endpoints.Count; i++)
+            for (var j = 0; j < i; j++)
+                spread = Math.Max(spread, Distance(endpoints[i], endpoints[j]));
+        if (!double.IsFinite(guideResidual) || !double.IsFinite(spread))
+            return new(false, "CORRECTION_WINDOW_EVIDENCE_INVALID");
+        if (guideResidual > guideTolerance)
+            return new(false, "CORRECTION_WINDOW_LOCK_NOT_REACHED", guideResidual, spread);
+        if (spread > endpointTolerance)
+            return new(false, "CORRECTION_WINDOW_ENDPOINT_UNSTABLE", guideResidual, spread);
+        return new(true, "CORRECTION_WINDOW_COHERENT", guideResidual, spread);
+    }
+
+    private static bool Finite(Phd2Point point) => double.IsFinite(point.X) && double.IsFinite(point.Y);
+    private static double Distance(Phd2Point a, Phd2Point b) =>
+        Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
+
+    internal static bool MustWaitForExistingLock(
+        IReadOnlyList<double> guideResiduals, double guideTolerance,
+        bool sameFrameMeasuredGeometry, bool planAllowed, string planCode) =>
+        sameFrameMeasuredGeometry && CanWaitWithoutNewMotion(planAllowed, planCode) &&
+        !AllWithinTolerance(guideResiduals, guideTolerance);
+
     internal static string FailureCode(bool deadlineExpired, int completedWindows) =>
         deadlineExpired && completedWindows == 0 ? "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" : "PHD2_GUIDE_WINDOW_NOT_STABLE";
 

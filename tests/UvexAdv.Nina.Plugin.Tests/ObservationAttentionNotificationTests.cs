@@ -88,7 +88,9 @@ public sealed class ObservationAttentionNotificationTests
     [InlineData(ObservationRunState.Paused)]
     [InlineData(ObservationRunState.ManualTakeover)]
     [InlineData(ObservationRunState.Cancelled)]
-    [InlineData(ObservationRunState.Completed)]
+    [InlineData(ObservationRunState.Idle)]
+    [InlineData(ObservationRunState.RunningAuto)]
+    [InlineData(ObservationRunState.Finalizing)]
     public void OperatorAndNormalStatesDoNotNotify(ObservationRunState state)
     {
         var tracker = new ObservationAttentionNotificationTracker();
@@ -118,6 +120,97 @@ public sealed class ObservationAttentionNotificationTests
         Assert.True(recovered.ClearActiveIndicator);
         Assert.NotNull(tracker.Evaluate(blocked, null).Notification);
     }
+
+    [Fact]
+    public void CompletedReportsTargetAndAcceptedScienceFramesNotAnOldWarning()
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var notification = tracker.Evaluate(Completed(), GateResult.Unknown("OLD_WARNING", "old failure"),
+            CultureInfo.GetCultureInfo("zh-CN"), new("run-1", "WR 152", 3, "real")).Notification;
+
+        Assert.NotNull(notification);
+        Assert.Equal(ObservationAttentionSeverity.Success, notification.Severity);
+        Assert.Equal("OpenAstroSpec 目标观测完成", notification.Title);
+        Assert.Contains("WR 152", notification.Body);
+        Assert.Contains("已接受科学帧：3 张", notification.Body);
+        Assert.Contains("运行：run-1", notification.Body);
+        Assert.Contains("设备收口状态请查看运行报告", notification.Body);
+        Assert.DoesNotContain("OLD_WARNING", notification.Body);
+    }
+
+    [Fact]
+    public void CompletionIsOncePerRunDespiteRefreshCultureOrInterveningIdle()
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        Assert.NotNull(tracker.Evaluate(Completed(), null).Notification);
+        var duplicate = tracker.Evaluate(Completed() with { UpdatedUtc = DateTimeOffset.UtcNow.AddMinutes(1) }, null);
+        Assert.Null(duplicate.Notification);
+        Assert.False(duplicate.ClearActiveIndicator);
+        Assert.True(tracker.Evaluate(ObservationSnapshot.Idle, null).ClearActiveIndicator);
+        Assert.Null(tracker.Evaluate(Completed(), null, CultureInfo.GetCultureInfo("en-US")).Notification);
+        Assert.NotNull(tracker.Evaluate(Completed() with { ObservationRunId = "run-2" }, null).Notification);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void AnonymousCompletionCannotNotify(string? runId)
+    {
+        Assert.Null(new ObservationAttentionNotificationTracker().Evaluate(
+            Completed() with { ObservationRunId = runId }, null).Notification);
+    }
+
+    [Fact]
+    public void StaleContextCannotSupplyAnotherTargetsNameCountOrSimulationMode()
+    {
+        var notification = new ObservationAttentionNotificationTracker().Evaluate(Completed(), null,
+            CultureInfo.GetCultureInfo("en-US"), new("other-run", "Wrong target", 999, "simulator")).Notification!;
+        Assert.Equal("OpenAstroSpec target observation completed", notification.Title);
+        Assert.Contains("Target name unavailable", notification.Body);
+        Assert.Contains("Science frame count unavailable", notification.Body);
+        Assert.DoesNotContain("Wrong target", notification.Body);
+        Assert.DoesNotContain("999", notification.Body);
+    }
+
+    [Theory]
+    [InlineData("zh-CN")]
+    [InlineData("en-US")]
+    public void SimulationCompletionIsExplicitlyNotRealAcquisition(string culture)
+    {
+        var notification = new ObservationAttentionNotificationTracker().Evaluate(Completed(), null,
+            CultureInfo.GetCultureInfo(culture), new("run-1", "Test target", 3, "simulator")).Notification!;
+        Assert.Equal(ObservationAttentionSeverity.Success, notification.Severity);
+        if (culture == "zh-CN")
+        {
+            Assert.Contains("模拟", notification.Title);
+            Assert.Contains("未采集真实科学帧", notification.Body);
+        }
+        else
+        {
+            Assert.Contains("simulated", notification.Title);
+            Assert.Contains("no real science frames acquired", notification.Body);
+            Assert.False(ObservationUiPresentation.ContainsCjk(notification.Body));
+        }
+    }
+
+    [Fact]
+    public void RecoveredBlockerCanCompleteAndNextRunCanStillWarn()
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var blocked = Snapshot(ObservationRunState.PausedNeedsAttention, ObservationStage.StartGuiding,
+            "PHD2 lost lock", "PHD_SETTLE_FAILED");
+        Assert.Equal(ObservationAttentionSeverity.Warning, tracker.Evaluate(blocked, null).Notification!.Severity);
+        Assert.Equal(ObservationAttentionSeverity.Success, tracker.Evaluate(Completed(), null).Notification!.Severity);
+        Assert.Null(tracker.Evaluate(Completed(), null).Notification);
+        Assert.Equal(ObservationAttentionSeverity.Warning, tracker.Evaluate(
+            blocked with { ObservationRunId = "run-2" }, null).Notification!.Severity);
+    }
+
+    private static ObservationSnapshot Completed() => ObservationSnapshot.Idle with
+    {
+        ObservationRunId = "run-1", State = ObservationRunState.Completed, CompletedStageCount = 11,
+    };
 
     private static ObservationSnapshot Snapshot(
         ObservationRunState state,

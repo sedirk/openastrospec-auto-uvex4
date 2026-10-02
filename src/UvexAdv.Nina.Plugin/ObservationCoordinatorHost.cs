@@ -64,6 +64,41 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private RealObservationRunOwnershipLease? realRunOwnershipLease;
     private bool persistenceFailureLatched;
     private bool disposed;
+    private object? nightOwner;
+
+    internal async Task<IDisposable> ReserveNightAsync(object owner, bool real, CancellationToken token)
+    {
+        if (!await runGate.WaitAsync(0, token).ConfigureAwait(false))
+            throw new InvalidOperationException("观测或对焦仍占用设备，不能开始整夜序列。");
+        try
+        {
+            if (real)
+            {
+                var ownership = RealObservationRunOwnershipLease.TryAcquire(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "UVEX-ADV", "observations", "control", "real-observation-owner.lock"));
+                if (!ownership.Acquired) throw new InvalidOperationException(ownership.Failure);
+                realRunOwnershipLease = ownership.Lease;
+            }
+            nightOwner = owner;
+            return new NightReservation(this);
+        }
+        catch { runGate.Release(); throw; }
+    }
+
+    private sealed class NightReservation(ObservationCoordinatorHost host) : IDisposable
+    {
+        private bool released;
+        public void Dispose()
+        {
+            if (released) return;
+            released = true;
+            host.realRunOwnershipLease?.Dispose();
+            host.realRunOwnershipLease = null;
+            host.nightOwner = null;
+            host.runGate.Release();
+        }
+    }
 
     public ObservationCoordinatorHost()
         : this(new NinaAndWindowsObservationAttentionNotifier())
@@ -132,12 +167,14 @@ public sealed class ObservationCoordinatorHost : IDisposable
     public async Task RunAsync(
         ObservationPlan plan,
         IObservationStageRunner runner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        object? sequenceNightOwner = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(runner);
-        if (!await runGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        var belongsToNight = sequenceNightOwner is not null && ReferenceEquals(nightOwner, sequenceNightOwner);
+        if (!belongsToNight && !await runGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException("An observation run is already active.");
         }
@@ -151,7 +188,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
             // run while this run is still being prepared.
             if (activeRunReservation is not null)
             {
-                runGate.Release();
+                if (!belongsToNight) runGate.Release();
                 throw new InvalidOperationException("An observation run is already reserved.");
             }
             activeRunReservation = reservation;
@@ -163,7 +200,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
         try
         {
-            if (runner is IRealObservationRunOwnershipSource realRunner)
+            if (!belongsToNight && runner is IRealObservationRunOwnershipSource realRunner &&
+                !string.IsNullOrWhiteSpace(realRunner.RealObservationOwnershipLockPath))
             {
                 var ownership = RealObservationRunOwnershipLease.TryAcquire(
                     realRunner.RealObservationOwnershipLockPath);
@@ -227,7 +265,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
                     if (ReferenceEquals(activeRunReservation, reservation)) activeRunReservation = null;
                 }
                 runOwnershipLease?.Dispose();
-                runGate.Release();
+                if (!belongsToNight) runGate.Release();
             }
         }
     }
@@ -274,6 +312,24 @@ public sealed class ObservationCoordinatorHost : IDisposable
             handler = DashboardChanged;
         }
         handler?.Invoke(this, dashboard);
+    }
+
+    internal bool TryReplacePreview(ObservationPreviewChannel channel, ImageSource expected, ImageSource replacement, string caption)
+    {
+        if (replacement is Freezable { CanFreeze: true, IsFrozen: false } value) value.Freeze();
+        EventHandler<ObservationDashboardSnapshot>? handler;
+        ObservationDashboardSnapshot dashboard;
+        lock (sync)
+        {
+            // A reset/new frame changes the image identity. Never attach delayed
+            // analysis to a newer frame, a new run or a disposed host.
+            if (disposed || !ReferenceEquals(previews[channel].Image, expected)) return false;
+            previews[channel] = previews[channel] with { Image = replacement, Caption = caption };
+            dashboard = CreateDashboardLocked();
+            handler = DashboardChanged;
+        }
+        handler?.Invoke(this, dashboard);
+        return true;
     }
 
     public void PublishGate(ObservationStage stage, GateResult gate)
@@ -501,7 +557,11 @@ public sealed class ObservationCoordinatorHost : IDisposable
             currentCounters = counters;
             current?.PublishSnapshot(snapshot, currentCounters);
             gates.TryGetValue(snapshot.CurrentStage ?? ObservationStage.ValidateNightSetup, out var currentGate);
-            notificationEvaluation = attentionNotificationTracker.Evaluate(snapshot, currentGate);
+            var completion = dashboardPlan is not null && dashboardPlan.ObservationRunId == snapshot.ObservationRunId
+                ? new ObservationCompletionNotificationContext(dashboardPlan.ObservationRunId,
+                    dashboardPlan.Target.Name, currentCounters.AtrAcceptedFrames, dashboardRunAdapter)
+                : null;
+            notificationEvaluation = attentionNotificationTracker.Evaluate(snapshot, currentGate, completion: completion);
             dashboard = CreateDashboardLocked(snapshot);
             handler = DashboardChanged;
         }
@@ -552,8 +612,9 @@ public sealed class ObservationCoordinatorHost : IDisposable
 
 internal sealed class DashboardStageRunner(
     ObservationCoordinatorHost host,
-    IObservationStageRunner inner) : IObservationStageRunner, IObservationRunCompletionCommitter
+    IObservationStageRunner inner) : IObservationStageRunner, IObservationRunCompletionCommitter, IObservationTerminalGatePolicy
 {
+    public bool EndRunOnGateFailure => inner is IObservationTerminalGatePolicy { EndRunOnGateFailure: true };
     public async Task<StageResult> ExecuteStageAsync(
         ObservationStage stage,
         ObservationContext context,
@@ -620,7 +681,8 @@ internal sealed class DashboardStageRunner(
 /// semantics remain authoritative. Failed gates keep the same child item active
 /// across Pause/Resume and are retried only after coordinator revalidation.
 /// </summary>
-internal sealed class SequencerStageBridge : IObservationStageRunner, IObservationRunProvenanceSource, IDisposable
+internal sealed class SequencerStageBridge : IObservationStageRunner, IObservationRunProvenanceSource,
+    IRealObservationRunOwnershipSource, IObservationTerminalGatePolicy, IDisposable
 {
     private readonly IObservationStageRunner inner;
     private readonly Channel<StageRequest> requests = Channel.CreateUnbounded<StageRequest>(
@@ -630,6 +692,12 @@ internal sealed class SequencerStageBridge : IObservationStageRunner, IObservati
     private bool disposed;
 
     public SequencerStageBridge(IObservationStageRunner inner) => this.inner = inner;
+
+    public bool EndRunOnGateFailure { get; init; }
+    public bool HasCompletedFinalMarker { get; private set; }
+    public Func<GateResult?>? BoundaryGate { get; init; }
+    public string RealObservationOwnershipLockPath =>
+        (inner as IRealObservationRunOwnershipSource)?.RealObservationOwnershipLockPath ?? string.Empty;
 
     public ObservationRunLockedMetadata LockedMetadata =>
         inner is IObservationRunProvenanceSource provenance
@@ -685,7 +753,12 @@ internal sealed class SequencerStageBridge : IObservationStageRunner, IObservati
                     Source = "OpenAstroSpec Auto",
                     Status = SimulatedObservationStageRunner.StageDisplayName(expectedStage),
                 });
-                var result = await inner.ExecuteStageAsync(request.Stage, request.Context, linked.Token).ConfigureAwait(false);
+                var stop = expectedStage == ObservationStage.FinalizeObservation ? null : BoundaryGate?.Invoke();
+                var result = stop is null
+                    ? await inner.ExecuteStageAsync(request.Stage, request.Context, linked.Token).ConfigureAwait(false)
+                    : new StageResult(stop);
+                if (expectedStage == ObservationStage.FinalizeObservation && result.CanAdvance)
+                    HasCompletedFinalMarker = true;
                 request.Completion.TrySetResult(result);
                 if (result.CanAdvance) return;
             }

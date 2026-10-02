@@ -15,6 +15,7 @@ namespace UvexAdv.Nina.Plugin;
 
 internal enum ObservationAttentionSeverity
 {
+    Success,
     Warning,
     Error,
 }
@@ -29,21 +30,61 @@ internal sealed record ObservationAttentionNotificationEvaluation(
     ObservationAttentionNotification? Notification,
     bool ClearActiveIndicator);
 
+internal sealed record ObservationCompletionNotificationContext(
+    string ObservationRunId,
+    string TargetName,
+    long AcceptedScienceFrames,
+    string Adapter);
+
 /// <summary>
 /// Converts coordinator terminal/attention states into one operator alert per
 /// distinct blocker.  Returning to any non-alert state rearms the tracker, so
 /// the same blocker is reported again if it recurs after Resume/revalidation.
+/// Successful completion is deduplicated by run, independently of blocker recovery.
 /// </summary>
 internal sealed class ObservationAttentionNotificationTracker
 {
     private string? activeFingerprint;
+    private readonly HashSet<string> completedRuns = new(StringComparer.Ordinal);
 
     public ObservationAttentionNotificationEvaluation Evaluate(
         ObservationSnapshot snapshot,
         GateResult? currentGate,
-        CultureInfo? culture = null)
+        CultureInfo? culture = null,
+        ObservationCompletionNotificationContext? completion = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+
+        // The shared coordinator publishes Completed only after its durable
+        // completion commit. Neither a passed science gate nor Finalizing is success.
+        if (snapshot.State == ObservationRunState.Completed &&
+            !string.IsNullOrWhiteSpace(snapshot.ObservationRunId))
+        {
+            if (!completedRuns.Add(snapshot.ObservationRunId))
+                return new ObservationAttentionNotificationEvaluation(null, false);
+
+            var ui = culture ?? CultureInfo.CurrentUICulture;
+            var matching = completion?.ObservationRunId == snapshot.ObservationRunId ? completion : null;
+            var simulated = string.Equals(matching?.Adapter, "simulator", StringComparison.Ordinal);
+            var completionTitle = simulated
+                ? ObservationUiPresentation.Text("OpenAstroSpec 模拟目标观测完成", "OpenAstroSpec simulated target completed", ui)
+                : ObservationUiPresentation.Text("OpenAstroSpec 目标观测完成", "OpenAstroSpec target observation completed", ui);
+            var target = string.IsNullOrWhiteSpace(matching?.TargetName)
+                ? ObservationUiPresentation.Text("未提供目标名称", "Target name unavailable", ui)
+                : matching.TargetName;
+            var frames = matching is null
+                ? ObservationUiPresentation.Text("科学帧计数未提供。", "Science frame count unavailable.", ui)
+                : simulated
+                    ? ObservationUiPresentation.Text("模拟流程，未采集真实科学帧。", "Simulation; no real science frames acquired.", ui)
+                    : ObservationUiPresentation.Text($"已接受科学帧：{matching.AcceptedScienceFrames} 张。", $"Accepted science frames: {matching.AcceptedScienceFrames}.", ui);
+            var completionBody = ObservationUiPresentation.Text(
+                $"目标：{target}\n{frames}\n本目标流程和完成记录已保存。整夜序列与设备收口状态请查看运行报告。\n运行：{snapshot.ObservationRunId}",
+                $"Target: {target}\n{frames}\nTarget workflow and completion record saved. See the run report for night sequence and equipment shutdown status.\nRun: {snapshot.ObservationRunId}",
+                ui);
+            activeFingerprint = $"{snapshot.ObservationRunId}|Completed";
+            return new ObservationAttentionNotificationEvaluation(
+                new ObservationAttentionNotification(ObservationAttentionSeverity.Success, completionTitle, completionBody, activeFingerprint), false);
+        }
 
         if (snapshot.State is not (ObservationRunState.PausedNeedsAttention or ObservationRunState.Faulted))
         {
@@ -167,7 +208,11 @@ internal sealed class NinaAndWindowsObservationAttentionNotifier : IObservationA
         try
         {
             var inAppMessage = $"{notification.Title}\n{notification.Body}";
-            if (notification.Severity == ObservationAttentionSeverity.Error)
+            if (notification.Severity == ObservationAttentionSeverity.Success)
+            {
+                NINA.Core.Utility.Notification.Notification.ShowSuccess(inAppMessage);
+            }
+            else if (notification.Severity == ObservationAttentionSeverity.Error)
             {
                 NINA.Core.Utility.Notification.Notification.ShowError(inAppMessage);
             }
@@ -190,17 +235,25 @@ internal sealed class NinaAndWindowsObservationAttentionNotifier : IObservationA
                 if (disposed) return;
                 notifyIcon ??= new Forms.NotifyIcon
                 {
-                    Icon = System.Drawing.SystemIcons.Warning,
                     Text = "OpenAstroSpec Auto",
+                };
+                notifyIcon.Icon = notification.Severity switch
+                {
+                    ObservationAttentionSeverity.Success => System.Drawing.SystemIcons.Information,
+                    ObservationAttentionSeverity.Error => System.Drawing.SystemIcons.Error,
+                    _ => System.Drawing.SystemIcons.Warning,
                 };
                 notifyIcon.Visible = true;
                 notifyIcon.ShowBalloonTip(
                     15_000,
                     Truncate(notification.Title, 63),
                     Truncate(notification.Body.Replace('\n', ' '), 255),
-                    notification.Severity == ObservationAttentionSeverity.Error
-                        ? Forms.ToolTipIcon.Error
-                        : Forms.ToolTipIcon.Warning);
+                    notification.Severity switch
+                    {
+                        ObservationAttentionSeverity.Success => Forms.ToolTipIcon.Info,
+                        ObservationAttentionSeverity.Error => Forms.ToolTipIcon.Error,
+                        _ => Forms.ToolTipIcon.Warning,
+                    });
             }
         }
         catch (Exception ex)

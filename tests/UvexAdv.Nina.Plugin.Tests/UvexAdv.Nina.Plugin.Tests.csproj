@@ -35,6 +35,8 @@
     <ProjectReference Include="..\..\src\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.AtrCoolingRecovery.cs"
+          Link="Sources\RealObservationStageRunner.AtrCoolingRecovery.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\Templates.xaml"
           Link="Templates.xaml"
           CopyToOutputDirectory="PreserveNewest" />
