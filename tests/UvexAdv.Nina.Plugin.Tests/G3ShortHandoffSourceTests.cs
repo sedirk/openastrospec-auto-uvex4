@@ -26,9 +26,13 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("if (accepted) return latest",source);
         Assert.Contains("G3SepShortPositionPolicy.Measure",source);
         Assert.Contains("G3ShortPositionMeasurementPolicy.EvaluateConfirmation",source);
-        Assert.Contains("attempt <= G3PostWcsShortExposurePolicy.MaximumFrames",source);
-        Assert.Contains("confirmation.Accepted && handoffGeometry",source);
-        Assert.Contains("G3_POST_WCS_SHORT_UNCONFIRMED",source);
+        Assert.Contains("attempt <= maximumFrames",source);
+        Assert.Contains("G3PostWcsShortHandoffPolicy.Evaluate",source);
+        Assert.Contains("Gate = accepted ? probe.Gate : decision.Gate",source);
+        Assert.Contains("maximumFrames = attempt + 2",source);
+        Assert.Contains("previousHash = previousPath = null",source);
+        Assert.Contains("boundaryRecheckUsed ? policy",source);
+        Assert.Contains("return latest with { MeasuredPostWcsTarget = null }",source);
         Assert.DoesNotContain("SlitTargetIdentifier.Identify",source);
         Assert.DoesNotContain("SolveImageAsync",source);
         Assert.DoesNotContain("SlewTo",source);

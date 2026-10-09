@@ -26,14 +26,25 @@ public sealed class Phd2GuideOutputRecoveryTests
         var reconnectStateReads = 0;
         await using var server = new FakePhd2Server(async (session, token) =>
         {
+            var equipmentRequest = await session.ReadRequestAsync(token);
+            Assert.Equal("get_current_equipment", equipmentRequest.GetProperty("method").GetString());
+            await session.ReplyResultAsync(equipmentRequest, new
+            {
+                camera = new { name = "bound-camera", connected = true },
+                mount = new { name = "bound-mount", connected = true },
+            }, token);
+            // The next RPC proves the equipment readback was applied before events.
+            var initialState = await session.ReadRequestAsync(token);
+            Assert.Equal("get_app_state", initialState.GetProperty("method").GetString());
             await session.SendEventAsync(new { Event = "StartGuiding" }, token);
             for (var frame = 4; frame <= 6; frame++)
             {
-                await session.SendEventAsync(new { Event = "GuideStep", Frame = frame, Mount = "Mount",
+                await session.SendEventAsync(new { Event = "GuideStep", Frame = frame, Mount = "bound-mount",
                     dx = -1.548, dy = -1.798, RADistanceGuide = -1.786, DECDistanceGuide = 2.326,
                     SNR = 143.67, HFD = 5.36, AvgDist = 1.39, ErrorCode = 1 }, token);
                 if (frame < 6) await Task.Delay(1050, token);
             }
+            await session.ReplyResultAsync(initialState, "Guiding", token);
             var connected = true;
             var state = "Guiding";
             while (!token.IsCancellationRequested)
@@ -90,6 +101,8 @@ public sealed class Phd2GuideOutputRecoveryTests
         await using var client = new Phd2Client(new Phd2ClientOptions { Host = "127.0.0.1", Port = server.Port });
         client.SnapshotChanged += (_, snapshot) => { if (snapshot.GuideOutput?.Failed == true) faultSeen.TrySetResult(); };
         await client.ConnectAsync(CancellationToken.None);
+        await client.GetCurrentEquipmentAsync(CancellationToken.None);
+        await client.GetAppStateAsync(CancellationToken.None);
         await faultSeen.Task.WaitAsync(TimeSpan.FromSeconds(8));
         var fault = Assert.IsType<Phd2GuideOutputStatus>(client.Snapshot.GuideOutput);
         Assert.True(fault.Failed);

@@ -41,7 +41,7 @@ public sealed class PreparationTemplateContractTests
         var categories = advanced.Elements().Where(node => node.Name.LocalName == "TabItem").ToArray();
         Assert.Equal(10, categories.Length);
         Assert.Equal("{Binding SelectedAdvancedCategoryIndex, Mode=TwoWay}", advanced.Attribute("SelectedIndex")?.Value);
-        string[] bindings = ["CommissioningProfiles", "TelescopeCandidates", "AtrCameraCandidates", "G3CameraCandidates", "QhyCameraCandidates",
+        string[] bindings = ["VisibleCommissioningProfiles", "TelescopeCandidates", "AtrCameraCandidates", "G3CameraCandidates", "QhyCameraCandidates",
             "ImportCommissioningBindingsCommand", "PreparationSafetyCapabilityChoices"];
         foreach (var binding in bindings)
         {

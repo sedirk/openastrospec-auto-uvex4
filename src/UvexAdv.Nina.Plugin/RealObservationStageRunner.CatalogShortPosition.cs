@@ -1,4 +1,5 @@
 using NINA.Core.Enum;
+using NINA.Core.Utility;
 using UvexAdv.Observatory;
 using UvexAdv.Phd2;
 
@@ -26,6 +27,7 @@ internal sealed partial class RealObservationStageRunner
         if (exposure is not > 0)
             return Unconfirmed("The clipped formal-WCS frame requires the commissioned short target exposure; none is configured. No new motion was sent.");
         var exposurePolicy = new G3ShortExposurePolicy(exposure.Value);
+        var handoffBoundaryRecheckUsed = false;
         var sourceExposureMilliseconds = field.Image?.MetaData.Image.ExposureTime * 1000 ?? double.NaN;
 
         await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
@@ -172,12 +174,15 @@ internal sealed partial class RealObservationStageRunner
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise)
                 : G3SepShortPositionPolicy.Measure(sepMeasurements, field.TargetIdentification.PredictedPoint,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
-            var nextExposurePolicy = exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt);
+            // A boundary recheck is exactly one same-setting fresh pair, not
+            // another exposure search or a reset of the six-frame ceiling.
+            var nextExposurePolicy = handoffBoundaryRecheckUsed ? exposurePolicy :
+                exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt);
             var rawRoiPeak = G3ShortExposurePolicy.RecognitionPeak(frame,
                 field.TargetIdentification.PredictedPoint, preset.TargetSearchRadiusPixels);
             // Keep a good same-exposure anchor across a transient missed frame.
             // Exposure search is needed only while there is NO valid position.
-            if (previous?.Gate.Disposition != GateDisposition.Passed)
+            if (!handoffBoundaryRecheckUsed && previous?.Gate.Disposition != GateDisposition.Passed)
                 nextExposurePolicy = nextExposurePolicy.AfterUnmeasured(measurement, attempt,
                     rawRoiPeak, frame.SaturationLevel, sourceExposureMilliseconds);
             var signalExposureIncreased = nextExposurePolicy.SignalExposureIncreases > exposurePolicy.SignalExposureIncreases;
@@ -198,7 +203,8 @@ internal sealed partial class RealObservationStageRunner
                 return Unconfirmed("G3_SHORT_FRAME_CHANGED: The first confirmation frame changed; no position was adopted.");
             var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
                 previous, measurement, previousHash, sha, attempt, preset.TargetSearchRadiusPixels, nextExposurePolicy.MaximumFrames);
-            var blendExposurePolicy = nextExposurePolicy.AfterConfirmation(confirmation, measurement, attempt, frame.SaturationLevel);
+            var blendExposurePolicy = handoffBoundaryRecheckUsed ? nextExposurePolicy :
+                nextExposurePolicy.AfterConfirmation(confirmation, measurement, attempt, frame.SaturationLevel);
             var blendExposureIncreased = blendExposurePolicy.ExposureMilliseconds > nextExposurePolicy.ExposureMilliseconds;
             if (blendExposureIncreased)
             {
@@ -220,6 +226,7 @@ internal sealed partial class RealObservationStageRunner
                 new
                 {
                     accepted,
+                    handoffBoundaryRecheckUsed,
                     attempt,
                     policyVersion = primaryAstrometry is null ? G3SepShortPositionPolicy.Version : "sep-exact-id-parent-region-v1",
                     primaryAstrometry,
@@ -271,6 +278,20 @@ internal sealed partial class RealObservationStageRunner
             exposurePolicy = nextExposurePolicy;
             if (!accepted)
             {
+                // Show the CURRENT rejected raw frame, not the clipped solve
+                // preview. No candidate marker: a measured parent is not yet
+                // an identified target. Rendering cannot change the verdict.
+                try
+                {
+                    PublishG3Preview(image, ObservationUiPresentation.Text(
+                        $"位置复核未通过 {attempt}/{exposurePolicy.MaximumFrames} · {exposure} ms · {confirmation.Gate.Code}。这是本次未通过的短帧，不是入缝证明；请检查星像是否空心、离焦或存在邻星。",
+                        $"Position check rejected {attempt}/{exposurePolicy.MaximumFrames} · {exposure} ms · {confirmation.Gate.Code}. Current rejected short frame, not slit-placement proof; inspect hollow/defocused morphology or neighbouring sources."));
+                }
+                catch (Exception ex)
+                {
+                    // A diagnostic view must not hide the original failure.
+                    Logger.Warning($"Rejected G3 short-frame preview unavailable: {ex.Message}");
+                }
                 if (!confirmation.RetryAllowed)
                 {
                     await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
@@ -315,10 +336,36 @@ internal sealed partial class RealObservationStageRunner
                 Gate = GateResult.Pass("TARGET_CATALOG_WCS_SHORT_REFINED",
                     "Formal WCS retains identity; separately hash-bound, unchanged-pointing short evidence supplies a measured coarse centre and its empirical spread. Not exact placement or focus.", measured.Gate.Metrics),
             };
+            var residual = PixelDistance(identification.Target!.Centroid, field.SlitDetection.Geometry.AcquisitionPoint);
+            var handoffRadius = Phd2HandoffResidualPixels(field with { TargetIdentification = identification }, preset);
+            if (G3HandoffBoundaryRecheckPolicy.ShouldRecheck(confirmation.Accepted,
+                field.SlitDetection.Gate.Disposition == GateDisposition.Passed, handoffBoundaryRecheckUsed,
+                residual, positionSpread, handoffRadius, attempt))
+            {
+                handoffBoundaryRecheckUsed = true;
+                // Keep consumed frame numbers and the original absolute ceiling.
+                // Discard BOTH old anchors: no cherry-picking the best historical
+                // pair. Any failure of the new pair follows the normal stop path.
+                exposurePolicy = exposurePolicy with { MaximumFrames = attempt + 2 };
+                previous = null;
+                previousHash = previousFramePath = previousReceipt = null;
+                await PublishRunJsonEvidenceAsync("g3-handoff-boundary-recheck",
+                    "One new short-frame pair before a marginal WCS correction",
+                    new { sourceConfirmation = receipt, residualPixels = residual, spreadPixels = positionSpread,
+                        handoffRadiusPixels = handoffRadius, framesUsed = attempt,
+                        maximumFrames = exposurePolicy.MaximumFrames,
+                        absoluteMaximumFrames = G3ShortExposurePolicy.AbsoluteMaximumFrames,
+                        additionalFrames = 2, exposureMilliseconds = exposure.Value,
+                        sameExposureNewPairRequired = true, motionIssued = false, repeatSolve = false,
+                        handoffAuthorized = false, budgetReset = false }, capture.Path, cancellationToken).ConfigureAwait(false);
+                Report(ObservationUiPresentation.Text(
+                    $"目标距缝 {residual:F2}px，中心在 {handoffRadius:F2}px 交接范围内，但含 {positionSpread:F2}px 分散后越界；先用相同曝光复核两张新帧，不移动、不重新解算，总上限 {exposurePolicy.MaximumFrames} 帧。",
+                    $"Target residual {residual:F2}px lies inside the {handoffRadius:F2}px handoff radius, but its {positionSpread:F2}px spread crosses the boundary. Recheck one new same-exposure pair; no motion or repeat solve; total cap {exposurePolicy.MaximumFrames} frames."));
+                continue;
+            }
             await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
                 "TARGET_BRANCH_PASSED", $"{attempt} 张原预算内短帧完成独立位置复核；分散尺度 {positionSpread:F2}px，仍不是精确入缝。",
                 capture.Path, cancellationToken).ConfigureAwait(false);
-            var residual = PixelDistance(identification.Target!.Centroid, field.SlitDetection.Geometry.AcquisitionPoint);
             PublishG3Preview(image, ObservationUiPresentation.Text(
                 $"短曝光位置已复核：距本轮 LED 狭缝中点 {residual:F2}px，位置分散尺度 {positionSpread:F2}px；仅供粗定位/接管，精入缝仍须新帧实测。",
                 $"Short position confirmed: {residual:F2}px from the run's LED slit midpoint, empirical position spread {positionSpread:F2}px. Coarse handoff only; fresh fine residual still required."),

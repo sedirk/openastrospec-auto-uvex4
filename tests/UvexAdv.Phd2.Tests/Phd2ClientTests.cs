@@ -732,6 +732,105 @@ public sealed class Phd2ClientTests
         Assert.DoesNotContain("guide", server.ReceivedMethods);
     }
 
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    public async Task OwnerManagedGuideNeverForcesRecalibrationAndKeepsNativeFailure(bool calibrated, bool nativeCalibration, bool nativeFailure)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var request = await session.ReadRequestAsync(token);
+                switch (request.GetProperty("method").GetString())
+                {
+                    case "get_profile":
+                        await session.ReplyResultAsync(request, new { id = 2, name = "c11+ccdt67+slit+2210" }, token);
+                        break;
+                    case "get_calibration_data":
+                        await session.ReplyResultAsync(request, new { calibrated, raAngle = 0, decAngle = 42.5,
+                            raRate = 0.00001, decRate = 10000, raParity = "?", decParity = "?" }, token);
+                        break;
+                    case "export_config_settings":
+                        await session.ReplyErrorAsync(request, -32601, "unavailable diagnostic export", token);
+                        break;
+                    case "guide":
+                        Assert.False(request.GetProperty("params").GetProperty("recalibrate").GetBoolean());
+                        await session.ReplyResultAsync(request, 0, token);
+                        if (nativeCalibration)
+                        {
+                            await session.SendEventAsync(new { Event = "StartCalibration" }, token);
+                            await session.SendEventAsync(new { Event = nativeFailure ? "CalibrationFailed" : "CalibrationComplete", Reason = "native failure" }, token);
+                        }
+                        if (!nativeFailure)
+                        {
+                            await session.SendEventAsync(new { Event = "StartGuiding" }, token);
+                            await session.SendEventAsync(new { Event = "SettleBegin" }, token);
+                            await session.SendEventAsync(new { Event = "SettleDone", Status = 0, TotalFrames = 5, DroppedFrames = 0 }, token);
+                        }
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        break;
+                    default: throw new InvalidOperationException(request.ToString());
+                }
+            }
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var validation = await client.ValidateCalibrationAsync(ValidCalibrationRequirement() with
+        {
+            OwnerManaged = true, AllowNativeCalibration = true,
+            CalibrationTimestampUtc = DateTimeOffset.UtcNow.AddDays(-31.21),
+            RequireGuideRateMatch = true,
+        }, CancellationToken.None);
+        // Unsupported native export and missing guide-rate metadata must warn,
+        // not prevent PHD2 from running its own ordinary guide operation.
+        Assert.Equal(calibrated, validation.IsValid);
+        Assert.True(validation.CanStartNativeGuide);
+        Assert.NotEmpty(validation.Warnings);
+        var operation = client.GuideAndSettleAsync(new(1.5, 1, 1), false, CancellationToken.None);
+        if (nativeFailure)
+            await Assert.ThrowsAsync<Phd2CalibrationRejectedException>(() => operation);
+        else
+        {
+            var result = await operation;
+            Assert.True(result.Succeeded);
+            Assert.Equal(nativeCalibration, result.NativeCalibrationOccurred);
+            Assert.True(client.Snapshot.HasCurrentSuccessfulSettle);
+        }
+        Assert.Single(server.ReceivedMethods.Where(method => method == "guide"));
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task OwnerManagedStillRejectsAbsentCalibrationWithoutMotionFreePermissionOrWrongProfile(bool calibrated, bool correctProfile)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                var request = await session.ReadRequestAsync(token);
+                if (request.GetProperty("method").GetString() == "get_profile")
+                    await session.ReplyResultAsync(request, new { id = correctProfile ? 2 : 99, name = "c11+ccdt67+slit+2210" }, token);
+                else
+                    await session.ReplyResultAsync(request, new { calibrated }, token);
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var validation = await client.ValidateCalibrationAsync(ValidCalibrationRequirement() with
+        { OwnerManaged = true, CalibrationTimestampUtc = null }, CancellationToken.None);
+        Assert.False(validation.IsValid);
+        Assert.False(validation.CanStartNativeGuide);
+        await Assert.ThrowsAsync<Phd2CalibrationRejectedException>(() =>
+            client.GuideAndSettleAsync(new(1.5, 1, 1), false, CancellationToken.None));
+        Assert.DoesNotContain("guide", server.ReceivedMethods);
+    }
+
     [Fact]
     public async Task ForcedRecalibrationRequiresIdentityAndStarThenLeavesCalibrationUnapproved()
     {

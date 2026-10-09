@@ -82,7 +82,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "string.Equals(plan.Code, \"FRESH_G3_RESIDUAL_REQUIRED\", StringComparison.Ordinal)",
             "if (!supervisedSlitPrecisionWarning && (nativeCorrectionPending || completionWindowUnstable ||",
             "DateTimeOffset.UtcNow + completionLimits.MaximumStageDuration > completionDeadline",
-            "targetCompletionWindow = await CapturePhd2PlacementGuideWindowAsync(",
+            "var newCompletionMeasurements = await CapturePhd2PlacementGuideWindowAsync(",
             "requiredCompletionFrames, completionDeadline,",
             "session = session with { LastMeasurement = completionMeasurement };",
             "newLockMotion = false",
@@ -116,7 +116,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var reservedReturnAttempts =",
             "var completionDeadline = ledger.StartedUtc + completionLimits.MaximumElapsed -",
             "PHD2_COMPLETION_WINDOW_RETURN_RESERVE:",
-            "targetCompletionWindow = await CapturePhd2PlacementGuideWindowAsync(",
+            "var newCompletionMeasurements = await CapturePhd2PlacementGuideWindowAsync(",
             "requiredCompletionFrames, completionDeadline,");
     }
 

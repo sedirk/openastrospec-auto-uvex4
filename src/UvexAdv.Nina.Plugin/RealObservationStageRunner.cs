@@ -684,7 +684,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                                 $"Science continuation could not verify the unchanged guide/slit evidence: {ex.Message}. No new motion or dependency rebuild was started.")));
                         }
                     }
-                    var replacementBudget = await CheckScienceRebuildBudgetAsync(context, cancellationToken).ConfigureAwait(false);
+                    var replacementBudget = await CheckScienceRebuildBudgetAsync(context, result.Gate, cancellationToken).ConfigureAwait(false);
                     if (replacementBudget is not null) return (false, new StageResult(replacementBudget));
                 }
                 // This uses the same reviewed recovery chain as cooperative
@@ -1517,6 +1517,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var c11OwnerGate = c11RunFocusLock.Validate(c11Focus, nightSetup.Value);
         if (c11OwnerGate.Disposition != GateDisposition.Passed) return c11OwnerGate;
 
+        await RefreshQhyLiveFocusMetricAsync(context, cancellationToken).ConfigureAwait(false);
         var focusEvidence = focusDomainEvidence.BuildLiveFocusDomains(
             new WindowsFocusDomainEvidenceInput(
                 C11Connected: c11Focus.Connected,
@@ -1534,6 +1535,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     focusState.ObservationRunId == context.Plan.ObservationRunId,
                 UvexPortName: uvexStatus.PortName,
                 UvexUsbInstanceId: uvexStatus.UsbInstanceId));
+        await DegradeOptionalQhyLiveSetupAsync(focusEvidence.EvidenceGates, advisoryWarnings).ConfigureAwait(false);
         var focusIdentityIssue = focusEvidence.EvidenceGates
             .FirstOrDefault(gate => gate.Disposition != GateDisposition.Passed &&
                 (qhyAvailableForRun || !IsOptionalQhyLiveSetupGate(gate)));
@@ -1555,6 +1557,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             focusDomains: focusEvidence.FocusDomains,
             evaluatedUtc: DateTimeOffset.UtcNow,
             c11RunStartPositionSteps: c11RunFocusLock.Position);
+        await DegradeOptionalQhyLiveSetupAsync(liveSetupGates.Where(gate =>
+            !CanDeferInitialGs350Metric(gate, nightSetup.Value, currentQhyFocusMetric)), advisoryWarnings).ConfigureAwait(false);
         var requireScienceTemperature = Volatile.Read(ref atrScienceTemperatureRequired) != 0;
         // Evaluate the same NINA-owned sensor now, not a stale CameraInfo zero.
         // The independent identity/geometry gates below remain unchanged.
@@ -1690,8 +1694,50 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     }
 
     private static bool IsOptionalQhyLiveSetupGate(GateResult gate) =>
-        gate.Code.StartsWith("QHY_", StringComparison.Ordinal) ||
-        gate.Code.StartsWith("FOCUS_GS350_WIDE_FIELD_", StringComparison.Ordinal);
+        QhyLiveFocusPolicy.IsOptionalLiveSetupGate(gate);
+
+    private async Task DegradeOptionalQhyLiveSetupAsync(IEnumerable<GateResult> gates, List<string> warnings)
+    {
+        if (!qhyAvailableForRun || QhyLiveFocusPolicy.Degradation(gates) is not { } warning) return;
+        DisableQhyForRun($"{warning.Code}: {warning.Message}");
+        warnings.Add(qhyUnavailableReason!);
+        await WriteAuditBestEffortAsync("qhy-live-setup-degraded", new
+        {
+            warning.Code, warning.Message, spectroscopyMustPassIndependentGates = true,
+            lifecycleHandleRetainedForFinalization = photometryJobId is not null,
+            liveFocusMetricForged = false, focusOrMountMotionAuthorized = false,
+        }).ConfigureAwait(false);
+    }
+
+    private async Task RefreshQhyLiveFocusMetricAsync(ObservationContext context, CancellationToken cancellationToken)
+    {
+        if (!qhyAvailableForRun || photometryJobId is not { } jobId || !qhy.HasOwnerSession(jobId)) return;
+        try
+        {
+            // Read only the already-owned job; never start a new frame for this
+            // checkpoint, reconnect a camera, or re-solve a photometry image.
+            var snapshot = await qhy.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (snapshot is null) return;
+            ObserveQhySnapshot(snapshot);
+            var previous = currentQhyFocusMetric;
+            currentQhyFocusMetric = QhyLiveFocusPolicy.RefreshFromPhotometry(snapshot, jobId,
+                context.Plan.ObservationRunId, context.Plan.ExpectedQhyCameraId, previous, DateTimeOffset.UtcNow);
+            if (!ReferenceEquals(previous, currentQhyFocusMetric))
+                await WriteAuditBestEffortAsync("qhy-live-focus-metric-refreshed", new
+                {
+                    context.Plan.ObservationRunId, jobId, currentQhyFocusMetric,
+                    source = "same-run-owner-photometry-frame", wcsRefreshed = false,
+                    focusOrMountMotionAuthorized = false,
+                }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // Failure to fetch a new metric does not extend the old one's age.
+            // The unchanged live validator will expire it and isolate QHY only.
+            await WriteAuditBestEffortAsync("qhy-live-focus-refresh-unavailable", new { jobId, reason = ex.Message }).ConfigureAwait(false);
+        }
+    }
 
     private static bool IsDeferredAtrCaptureAttestationGate(GateResult gate) =>
         gate.Disposition == GateDisposition.Indeterminate &&
@@ -1699,27 +1745,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
     private static LiveFocusMetricState? BuildQhyFocusMetric(
         QhyFrameRecord accepted,
-        string qhyStableDeviceId)
-    {
-        var fwhm = accepted.Metrics.MedianFwhmPixels;
-        if (fwhm is not { } finiteFwhm || !double.IsFinite(finiteFwhm) || finiteFwhm <= 0 ||
-            accepted.Metrics.QualityFlags.Count != 0 ||
-            string.IsNullOrWhiteSpace(accepted.Sha256))
-        {
-            return null;
-        }
-
-        return new LiveFocusMetricState(
-            new FocusMetricEvidence(
-                FocusMetricKind.QhyStellarShapeAndPlateSolve,
-                qhyStableDeviceId,
-                finiteFwhm,
-                "FWHM pixels",
-                accepted.Sha256),
-            accepted.ExposureEndedUtc,
-            accepted.ExposureEndedUtc.AddMinutes(30),
-            GateDisposition.Passed);
-    }
+        string qhyStableDeviceId) => QhyLiveFocusPolicy.FromFrame(accepted, qhyStableDeviceId);
 
     private async Task<GateResult> ValidateQhyServiceConfigurationAsync(
         ObservationPlan plan,
@@ -2457,6 +2483,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 cameraDeviceId = camera.DeviceId,
                 directToTarget = true,
                 parallelWithAcquisitionPreparation = true,
+                // Connection success does not verify temperature or cooling.
+                nativeOwnerType = cameraMediator.GetDevice()?.GetType().FullName,
+                initialTemperatureC = camera.Temperature,
+                initialSetPointC = camera.TemperatureSetPoint,
+                initialCoolerPowerPercent = camera.CoolerPower,
+                initialCoolerOn = camera.CoolerOn,
+                temperatureVerified = false,
             }).ConfigureAwait(false);
             return GateResult.Pass(
                 "ATR_PRECOOLING_STARTED",
@@ -2519,7 +2552,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // its result for audit but let fresh telemetry drive bounded recovery.
             if (atrPreCoolingTask is { IsCompleted: true } completedCooling)
             {
-                try { _ = await completedCooling.ConfigureAwait(false); }
+                try
+                {
+                    var nativeResult = await completedCooling.ConfigureAwait(false);
+                    await WriteAuditBestEffortAsync("atr-cooling-command-ended", new
+                    {
+                        nativeResult, temperatureVerified = false,
+                        nativeOwnerType = cameraMediator.GetDevice()?.GetType().FullName,
+                        nextAction = "Fresh owner telemetry decides; no extra reconnect allowance.",
+                    }).ConfigureAwait(false);
+                }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex) { await WriteAuditBestEffortAsync("atr-cooling-command-ended", new { error = ex.Message }).ConfigureAwait(false); }
                 atrPreCoolingTask = null;
@@ -2539,6 +2581,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         temperatureToleranceC = AtrCoolingReadinessPolicy.TemperatureToleranceC,
                         readiness.Metrics,
                     }).ConfigureAwait(false);
+                    Report(ObservationUiPresentation.Text(
+                        "光谱相机制冷已通过连续稳定检查；光谱曝光尚未开始，正在复核导星与狭缝新帧。",
+                        "Spectroscopy cooling passed consecutive stable checks; no exposure has started. Revalidating fresh guide/slit evidence.",
+                        ObservationStaticTextLocalization.EffectiveCulture));
                     return readiness;
                 }
             }
@@ -13086,26 +13132,27 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var calibrationBefore = await phd2.ValidateCalibrationAsync(
             PhdCalibrationRequirement(),
             cancellationToken).ConfigureAwait(false);
-        var forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid;
+        if (!calibrationBefore.IsValid)
+            return Attention(ObservationStage.StartGuiding, "PHD2_OWNER_CALIBRATION_UNAVAILABLE",
+                string.Join(" ", calibrationBefore.Failures.Concat(calibrationBefore.IndeterminateReasons)));
+        ReportPhd2OwnerCalibration(calibrationBefore);
         var recalibrationStartedUtc = DateTimeOffset.UtcNow;
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
-        Report(forceRecalibration
-            ? "旧 PHD2 校准未通过，自动强制重标定并等待稳定"
-            : "PHD2 使用已验证校准启动导星并等待稳定");
+        Report("校准由 PHD2 管理；插件不强制重校准，启动导星后核验实际稳定性与入缝位置");
         Volatile.Write(ref phd2GuidingEverStarted, 1);
         var settle = await phd2.GuideAndSettleAsync(
             new Phd2SettleCriteria(
                 configuration.Phd2.SettlePixels,
                 configuration.Phd2.SettleStableSeconds,
                 configuration.Phd2.SettleTimeoutSeconds),
-            forceRecalibration,
+            forceRecalibration: false,
             guideSelectionRoi,
             cancellationToken).ConfigureAwait(false);
         if (!settle.Succeeded)
         {
             return Failed(ObservationStage.StartGuiding, "PHD2_SETTLE_FAILED", settle.Error ?? "PHD2 did not settle.");
         }
-        if (forceRecalibration)
+        if (settle.NativeCalibrationOccurred)
         {
             var calibrationAfter = await phd2.ValidateCalibrationAsync(
                 PhdCalibrationRequirement(recalibrationStartedUtc),
@@ -13228,7 +13275,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 ["guideStarY"] = selected.Y,
                 ["settleFrames"] = settle.TotalFrames,
                 ["settleDroppedFrames"] = settle.DroppedFrames,
-                ["forcedRecalibration"] = forceRecalibration ? 1 : 0,
+                ["forcedRecalibration"] = 0,
+                ["nativeCalibrationOccurred"] = settle.NativeCalibrationOccurred ? 1 : 0,
             });
     }
 
@@ -14196,8 +14244,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             $"PHD2 profile {validation.Evidence.ProfileId}/{validation.Evidence.ProfileName} is bound to the commissioned G3 USB instance, gain and binning.");
     }
 
-    private Phd2CalibrationRequirement PhdCalibrationRequirement(DateTimeOffset? runtimeCalibrationTimestampUtc = null)
+    private void ReportPhd2OwnerCalibration(Phd2CalibrationValidation calibration)
     {
+        Report(calibration.Warnings.Count == 0
+            ? "PHD2 自管校准；插件只核对当前设备与实际导星/入缝，不重复评定校准优劣。"
+            : $"warning：PHD2 自管校准；{calibration.Warnings.Count} 项校准元数据提示已保留，不阻断、不强制重校准。继续核验实际导星与入缝。");
+    }
+
+    private Phd2CalibrationRequirement PhdCalibrationRequirement(DateTimeOffset? runtimeCalibrationTimestampUtc = null,
+        bool allowNativeCalibration = false)
+    {
+        double? raGuideRate = null, decGuideRate = null;
+        // Read the existing master-owned mount only. Never set rates or open a
+        // second ASCOM connection; unknown readback is not equality evidence.
+        try
+        {
+            if (telescopeMediator.GetDevice() is ITelescope mount && mount.Connected)
+            {
+                raGuideRate = mount.GuideRateRightAscensionArcsecPerSec;
+                decGuideRate = mount.GuideRateDeclinationArcsecPerSec;
+            }
+        }
+        catch (Exception) { /* validation below retains the missing-rate evidence */ }
         _ = DateTimeOffset.TryParse(
             configuration.Phd2.CalibrationTimestampUtc,
             CultureInfo.InvariantCulture,
@@ -14210,10 +14278,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             TimeSpan.FromHours(configuration.Phd2.CalibrationMaximumAgeHours),
             RequireKnownAge: true)
         {
+            OwnerManaged = true,
+            AllowNativeCalibration = allowNativeCalibration,
             // The client matches the proof against fresh native data, not a
             // nullable cached validation or the declination-compensated RA rate.
             RuntimeProof = runtimeCalibrationTimestampUtc.HasValue ? null : localPhd2CalibrationProof,
             ReadNativeCalibrationTimestamp = !runtimeCalibrationTimestampUtc.HasValue,
+            RequireGuideRateMatch = true,
+            CurrentRaGuideRateArcsecondsPerSecond = raGuideRate,
+            CurrentDecGuideRateArcsecondsPerSecond = decGuideRate,
         };
     }
 
@@ -14958,6 +15031,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var provenance = new FitsProvenanceExpectation(targetName, context.Plan.ObservationRunId, stageRole,
             captureToken, context.Plan.NightSetupId, imageType, context.Plan.Target.CatalogId.Trim(), HeaderSchemaVersion: 2);
         var identityHeaders = AtrFitsProvenance.CreateIdentityHeaders(provenance);
+        var exposureLedger = await ReadSettledAtrExposureLedgerAsync(context, cancellationToken).ConfigureAwait(false);
         var guideBeforeExposure = phd2.Snapshot;
         // A cloud/guide-window wait can outlast the earlier scheduling margin.
         // Re-evaluate at the actual shutter boundary; a charged failed attempt
@@ -14969,7 +15043,24 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 guideBeforeExposure.AppState == Phd2AppState.LostLock ? "GUIDING_LOST" : "GUIDING_UNSTABLE",
                 "The owner guide state changed after the optical window and before opening the ATR exposure; no exposure was started."));
         PublishAcquisitionProgress(context, "Exposing", stageRole, captureToken, exposureSeconds);
+        var exposureOpenedUtc = DateTimeOffset.UtcNow;
+        var exposureClock = System.Diagnostics.Stopwatch.StartNew();
         var exposure = await imagingMediator.CaptureImage(sequence, cancellationToken, progress, reason).ConfigureAwait(false);
+        exposureClock.Stop();
+        if (exposure is null)
+            throw new InvalidOperationException("ATR_EXPOSURE_EMPTY: The camera returned no completed exposure; no passive exposure time was credited.");
+        try
+        {
+            await RecordAtrExposureClockAsync(context, exposureLedger, captureToken, exposureOpenedUtc,
+                DateTimeOffset.UtcNow, exposureSeconds, exposureClock.Elapsed.TotalSeconds, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Clock bookkeeping must not discard an already captured raw image.
+            // Failure grants no credit; the next recovery re-reads the ledger.
+            await WriteAuditBestEffortAsync("phd2-atr-exposure-clock-not-credited",
+                new { captureToken, reason = ex.Message }).ConfigureAwait(false);
+        }
         PublishAcquisitionProgress(context, "Processing", stageRole, captureToken, exposureSeconds);
         var image = await exposure.ToImageData(progress, cancellationToken).ConfigureAwait(false);
         var guideAfterExposure = phd2.Snapshot;

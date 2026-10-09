@@ -275,7 +275,7 @@ public sealed class XamlBindingSafetyTests
         Assert.Contains("Content=\"生成准备草稿\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("ItemsSource=\"{Binding PreparationSpectralRegionChoices}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
         Assert.Contains("ItemsSource=\"{Binding PreparationCalibrationReferenceChoices}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);
-        foreach (var setting in new[] { "PreparationSafetyCapabilityChoices", "CommissioningProfiles",
+        foreach (var setting in new[] { "PreparationSafetyCapabilityChoices", "VisibleCommissioningProfiles",
                      "TelescopeCandidates", "AtrCameraCandidates", "G3CameraCandidates", "QhyCameraCandidates" })
         {
             Assert.DoesNotContain($"ItemsSource=\"{{Binding {setting}}}\"", dock[preparationTabStart..realtimeTabStart], StringComparison.Ordinal);

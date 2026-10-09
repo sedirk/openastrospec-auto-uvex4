@@ -26,8 +26,10 @@ internal sealed partial class RealObservationStageRunner
         var lastCompleted = DateTimeOffset.MinValue;
         G3PlateSolveProbeState? latest = null;
         const int shortConfirmationGainPercent = 0;
+        var boundaryRecheckUsed = false;
+        var maximumFrames = G3PostWcsShortExposurePolicy.MaximumFrames;
 
-        for (var attempt = 1; attempt <= G3PostWcsShortExposurePolicy.MaximumFrames; attempt++)
+        for (var attempt = 1; attempt <= maximumFrames; attempt++)
         {
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
             var longGate = await ValidateG3ProbeMountBindingForMotionAsync(context, longProbe, cancellationToken).ConfigureAwait(false);
@@ -38,7 +40,7 @@ internal sealed partial class RealObservationStageRunner
             var off = await EnsureSlitIlluminationOffAsync("short target-centre confirmation", true, cancellationToken).ConfigureAwait(false);
             if (off.Issue is not null) throw new InvalidOperationException(off.Issue);
             exposureMilliseconds = policy.ExposureMilliseconds;
-            Report($"小范围 WCS 修正后 SEP 连续复核 {attempt}/{G3PostWcsShortExposurePolicy.MaximumFrames}：{exposureMilliseconds} ms、增益 {shortConfirmationGainPercent}%；需要两张独立一致星像，不移动、不重复解算。");
+            Report($"小范围 WCS 修正后 SEP 连续复核 {attempt}/{maximumFrames}：{exposureMilliseconds} ms、增益 {shortConfirmationGainPercent}%；需要两张独立一致星像，不移动、不重复解算。");
             var before = CaptureG3FrameMountReadback();
             var captured = await CaptureG3NativeSingleFrameForAcquisitionAsync(
                 new Phd2SingleFrameRequest(exposureMilliseconds, configuration.G3.Binning, shortConfirmationGainPercent,
@@ -91,32 +93,47 @@ internal sealed partial class RealObservationStageRunner
             if (longGate.Disposition != GateDisposition.Passed)
                 throw new InvalidOperationException($"{longGate.Code}: {longGate.Message}");
             var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(previous, measurement,
-                previousHash, sha, attempt, preset.TargetSearchRadiusPixels, G3PostWcsShortExposurePolicy.MaximumFrames);
+                previousHash, sha, attempt, preset.TargetSearchRadiusPixels, maximumFrames);
             var handoffGeometry = G3PostWcsMeasuredHandoffPolicy.CanHandOff(longTarget, prediction.PredictedTargetPoint,
                 prediction.MaximumUncertaintyPixels, slit.AcquisitionPoint, frame.Width, frame.Height,
                 preset.MaximumAcquisitionResidualPixels, shortTarget);
-            var accepted = confirmation.Accepted && handoffGeometry;
-            var next = policy.AfterMeasurement(measurement.Gate.Code, attempt);
+            var decision = G3PostWcsShortHandoffPolicy.Evaluate(longTarget, prediction.PredictedTargetPoint,
+                prediction.MaximumUncertaintyPixels, slit.AcquisitionPoint, frame.Width, frame.Height,
+                preset.MaximumAcquisitionResidualPixels, previous, measurement, confirmation, attempt, boundaryRecheckUsed);
+            var accepted = decision.Accepted;
+            var next = boundaryRecheckUsed ? policy : policy.AfterMeasurement(measurement.Gate.Code, attempt);
             var receipt = await PublishRunJsonEvidenceAsync("g3-post-wcs-short-target-confirmation",
                 "SEP continuity check after a small WCS correction (no repeat solve)",
-                new { accepted, attempt, maximumFrames = G3PostWcsShortExposurePolicy.MaximumFrames,
+                new { accepted, attempt, maximumFrames,
                     longFramePath, longTarget, shortFramePath = captured.Path, shortFrameSha256 = sha,
                     exposureMilliseconds, requestedGainPercent = shortConfirmationGainPercent,
                     guidingProfileGainPercent = configuration.G3.GainPercent,
                     captured.GainAndBinningApplied, imageGate, shortTarget, measurement, sep, confirmation, handoffGeometry,
+                    decision, boundaryRecheckUsed,
                     policy, nextExposurePolicy = next, workerHash, moduleHash, previousPath, previousHash,
                     mountGate, binding, prediction.SourceSolveEvidencePath,
                     targetFieldSolvePerformed = false, freshPhd2TargetAndSlitMeasurementStillRequired = true,
                     scienceOrLockShiftAuthorized = false, budgetReset = false }, captured.Path, cancellationToken).ConfigureAwait(false);
-            latest = probe with { SummaryEvidencePath = receipt,
+            latest = probe with { SummaryEvidencePath = receipt, Gate = accepted ? probe.Gate : decision.Gate,
                 MeasuredPostWcsTarget = accepted ? shortTarget with
                 {
                     BoundShortPositionEvidencePath = receipt,
                     CatalogPositionSpreadPixels = confirmation.PositionSpreadPixels,
                 } : null };
             PublishG3Preview(image, accepted ? "SEP 两张独立短帧确认目标靠近狭缝；保留目录身份与狭缝，直接交给 PHD2 新帧精调。" :
-                $"SEP 小范围复核 {attempt}/{G3PostWcsShortExposurePolicy.MaximumFrames}：{confirmation.Gate.Code}；尚未授权入缝。", slit, shortTarget.Target?.Centroid);
+                ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, decision.Gate,
+                    ObservationStaticTextLocalization.EffectiveCulture).Summary, slit, shortTarget.Target?.Centroid);
             if (accepted) return latest;
+            if (decision.RecheckPair)
+            {
+                boundaryRecheckUsed = true;
+                maximumFrames = attempt + 2;
+                previous = null;
+                previousHash = previousPath = null; // a wholly new pair, never cherry-pick from the old one
+                Report(ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, decision.Gate,
+                    ObservationStaticTextLocalization.EffectiveCulture).Summary);
+                continue;
+            }
             if (!confirmation.RetryAllowed || (confirmation.Accepted && !handoffGeometry)) break;
             if (next.ExposureMilliseconds != policy.ExposureMilliseconds)
             {
@@ -133,8 +150,8 @@ internal sealed partial class RealObservationStageRunner
         }
         // Do not spend another 5/10/15-second PL3 ladder and then hand a stale
         // prediction to guiding. Preserve the failed measured evidence instead.
-        return latest! with { Gate = GateResult.Unknown("G3_POST_WCS_SHORT_UNCONFIRMED",
-            "小范围修正后，SEP 短帧仍未确认一致的近缝目标；已保留原目录和本轮狭缝，没有重复整套解算或把预测位置当成实测入缝。"),
-            MeasuredPostWcsTarget = null };
+        Report(ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, latest!.Gate,
+            ObservationStaticTextLocalization.EffectiveCulture).Summary);
+        return latest with { MeasuredPostWcsTarget = null };
     }
 }

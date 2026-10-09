@@ -20,7 +20,27 @@ public static class ObservationOperatorGuidance
         ArgumentNullException.ThrowIfNull(gate);
         var code = gate.Code.ToUpperInvariant();
 
-        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
+        if (code == Phd2StageFailurePolicy.PlacementStarLost)
+            return new ObservationFailureGuidance(
+                ObservationPreviewChannel.G3SlitField,
+                T("PHD2 丢星与入缝实测", "PHD2 StarLost and measured slit position", culture),
+                T("比较丢星前的新帧目标/狭缝残差、导星误差及实际脉冲响应；风可能造成抖动，但不能单凭超时认定。若修正后误差交替放大，核查当前校准、轴方向和回差，勿仅延长稳定等待或放宽容差。保持原账本，确认停止后再处理。",
+                  "Compare fresh target/slit residuals, guide errors and actual pulse response before StarLost. Wind is possible, not proven by timeout. Alternating growing errors after correction require checking calibration, axis directions and backlash, not merely longer settling or relaxed tolerance. Retain the ledger and confirm stopped owners before intervention.", culture));
+
+        if (code == Phd2RecoveryCalibrationPresentation.Code)
+            return new ObservationFailureGuidance(ObservationPreviewChannel.G3SlitField,
+                T("旧入缝记录与校准读回", "Old lock intent and calibration readback", culture),
+                T("这次阻断来自旧入缝恢复，而不是当前手动导星稳定性。核对旧运行、校准年龄及校准/当前导星速率。已人工接管时，在曝光和导星停止、旧自动运行已取消后，显式确认接管旧记录；不以重启代替接管，也不使用失效校准回放旧锁点。",
+                  "This blocks old lock recovery, not current manual guiding stability. Compare the source run, calibration age and saved/current guide rates. After manual takeover, exposures/guiding must stop and automation must be cancelled before explicitly archiving the old intent. Restart is not takeover and invalid calibration cannot replay the old lock.", culture));
+
+        if (code == Phd2GuidingExposurePolicy.MismatchCode)
+            return new ObservationFailureGuidance(
+                ObservationPreviewChannel.G3SlitField,
+                T("PHD2 导星曝光设置与原始帧", "PHD2 guide exposure and raw frame", culture),
+                T("核对本轮期望曝光、原始 FITS 实际曝光和 PHD2 曝光选择历史；先结束本轮、确认空闲再核对下一轮配置，不在导星中覆盖设置。",
+                  "Compare the locked exposure, raw FITS exposure and PHD2 selection history. End the run and confirm idle before reviewing the next run's configuration; do not overwrite settings during guiding.", culture));
+
+        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout or Phd2StageFailurePolicy.NativeFrameTimeout)
             return new ObservationFailureGuidance(
                 ObservationPreviewChannel.G3SlitField,
                 T("PHD2 导星相机取图与连接", "PHD2 guide-camera delivery and connection", culture),

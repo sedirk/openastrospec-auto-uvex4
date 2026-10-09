@@ -6,6 +6,20 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>Operator wording only. Never used to authorize a job or alter its state.</summary>
 internal static class PhotometryUiPresentation
 {
+    internal static string MasterNextAction(string? endpoint, CultureInfo? culture = null) => IsLegacyEndpoint(endpoint)
+        ? T("当前使用独立测光服务：回到“自动观测”顶部勾选“同步测光”，由新一轮观测启动。下面的双实例配对只用于空闲时迁移，本次不需要。", "The photometry service is selected: enable simultaneous photometry at the top of Automatic observation and start a new run. Dual-instance pairing below is only for an idle-boundary migration; it is not needed now.", culture)
+        : T("核对两端配对和测光端接收状态，再回到“自动观测”设置同步测光开关并启动。地址已保存不代表另一实例已连接。", "Check pairing and reception in the photometry instance, then use the simultaneous-photometry switch and Start in Automatic observation. A saved address does not prove a peer connection.", culture);
+
+    internal static string SwitchSummary(bool enabled, string? endpoint, CultureInfo? culture = null)
+    {
+        if (!enabled) return T("关闭 · 仅保留定位短曝", "OFF · acquisition witnesses only", culture);
+        var backend = NinaInstancePolicy.TryWorkerEndpoint(endpoint, out _)
+            ? T("N.I.N.A. 测光端", "photometry N.I.N.A.", culture)
+            : IsLegacyEndpoint(endpoint) ? T("独立测光服务", "photometry service", culture)
+            : T("采集端未配置", "backend not configured", culture);
+        return T($"已启用 · {backend} · 入缝后启动", $"Enabled · {backend} · starts after placement", culture);
+    }
+
     internal static string JobKind(QhyJobKind kind, CultureInfo? culture = null) => kind switch
     {
         QhyJobKind.Acquisition => T("广域定位（光谱优先）", "Wide-field acquisition (spectroscopy priority)", culture),
@@ -54,7 +68,7 @@ internal static class PhotometryUiPresentation
         if (NinaInstancePolicy.TryWorkerEndpoint(endpoint, out _))
             return T("已保存测光端地址；尚未验证连接。实际启动时会核对另一实例及设备身份。", "Photometry address saved; connection is not yet verified. The peer instance and device identities are checked when the run starts.", culture);
         if (IsLegacyEndpoint(endpoint))
-            return T("当前仍使用旧版独立采集服务，尚未切换双 N.I.N.A.。要切换，请先在空闲时释放旧服务，再粘贴测光端地址。", "The legacy acquisition service is still selected, not dual N.I.N.A. To migrate, release the old service while idle, then paste the photometry instance address.", culture);
+            return T("当前采集端：旧版独立测光服务。它也支持同步测光：在“自动观测”顶部勾选“同步测光”，新一轮入缝并导星后自动开始。无需另开 N.I.N.A.。本页双实例配对仅用于迁移，不是第二个测光开关；两种采集端互斥，不能同时连接同一相机。地址已配置不等于正在采集。", "Selected backend: legacy photometry service. It supports simultaneous photometry: enable the switch at the top of Automatic observation; capture starts after slit placement and guiding in a new run. No second N.I.N.A. is needed. Dual-instance pairing here is for migration, not another photometry switch. Backends are exclusive; never connect the same camera to both. A configured address does not mean capture is active.", culture);
         return T("尚未配置有效地址。请从另一 N.I.N.A. 的测光协同页复制地址，不要填写相机型号。", "No valid address is configured. Copy it from the other N.I.N.A. instance's photometry page; do not enter a camera model.", culture);
     }
 

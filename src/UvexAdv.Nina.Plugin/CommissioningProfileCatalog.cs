@@ -52,7 +52,9 @@ internal static class CommissioningProfileCatalog
     public static CommissioningProfileCatalogResult Discover(
         string ninaProfilesDirectory,
         string programDataRoot,
-        string? rememberedBindingsPath = null)
+        string? rememberedBindingsPath = null,
+        string? localDataRoot = null,
+        string? activeNinaProfileId = null)
     {
         var operationalProfile = TryReadDefaultOperationalProfile(programDataRoot);
         var profiles = new List<CommissioningProfileChoice>
@@ -69,10 +71,11 @@ internal static class CommissioningProfileCatalog
         var g3 = new List<DeviceIdentityChoice>();
         var qhy = new List<DeviceIdentityChoice>();
 
-        DiscoverNinaProfiles(ninaProfilesDirectory, telescopes, atr, qhy);
+        DiscoverNinaProfiles(ninaProfilesDirectory, telescopes, atr, qhy, activeNinaProfileId);
         DiscoverQhyConfiguration(programDataRoot, qhy);
         DiscoverPhd2Evidence(programDataRoot, g3);
         DiscoverBindings(programDataRoot, profiles);
+        if (!string.IsNullOrWhiteSpace(localDataRoot)) DiscoverBindings(localDataRoot, profiles);
         if (rememberedBindingsPath is { Length: > 0 } remembered &&
             remembered.EndsWith(".bindings.json", StringComparison.OrdinalIgnoreCase) &&
             File.Exists(remembered))
@@ -200,14 +203,32 @@ internal static class CommissioningProfileCatalog
             ?? profiles.FirstOrDefault();
     }
 
+    // Browsing history is explicit. Keep the active selection visible even when
+    // it is old; never silently substitute a different installation package.
+    public static IReadOnlyList<CommissioningProfileChoice> VisibleProfiles(
+        IReadOnlyList<CommissioningProfileChoice> profiles, string? selectedId, bool includeHistory)
+    {
+        if (includeHistory) return profiles;
+        var newest = SelectStartupProfile(profiles, null);
+        return profiles.Where(item => item.IsAutomatic ||
+            string.Equals(item.Id, selectedId, StringComparison.OrdinalIgnoreCase) || item.Id == newest?.Id).ToArray();
+    }
+
+    internal static DeviceIdentityChoice? SavedOrUniqueCandidate(IReadOnlyList<DeviceIdentityChoice> candidates, string savedId) =>
+        candidates.FirstOrDefault(item => string.Equals(item.Id, savedId, StringComparison.OrdinalIgnoreCase)) ??
+        (string.IsNullOrWhiteSpace(savedId) && candidates.Count == 1 ? candidates[0] : null);
+
     private static void DiscoverNinaProfiles(
         string directory,
         ICollection<DeviceIdentityChoice> telescopes,
         ICollection<DeviceIdentityChoice> atr,
-        ICollection<DeviceIdentityChoice> qhy)
+        ICollection<DeviceIdentityChoice> qhy,
+        string? activeNinaProfileId)
     {
         if (!Directory.Exists(directory)) return;
-        foreach (var path in Directory.EnumerateFiles(directory, "*.profile", SearchOption.TopDirectoryOnly))
+        foreach (var path in Directory.EnumerateFiles(directory, "*.profile", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(path => string.Equals(Path.GetFileNameWithoutExtension(path), activeNinaProfileId, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
@@ -221,7 +242,7 @@ internal static class CommissioningProfileCatalog
                 AddDevice(
                     telescopes,
                     ChildValue(telescope, "Id"),
-                    $"{ChildValue(telescope, "LastDeviceName")} · N.I.N.A. 配置“{profileName}”",
+                    $"{ChildValue(telescope, "LastDeviceName")} · 记录来源：{profileName}",
                     $"N.I.N.A. 配置：{profileName}");
 
                 var camera = Child(root, "CameraSettings");
@@ -244,7 +265,7 @@ internal static class CommissioningProfileCatalog
                     AddDevice(
                         atr,
                         boundAtr,
-                        $"ATR585M · 既有绑定 · N.I.N.A. 配置“{profileName}”",
+                        $"ATR585M · 保存的绑定（来源：{profileName}）",
                         $"OpenAstroSpec 既有绑定：{profileName}");
                 }
                 if (pluginValues.TryGetValue(nameof(UvexPluginSettings.ObservationExpectedAtrCameraId), out var expectedAtr) &&
@@ -349,8 +370,8 @@ internal static class CommissioningProfileCatalog
                 : !string.IsNullOrWhiteSpace(setupId) ? setupId : Path.GetFileNameWithoutExtension(path);
             profiles.Add(new CommissioningProfileChoice(
                 Path.GetFullPath(path),
-                $"设备标定方案 · {label}",
-                $"经文件导入：{Path.GetFileName(path)}",
+                $"安装标定 · {File.GetLastWriteTime(path):yyyy-MM-dd HH:mm} · 狭缝 {JsonElementValue(values, nameof(UvexPluginSettings.ExpectedUvexSlitPosition))} · G3 {JsonElementValue(values, nameof(UvexPluginSettings.G3ExposureMilliseconds))} ms",
+                $"安装记录（不是目标或曝光计划）：{label}。来源：{Path.GetFileName(path)}；只有点击加载才应用。",
                 Path.GetFullPath(path),
                 false));
         }
@@ -457,6 +478,9 @@ internal static class CommissioningProfileCatalog
         values.TryGetValue(name, out var node) && node.ValueKind == JsonValueKind.String
             ? node.GetString() ?? string.Empty
             : string.Empty;
+
+    private static string JsonElementValue(IReadOnlyDictionary<string, JsonElement> values, string name) =>
+        values.TryGetValue(name, out var node) ? node.ToString() : "—";
 
     private static bool TryGetProperty(JsonElement parent, string name, out JsonElement value)
     {

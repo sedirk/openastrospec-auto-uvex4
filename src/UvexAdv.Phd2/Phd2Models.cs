@@ -107,9 +107,17 @@ public sealed record Phd2CalibrationRequirement(
     bool RequireKnownAge = true)
 {
     public Phd2RuntimeCalibrationProof? RuntimeProof { get; init; }
+    // ADR-0020: PHD2 owns calibration. Numerical/provenance checks are diagnostics.
+    public bool OwnerManaged { get; init; }
+    // Only a fresh, motion-free acquisition may allow PHD2 to calibrate as part
+    // of its ordinary guide command. Recovery of an outstanding lock never may.
+    public bool AllowNativeCalibration { get; init; }
     // Local native export supplies original calibration age across client restarts.
     // It exports diagnostics only; it never imports/mutates the PHD2 profile.
     public bool ReadNativeCalibrationTimestamp { get; init; }
+    public bool RequireGuideRateMatch { get; init; }
+    public double? CurrentRaGuideRateArcsecondsPerSecond { get; init; }
+    public double? CurrentDecGuideRateArcsecondsPerSecond { get; init; }
 }
 
 // A locally observed native recalibration supplies age, never quality authority.
@@ -144,10 +152,21 @@ public sealed record Phd2CalibrationValidation(
     IReadOnlyList<string> Failures,
     IReadOnlyList<string> IndeterminateReasons)
 {
+    public bool OwnerManaged { get; init; }
+    public bool AllowNativeCalibration { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+    public bool CanStartNativeGuide => IsValid ||
+        (OwnerManaged && AllowNativeCalibration && !Calibration.Calibrated &&
+         IndeterminateReasons.Count == 0 && Failures.Count == 1 &&
+         Failures[0] == "mount calibration is absent");
     public string CalibrationTimestampSource { get; init; } = "Configured";
     public DateTimeOffset? CalibrationTimestampUtc { get; init; }
     public long ConnectionEpoch { get; init; }
     public long CalibrationChangeSequence { get; init; }
+
+    public Phd2NativeCalibrationDetails? NativeDetails { get; init; }
+    public double? CurrentRaGuideRateArcsecondsPerSecond { get; init; }
+    public double? CurrentDecGuideRateArcsecondsPerSecond { get; init; }
 
     public Phd2ValidationStatus Status => Failures.Count > 0
         ? Phd2ValidationStatus.Invalid
@@ -198,7 +217,10 @@ public sealed record Phd2SettleResult(
     string? Error,
     int TotalFrames,
     int DroppedFrames,
-    DateTimeOffset CompletedUtc);
+    DateTimeOffset CompletedUtc)
+{
+    public bool NativeCalibrationOccurred { get; init; }
+}
 
 public sealed record Phd2StopCaptureResult(
     Phd2AppState InitialState,
@@ -267,6 +289,7 @@ public sealed record Phd2StateSnapshot(
     Phd2ConfigurationChangeEvidence? LastConfigurationChange = null)
 {
     public long CalibrationChangeSequence { get; init; }
+    public bool PendingOwnerCalibrationAllowed { get; init; }
 
     public bool HasCurrentSuccessfulSettle =>
         IsConnected &&

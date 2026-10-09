@@ -64,4 +64,134 @@ public sealed class Phd2ScienceContinuationPolicyTests
         Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(Ledger() with { CumulativeCommandedPixels = 100 }, Start.AddSeconds(50)));
         Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(Ledger(), Start.AddSeconds(300)));
     }
+
+    [Fact]
+    public void Completed600SecondExposurePreservesOriginalActiveTimeAndAllMotionLimits()
+    {
+        var before = Ledger();
+        var after = Credit(before, 200, 805, 600, 605)!;
+        Assert.NotNull(after);
+        Assert.Equal(600, after.ExcludedAtrExposureSeconds);
+        Assert.Equal(Start, after.StartedUtc);
+        Assert.Equal(before.AttemptsUsed, after.AttemptsUsed);
+        Assert.Equal(before.CumulativeCommandedPixels, after.CumulativeCommandedPixels);
+        Assert.Equal(before.MaximumElapsedSeconds, after.MaximumElapsedSeconds);
+        Assert.Equal(Start.AddSeconds(600), after.ToPlannerLedger().StartedUtc);
+        Assert.True(Phd2ScienceContinuationPolicy.HasReplacementBudget(after, Start.AddSeconds(805)));
+        Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(after, Start.AddSeconds(900)));
+        Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(after with { AttemptsUsed = 8 }, Start.AddSeconds(805)));
+        Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(after with { CumulativeCommandedPixels = 100 }, Start.AddSeconds(805)));
+        Assert.Equal(Start.AddSeconds(1000), after.ToRecoveryEpisodePlannerLedger(Start.AddSeconds(1000)).StartedUtc);
+    }
+
+    [Fact]
+    public void ReportedEightProbeDurationsDoNotBecomeFineMotionTime()
+    {
+        var ledger = Ledger();
+        var cursor = 200d;
+        foreach (var seconds in new[] { 0.1, 0.3, 1, 3, 10, 15, 30, 600 })
+        {
+            ledger = Credit(ledger, cursor, cursor + seconds, seconds, seconds)!;
+            cursor += seconds;
+        }
+        Assert.Equal(659.4, ledger.ExcludedAtrExposureSeconds, 6);
+        Assert.Equal(208.8259, (Start.AddSeconds(868.2259) - ledger.MotionClockStartedUtc).TotalSeconds, 5);
+        Assert.True(Phd2ScienceContinuationPolicy.HasReplacementBudget(ledger, Start.AddSeconds(868.2259)));
+        // Credit is only accounting: a lost guide epoch still rejects the observation shortcut.
+        Assert.False(Phd2ScienceContinuationPolicy.CanObserveAtSettledLock(ledger,
+            State() with { AppState = Phd2AppState.LostLock, GuideEpoch = 142 },
+            1, 86, true, new(1785.13, 447.2), 0.05));
+    }
+
+    [Theory]
+    [InlineData(620, 600, 620, 600)]
+    [InlineData(600, 600, 590, 590)]
+    [InlineData(580, 600, 600, 580)]
+    public void CreditNeverExceedsRequestedExposureWallOrMonotonicTime(double wall, double requested, double monotonic, double expected)
+    {
+        Assert.Equal(expected, Credit(Ledger(), 50, 50 + wall, requested, monotonic)!.ExcludedAtrExposureSeconds);
+    }
+
+    [Fact]
+    public void ExposureDoesNotReviveAlreadyExpiredMotionTimeOrExcludePause()
+    {
+        var expired = Credit(Ledger(), 350, 950, 600, 600)!;
+        Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(expired, Start.AddSeconds(950)));
+        var completed = Credit(Ledger(), 100, 700, 600, 600)!;
+        Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(completed, Start.AddSeconds(1000)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    public void NoCreditForOutstandingOrRetiredMotion(int phase)
+    {
+        Assert.Null(Credit(Ledger() with { Phase = (Phd2LockShiftPendingPhase)phase }, 50, 650, 600, 600));
+    }
+
+    [Fact]
+    public void NoCreditForChangedLedgerDuplicateOrOverlappingCapture()
+    {
+        var before = Ledger();
+        var after = Credit(before, 50, 650, 600, 600)!;
+        Assert.Null(Phd2ScienceContinuationPolicy.CreditExposure(before, after, Start.AddSeconds(50), Start.AddSeconds(650), 600, 600));
+        Assert.Null(Credit(after, 50, 650, 600, 600));
+        Assert.Null(Credit(before, 20, 620, 600, 600));
+        Assert.Null(Phd2ScienceContinuationPolicy.CreditExposure(before, before with { AttemptsUsed = 4 }, Start.AddSeconds(50), Start.AddSeconds(650), 600, 600));
+        Assert.Null(Credit(before, 650, 50, 600, 600));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public void InvalidDurationsAreNeverCredited(double invalid)
+    {
+        Assert.Null(Credit(Ledger(), 50, 650, invalid, 600));
+        Assert.Null(Credit(Ledger(), 50, 650, 600, invalid));
+    }
+
+    [Fact]
+    public async Task DurableStoreReadsHistoricalZeroFieldAndPreservesNonzeroCreditAndHash()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "uvex-clock-test-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var before = Ledger();
+            await Phd2LockShiftPendingStore.WriteAtomicAsync(path, before, CancellationToken.None);
+            var historical = await File.ReadAllTextAsync(path);
+            Assert.DoesNotContain("excludedAtrExposureSeconds", historical);
+            Assert.DoesNotContain("motionClockStartedUtc", historical);
+            Assert.Equal(before, (await Phd2LockShiftPendingStore.LoadAsync(path, CancellationToken.None)).State);
+            var after = Credit(before, 50, 650, 600, 600)!;
+            await Phd2LockShiftPendingStore.WriteAtomicAsync(path, after, CancellationToken.None);
+            Assert.Equal(after, (await Phd2LockShiftPendingStore.LoadAsync(path, CancellationToken.None)).State);
+            var json = await File.ReadAllTextAsync(path);
+            Assert.Contains("\"excludedAtrExposureSeconds\": 600", json);
+            await File.WriteAllTextAsync(path, json.Replace("\"excludedAtrExposureSeconds\": 600", "\"excludedAtrExposureSeconds\": 601"));
+            Assert.Contains("SHA-256", (await Phd2LockShiftPendingStore.LoadAsync(path, CancellationToken.None)).Error!);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void HandoffCannotDropOrInflateCreditedExposure()
+    {
+        var source = Credit(Ledger(), 50, 650, 600, 600)!;
+        source = source with { CurrentLockX = source.OriginLockX, CurrentLockY = source.OriginLockY,
+            RequestedLockX = source.OriginLockX, RequestedLockY = source.OriginLockY };
+        var copy = Phd2LockShiftBudgetHandoff.CreateCurrentRunSettledCopy(source, "next", source.RecoveryContextSha256, Start.AddSeconds(651));
+        Assert.Empty(Phd2LockShiftBudgetHandoff.ValidateCompletedHandoff(source, copy, "next", source.RecoveryContextSha256));
+        foreach (var excluded in new[] { 0d, 601d })
+            Assert.NotEmpty(Phd2LockShiftBudgetHandoff.ValidateCompletedHandoff(source, copy with { ExcludedAtrExposureSeconds = excluded }, "next", source.RecoveryContextSha256));
+        Assert.NotEmpty((source with { ExcludedAtrExposureSeconds = 651 }).Validate());
+        Assert.NotEmpty((source with { ExcludedAtrExposureSeconds = double.NaN }).Validate());
+    }
+
+    private static Phd2LockShiftPendingState? Credit(Phd2LockShiftPendingState before, double opened, double completed, double requested, double monotonic) =>
+        Phd2ScienceContinuationPolicy.CreditExposure(before, before, Start.AddSeconds(opened), Start.AddSeconds(completed), requested, monotonic);
 }

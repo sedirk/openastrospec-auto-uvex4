@@ -72,6 +72,23 @@ public sealed class ScenarioCatalogTests
         Assert.True(ScenarioCatalog.Select("target-strategy-narrow-bottom").Single().ExercisePlanScrolling);
     }
 
+    [Theory]
+    [InlineData("guide-output-unavailable")]
+    [InlineData("guide-output-unavailable-narrow")]
+    [InlineData("guide-output-unavailable-en")]
+    public void NativeOutputFailureScenariosUseProductionIssueWithConcreteEvidence(string name)
+    {
+        var scenario = ScenarioCatalog.Select(name).Single();
+        var vm = scenario.ViewModel;
+        Assert.Equal("PHD2_GUIDE_OUTPUT_UNAVAILABLE", vm.LastFailureCode);
+        Assert.True(vm.IsSimulationMode);
+        Assert.Contains("On-Step (ASCOM)", vm.LastFailureTechnicalDetails);
+        Assert.Contains("-3.765", vm.LastFailureMetrics);
+        Assert.Contains("reportedRaPulseMilliseconds=0", vm.LastFailureMetrics);
+        Assert.DoesNotContain("COARSE_HANDOFF", vm.LastFailureCode);
+        Assert.Equal(5, vm.SelectedWorkspaceTabIndex);
+    }
+
     [Fact]
     public void FocusScenariosExposeInvalidBusyCancelledAndNativeStatesWithoutDevices()
     {
@@ -141,6 +158,12 @@ public sealed class ScenarioCatalogTests
             .Concat(new[] { "g3-slit-extent", "g3-slit-extent-narrow" })
             .Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
         expected = expected.Concat(new[] { "atr-reduced", "atr-reduced-narrow", "atr-reduced-missing", "native-night", "native-night-narrow", "native-failure-popup", "native-failure-popup-en", "native-meridian", "native-meridian-narrow", "native-meridian-en" }).ToArray();
+        expected = expected.Concat(new[] { "photometry-legacy-master", "photometry-legacy-master-en", "photometry-legacy-master-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "guide-exposure-mismatch", "guide-exposure-mismatch-en", "guide-exposure-mismatch-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "short-handoff-outside", "short-handoff-outside-en", "short-handoff-outside-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "guide-output-unavailable", "guide-output-unavailable-en", "guide-output-unavailable-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "lock-recovery-calibration", "lock-recovery-calibration-narrow", "lock-recovery-calibration-en" }).ToArray();
+        expected = expected.Concat(new[] { "g3-split-morphology", "g3-split-morphology-narrow", "g3-split-morphology-en" }).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());

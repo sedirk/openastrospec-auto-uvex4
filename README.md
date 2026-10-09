@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-03.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-09.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
 [live spectrum preview](docs/live-spectrum-preview.md) ·
@@ -37,21 +37,28 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 3 closeout](docs/closeout-2026-10-03.md) consolidates **0.4.0.210–223**:
-native night/target sequencing and the dedicated spectroscopy meridian trigger,
-reduction-backed live previews, bounded acquisition/guiding/ATR cooling recovery,
-and durable-completion notifications. The installed **0.4.0.223** package matches
-all 41 rebuilt deployment files. **2,387 .NET tests, 75 reduction tests and Ruff
-passed**. After the operator stowed the hardware, this software-only closeout
-released the cameras and normally exited N.I.N.A.; no new observation or motion
-was started, and N.I.N.A. was not restarted.
+The [October 9 closeout](docs/closeout-2026-10-09.md) consolidates **0.4.0.224–240**:
+PHD2-owned calibration with advisory metadata (ADR-0020), bounded guide-window and
+short-frame handoff fixes, exposure-clock/photometry continuity, simpler preparation,
+and same-star paired autofocus validation. **2,619 .NET tests, 75 reduction tests,
+Ruff and four frozen-design checks passed**; the independent SEP suite passed 43
+tests with 2 skipped. All 41 installed **.240** plugin files match the rebuild.
+After operator hardware stow, N.I.N.A. was normally closed and the photometry
+camera released; no new observation, motion or application restart was performed.
 
-A supervised **.220** run completed with three accepted 600-second frames,
-including one reused final trial. That is version-specific evidence, not .223
-acceptance. The last .223 EW Lac run was cancelled during guide-field acquisition;
-it did not reach the new correction-window policy. Complete .223 sky acquisition,
-native multi-target/meridian/automatic night closure and unattended safety remain
-separate commissioning requirements.
+On **.240**, EW Lac completed at 01:47 with three accepted 600-second frames
+(one reused final trial), all hash-checked, plus 260 photometry frames and two
+acquisition frames. It retained supervised slit-precision warnings; it is not
+strict placement, calibrated science or unattended certification. The later 78 Psc
+run failed guide-field acquisition under operator-confirmed cloud, returned to its
+search origin and was cancelled without ATR exposure. The autofocus candidate
+near 4949 did not repeat its improvement: 5000 was retained, not declared optimal.
+Dual-N.I.N.A. photometry, uninterrupted multi-target/meridian operations and
+unattended safety remain separate commissioning requirements.
+
+The historical [October 3 closeout](docs/closeout-2026-10-03.md) retains the
+**.210–.223** sequencing, live-spectrum, cooling-recovery and notification work,
+including its version-specific .220 supervised success and .223 failed run.
 
 The historical [September 16 evening closeout](docs/closeout-2026-09-16-evening.md) covers
 installed **0.4.0.209**: run-local main-telescope focus independent of UVEX internal

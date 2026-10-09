@@ -13,6 +13,29 @@ internal sealed record Phd2CorrectionWindowDecision(
 
 internal static class Phd2PlacementGuideWindowPolicy
 {
+    internal static bool CanRollCorrectionWindow(bool supervised, Phd2SlitGuideMode guideMode,
+        bool planAllowed, bool planComplete, bool waitingForLock, int availableFrames, int requiredFrames) =>
+        supervised && guideMode == Phd2SlitGuideMode.OffSlitGuideStar && planAllowed && !planComplete &&
+        waitingForLock && availableFrames >= Math.Max(3, requiredFrames);
+
+    // FIFO only: never search for a favourable subset or average away a bad
+    // frame. Callers must keep the same guide epoch AND exact lock; after any
+    // motion the production path acquires an entirely new post-lock window.
+    internal static IReadOnlyList<T> AppendConsecutiveSample<T>(IReadOnlyList<T> previous, T latest,
+        int requiredFrames, Func<T, Phd2SlitFieldMeasurement> measurement)
+    {
+        var count = Math.Max(3, requiredFrames);
+        if (previous.Count < count)
+            throw new InvalidOperationException("PHD2_ROLLING_WINDOW_INCOMPLETE: A full preceding window is required.");
+        var next = measurement(latest);
+        var last = measurement(previous[^1]);
+        if (next.CapturedUtc <= last.CapturedUtc ||
+            previous.Any(item => string.Equals(measurement(item).FrameSha256, next.FrameSha256, StringComparison.OrdinalIgnoreCase)) ||
+            previous.Any(item => measurement(item).TopologyFingerprintSha256 != next.TopologyFingerprintSha256))
+            throw new InvalidOperationException("PHD2_ROLLING_WINDOW_EVIDENCE_CHANGED: Repeated, out-of-order or different-topology evidence cannot extend this window.");
+        return previous.Skip(previous.Count - (count - 1)).Append(latest).ToArray();
+    }
+
     // Motion continuation is not final slit/guide-quality acceptance. For an
     // explicitly supervised off-slit guide, common image motion cancels in
     // guide + slit - target. Use EVERY frame to check that absolute endpoint,

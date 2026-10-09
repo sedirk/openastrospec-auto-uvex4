@@ -173,8 +173,10 @@ public sealed record Phd2CalibrationQualityAssessment(
     IReadOnlyList<string> HardFailures,
     DateTimeOffset EvaluatedUtc)
 {
+    public bool OwnerManaged { get; init; }
+    public IReadOnlyList<string> CalibrationWarnings { get; init; } = Array.Empty<string>();
     public string Summary =>
-        $"{Grade}: {string.Join(" ", HardFailures.Count > 0 ? HardFailures : Reasons)}";
+        $"{(OwnerManaged ? "PHD2-owned calibration; operational " : "")}{Grade}: {string.Join(" ", HardFailures.Count > 0 ? HardFailures : Reasons)}";
 }
 
 public sealed record Phd2CalibrationCandidateSelection(
@@ -195,7 +197,7 @@ public static partial class Phd2CalibrationQualityEvaluator
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(candidate.Validation);
         ArgumentNullException.ThrowIfNull(policy);
-        ValidatePolicy(policy);
+        ValidatePolicy(policy, candidate.Validation.OwnerManaged);
 
         var reasons = new List<string>();
         var failures = new List<string>();
@@ -215,35 +217,41 @@ public static partial class Phd2CalibrationQualityEvaluator
         {
             failures.Add("current PHD2 camera or mount identity does not match");
         }
+        var calibrationWarnings = new List<string>(validation.Warnings);
+        var diagnosticGrade = Phd2CalibrationQualityGrade.Excellent;
+        var calibrationReasons = validation.OwnerManaged ? calibrationWarnings : reasons;
+        var calibrationFailures = validation.OwnerManaged ? calibrationWarnings : failures;
         if (candidate.CalibrationTopologyMatched == false)
         {
-            failures.Add("camera/profile/ROI/binning/topology differs from the calibration evidence");
+            calibrationFailures.Add("camera/profile/ROI/binning/topology differs from the calibration evidence");
         }
         else if (!candidate.CalibrationTopologyMatched.HasValue)
         {
-            Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
-            reasons.Add("calibration-to-current topology provenance is unavailable; supervised use only");
+            Cap(ref diagnosticGrade, Phd2CalibrationQualityGrade.DegradedSupervised);
+            calibrationReasons.Add("calibration-to-current topology provenance is unavailable");
         }
         if (candidate.CalibrationPierSideMatched == false)
         {
-            failures.Add("current pier side differs from the calibration evidence");
+            calibrationFailures.Add("current pier side differs from the calibration evidence");
         }
         else if (!candidate.CalibrationPierSideMatched.HasValue)
         {
-            Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
-            reasons.Add("calibration pier-side provenance is unavailable; supervised use only");
+            Cap(ref diagnosticGrade, Phd2CalibrationQualityGrade.DegradedSupervised);
+            calibrationReasons.Add("calibration pier-side provenance is unavailable");
         }
         if (!candidate.CalibrationProcessEvidenceComplete)
         {
-            Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
-            reasons.Add("complete calibration-process evidence is unavailable; supervised use only");
+            Cap(ref diagnosticGrade, Phd2CalibrationQualityGrade.DegradedSupervised);
+            calibrationReasons.Add("complete calibration-process evidence is unavailable");
         }
 
-        if (!calibration.Calibrated)
+        var nativeCalibrationPermitted = candidate.Phase == Phd2CalibrationEvaluationPhase.PreGuide &&
+            validation.CanStartNativeGuide && validation.OwnerManaged && validation.AllowNativeCalibration;
+        if (!calibration.Calibrated && !nativeCalibrationPermitted)
         {
             failures.Add("PHD2 reports no mount calibration");
         }
-        if (validation.Failures.Count > 0)
+        if (validation.Failures.Count > 0 && !nativeCalibrationPermitted)
         {
             failures.AddRange(validation.Failures.Select(reason => $"calibration validation: {reason}"));
         }
@@ -252,13 +260,19 @@ public static partial class Phd2CalibrationQualityEvaluator
             failures.AddRange(validation.IndeterminateReasons.Select(reason => $"calibration validation is indeterminate: {reason}"));
         }
 
-        GradeAge(validation.CalibrationAge, policy, ref grade, reasons, failures);
-        GradeOrthogonality(validation.OrthogonalityErrorDegrees, policy, ref grade, reasons, failures);
-        ValidateAxisDirection("RA", calibration.RaAngleDegrees, calibration.RaRatePixelsPerSecond, calibration.RaParity, failures);
-        ValidateAxisDirection("Dec", calibration.DecAngleDegrees, calibration.DecRatePixelsPerSecond, calibration.DecParity, failures);
-        GradeSymmetry("RA", candidate.RaBidirectionalRateRatio, policy, ref grade, reasons, failures);
-        GradeSymmetry("Dec", candidate.DecBidirectionalRateRatio, policy, ref grade, reasons, failures);
-        var crossAxisRateRatio = GradeCrossAxisRateRatio(calibration, policy, ref grade, reasons, failures);
+        GradeAge(validation.CalibrationAge, policy, ref diagnosticGrade, calibrationReasons, calibrationFailures);
+        GradeOrthogonality(validation.OrthogonalityErrorDegrees, policy, ref diagnosticGrade, calibrationReasons, calibrationFailures);
+        ValidateAxisDirection("RA", calibration.RaAngleDegrees, calibration.RaRatePixelsPerSecond, calibration.RaParity, calibrationFailures);
+        ValidateAxisDirection("Dec", calibration.DecAngleDegrees, calibration.DecRatePixelsPerSecond, calibration.DecParity, calibrationFailures);
+        GradeSymmetry("RA", candidate.RaBidirectionalRateRatio, policy, ref diagnosticGrade, calibrationReasons, calibrationFailures);
+        GradeSymmetry("Dec", candidate.DecBidirectionalRateRatio, policy, ref diagnosticGrade, calibrationReasons, calibrationFailures);
+        var crossAxisRateRatio = GradeCrossAxisRateRatio(calibration, policy, ref diagnosticGrade, calibrationReasons, calibrationFailures);
+        grade = validation.OwnerManaged ? Phd2CalibrationQualityGrade.Qualified : diagnosticGrade;
+        if (validation.OwnerManaged)
+        {
+            reasons.Add("Calibration is managed by PHD2; its age, geometry, rates, parity and historical provenance are advisory only. This grade describes current operational evidence, not calibration quality.");
+            reasons.AddRange(calibrationWarnings.Distinct().Select(reason => "warning: " + reason));
+        }
 
         if (candidate.Phase == Phd2CalibrationEvaluationPhase.PostSettle)
         {
@@ -290,9 +304,9 @@ public static partial class Phd2CalibrationQualityEvaluator
         var unattended = grade is Phd2CalibrationQualityGrade.Excellent or Phd2CalibrationQualityGrade.Qualified &&
             usableSupervised &&
             !guideTrackingWarning &&
-            candidate.CalibrationProcessEvidenceComplete &&
+            (validation.OwnerManaged || (candidate.CalibrationProcessEvidenceComplete &&
             candidate.CalibrationTopologyMatched == true &&
-            candidate.CalibrationPierSideMatched == true;
+            candidate.CalibrationPierSideMatched == true));
         var maximumLockShiftScale = grade switch
         {
             Phd2CalibrationQualityGrade.Excellent or Phd2CalibrationQualityGrade.Qualified => policy.QualifiedMaximumLockShiftScale,
@@ -334,7 +348,11 @@ public static partial class Phd2CalibrationQualityEvaluator
             policy.RequiredFreshResidualsPerLockShiftStage,
             reasons.AsReadOnly(),
             failures.AsReadOnly(),
-            evaluatedUtc);
+            evaluatedUtc)
+        {
+            OwnerManaged = validation.OwnerManaged,
+            CalibrationWarnings = calibrationWarnings.Distinct().ToArray(),
+        };
     }
 
     /// <summary>
@@ -619,8 +637,11 @@ public static partial class Phd2CalibrationQualityEvaluator
         Phd2CalibrationQualityPolicy policy)
     {
         var score = (int)grade * 1000d;
-        score -= Math.Min(candidate.Validation.OrthogonalityErrorDegrees ?? policy.DegradedMaximumOrthogonalityErrorDegrees, 90) * 10;
-        score -= Math.Min(candidate.Validation.CalibrationAge?.TotalHours ?? policy.DegradedMaximumAge.TotalHours, 100_000) / 1000d;
+        if (!candidate.Validation.OwnerManaged)
+        {
+            score -= Math.Min(candidate.Validation.OrthogonalityErrorDegrees ?? policy.DegradedMaximumOrthogonalityErrorDegrees, 90) * 10;
+            score -= Math.Min(candidate.Validation.CalibrationAge?.TotalHours ?? policy.DegradedMaximumAge.TotalHours, 100_000) / 1000d;
+        }
         if (candidate.Settle?.Result is { TotalFrames: > 0 } settle)
             score -= 100d * settle.DroppedFrames / settle.TotalFrames;
         if (candidate.FreshResidual is { MaximumResidualPixels: > 0 } residual)
@@ -628,16 +649,16 @@ public static partial class Phd2CalibrationQualityEvaluator
         return score;
     }
 
-    private static void ValidatePolicy(Phd2CalibrationQualityPolicy policy)
+    private static void ValidatePolicy(Phd2CalibrationQualityPolicy policy, bool ownerManaged)
     {
         static bool Fraction(double value) => double.IsFinite(value) && value is >= 0 and <= 1;
         if (string.IsNullOrWhiteSpace(policy.PolicyId) ||
-            policy.ExcellentMaximumAge <= TimeSpan.Zero ||
+            (!ownerManaged && (policy.ExcellentMaximumAge <= TimeSpan.Zero ||
             policy.QualifiedMaximumAge < policy.ExcellentMaximumAge ||
             policy.DegradedMaximumAge < policy.QualifiedMaximumAge ||
             !Ordered(policy.ExcellentMaximumOrthogonalityErrorDegrees, policy.QualifiedMaximumOrthogonalityErrorDegrees, policy.DegradedMaximumOrthogonalityErrorDegrees, 90) ||
             !Ordered(policy.ExcellentMaximumBidirectionalRateRatio, policy.QualifiedMaximumBidirectionalRateRatio, policy.DegradedMaximumBidirectionalRateRatio, double.PositiveInfinity) ||
-            !Ordered(policy.ExcellentMaximumCrossAxisRateRatio, policy.QualifiedMaximumCrossAxisRateRatio, policy.DegradedMaximumCrossAxisRateRatio, double.PositiveInfinity) ||
+            !Ordered(policy.ExcellentMaximumCrossAxisRateRatio, policy.QualifiedMaximumCrossAxisRateRatio, policy.DegradedMaximumCrossAxisRateRatio, double.PositiveInfinity))) ||
             !Fraction(policy.ExcellentMaximumDroppedFrameFraction) ||
             !Fraction(policy.QualifiedMaximumDroppedFrameFraction) ||
             !Fraction(policy.DegradedMaximumDroppedFrameFraction) ||

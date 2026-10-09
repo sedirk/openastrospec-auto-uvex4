@@ -11,7 +11,6 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed partial class RealObservationStageRunner
 {
-    private bool phd2AgedCalibrationRefreshAttempted;
     private sealed record Phd2HomeBoundaryProof(string RunId, string TelescopeId, DateTimeOffset VerifiedUtc, string EvidencePath);
     private Phd2HomeBoundaryProof? phd2HomeBoundaryProof;
     private Phd2RuntimeCalibrationProof? localPhd2CalibrationProof;
@@ -111,8 +110,10 @@ internal sealed partial class RealObservationStageRunner
             var calibrationBefore = await phd2.ValidateCalibrationAsync(
                 policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement()),
                 cancellationToken).ConfigureAwait(false);
-            var forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid;
-            if (!forceRecalibration)
+            if (!calibrationBefore.IsValid)
+                return Attention(ObservationStage.StartGuiding, "PHD2_OWNER_CALIBRATION_UNAVAILABLE",
+                    string.Join(" ", calibrationBefore.Failures.Concat(calibrationBefore.IndeterminateReasons)));
+            ReportPhd2OwnerCalibration(calibrationBefore);
             {
                 var preGuide = SelectPhd2CalibrationQuality(
                     calibrationBefore,
@@ -240,26 +241,21 @@ internal sealed partial class RealObservationStageRunner
             // client invalidates its cached calibration attestation on that
             // event, so refresh the attestation at the last possible point
             // before guide rather than treating a cleared cache as a failed
-            // calibration.  A genuinely invalid readback still requests the
-            // existing one-shot forced recalibration path.
+            // calibration. Identity/owner-readback failure still stops; numeric
+            // calibration quality is advisory under ADR-0020.
             calibrationBefore = await phd2.ValidateCalibrationAsync(
                 policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement()),
                 cancellationToken).ConfigureAwait(false);
-            forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid;
-            if (forceRecalibration)
+            if (!calibrationBefore.IsValid)
             {
-                // Exposure/loop ConfigurationChange invalidates the earlier
-                // identity attestation as well as the calibration cache. Recheck
-                // actual profile/equipment after selection; never bypass the
-                // client's forced-calibration identity prerequisite.
-                identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
-                if (!identity.IsValid)
-                    throw new Phd2IdentityMismatchException(identity);
+                await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
+                return Attention(ObservationStage.StartGuiding, "PHD2_OWNER_CALIBRATION_UNAVAILABLE",
+                    string.Join(" ", calibrationBefore.Failures.Concat(calibrationBefore.IndeterminateReasons)));
             }
             Volatile.Write(ref phd2GuidingEverStarted, 1);
             var settle = await phd2.GuideAndSettleAsync(
                 Phd2SettleCriteriaForSlitPlacement(preset),
-                forceRecalibration,
+                forceRecalibration: false,
                 guideSelectionRoi,
                 preserveSameEpochGuidingOnSettleTimeout: HasSupervisedScienceOptIn(),
                 cancellationToken).ConfigureAwait(false);
@@ -271,7 +267,7 @@ internal sealed partial class RealObservationStageRunner
             if (windSampledSettle)
                 Report("warning：海风导致 PHD2 未进入 settle 圈；保持同一 Guiding epoch，改取 fresh GuideStep/FITS 窗口评估");
             var calibration = await phd2.ValidateCalibrationAsync(
-                policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement(forceRecalibration ? DateTimeOffset.UtcNow - TimeSpan.FromMinutes(1) : null)),
+                PhdCalibrationRequirement(),
                 cancellationToken).ConfigureAwait(false);
             if (calibration.Status != Phd2ValidationStatus.Valid)
                 throw new InvalidOperationException($"Post-guide calibration failed policy hard ceilings: {string.Join(" ", calibration.Failures.Concat(calibration.IndeterminateReasons))}");
@@ -331,7 +327,7 @@ internal sealed partial class RealObservationStageRunner
                 settle,
                 proof.ConnectionEpoch,
                 proof.GuideEpoch,
-                forceRecalibration,
+                false,
                 windSampledSettle);
             phd2SlitPlacementSession = session;
             lastG3Field = UpdateG3FieldFromGuidingResidual(choice.Field, measurement, preset);
@@ -775,16 +771,16 @@ internal sealed partial class RealObservationStageRunner
             cancellationToken).ConfigureAwait(false);
         await PublishRunJsonEvidenceAsync(
             "phd2-lock-recovery-calibration-readback",
-            "Fresh owner calibration age and geometry checked before any recovery guide command",
+            "Fresh PHD2 owner readback with advisory calibration metadata before recovery guide",
             new { state.LineageId, calibration = activeCalibrationBeforeGuide,
                 originalMotionLedgerPreserved = true, guideOrRecalibrationCommandSent = false },
             item.Path, cancellationToken).ConfigureAwait(false);
         if (activeCalibrationBeforeGuide.Status != Phd2ValidationStatus.Valid)
         {
-            return Attention(
-                ObservationStage.PlaceTargetOnSlit,
-                "PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID",
-                $"Durable recovery will not start a guide/recalibration command from an invalid active calibration: {string.Join(" ", activeCalibrationBeforeGuide.Failures.Concat(activeCalibrationBeforeGuide.IndeterminateReasons))}");
+            // PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID is old-debt
+            // recovery, not a numerical calibration-quality rejection.
+            return new StageResult(Phd2RecoveryCalibrationPresentation.Blocked(
+                activeCalibrationBeforeGuide, state.ObservationRunId, state));
         }
         var recoveryPreGuide = SelectPhd2CalibrationQuality(
             activeCalibrationBeforeGuide,
@@ -884,7 +880,7 @@ internal sealed partial class RealObservationStageRunner
         Volatile.Write(ref phd2GuidingEverStarted, 1);
         var settle = await phd2.GuideAndSettleAsync(
             Phd2SettleCriteriaForSlitPlacement(preset),
-            false,
+            forceRecalibration: false,
             guideSelectionRoi,
             preserveSameEpochGuidingOnSettleTimeout: HasSupervisedScienceOptIn(),
             cancellationToken).ConfigureAwait(false);
@@ -1301,7 +1297,7 @@ internal sealed partial class RealObservationStageRunner
                         Phd2EffectiveQualityMetrics(settledSession.Quality, settledSession.GuideMode, settledSession.SelectedGuide, settledSession.Settle, residual),
                         Metadata(loaded));
                 }
-                var elapsedSeconds = Math.Max(0, (DateTimeOffset.UtcNow - currentLedger.StartedUtc).TotalSeconds);
+                var elapsedSeconds = Math.Max(0, (DateTimeOffset.UtcNow - currentLedger.MotionClockStartedUtc).TotalSeconds);
                 if (currentLedger.AttemptsUsed >= currentLedger.MaximumAttempts ||
                     currentLedger.CumulativeCommandedPixels >= currentLedger.MaximumCumulativePixels - 1e-9 ||
                     elapsedSeconds >= currentLedger.MaximumElapsedSeconds)
@@ -1370,34 +1366,17 @@ internal sealed partial class RealObservationStageRunner
                 "PHD2_DIRECT_TARGET_SUPERVISION_OPT_IN_REQUIRED",
                 "The commissioned guide mode is degraded direct-target guiding. Explicit supervised-science opt-in is required before any guide or lock command.");
         }
-        var hardRequirement = policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement());
+        // ADR-0020: PHD2 alone decides whether its calibration is reusable.
+        // New native calibration is allowed only before this placement has any
+        // motion lineage; recovery must not silently add calibration pulses.
+        var allowNativeCalibration = pendingPhd2LockShift is null && inheritedSettledBudget is null &&
+            lostLockReacquisitionDepth == 0 && postCalibrationReacquisitionDepth == 0;
+        var hardRequirement = PhdCalibrationRequirement(allowNativeCalibration: allowNativeCalibration);
         var calibrationBefore = await phd2.ValidateCalibrationAsync(hardRequirement, cancellationToken).ConfigureAwait(false);
-        var refreshAgedCalibration = Phd2CalibrationRefreshPolicy.ShouldRefresh(
-            calibrationBefore.CalibrationAge, calibrationBefore.OrthogonalityErrorDegrees,
-            policy.QualifiedMaximumAge, policy.QualifiedMaximumOrthogonalityErrorDegrees,
-            phd2AgedCalibrationRefreshAttempted, postCalibrationReacquisitionDepth > 0,
-            pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger });
-        if (refreshAgedCalibration)
-        {
-            phd2AgedCalibrationRefreshAttempted = true;
-            await PublishRunJsonEvidenceAsync(
-                "phd2-aged-calibration-refresh-intent",
-                "One native recalibration requested for an aged calibration with poor measured axis geometry",
-                new { calibrationBefore.CalibrationAge, calibrationBefore.OrthogonalityErrorDegrees,
-                    policy.QualifiedMaximumAge, qualifiedOrthogonalityLimit = policy.QualifiedMaximumOrthogonalityErrorDegrees,
-                    maximumRefreshAttempts = 1, exactLockCommandIssued = false, budgetReset = false },
-                lastG3Field.FramePath, cancellationToken).ConfigureAwait(false);
-            Report($"PHD2 旧标定已超合格年龄，且两轴不正交误差 {calibrationBefore.OrthogonalityErrorDegrees:F1}°；执行本轮唯一一次原生重标定，随后重新取场。");
-        }
-        var forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid || refreshAgedCalibration;
-        if (forceRecalibration && postCalibrationReacquisitionDepth > 0)
-        {
-            return Attention(
-                ObservationStage.PlaceTargetOnSlit,
-                "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE",
-                "PHD2 still reports an invalid active calibration after the one allowed calibration/reacquisition cycle; no further guide, exposure or lock command is sent.");
-        }
-        if (!forceRecalibration)
+        if (!calibrationBefore.CanStartNativeGuide)
+            return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_OWNER_CALIBRATION_UNAVAILABLE",
+                string.Join(" ", calibrationBefore.Failures.Concat(calibrationBefore.IndeterminateReasons)));
+        ReportPhd2OwnerCalibration(calibrationBefore);
         {
             var preGuide = SelectPhd2CalibrationQuality(
                 calibrationBefore,
@@ -1445,7 +1424,7 @@ internal sealed partial class RealObservationStageRunner
         initialTarget = guideChoice.Field.TargetIdentification.Target
             ?? throw new InvalidOperationException("Fresh guide-selection frame passed without a target identity.");
         var takeoverResidual = PixelDistance(initialTarget.Centroid, lastG3Field.SlitDetection.Geometry.AcquisitionPoint);
-        if (!forceRecalibration && takeoverResidual + guideChoice.Field.TargetIdentification.CatalogPositionSpreadPixels >
+        if (calibrationBefore.Calibration.Calibrated && takeoverResidual + guideChoice.Field.TargetIdentification.CatalogPositionSpreadPixels >
             Phd2HandoffResidualPixels(guideChoice.Field, preset) &&
             guideChoice.Field.TargetIdentification.PredictionResidualPixels > preset.CoarseHandoffResidualPixels)
             return await ReacquireG3ForPhd2HandoffAsync(context, "PHD2_WCS_TAKEOVER_POSITION_CHANGED",
@@ -1547,34 +1526,26 @@ internal sealed partial class RealObservationStageRunner
             }
             // The full-frame selection loop may emit ConfigurationChange and
             // therefore invalidate only the cached calibration attestation.
-            // Re-read the actual calibration immediately before guide.  If
-            // the hardware readback is valid, continue without recalibration;
-            // if it is genuinely invalid, use the already-bounded forced
-            // recalibration + fresh-G3 path instead of falling into the outer
-            // non-LostLock failure handler.
-            calibrationBefore = await phd2.ValidateCalibrationAsync(
-                hardRequirement,
-                cancellationToken).ConfigureAwait(false);
-            forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid || refreshAgedCalibration;
-            if (forceRecalibration && postCalibrationReacquisitionDepth > 0)
+            // Re-read actual owner identity/calibration immediately before
+            // guide. PHD2 may calibrate only at this motion-free boundary;
+            // the plugin never requests forced renewal (ADR-0020).
+            hardRequirement = PhdCalibrationRequirement(allowNativeCalibration: allowNativeCalibration);
+            calibrationBefore = await phd2.ValidateCalibrationAsync(hardRequirement, cancellationToken).ConfigureAwait(false);
+            if (!calibrationBefore.CanStartNativeGuide)
             {
                 await StopPhdAndWaitAsync(cancellationToken).ConfigureAwait(false);
-                return Attention(
-                    ObservationStage.PlaceTargetOnSlit,
-                    "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE",
-                    "The last-moment calibration readback is still invalid after the one allowed calibration/reacquisition cycle; guiding was checked-stopped and no further command was sent.");
+                return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_OWNER_CALIBRATION_UNAVAILABLE",
+                    string.Join(" ", calibrationBefore.Failures.Concat(calibrationBefore.IndeterminateReasons)));
             }
-            if (forceRecalibration)
-            {
-                identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
-                if (!identity.IsValid)
-                    throw new Phd2IdentityMismatchException(identity);
-            }
+            ReportPhd2OwnerCalibration(calibrationBefore);
+            identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
+            if (!identity.IsValid)
+                throw new Phd2IdentityMismatchException(identity);
             Volatile.Write(ref phd2GuidingEverStarted, 1);
-            var recalibrationStartedUtc = forceRecalibration ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+            var recalibrationStartedUtc = DateTimeOffset.UtcNow;
             var settle = await phd2.GuideAndSettleAsync(
                 Phd2SettleCriteriaForSlitPlacement(preset),
-                forceRecalibration,
+                forceRecalibration: false,
                 guideSelectionRoi,
                 preserveSameEpochGuidingOnSettleTimeout: HasSupervisedScienceOptIn(),
                 cancellationToken).ConfigureAwait(false);
@@ -1585,23 +1556,23 @@ internal sealed partial class RealObservationStageRunner
             if (settle.Succeeded && !guideProof.HasCurrentSuccessfulSettle)
                 throw new InvalidOperationException("The locally issued guide operation did not leave a same-epoch successful settle attestation.");
             if (windSampledSettle)
-                Report("warning：海风导致 PHD2 未进入 settle 圈；保持同一 Guiding epoch，改取 fresh GuideStep/FITS 窗口评估");
+                Report("warning：PHD2 原生稳定等待超时；保持同一 Guiding epoch，改取 fresh GuideStep/FITS 窗口评估，尚未确认天气原因");
 
             var calibration = await phd2.ValidateCalibrationAsync(
                 policy.ApplyHardRejectionCeilings(PhdCalibrationRequirement(
-                    recalibrationStartedUtc)),
+                    settle.NativeCalibrationOccurred ? recalibrationStartedUtc : null)),
                 cancellationToken).ConfigureAwait(false);
             if (calibration.Status != Phd2ValidationStatus.Valid)
             {
                 throw new InvalidOperationException(
-                    $"PHD2 calibration failed the policy hard rejection ceilings: {string.Join(" ", calibration.Failures.Concat(calibration.IndeterminateReasons))}");
+                    $"PHD2 current owner/calibration readback unavailable: {string.Join(" ", calibration.Failures.Concat(calibration.IndeterminateReasons))}");
             }
 
-            if (forceRecalibration)
+            if (settle.NativeCalibrationOccurred)
             {
                 localPhd2CalibrationProof = new Phd2RuntimeCalibrationProof(
                     calibration.Profile, calibration.Calibration, calibration.ConnectionEpoch,
-                    calibration.CalibrationChangeSequence, recalibrationStartedUtc!.Value);
+                    calibration.CalibrationChangeSequence, recalibrationStartedUtc);
                 // Calibration pulses invalidate every pre-calibration target,
                 // slit and mount binding even when PHD2 normally returns very
                 // close to its origin. This is the ordering used by both
@@ -1734,7 +1705,7 @@ internal sealed partial class RealObservationStageRunner
             if (!qualification.IsQualified)
                 throw new InvalidOperationException(string.Join(" ", qualification.Failures));
 
-            var startedUtc = inheritedSettledBudget?.StartedUtc ?? DateTimeOffset.UtcNow;
+            var startedUtc = inheritedSettledBudget?.MotionClockStartedUtc ?? DateTimeOffset.UtcNow;
             var ledger = new Phd2LockShiftLedger(
                 inheritedSettledBudget?.LineageId ?? Guid.NewGuid().ToString("N"),
                 lockOrigin,
@@ -1765,7 +1736,7 @@ internal sealed partial class RealObservationStageRunner
                 settle,
                 guideProof.ConnectionEpoch,
                 guideProof.GuideEpoch,
-                forceRecalibration,
+                false,
                 windSampledSettle);
             phd2SlitPlacementSession = session;
 
@@ -1872,6 +1843,10 @@ internal sealed partial class RealObservationStageRunner
                             ["slitQualityWarningEnabled"] = configuration.AllowSupervisedSlitQualityWarning ? 1 : 0,
                             ["elapsedSeconds"] = Math.Max(0, (DateTimeOffset.UtcNow - ledger.StartedUtc).TotalSeconds),
                             ["maximumElapsedSeconds"] = completionLimits.MaximumElapsed.TotalSeconds,
+                            ["completionWindowRetries"] = completionWindowRetries,
+                            ["waitingForExistingLock"] = existingLockNotReached ? 1 : 0,
+                            ["latestGuideLockResidualPixels"] = PointDistance(session.LastMeasurement.Measurement.GuideStar, ledger.CurrentLockPosition),
+                            ["guideLockTolerancePixels"] = preset.MaximumGuideLockResidualPixels,
                         };
                         if (pendingPhd2LockShift is { } returnReserved)
                             return await ReturnPhd2LockToOriginAsync(context, session, returnReserved, reason,
@@ -1890,12 +1865,29 @@ internal sealed partial class RealObservationStageRunner
                         : nativeCorrectionPending
                         ? "目标偏差与原生导星偏差相符，现有锁点无需重复移动；保持 PHD2 导星并有界补取新帧，等待实际纠偏。"
                         : "最后一帧已接近狭缝，但整组尚未稳定；保持导星补取新帧，必要时在原账本内继续精调，不提前宣布入缝完成。");
-                    targetCompletionWindow = await CapturePhd2PlacementGuideWindowAsync(
+                    var rollingCorrectionWindow = Phd2PlacementGuideWindowPolicy.CanRollCorrectionWindow(
+                        measuredSupervisedGeometry, session.GuideMode, plan.IsAllowed, plan.IsComplete,
+                        existingLockNotReached && !transientResidualGrowthWarning && !nearSlitTrackingWarning,
+                        targetCompletionWindow.Count, requiredCompletionFrames);
+                    var previousCompletionWindow = targetCompletionWindow;
+                    if (rollingCorrectionWindow)
+                    {
+                        RequireSameCorrectionWindowEpoch(session, ledger.CurrentLockPosition, preset);
+                        Report("PHD2 等待现锁点：每到一张新帧即检查最近完整窗口，不再每三帧才检查一次；原门限、运动账本和回程时间不变。");
+                    }
+                    var newCompletionMeasurements = await CapturePhd2PlacementGuideWindowAsync(
                         context, preset, topology, ledger.CurrentLockPosition,
                         session.LastMeasurement.Measurement.TargetCentroid,
                         session.LastMeasurement.RuntimeSlitLocal, session.GuideMode,
-                        requiredCompletionFrames, completionDeadline,
+                        rollingCorrectionWindow ? 1 : requiredCompletionFrames, completionDeadline,
                         cancellationToken).ConfigureAwait(false);
+                    if (rollingCorrectionWindow)
+                    {
+                        RequireSameCorrectionWindowEpoch(session, ledger.CurrentLockPosition, preset);
+                        targetCompletionWindow = Phd2PlacementGuideWindowPolicy.AppendConsecutiveSample(
+                            previousCompletionWindow, newCompletionMeasurements.Single(), requiredCompletionFrames, item => item.Measurement);
+                    }
+                    else targetCompletionWindow = newCompletionMeasurements;
                     var completionMeasurement = targetCompletionWindow[^1];
                     session = session with { LastMeasurement = completionMeasurement };
                     phd2SlitPlacementSession = session;
@@ -1908,7 +1900,11 @@ internal sealed partial class RealObservationStageRunner
                         {
                             completionWindowRetries, boundedByOriginalDeadline = true, nativeCorrectionPending,
                             nearSlitTrackingWarning, transientResidualGrowthWarning, existingLockNotReached,
-                            correctionWindow,
+                            previousWindowDecision = correctionWindow,
+                            previousWindowFrames = previousCompletionWindow.Select(item => item.Measurement.FrameSha256).ToArray(),
+                            rollingCorrectionWindow,
+                            newlyAcquiredFrames = newCompletionMeasurements.Count,
+                            currentWindowFrames = targetCompletionWindow.Select(item => item.Measurement.FrameSha256).ToArray(),
                             completionDeadline, reservedReturnAttempts,
                             plannerCode = plan.Code,
                             residuals = targetCompletionWindow.Select(item => PointDistance(
@@ -2119,7 +2115,7 @@ internal sealed partial class RealObservationStageRunner
                     pendingPhd2LockShift = pending;
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (Phd2StageFailurePolicy.FindLostFrame(ex) is null)
                 {
                     return await ReturnPhd2LockToOriginAsync(
                         context,
@@ -2222,7 +2218,7 @@ internal sealed partial class RealObservationStageRunner
                     pendingPhd2LockShift = pending;
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (Phd2StageFailurePolicy.FindLostFrame(ex) is null)
                 {
                     return await ReturnPhd2LockToOriginAsync(
                         context,
@@ -2275,7 +2271,7 @@ internal sealed partial class RealObservationStageRunner
                     pendingPhd2LockShift = pending;
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (Phd2StageFailurePolicy.FindLostFrame(ex) is null)
                 {
                     return await ReturnPhd2LockToOriginAsync(
                         context,
@@ -2459,8 +2455,64 @@ internal sealed partial class RealObservationStageRunner
                         relockException);
                 }
             }
-            try { await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false); } catch { }
-            phd2SlitPlacementSession = null;
+            var lostFrameFailure = Phd2StageFailurePolicy.FindLostFrame(failure);
+            var stopConfirmed = false;
+            try
+            {
+                // The inner motion/settle/frame handlers must let typed StarLost
+                // reach this boundary. Its guide epoch is no longer return
+                // authority, even if PHD2 has already reacquired by this point.
+                // Preserve all charged motion and the original endpoint/epoch;
+                // stopping is not proof of arrival or a completed return.
+                if (lostFrameFailure is not null && pendingPhd2LockShift is
+                    { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } lostPending)
+                {
+                    pendingPhd2LockShift = lostPending with
+                    {
+                        Phase = Phd2LockShiftPendingPhase.ReturnRequired,
+                        UpdatedUtc = DateTimeOffset.UtcNow,
+                        LastReason = $"Native guide star lost with outstanding lock motion; no automatic return was attempted. {lostFrameFailure.Message}",
+                    };
+                    await Phd2LockShiftPendingStore.WriteAtomicAsync(
+                        Phd2LockShiftPendingPath(lostPending.ObservationRunId),
+                        pendingPhd2LockShift,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                // A persistence error must not prevent the existing checked stop.
+                try
+                {
+                    await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+                    stopConfirmed = true;
+                }
+                catch { }
+                phd2SlitPlacementSession = null;
+            }
+            if (lostFrameFailure is not null)
+            {
+                var lost = lostFrameFailure.LostFrame;
+                var metrics = new Dictionary<string, double>
+                {
+                    ["stopConfirmed"] = stopConfirmed ? 1 : 0,
+                    ["outstandingLockMotion"] = pendingPhd2LockShift is not null &&
+                        pendingPhd2LockShift.Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger ? 1 : 0,
+                };
+                if (lost?.Frame is { } lostGuideFrame) metrics["lostGuideFrame"] = lostGuideFrame;
+                if (lost?.Snr is { } lostGuideSnr && double.IsFinite(lostGuideSnr)) metrics["lostGuideSnr"] = lostGuideSnr;
+                if (lost?.ErrorCode is { } lostGuideErrorCode) metrics["lostGuideErrorCode"] = lostGuideErrorCode;
+                await PublishRunJsonEvidenceAsync("phd2-placement-star-lost",
+                    "Native StarLost terminated placement; not a settle-only quality warning",
+                    new { lostFrameFailure.Snapshot.ConnectionEpoch, lostFrameFailure.Snapshot.GuideEpoch,
+                        lostFrame = lost, stopConfirmed, pendingPhase = pendingPhd2LockShift?.Phase,
+                        previousOpticalFrame = lastG3Field?.FramePath,
+                        windCauseConfirmed = false, slitArrivalConfirmed = false, budgetReset = false },
+                    lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
+                return Attention(ObservationStage.PlaceTargetOnSlit,
+                    Phd2StageFailurePolicy.PlacementStarLost,
+                    $"PHD2 explicitly reported StarLost during fresh placement verification, not just a settle timeout. Stop confirmed: {stopConfirmed}. The original motion ledger is retained; no arrival, return or weather cause is inferred. {failure.Message}", metrics);
+            }
             return Attention(
                 ObservationStage.PlaceTargetOnSlit,
                 "PHD2_SLIT_PLACEMENT_FAILED_SAFE",
@@ -3092,12 +3144,24 @@ internal sealed partial class RealObservationStageRunner
             if (image.MetaData.Camera.BinX > 0 &&
                 (image.MetaData.Camera.BinX != configuration.G3.Binning || image.MetaData.Camera.BinY != configuration.G3.Binning))
                 throw new InvalidOperationException("Fresh guiding FITS binning does not match the locked run/topology.");
-            var exposureMilliseconds = (int)Math.Round(image.MetaData.Image.ExposureTime * 1000);
             var expectedExposureMilliseconds = preset.ExposureFor(guideMode);
-            var exposureTolerance = Math.Max(1, expectedExposureMilliseconds * 0.02);
-            var exposureMatched = Math.Abs(exposureMilliseconds - expectedExposureMilliseconds) <= exposureTolerance;
-            if (!exposureMatched)
-                throw new InvalidOperationException($"Fresh guiding FITS exposure {exposureMilliseconds}ms does not match commissioned {expectedExposureMilliseconds}ms for {guideMode}.");
+            var exposureGate = Phd2GuidingExposurePolicy.Evaluate(
+                image.MetaData.Image.ExposureTime, expectedExposureMilliseconds, guideMode.ToString());
+            if (exposureGate.Disposition != GateDisposition.Passed)
+            {
+                await PublishRunJsonEvidenceAsync("phd2-guiding-exposure-mismatch",
+                    "Fresh guide-frame exposure differs from the locked run; no setting override or motion retry",
+                    new { exposureGate.Code, exposureGate.Message, exposureGate.Metrics,
+                        guideMode = guideMode.ToString(), framePath = result.Path, frameSha256 = actualSha,
+                        beforeFrameWait.ConnectionEpoch, beforeFrameWait.GuideEpoch,
+                        settingsOverridden = false, budgetReset = false },
+                    result.Path, cancellationToken).ConfigureAwait(false);
+                Report(ObservationUiPresentation.Present(ObservationStage.SelectAtrExposure,
+                    exposureGate, ObservationStaticTextLocalization.EffectiveCulture).Summary);
+                throw new PhysicalActionGateException(exposureGate);
+            }
+            var exposureMilliseconds = (int)Math.Round(image.MetaData.Image.ExposureTime * 1000);
+            var exposureMatched = true;
             var raw = image.Data.FlatArray;
             if (raw.Length != properties.Width * properties.Height)
                 throw new InvalidOperationException("Fresh guiding FITS pixel buffer is unsupported.");
@@ -3992,7 +4056,8 @@ internal sealed partial class RealObservationStageRunner
             commissionedSource,
             preset.LockedTopologyFingerprintSha256,
             currentPierSide,
-            preset.CalibrationPierSideEvidenceComplete);
+            preset.CalibrationPierSideEvidenceComplete,
+            ownerManagedCalibration: true);
     }
 
     private Phd2CalibrationCandidateSelection SelectPhd2CalibrationQuality(
@@ -4142,6 +4207,8 @@ internal sealed partial class RealObservationStageRunner
             originTargetLocal,
             session.InitialRuntimeSlitLocal);
         var originSlit = ToPhd2Domain(originSlitLocal, preset);
+        var excludedExposureSeconds = phd2SettledHandoffBudget is { } inherited &&
+            inherited.LineageId == ledger.LineageId ? inherited.ExcludedAtrExposureSeconds : 0;
         return new Phd2LockShiftPendingState(
             Phd2LockShiftPendingState.CurrentSchemaVersion,
             context.Plan.ObservationRunId,
@@ -4167,7 +4234,7 @@ internal sealed partial class RealObservationStageRunner
             preset.MaximumElapsedSeconds,
             ledger.CumulativeCommandedPixels,
             ledger.AttemptsUsed,
-            ledger.StartedUtc,
+            excludedExposureSeconds > 0 ? phd2SettledHandoffBudget!.StartedUtc : ledger.StartedUtc,
             now,
             now,
             phase,
@@ -4178,7 +4245,8 @@ internal sealed partial class RealObservationStageRunner
             session.InitialTarget.X,
             session.InitialTarget.Y,
             originSlit.X,
-            originSlit.Y);
+            originSlit.Y,
+            excludedExposureSeconds);
     }
 
     private async Task PublishPhd2GuideSelectionEvidenceAsync(
@@ -4304,6 +4372,17 @@ internal sealed partial class RealObservationStageRunner
         (session.ReadOnlyPostLockObservation is { } observation
             ? observation.HasAcceptedWindow(snapshot)
             : CanReplaceSettleWithFreshGuidingWindow(session.Settle, snapshot, session.ConnectionEpoch, session.GuideEpoch));
+
+    private void RequireSameCorrectionWindowEpoch(Phd2SlitPlacementSession session,
+        Phd2Point currentLock, Phd2SlitPlacementCommissioningPreset preset)
+    {
+        var snapshot = phd2.Snapshot;
+        if (!snapshot.IsConnected || snapshot.AppState != Phd2AppState.Guiding ||
+            snapshot.ConnectionEpoch != session.ConnectionEpoch || snapshot.GuideEpoch != session.GuideEpoch ||
+            snapshot.LockPosition is not { } actual || PointDistance(actual, currentLock) > preset.LockVerificationTolerancePixels)
+            throw new InvalidOperationException("PHD2_GUIDE_WINDOW_EPOCH_CHANGED: A rolling correction window cannot span a guide epoch or lock change.");
+        phd2.ThrowIfGuideOutputFailed();
+    }
 
     private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2PlacementGuideWindowAsync(
         ObservationContext context,

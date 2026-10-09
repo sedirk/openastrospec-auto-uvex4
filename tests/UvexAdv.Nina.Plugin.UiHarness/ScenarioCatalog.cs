@@ -24,6 +24,9 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("g3-split-morphology", 1040, 850, ObservationDockMockViewModel.SplitMorphology()),
+        new("g3-split-morphology-narrow", 540, 850, ObservationDockMockViewModel.SplitMorphology()),
+        new("g3-split-morphology-en", 1040, 850, ObservationDockMockViewModel.SplitMorphology(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
         new("atr-cooling-wait", 1040, 800, CoolingWait()),
         new("atr-cooling-wait-narrow", 540, 800, CoolingWait()),
         new("native-meridian", 660, 270, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyMeridianPanel", AlternateViewModel=new NativeMeridianMock() },
@@ -131,6 +134,20 @@ public static class ScenarioCatalog
         new("atr-levels", 1040, 700, ObservationDockMockViewModel.AtrLive()),
         new("atr-narrow", 640, 800, ObservationDockMockViewModel.AtrLive()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
+        new("lock-recovery-calibration", 1180, 900, ObservationDockMockViewModel.LockRecoveryCalibration()),
+        new("lock-recovery-calibration-narrow", 760, 850, ObservationDockMockViewModel.LockRecoveryCalibration()),
+        new("lock-recovery-calibration-en", 1180, 900, ObservationDockMockViewModel.LockRecoveryCalibration(true)) { Culture = CultureInfo.GetCultureInfo("en-US") },
+        new("guide-output-unavailable", 1180, 800, ObservationDockMockViewModel.GuideOutputUnavailable()),
+        new("guide-output-unavailable-narrow", 760, 800, ObservationDockMockViewModel.GuideOutputUnavailable()),
+        new("guide-output-unavailable-en", 1180, 800, ObservationDockMockViewModel.GuideOutputUnavailable(english: true))
+        { Culture = CultureInfo.GetCultureInfo("en-US") },
+        new("guide-exposure-mismatch", 1180, 800, ObservationDockMockViewModel.GuideExposureMismatch()),
+        new("guide-exposure-mismatch-narrow", 760, 800, ObservationDockMockViewModel.GuideExposureMismatch()),
+        new("guide-exposure-mismatch-en", 1180, 800, ObservationDockMockViewModel.GuideExposureMismatch(english: true)),
+        new("short-handoff-outside", 1180, 800, ObservationDockMockViewModel.ShortHandoffOutside()),
+        new("short-handoff-outside-narrow", 760, 800, ObservationDockMockViewModel.ShortHandoffOutside()),
+        new("short-handoff-outside-en", 1180, 800, ObservationDockMockViewModel.ShortHandoffOutside(english: true))
+        { Culture = CultureInfo.GetCultureInfo("en-US") },
         new("post-calibration-pulse", 1180, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
         new("post-calibration-pulse-narrow", 760, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
         new("post-calibration-blend", 1180, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure(blend: true)),
@@ -168,6 +185,21 @@ public static class ScenarioCatalog
         {
             TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
             AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true }, Culture = CultureInfo.GetCultureInfo("en-US"),
+        },
+        new("photometry-legacy-master", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true, MasterQhyEndpoint = "http://127.0.0.1:12345" },
+        },
+        new("photometry-legacy-master-narrow", 540, 900, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true, MasterQhyEndpoint = "http://127.0.0.1:12345" },
+        },
+        new("photometry-legacy-master-en", 980, 850, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey = "UvexAdv.Nina.Plugin.PhotometryWorkerDockable_Dockable",
+            AlternateViewModel = new PhotometryWorkerMockViewModel { IsSpectroscopyMaster = true, MasterQhyEndpoint = "http://127.0.0.1:12345" }, Culture = CultureInfo.GetCultureInfo("en-US"),
         },
         new("photometry-worker-running", 980, 850, ObservationDockMockViewModel.Idle())
         {
@@ -235,10 +267,8 @@ public sealed class ObservationDockMockViewModel
         ObservationStaticTextLocalization.EffectiveCulture);
     public ICommand ArmSlitQualityWarningCommand => DisabledCommand;
     public ICommand DisarmSlitQualityWarningCommand => IsRunActive ? DisabledCommand : EnabledCommand;
-    public string SynchronizedPhotometryStatus => ObservationUiPresentation.Text(
-        SynchronizedPhotometryEnabled ? "开启 · 与光谱同时拍摄" : "关闭 · 仅保留定位短曝",
-        SynchronizedPhotometryEnabled ? "ON · capture alongside spectra" : "OFF · acquisition witnesses only",
-        ObservationStaticTextLocalization.EffectiveCulture);
+    public string SynchronizedPhotometryStatus => PhotometryUiPresentation.SwitchSummary(
+        SynchronizedPhotometryEnabled, "http://127.0.0.1:12345", ObservationStaticTextLocalization.EffectiveCulture);
     public string ModeDescription { get; init; } = "只运行模拟状态机，不连接相机、赤道仪、PHD2 或 COM5。";
     public string RealModeStatus { get; init; } = "真实模式有 3 个启动阻断项；当前演练不受影响。";
     public string RealModeStatusSummary { get; init; } = "自动观测准备尚未完成；不影响“设备手控”。请在“自动准备”处理左侧带红色标记的分组。";
@@ -540,6 +570,14 @@ public sealed class ObservationDockMockViewModel
     public MainFocusMock MainFocus { get; } = new();
     public ICommand ShowMainFocusCommand => EnabledCommand;
     public int AutomaticPreparationIssueCount { get; init; } = 3;
+    public ICommand RecheckPreparationCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
+    public IReadOnlyList<string> PreparationBlockingDetails => PreparationChecklistIssues;
+    public string PreparationOwnerSummary => ObservationUiPresentation.Text(
+        "光谱主控 Profile：光谱；相机：ATR585M。PHD2 独占 G3；独立测光端独占 QHY 相机与滤镜轮。来源标签不代表所有者。",
+        "Spectroscopy Profile: spectroscopy; camera: ATR585M. PHD2 owns G3; the photometry worker owns QHY and its wheel. Source labels are not ownership.",
+        ObservationStaticTextLocalization.EffectiveCulture);
+    public IReadOnlyList<CommissioningProfileChoice> VisibleCommissioningProfiles => CommissioningProfiles;
+    public bool ShowHistoricalCommissioningProfiles { get; set; }
     public int PreparationChecklistIssueCount => ObservationDockable.CountPreparationChecklistIssues(
         AutomaticPreparationIssueCount, IsTargetPreparationMissing, IsSlitChoiceMissing);
     public IReadOnlyList<string> PreparationChecklistIssues { get; init; } =
@@ -970,6 +1008,27 @@ public sealed class ObservationDockMockViewModel
         OperatorNotice = "恢复不会重置运动、动作、时间或回程预算。",
     };
 
+    public static ObservationDockMockViewModel SplitMorphology(bool english = false)
+    {
+        const string code = "G3_CATALOG_SHORT_POSITION_UNCONFIRMED";
+        var issue = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField,
+            GateResult.Unknown(code, "G3_SEP_PARENT_BLEND_UNRESOLVED: Both whole parents remain split.",
+                new Dictionary<string,double> { ["shortPositionFrames"]=5,["maximumShortPositionFrames"]=5 }),
+            CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN"));
+        return new()
+        {
+            StateText = english ? "Paused" : "已暂停，需要处理", IsSimulationMode = true, HasFailure = true,
+            SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "Guide-field acquisition" : "光谱仪导星相机目标获取",
+            ProgressPercent = 36, ProgressSummary = "4/11 · 36%", LastFailureCode = code,
+            LastFailureHeadline = issue.Summary, LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Guide-field acquisition" : "光谱仪导星相机目标获取",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            OperatorNotice = english ? "Offline replay; no device actions." : "离线回放；没有设备动作。",
+        };
+    }
+
     public static ObservationDockMockViewModel PostCalibrationPulseFailure(bool blend = false)
     {
         const string code = "POST_CALIBRATION_G3_REACQUISITION_BLOCKED";
@@ -990,6 +1049,112 @@ public sealed class ObservationDockMockViewModel
             LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
             LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
             OperatorNotice = "离线故障重放；没有连接设备或发出动作。",
+        };
+    }
+
+    public static ObservationDockMockViewModel LockRecoveryCalibration(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown(Phd2RecoveryCalibrationPresentation.Code,
+            "Unfinished lock recovery from an old cancelled run was blocked before guiding: calibration age 31.21 days, saved guide rates 7.5203 arcsec/s, current mount rates 15.0405 arcsec/s. Not a manual guiding stability judgement.",
+            new Dictionary<string, double> { ["calibrationAgeDays"] = 31.21,
+                ["orthogonalityErrorDegrees"] = 1.3,
+                ["calibrationRaGuideRateArcsecondsPerSecond"] = 7.520256,
+                ["calibrationDecGuideRateArcsecondsPerSecond"] = 7.520256,
+                ["currentRaGuideRateArcsecondsPerSecond"] = 15.0405,
+                ["currentDecGuideRateArcsecondsPerSecond"] = 15.0405,
+                ["guideOrRecalibrationCommandSent"] = 0 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "PHD2 slit placement" : "PHD2 精确送入狭缝中点",
+            ProgressPercent = 45, ProgressSummary = "5/11 · 45%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Old lock recovery; no guide command" : "旧入缝恢复；尚未开始导星",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no hardware action." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel GuideOutputUnavailable(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown("PHD2_GUIDE_OUTPUT_UNAVAILABLE",
+            "On-Step (ASCOM): 3 consecutive nonzero correction requests with zero reported RA/DEC pulse duration. Connected/Guiding does not prove effective output.",
+            new Dictionary<string, double>
+            {
+                ["consecutiveMissingPulseFrames"] = 3, ["missingPulseWindowSeconds"] = 4.452,
+                ["requestedRaCorrectionPixels"] = -3.765, ["requestedDecCorrectionPixels"] = -2.335,
+                ["reportedRaPulseMilliseconds"] = 0, ["reportedDecPulseMilliseconds"] = 0,
+                ["outstandingExactLock"] = 0, ["confirmedStopped"] = 1,
+            });
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "PHD2 slit placement" : "PHD2 精确送入狭缝中点",
+            ProgressPercent = 45, ProgressSummary = english ? "Overall stages 5/11 · 45%" : "总体阶段 5/11 · 45%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Native mount output missing; not a star-SNR gate" : "赤道仪原生脉冲缺失；不是星点信噪比质量门",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel GuideExposureMismatch(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = Phd2GuidingExposurePolicy.Evaluate(1.5, 2000, "OffSlitGuideStar");
+        var issue = ObservationUiPresentation.Present(ObservationStage.SelectAtrExposure, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "Spectroscopy trial exposure" : "光谱相机试拍",
+            ProgressPercent = 73, ProgressSummary = english ? "Overall stages 8/11 · 73%" : "总体阶段 8/11 · 73%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Cooling passed; guide exposure changed" : "制冷已通过；导星曝光设置不一致",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = english ? "actual=1500 ms · expected=2000 ms · tolerance=40 ms" : "原始帧实际导星曝光=1500 毫秒 · 本轮要求=2000 毫秒 · 容差=40 毫秒",
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel ShortHandoffOutside(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown(G3PostWcsShortHandoffPolicy.OutsideCode,
+            "Independent short positions agree, but the pair does not fit the unchanged prediction/slit handoff windows. No PHD2 handoff is authorized.",
+            new Dictionary<string, double> { ["handoffPredictionResidualPixels"] = 20.1936,
+                ["handoffSlitResidualPixels"] = 17.86, ["maximumHandoffResidualPixels"] = 20,
+                ["shortRepeatSeparationPixels"] = 2.8276, ["shortPositionFrames"] = 4,
+                ["shortPairConfirmed"] = 1, ["handoffBoundaryRecheckUsed"] = 1 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "Slit-field acquisition" : "光谱仪导星相机取场与粗居中",
+            ProgressPercent = 36,
+            ProgressSummary = english ? "Overall stages 4/11 · 36%" : "总体阶段 4/11 · 36%",
+            LastFailureCode = gate.Code,
+            LastFailureHeadline = issue.Summary, LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Pair consistent; outside handoff geometry" : "短帧一致性通过；未满足交接范围",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
         };
     }
 
@@ -1445,8 +1610,7 @@ public sealed class PhotometryWorkerMockViewModel
         !Enabled ? T("本窗口：测光端 · 尚未开始接收", "This window: photometry instance · reception not enabled") :
         OperatorPaused ? T("测光端：人工暂停/停止有效", "Photometry instance: operator pause/stop is active") : PhotometryUiPresentation.JobState(State, Culture);
     public string NextAction => IsSpectroscopyMaster
-        ? T("先完成两端配对，再回到“自动观测”设置同步测光开关并启动。地址已保存不代表另一实例已连接。",
-            "Pair both instances, then use the simultaneous-photometry switch and Start in Automatic observation. A saved address does not prove a peer connection.")
+        ? PhotometryUiPresentation.MasterNextAction(MasterQhyEndpoint, Culture)
         : Enabled ? JobAdvice : T("本地配置检查通过。点击“开始接收主控任务”；主控下发经过检查的任务之前不会连接设备或曝光。",
             "Local configuration checks passed. Enable reception; no equipment connects or exposes until the master submits a checked job.");
     private UvexAdv.Qhy.Core.QhyJobSnapshot? Job => !Enabled ? null : new(

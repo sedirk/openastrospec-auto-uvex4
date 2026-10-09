@@ -45,6 +45,15 @@ public static class G3PostWcsMeasuredHandoffPolicy
         // close to the prediction while the real saturated core is farther
         // away. Only explicit filled-core topology may authorize a clipped
         // source; otherwise keep the normal formal-solve route.
+        return HasMeasuredSource(identification, width, height) &&
+            Distance(target.Centroid, predictedTarget) <= maximumAcquisitionResidualPixels &&
+            Distance(target.Centroid, slit) <= maximumAcquisitionResidualPixels;
+    }
+
+    internal static bool HasMeasuredSource(TargetIdentification identification, int width, int height)
+    {
+        if (identification.Gate.Disposition != GateDisposition.Passed || identification.Target is not { } target)
+            return false;
         var measured = (identification.Authority == TargetIdentificationAuthority.StellarCentroid &&
                         double.IsFinite(target.SaturatedFraction) && target.SaturatedFraction == 0) ||
             (identification.Authority == TargetIdentificationAuthority.BrightWingCentroid &&
@@ -52,9 +61,7 @@ public static class G3PostWcsMeasuredHandoffPolicy
         return measured && double.IsFinite(target.FluxAdu) && target.FluxAdu > 0 &&
             double.IsFinite(target.Centroid.X) && double.IsFinite(target.Centroid.Y) &&
             target.Centroid.X >= 0 && target.Centroid.X < width &&
-            target.Centroid.Y >= 0 && target.Centroid.Y < height &&
-            Distance(target.Centroid, predictedTarget) <= maximumAcquisitionResidualPixels &&
-            Distance(target.Centroid, slit) <= maximumAcquisitionResidualPixels;
+            target.Centroid.Y >= 0 && target.Centroid.Y < height;
     }
 
     private static double Distance(PixelPoint a, PixelPoint b) =>

@@ -9,6 +9,23 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class PhotometryUiPresentationTests
 {
+    [Fact]
+    public void PhotometrySwitchNamesSelectedOwnerAndDoesNotClaimActiveCapture()
+    {
+        Assert.Contains("独立测光服务", PhotometryUiPresentation.SwitchSummary(true, "http://127.0.0.1:12345", Chinese));
+        Assert.Contains("入缝后启动", PhotometryUiPresentation.SwitchSummary(true, "http://127.0.0.1:12345", Chinese));
+        Assert.Contains("N.I.N.A. 测光端", PhotometryUiPresentation.SwitchSummary(true, "nina://11111111-2222-3333-4444-555555555555", Chinese));
+        Assert.Contains("仅保留定位短曝", PhotometryUiPresentation.SwitchSummary(false, "http://127.0.0.1:12345", Chinese));
+        Assert.Contains("未配置", PhotometryUiPresentation.SwitchSummary(true, null, Chinese));
+        var help = PhotometryUiPresentation.EndpointSummary("http://127.0.0.1:12345", Chinese);
+        Assert.Contains("无需另开", help);
+        Assert.Contains("不是第二个测光开关", help);
+        Assert.Contains("互斥", help);
+        Assert.Contains("本次不需要", PhotometryUiPresentation.MasterNextAction("http://127.0.0.1:12345", Chinese));
+        Assert.DoesNotContain("先完成两端配对", PhotometryUiPresentation.MasterNextAction("http://127.0.0.1:12345", Chinese));
+        Assert.DoesNotMatch("[\\u3400-\\u9fff]", PhotometryUiPresentation.SwitchSummary(true, "http://127.0.0.1:12345", English));
+    }
+
     private static readonly CultureInfo Chinese = CultureInfo.GetCultureInfo("zh-CN");
     private static readonly CultureInfo English = CultureInfo.GetCultureInfo("en-US");
 

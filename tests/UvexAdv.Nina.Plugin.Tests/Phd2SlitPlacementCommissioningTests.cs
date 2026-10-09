@@ -826,7 +826,8 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("inheritedSettledBudget?.LineageId ?? Guid.NewGuid()", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("inheritedSettledBudget?.AttemptsUsed ?? 0", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("inheritedSettledBudget?.CumulativeCommandedPixels ?? 0", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("inheritedSettledBudget?.StartedUtc ?? DateTimeOffset.UtcNow", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("inheritedSettledBudget?.MotionClockStartedUtc ?? DateTimeOffset.UtcNow", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("excludedExposureSeconds > 0 ? phd2SettledHandoffBudget!.StartedUtc : ledger.StartedUtc", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("PHD2_LOCK_LEDGER_ALREADY_SETTLED", RunnerSource, StringComparison.Ordinal);
         Assert.Contains("RecoveryContextSha256", RunnerSource, StringComparison.Ordinal);
@@ -1251,7 +1252,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
             Phd2SlitPlacementCommissioningPreset.ComputePolicySha256(policy));
     }
 
-    private static Phd2LockShiftPendingState CreateState(string runId, Phd2LockShiftPendingPhase phase)
+    internal static Phd2LockShiftPendingState CreateState(string runId, Phd2LockShiftPendingPhase phase)
     {
         var now = DateTimeOffset.UtcNow;
         return new Phd2LockShiftPendingState(

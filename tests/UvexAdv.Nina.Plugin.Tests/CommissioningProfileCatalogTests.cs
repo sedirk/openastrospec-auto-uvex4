@@ -97,7 +97,8 @@ public sealed class CommissioningProfileCatalogTests : IDisposable
 
         Assert.Equal(2, result.Profiles.Count);
         var selectable = Assert.Single(result.Profiles, item => !item.IsAutomatic);
-        Assert.Contains("DF-UVEX4-2026", selectable.DisplayName, StringComparison.Ordinal);
+        Assert.Contains("安装标定", selectable.DisplayName, StringComparison.Ordinal);
+        Assert.Contains("DF-UVEX4-2026", selectable.Description, StringComparison.Ordinal);
         var values = CommissioningProfileCatalog.ReadProfileValues(full);
         Assert.Equal("ASCOM.OnStep.Telescope", values["ExpectedTelescopeId"].GetString());
     }
@@ -235,6 +236,60 @@ public sealed class CommissioningProfileCatalogTests : IDisposable
         Assert.False(CommissioningProfileCatalog.IsPostBindingsOperationalPreference(nameof(UvexPluginSettings.G3FocalLengthMillimeters)));
         Assert.False(CommissioningProfileCatalog.IsOperationalProfileSetting(nameof(UvexPluginSettings.RealModeCommissioned)));
         Assert.False(CommissioningProfileCatalog.IsOperationalProfileSetting(nameof(UvexPluginSettings.BrightTargetWingCentroidEnabled)));
+    }
+
+    [Fact]
+    public void LocalInstallationPackagesRemainDiscoverableWithoutARememberedPath()
+    {
+        var local = Path.Combine(root, "Local");
+        var directory = Path.Combine(local, "commissioning", "usb-rebind");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "current.bindings.json");
+        File.WriteAllText(path, """
+            {"NinaProfileValues":{"CommissioningPresetPath":"preset.json","CommissioningPresetId":"REBOUND",
+            "CommissioningPresetSha256":"hash","NightSetupSnapshotPath":"night.json","Phd2ProfileEvidenceSha256":"hash",
+            "ExpectedUvexSlitPosition":2,"G3ExposureMilliseconds":10000}}
+            """);
+        var result = CommissioningProfileCatalog.Discover(root, Path.Combine(root, "ProgramData"), localDataRoot: local);
+        var package = Assert.Single(result.Profiles, item => !item.IsAutomatic);
+        Assert.Equal(Path.GetFullPath(path), package.BindingsPath);
+        Assert.Contains("狭缝 2", package.DisplayName);
+        Assert.Contains("10000 ms", package.DisplayName);
+    }
+
+    [Fact]
+    public void ActiveProfileTakesPrecedenceOverDuplicateHistoricalIdentity()
+    {
+        Directory.CreateDirectory(root);
+        foreach (var id in new[] { "a-history", "z-active" })
+            File.WriteAllText(Path.Combine(root, id + ".profile"), $"""
+                <Profile><Name>{id}</Name><TelescopeSettings><Id>mount</Id><LastDeviceName>On-Step</LastDeviceName></TelescopeSettings></Profile>
+                """);
+        var result = CommissioningProfileCatalog.Discover(root, root, activeNinaProfileId: "z-active");
+        Assert.Contains("z-active", Assert.Single(result.Telescopes).Source);
+    }
+
+    [Fact]
+    public void HiddenHistoryNeverHidesTheCurrentSelectionAndIsExplicitlyRecoverable()
+    {
+        CommissioningProfileChoice[] profiles =
+        [
+            new("auto", "auto", "", null, true),
+            new("current", "current", "", "current.json", false),
+            new("historic", "historic", "", "historic.json", false),
+        ];
+        Assert.Contains(profiles[1], CommissioningProfileCatalog.VisibleProfiles(profiles, "current", false));
+        Assert.Equal(profiles, CommissioningProfileCatalog.VisibleProfiles(profiles, "current", true));
+    }
+
+    [Fact]
+    public void CandidateDiscoveryCannotReplaceExistingOrAmbiguousIdentities()
+    {
+        DeviceIdentityChoice[] candidates = [new("a", "a", ""), new("b", "b", "")];
+        Assert.Equal(candidates[1], CommissioningProfileCatalog.SavedOrUniqueCandidate(candidates, "b"));
+        Assert.Null(CommissioningProfileCatalog.SavedOrUniqueCandidate(candidates, "missing"));
+        Assert.Null(CommissioningProfileCatalog.SavedOrUniqueCandidate(candidates, ""));
+        Assert.Equal(candidates[0], CommissioningProfileCatalog.SavedOrUniqueCandidate([candidates[0]], ""));
     }
 
     public void Dispose()

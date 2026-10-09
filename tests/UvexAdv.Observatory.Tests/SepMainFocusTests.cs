@@ -1,3 +1,4 @@
+using System.Text.Json;
 using UvexAdv.Observatory;
 using Xunit;
 
@@ -67,6 +68,11 @@ public sealed class SepMainFocusTests
         Assert.True(result.FocusVerified);
         if (flat) { Assert.Equal("VerifiedAtOrigin", result.Status); Assert.True(File.Exists(Path.Combine(path, "origin-verification.json"))); }
         Assert.True(File.Exists(Path.Combine(path,"result.json")));
+        using var evidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(path, "validation.json")));
+        Assert.Equal(2, evidence.RootElement.GetProperty("schema").GetInt32());
+        Assert.Equal(!flat, evidence.RootElement.GetProperty("paired").GetProperty("Improved").GetBoolean());
+        Assert.Equal(4, evidence.RootElement.GetProperty("validation").GetArrayLength());
+        Assert.Equal(4, evidence.RootElement.GetProperty("paired").GetProperty("Groups").GetArrayLength());
         Assert.Equal(5, result.Curve.Length);
         Assert.All(fake.Moves.Zip(fake.Moves.Skip(1)), pair => Assert.InRange(Math.Abs(pair.First-pair.Second),0,150));
     }
@@ -86,10 +92,13 @@ public sealed class SepMainFocusTests
         }
     }
 
-    [Fact]
-    public async Task BadNativeFitNeverAppliesCandidateAndKeepsOriginalPosition()
+    [Theory]
+    [InlineData(.6)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public async Task BadNativeFitNeverAppliesCandidateAndKeepsOriginalPosition(double quality)
     {
-        var fake = new Fake { FitQuality = .6 };
+        var fake = new Fake { FitQuality = quality };
         var result = await new SepMainFocusRunner(fake).RunAsync(Options,
             Path.Combine(Path.GetTempPath(), "sep-main-focus-test-" + Guid.NewGuid()), null, CancellationToken.None);
         Assert.Equal("Failed", result.Status);
@@ -97,6 +106,42 @@ public sealed class SepMainFocusTests
         Assert.True(result.ReturnConfirmed);
         Assert.Equal(5000, fake.Position);
         Assert.Null(result.Candidate);
+        Assert.Contains("拟合优度 R²", result.Message);
+        Assert.DoesNotContain("外推", result.Message);
+        Assert.Equal(Options.Frames * (Options.HalfPoints * 2 + 2), fake.Captures);
+    }
+
+    [Theory]
+    [InlineData(4875, "较小焦位侧", "外推估计")]
+    [InlineData(4900, "较小焦位侧", "边界")]
+    [InlineData(5100, "较大焦位侧", "边界")]
+    [InlineData(5125, "较大焦位侧", "外推估计")]
+    public async Task OutOfRangeOrBoundaryMinimumIsNotAppliedOrValidated(int fittedPosition, string side, string reason)
+    {
+        var fake = new Fake { FitPosition = fittedPosition, FitQuality = .978 };
+        var directory = Path.Combine(Path.GetTempPath(), "sep-unbracketed-fit-" + Guid.NewGuid());
+        var result = await new SepMainFocusRunner(fake).RunAsync(Options, directory, null, CancellationToken.None);
+
+        Assert.Equal("Failed", result.Status);
+        Assert.False(result.Improved);
+        Assert.False(result.FocusVerified);
+        Assert.Null(result.Candidate);
+        Assert.True(result.ReturnConfirmed);
+        Assert.Equal(5000, result.FinalPosition);
+        Assert.Equal(5000, fake.Position);
+        Assert.Equal(new[] { 5000, 4900, 4950, 5000, 5050, 5100, 5000 }, fake.Moves);
+        Assert.Equal(Options.Frames * (Options.HalfPoints * 2 + 2), fake.Captures);
+        Assert.All(result.Samples, sample => Assert.InRange(sample.Group, 0, Options.HalfPoints * 2 + 1));
+        Assert.Contains("4900–5100", result.Message);
+        Assert.Contains(fittedPosition.ToString(), result.Message);
+        Assert.Contains(reason, result.Message);
+        Assert.Contains(side, result.Message);
+        Assert.Contains("不能据此声称最佳焦点", result.Message);
+        Assert.Contains("已回到原位 5000", result.Message);
+        Assert.Contains("不自动扩界", result.Message);
+        Assert.DoesNotContain("拟合优度 R²", result.Message);
+        Assert.True(File.Exists(Path.Combine(directory, "native-fit.json")));
+        Assert.False(File.Exists(Path.Combine(directory, "validation.json")));
     }
 
     [Fact]
@@ -160,6 +205,181 @@ public sealed class SepMainFocusTests
     }
 
     [Fact]
+    public void PairedValidationDoesNotConfuseRadiusRankChangesWithLackOfImprovement()
+    {
+        var samples = PairedSamples();
+        var paired = SepMainFocusRunner.CompareRepeatedSamples(samples);
+        Assert.False(SepMainFocusRunner.AcceptRepeatedValidation(paired.AbsolutePoints));
+        Assert.Equal(5, paired.AbsolutePoints[0].R50);
+        Assert.Equal(5.2, paired.AbsolutePoints[1].R50);
+        Assert.Equal(SepMainFocusRunner.Summarize(samples), paired.AbsolutePoints);
+        Assert.True(paired.Improved);
+        Assert.Equal(Enumerable.Range(0, 9), paired.StarIds);
+        Assert.Equal(new[] { 5, 2, 5, 3 }, paired.Groups.Select(g => g.FramePaths.Length));
+        Assert.Equal(new[] { "g1-f3.fit", "g1-f4.fit" }, paired.Groups[1].FramePaths);
+        Assert.Equal(new[] { "g3-f0.fit", "g3-f3.fit", "g3-f4.fit" }, paired.Groups[3].FramePaths);
+        Assert.Equal(7.4 / 8.2, paired.Pairs[0].R50Ratio, 12);
+        Assert.Equal(4.6 / 5.1, paired.Pairs[1].R50Ratio, 12);
+        Assert.Equal(9.4 / 9.2, paired.Pairs[0].R80Ratio, 12);
+        Assert.Equal(7.4 / 7.9, paired.Pairs[1].R80Ratio, 12);
+        Assert.All(paired.Pairs, p => { Assert.True(p.Accepted); Assert.Equal(9, p.Stars.Length); });
+        Assert.Equal(samples[0].Measurement.Reference, paired.Reference);
+    }
+
+    [Fact]
+    public void PairedValidationIsInvariantToIndependentStarSizeScalesAndStarOrder()
+    {
+        var samples = PairedSamples();
+        var original = SepMainFocusRunner.CompareRepeatedSamples(samples);
+        var scaled = samples.Select(s => s with { Measurement = s.Measurement with
+        {
+            Stars = s.Measurement.Stars.Reverse().Select(star => star with
+            { R50 = star.R50 * (star.Id + 1), R80 = star.R80 * (star.Id + 1) }).ToArray()
+        } }).ToArray();
+        var actual = SepMainFocusRunner.CompareRepeatedSamples(scaled);
+        Assert.Equal(original.Improved, actual.Improved);
+        Assert.Equal(original.StarIds, actual.StarIds);
+        for (var pair = 0; pair < 2; pair++)
+        {
+            Assert.Equal(original.Pairs[pair].R50Ratio, actual.Pairs[pair].R50Ratio, 12);
+            Assert.Equal(original.Pairs[pair].R80Ratio, actual.Pairs[pair].R80Ratio, 12);
+            for (var star = 0; star < 9; star++)
+            {
+                Assert.Equal(original.Pairs[pair].Stars[star].R50Ratio, actual.Pairs[pair].Stars[star].R50Ratio, 12);
+                Assert.Equal(original.Pairs[pair].Stars[star].R80Ratio, actual.Pairs[pair].Stars[star].R80Ratio, 12);
+            }
+        }
+    }
+
+    [Fact]
+    public void PairedValidationRejectsWhenAbsoluteMedianRankChangesWouldFalselyAccept()
+    {
+        double[] a = [1, 10, 11], b = [.99, 8, 10.9];
+        var samples = PairedSamples().Select(s => s with { Measurement = s.Measurement with
+        {
+            Stars = s.Measurement.Stars.Where(star => star.Id < 3).Select(star =>
+            {
+                var radius = (s.Group % 2 == 0 ? a : b)[star.Id];
+                return star with { R50 = radius, R80 = radius * 2 };
+            }).ToArray()
+        } }).ToArray();
+        var result = SepMainFocusRunner.CompareRepeatedSamples(samples);
+        Assert.True(SepMainFocusRunner.AcceptRepeatedValidation(result.AbsolutePoints));
+        Assert.False(result.Improved);
+        Assert.All(result.Pairs, pair => { Assert.Equal(.99, pair.R50Ratio, 12); Assert.False(pair.Accepted); });
+    }
+
+    [Fact]
+    public async Task SharedRunnerAppliesPairedDecisionAndPersistsItsActualSelectedEvidence()
+    {
+        var repeated = PairedSamples().Select(s => s with { Position = s.Group % 2 == 0 ? 5000 : 4975 }).ToArray();
+        var fake = new Fake { RepeatedSamples = repeated, RepeatedStartCapture = 30 };
+        var directory = Path.Combine(Path.GetTempPath(), "sep-paired-runner-" + Guid.NewGuid());
+        var result = await new SepMainFocusRunner(fake).RunAsync(Options with { Frames = 5 }, directory, null, CancellationToken.None);
+        Assert.Equal("Improved", result.Status);
+        Assert.True(result.FocusVerified);
+        Assert.Equal(4975, result.FinalPosition);
+        Assert.Equal(50, fake.Captures);
+        using var evidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "validation.json")));
+        var saved = evidence.RootElement.GetProperty("paired").Deserialize<SepFocusRepeatedComparison>()!;
+        Assert.True(saved.Improved);
+        Assert.False(SepMainFocusRunner.AcceptRepeatedValidation(saved.AbsolutePoints));
+        Assert.Equal(new[] { 5, 2, 5, 3 }, saved.Groups.Select(g => g.FramePaths.Length));
+        Assert.Equal(Enumerable.Range(0, 9), saved.StarIds);
+        var validationSamples = result.Samples.Where(s => s.Group >= 6).ToArray();
+        Assert.Equal(validationSamples.Where(s => s.Group == 7).Skip(3).Select(s => s.Path), saved.Groups[1].FramePaths);
+        Assert.Equal(SepMainFocusRunner.CompareRepeatedSamples(validationSamples).Pairs[0].R50Ratio, saved.Pairs[0].R50Ratio);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(3, false)]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    public void EachRepeatedPairMustIndependentlyPassBothUnchangedThresholds(int failingGroup, bool badR80)
+    {
+        var samples = PairedSamples();
+        var a = samples.First(s => s.Group == failingGroup - 1).Measurement.Stars;
+        var changed = samples.Select(s => s.Group != failingGroup ? s : s with { Measurement = s.Measurement with
+        {
+            Stars = s.Measurement.Stars.Select(star => badR80
+                ? star with { R80 = a.Single(x => x.Id == star.Id).R80 * 1.11 }
+                : star with { R50 = a.Single(x => x.Id == star.Id).R50 * .96 }).ToArray()
+        } }).ToArray();
+        var result = SepMainFocusRunner.CompareRepeatedSamples(changed);
+        Assert.False(result.Improved);
+        Assert.False(result.Pairs[failingGroup / 2].Accepted);
+        Assert.True(result.Pairs[1 - failingGroup / 2].Accepted);
+    }
+
+    [Fact]
+    public void PairedValidationUsesWithinStarGroupMediansBeforeRatios()
+    {
+        var samples = PairedSamples();
+        var expected = SepMainFocusRunner.CompareRepeatedSamples(samples);
+        // One outlier in a five-frame A group cannot replace its per-star median.
+        samples[0] = samples[0] with { Measurement = samples[0].Measurement with
+        { Stars = samples[0].Measurement.Stars.Select(s => s with { R50 = s.R50 * 10, R80 = s.R80 * 10 }).ToArray() } };
+        var result = SepMainFocusRunner.CompareRepeatedSamples(samples);
+        Assert.Equal(expected.Groups[0].Stars, result.Groups[0].Stars);
+        Assert.Equal(expected.Pairs[0].R50Ratio, result.Pairs[0].R50Ratio);
+        Assert.Equal(expected.Pairs[0].R80Ratio, result.Pairs[0].R80Ratio);
+    }
+
+    [Fact]
+    public void PairedValidationRejectsInsufficientFramesOrCommonStarsWithoutFilling()
+    {
+        var samples = PairedSamples();
+        Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples(
+            samples.Where(s => s.Group != 1 || s.Path == "g1-f3.fit").ToArray()));
+        Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples(samples.Select(s =>
+            s with { Measurement = s.Measurement with { Stars = s.Measurement.Stars.Where(x => x.Id < 2).ToArray() } }).ToArray()));
+        // Every frame has three IDs, but no three are co-observed in two frames.
+        Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples([
+            Sample(1,0,1,2), Sample(1,0,1,3), Sample(1,0,2,3)]));
+    }
+
+    [Fact]
+    public void PairedValidationRejectsDifferentUsableReferenceButIgnoresUninitializedMissingFrame()
+    {
+        var samples = PairedSamples();
+        var missing = samples[0] with { Path = "uninitialized.fit", Measurement = new([], []) };
+        Assert.True(SepMainFocusRunner.CompareRepeatedSamples(new[] { missing }.Concat(samples).ToArray()).Improved);
+        samples[0] = samples[0] with { Measurement = samples[0].Measurement with
+        { Reference = samples[0].Measurement.Reference.Select(p => p with { X = p.X + 1 }).ToArray() } };
+        var error = Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples(samples));
+        Assert.Contains("参考星纪元", error.Message);
+    }
+
+    [Fact]
+    public void PairedValidationRejectsNonAbabGroupsAndInvalidSelectedMeasurements()
+    {
+        var samples = PairedSamples();
+        Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples(
+            samples.Where(s => s.Group != 3).ToArray()));
+        Assert.Throws<InvalidOperationException>(() => SepMainFocusRunner.CompareRepeatedSamples(
+            samples.Select(s => s.Group == 2 ? s with { Position = 1100 } : s).ToArray()));
+        samples[0] = samples[0] with { Measurement = samples[0].Measurement with
+        { Stars = samples[0].Measurement.Stars.Select(s => s with { R50 = double.NaN }).ToArray() } };
+        Assert.Throws<InvalidDataException>(() => SepMainFocusRunner.CompareRepeatedSamples(samples));
+    }
+
+    private static SepFocusSample[] PairedSamples()
+    {
+        // Synthetic only: heterogeneous sizes/rank changes, not copied observing data.
+        double[][] r50 = [[4.7,4.9,5,4.8,7.5,8.2,4.7,7.7,7.5], [4.6,4.1,5.1,4.7,6,7.4,5.2,6.6,6.5],
+            [4.8,4.9,5.1,5.4,7.3,8.6,5,7.1,8.4], [4.5,4.2,4.6,5,6.5,7.8,4.8,5.8,6]];
+        double[][] r80 = [[7.8,8.2,8.8,9.2,11.8,13.5,8.9,13.8,13], [8.2,7.3,10.9,9.4,10.8,13.4,12.5,14.5,11.7],
+            [8,7.9,9.3,10.6,12.2,15.3,9.6,11.8,15.4], [8,7.4,8.6,10.3,11.6,14.1,10.8,10.3,11.4]];
+        int[][][] missing = [[[],[],[],[],[]], [[0],[1],[1],[],[]], [[],[],[],[],[]], [[],[0],[1],[],[]]];
+        var reference = Enumerable.Range(0, 9).Select(i => new SepFocusReference(30 + i * 50, 30)).ToArray();
+        return Enumerable.Range(0, 4).SelectMany(g => Enumerable.Range(0, 5).Select(f => new SepFocusSample(g,
+            g % 2 == 0 ? 1000 : 940, $"g{g}-f{f}.fit", new(reference.ToArray(), Enumerable.Range(0, 9)
+                .Where(id => !missing[g][f].Contains(id)).Select(id => new SepFocusStar(id, reference[id].X,
+                    reference[id].Y, r50[g][id], r80[g][id], 1000, 30)).ToArray())))).ToArray();
+    }
+
+    [Fact]
     public async Task BaselineOutlierIsPreservedButNeverPassedToNativeFit()
     {
         var fake = new Fake { BaselineOffset = 100 };
@@ -172,12 +392,55 @@ public sealed class SepMainFocusTests
         Assert.All(fake.FitPoints, p => Assert.True(p.R50 < 100));
     }
 
+    [Fact]
+    public async Task OneCompleteBaselineFrameFailsBeforeAnyFocusMotionOrFit()
+    {
+        var fake = new Fake { CompleteBaselineFrames = 1 };
+        var result = await new SepMainFocusRunner(fake).RunAsync(Options,
+            Path.Combine(Path.GetTempPath(), "sep-baseline-incomplete-" + Guid.NewGuid()), null, CancellationToken.None);
+
+        Assert.Equal("Failed", result.Status);
+        Assert.Contains("基准组", result.Message);
+        Assert.Contains("未开始扫焦", result.Message);
+        Assert.False(result.FocusVerified);
+        Assert.True(result.ReturnConfirmed);
+        Assert.Equal(5000, result.FinalPosition);
+        Assert.Equal(Options.Frames, fake.Captures);
+        Assert.Single(fake.Moves); // Initial position only: MoveAsync was never called.
+        Assert.Null(fake.FitPoints);
+        Assert.Empty(result.Curve);
+        Assert.All(result.Samples, sample => Assert.Equal(0, sample.Group));
+        Assert.Single(result.Samples, sample => sample.Measurement.Stars.Length >= 3);
+    }
+
+    [Fact]
+    public async Task TwoCompleteBaselineFramesSupportNativeReportAndRunLocalFocusMessage()
+    {
+        var fake = new Fake { CompleteBaselineFrames = 2 };
+        var result = await new SepMainFocusRunner(fake).RunAsync(Options,
+            Path.Combine(Path.GetTempPath(), "sep-baseline-complete-" + Guid.NewGuid()), null, CancellationToken.None);
+
+        Assert.Equal("Improved", result.Status);
+        Assert.True(result.FocusVerified);
+        var baseline = Assert.Single(SepMainFocusRunner.Summarize(result.Samples.Where(sample => sample.Group == 0).ToArray()));
+        Assert.Equal(2, baseline.Frames);
+        Assert.Equal(result.Origin, baseline.Position);
+        Assert.Contains("本轮焦位锁", result.Message);
+        Assert.Contains("目标/WCS/狭缝/导星", result.Message);
+        Assert.Contains("不改写原 Night Setup", result.Message);
+        Assert.DoesNotContain("重新建立 Night Setup", result.Message);
+    }
+
     private sealed class Fake : ISepMainFocusHardware
     {
         public int Position=5000, Captures, CancelAtCapture, Reads;
         public bool Flat, ExternalMove;
         public double FitQuality = .95;
+        public int FitPosition = 4975;
         public double BaselineOffset;
+        public int CompleteBaselineFrames = 3;
+        public SepFocusSample[]? RepeatedSamples;
+        public int RepeatedStartCapture;
         public SepFocusPoint[]? FitPoints;
         public List<int> Moves = [5000];
         public Task<SepFocusState> ReadReadyAsync(CancellationToken token) { Reads++; return Task.FromResult(new SepFocusState(Position,"same",100,0)); }
@@ -185,11 +448,14 @@ public sealed class SepMainFocusTests
         public Task<SepFocusFrame> CaptureAsync(string path,SepFocusReference[]? reference,CancellationToken token)
         {
             if (++Captures==CancelAtCapture) { if(ExternalMove) Position++; throw new OperationCanceledException(); }
+            if (RepeatedSamples is not null && Captures > RepeatedStartCapture)
+                return Task.FromResult(RepeatedSamples[Captures - RepeatedStartCapture - 1].Measurement);
             var r50=Flat?4:3+Math.Pow(Position-4975,2)/2000;
             if (Captures <= 3) r50 += BaselineOffset;
+            var starCount = Captures <= 3 && Captures > CompleteBaselineFrames ? 2 : 3;
             return Task.FromResult(new SepFocusFrame(reference ?? [new(30,30),new(90,30),new(30,90)],
-                Enumerable.Range(0,3).Select(i=>new SepFocusStar(i,30,30,r50,r50+2,1000,30)).ToArray()));
+                Enumerable.Range(0,starCount).Select(i=>new SepFocusStar(i,30,30,r50,r50+2,1000,30)).ToArray()));
         }
-        public Task<SepFocusFit> FitAsync(SepFocusPoint[] points,CancellationToken token) { FitPoints = points; return Task.FromResult(new SepFocusFit(4975,FitQuality)); }
+        public Task<SepFocusFit> FitAsync(SepFocusPoint[] points,CancellationToken token) { FitPoints = points; return Task.FromResult(new SepFocusFit(FitPosition,FitQuality)); }
     }
 }

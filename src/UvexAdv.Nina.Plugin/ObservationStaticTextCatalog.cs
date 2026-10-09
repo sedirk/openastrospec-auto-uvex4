@@ -13,6 +13,16 @@ internal static partial class ObservationStaticTextCatalog
     private static readonly IReadOnlyDictionary<string, string> English =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["1 · 目标与曝光"] = "1 · Target and exposures",
+            ["2 · 当前设备与光学配置"] = "2 · Current equipment and optics",
+            ["3 · 待处理项（具体原因）"] = "3 · Outstanding checks (specific reasons)",
+            ["日常观测沿用当前安装标定，不必每晚选方案、填哈希或生成草稿。仅更换设备或光学配置时再修改。"] = "Reuse the current installation for daily observations. No nightly package selection, hashes or drafts are required. Change it only when equipment or optics change.",
+            ["更换安装标定…"] = "Change installation…",
+            ["重新检查当前配置"] = "Recheck current setup",
+            ["高级设置…"] = "Advanced settings…",
+            ["监督方式…"] = "Supervision…",
+            ["显示历史标定包（调试记录，通常无需选择）"] = "Show historical packages (commissioning history, rarely needed)",
+            ["标定包静态校验已通过（由文件校验得出，不能手工勾选）"] = "Commissioning files validated (read-only result, not a manual override)",
             ["光谱单目标完整流程（11 阶段）。翻转请将目标放入光谱整夜序列，添加 OpenAstroSpec · 光谱中天翻转；不要混用普通翻转触发器。"] = "Complete single-target spectroscopy workflow (11 stages). For flips, put the target inside a spectroscopy night and add OpenAstroSpec · Spectroscopy Meridian Flip; do not mix with ordinary flip triggers.",
             ["逐帧翻转 · 保存 → 停止采集 → N.I.N.A. 翻转 → 重新定位 / 入缝 / 导星 → 续拍剩余帧"] = "Frame-boundary flip · Save → Stop acquisition → N.I.N.A. flip → Reacquire / slit / guide → Remaining frames",
             ["使用 N.I.N.A. 的翻转时机与镜筒侧设置；不调用 ATR 主相机居中或普通自动对焦。此触发器仅用于光谱整夜序列，模拟不移动设备。"] = "Uses N.I.N.A. flip timing and pier-side settings, without ATR main-camera recentering or ordinary autofocus. For spectroscopy nights only; simulation never moves equipment.",
@@ -186,6 +196,7 @@ internal static partial class ObservationStaticTextCatalog
             ["空闲时设置，启动后锁定到本轮结束。关闭仅停用并行测光，不禁用定位所需的测光相机短曝光；不会断开设备。"] = "Set while idle; locked until this run ends. OFF disables parallel photometry only, not photometry camera acquisition witnesses, and does not disconnect equipment.",
             ["按当前设置新开一轮。用于切换超亮目标等会改变动作哈希的分支：先结束旧运行并审计退役旧光谱仪导星相机恢复链，再按当前表单捕获新哈希并启动。不会把新设置热替换进旧运行，也不要求把设置改回去。"] = "Start a new run with the current settings. Use this for branches such as very-bright targets that change the action hash: finish the old run, audit and retire its spectrograph guide camera recovery chain, then capture a new hash from the current form and start. Settings are never hot-swapped into an old run, and you do not have to revert the form.",
             ["清除导星相机旧状态"] = "Clear old guide-camera state",
+            ["人工接管旧定位/入缝记录。存在未结 PHD2 入缝时，先结束曝光、停止导星并取消旧自动运行，再确认接管；保留原位置与预算，归档为未完成。不回程、不校准、不自动开始新观测。"] = "Take over old acquisition/slit records. For unfinished PHD2 placement, first finish exposures, stop guiding and cancel automation, then confirm takeover. Original positions/budget remain as incomplete history. No return, calibration or new observation is started.",
             ["清除旧光谱仪导星相机状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的光谱仪导星相机自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。"] = "Clear old spectrograph guide camera state: cancel the failed run, accept the current state after manual takeover, and close the stale spectrograph guide camera automatic-return ledger. This does not move the mount; the original ledger and audit record are retained. You may start again immediately afterward.",
             ["目录转向 → 测光相机广域见证 → 光谱仪导星相机解算 / N.I.N.A. 大步修正 / 邻场搜索 → PHD2 入缝并导星 → 光谱相机自适应曝光 + 可选测光相机同步测光"] = "Catalog slew → photometry camera wide-field evidence → spectrograph guide camera solve / N.I.N.A. large correction / nearby-field search → PHD2 slit placement and guiding → spectroscopy camera adaptive exposure + optional synchronized photometry camera photometry",
             ["用于并行测光相机任务长度及自动观测开始时的地平线保护估算；不是光谱相机单帧曝光的硬超时。"] = "Used for the parallel photometry camera task duration and horizon-protection estimate at observation start; it is not a hard timeout for an spectroscopy camera exposure.",

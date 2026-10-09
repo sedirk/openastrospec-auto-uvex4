@@ -132,7 +132,7 @@ internal sealed class UvexPluginSettings
     // Real target-observation mode is deliberately opt-in. Empty calibration/identity values are
     // interpreted as uncommissioned and cause a NeedsAttention gate instead of guessed motion.
     public bool RealModeCommissioned { get => values.GetValueBoolean(nameof(RealModeCommissioned), false); set => values.SetValueBoolean(nameof(RealModeCommissioned), value); }
-    public bool AutoLoadNewestCompleteCommissioningPackage { get => values.GetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), true); set => values.SetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), value); }
+    public bool AutoLoadNewestCompleteCommissioningPackage { get => values.GetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), false); set => values.SetValueBoolean(nameof(AutoLoadNewestCompleteCommissioningPackage), value); }
     public bool AutoApproveValidatedCommissioningPackage { get => values.GetValueBoolean(nameof(AutoApproveValidatedCommissioningPackage), true); set => values.SetValueBoolean(nameof(AutoApproveValidatedCommissioningPackage), value); }
     public string SelectedCommissioningProfileId { get => GetString(nameof(SelectedCommissioningProfileId), CommissioningProfileChoice.AutomaticSiteProfileId); set => values.SetValueString(nameof(SelectedCommissioningProfileId), value); }
     public string SelectedCommissioningProfilePath { get => GetString(nameof(SelectedCommissioningProfilePath), string.Empty); set => values.SetValueString(nameof(SelectedCommissioningProfilePath), value); }

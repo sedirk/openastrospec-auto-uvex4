@@ -366,6 +366,64 @@ public sealed class Phd2CalibrationQualityTests
         Assert.Contains(assessment.Reasons, reason => reason.Contains("cross-axis", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void OwnerManagedCalibrationMetadataCannotVetoMeasuredGuidingOrChangeMotionScale()
+    {
+        var candidate = Candidate(47.5);
+        candidate = candidate with
+        {
+            Validation = candidate.Validation with { OwnerManaged = true, CalibrationAge = TimeSpan.FromDays(100),
+                Calibration = candidate.Validation.Calibration with { RaParity = "?", DecParity = null,
+                    RaRatePixelsPerSecond = 0, DecAngleDegrees = null }, Warnings = ["native/current guide-rate mismatch"] },
+            CalibrationTopologyMatched = false, CalibrationPierSideMatched = false,
+            CalibrationProcessEvidenceComplete = false, RaBidirectionalRateRatio = 100,
+        };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.True(result.OwnerManaged);
+        Assert.True(result.IsLockShiftAuthority, result.Summary);
+        Assert.True(result.IsUnattendedScienceAuthority);
+        Assert.Equal(Phd2CalibrationQualityGrade.Qualified, result.Grade);
+        Assert.Equal(1, result.MaximumLockShiftScale);
+        Assert.NotEmpty(result.CalibrationWarnings);
+        Assert.Empty(result.HardFailures);
+        Assert.Contains(result.CalibrationWarnings, warning => warning.Contains("guide-rate mismatch"));
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("equipment")]
+    [InlineData("settle")]
+    [InlineData("epoch")]
+    [InlineData("target")]
+    [InlineData("topology")]
+    [InlineData("residual")]
+    [InlineData("stale")]
+    [InlineData("motion")]
+    [InlineData("absent")]
+    public void OwnerManagedDoesNotDowngradeCurrentOperationalFailures(string failure)
+    {
+        var candidate = Candidate(47.5);
+        candidate = candidate with { Validation = candidate.Validation with { OwnerManaged = true } };
+        candidate = failure switch
+        {
+            "profile" => candidate with { ProfileEvidenceMatched = false },
+            "equipment" => candidate with { EquipmentIdentityMatched = false },
+            "settle" => candidate with { Settle = null },
+            "epoch" => candidate with { Settle = candidate.Settle! with { SameGuideEpoch = false } },
+            "target" => candidate with { FreshResidual = candidate.FreshResidual! with { TargetIdentityConfirmed = false } },
+            "topology" => candidate with { FreshResidual = candidate.FreshResidual! with { TopologyMatched = false } },
+            "residual" => candidate with { FreshResidual = candidate.FreshResidual! with { ResidualPixels = 100 } },
+            "stale" => candidate with { FreshResidual = candidate.FreshResidual! with { CapturedUtc = Now.AddHours(-1) } },
+            "motion" => candidate with { FreshResidual = candidate.FreshResidual! with { NoUnvalidatedCalibrationOrLockShiftAfterMeasurement = false } },
+            "absent" => candidate with { Validation = candidate.Validation with { Calibration = candidate.Validation.Calibration with { Calibrated = false } } },
+            _ => throw new InvalidOperationException(),
+        };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.False(result.IsLockShiftAuthority);
+        Assert.False(result.IsUnattendedScienceAuthority);
+        Assert.NotEmpty(result.HardFailures);
+    }
+
     private static Phd2CalibrationQualityCandidate Candidate(double orthogonalityDegrees)
     {
         var validation = new Phd2CalibrationValidation(

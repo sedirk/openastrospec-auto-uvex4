@@ -7,6 +7,27 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class ScienceRecoveryBoundaryTests
 {
+    [Fact]
+    public void AtrClockCreditRequiresSettledProofCompletedCaptureAndKeepsGuideQualityCheck()
+    {
+        var before = Source.IndexOf("var exposureLedger = await ReadSettledAtrExposureLedgerAsync(", StringComparison.Ordinal);
+        var capture = Source.IndexOf("await imagingMediator.CaptureImage(sequence", before, StringComparison.Ordinal);
+        var credit = Source.IndexOf("await RecordAtrExposureClockAsync(", capture, StringComparison.Ordinal);
+        var image = Source.IndexOf("await exposure.ToImageData(", credit, StringComparison.Ordinal);
+        var continuity = Source.IndexOf("atr-exposure-guide-continuity", image, StringComparison.Ordinal);
+        Assert.True(before >= 0 && capture > before && credit > capture && image > credit && continuity > image);
+        Assert.Contains("if (exposure is null)", Source[capture..credit]);
+        Assert.Contains("throw new InvalidOperationException(\"ATR_EXPOSURE_EMPTY", Source[capture..credit]);
+        Assert.Contains("if (!IsGuidingStable())", Source[before..capture]);
+        Assert.Contains("CheckScienceRebuildBudgetAsync(context, result.Gate,", Source);
+        var accounting = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.ScienceContinuation.cs"));
+        Assert.Contains("pendingPhd2LockShift is not null", accounting);
+        Assert.Contains("CanObserveAtSettledLock", accounting);
+        Assert.Contains("ValidateCurrentPhd2LockLedgerBinding", accounting);
+        Assert.Contains("motionBudgetReset = false, scienceAccepted = false", accounting);
+        Assert.Contains("{sourceGate.Code}: {sourceGate.Message}", accounting);
+    }
+
     [Theory]
     [InlineData(ObservationStage.SelectAtrExposure)]
     [InlineData(ObservationStage.RunScienceBlock)]

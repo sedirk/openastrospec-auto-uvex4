@@ -307,7 +307,7 @@ public sealed class ScreenshotRendererTests
         Assert.True(layout.ViewportInsideHost);
         if (tab == 0)
         {
-            Assert.Equal(7, layout.ChecklistCardCount);
+            Assert.Equal(3, layout.ChecklistCardCount);
             Assert.Equal(0, layout.NightEditorCount);
             Assert.Contains("ShowObservationPlanCommand", layout.NavigationCommands);
             Assert.Contains("ShowDeviceBindingsSettingsCommand", layout.NavigationCommands);

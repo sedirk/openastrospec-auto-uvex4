@@ -5,6 +5,19 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class CatalogShortPositionSourceSafetyTests
 {
     [Fact]
+    public void RejectedCurrentFrameIsVisibleWithoutTargetMarkerOrAcceptanceChange()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.CatalogShortPosition.cs"));
+        var rejected = source[source.IndexOf("if (!accepted)", StringComparison.Ordinal)..];
+        rejected = rejected[..rejected.IndexOf("if (!confirmation.RetryAllowed)", StringComparison.Ordinal)];
+        Assert.Contains("PublishG3Preview(image,", rejected);
+        Assert.Contains("Current rejected short frame, not slit-placement proof", rejected);
+        Assert.DoesNotContain("measured.Target", rejected);
+        Assert.DoesNotContain("SlitDetection.Geometry", rejected);
+        Assert.Contains("catch (Exception ex)", rejected);
+        Assert.DoesNotContain("accepted =", rejected);
+    }
+    [Fact]
     public void SharedProductionRouteChecksBothImmutableBindingsAndNeverSolvesOrMovesInShortCheck()
     {
         var source=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.CatalogShortPosition.cs"));

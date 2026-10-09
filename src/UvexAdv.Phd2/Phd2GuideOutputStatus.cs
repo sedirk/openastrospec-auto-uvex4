@@ -18,16 +18,29 @@ public sealed record Phd2GuideOutputStatus(
     public static readonly TimeSpan MinimumWindow = TimeSpan.FromSeconds(2);
 
     public static Phd2GuideOutputStatus? Observe(
-        Phd2GuideOutputStatus? previous, Phd2GuideStep step, DateTimeOffset now)
+        Phd2GuideOutputStatus? previous, Phd2GuideStep step, DateTimeOffset now,
+        Phd2Equipment? equipment)
     {
         // A latched device-output fault cannot be cleared by a lock change,
         // a late good frame, Stop/Guide, or a TCP reconnect. Rebinding the
         // equipment explicitly is the only client-side reset.
         if (previous?.Failed == true) return previous;
+        // GuideStep.Mount is the native driver NAME (e.g. "On-Step (ASCOM)"),
+        // not the "mount" RPC role or the literal "Mount" guide-log column.
+        // Bind it to current equipment, never infer mount output from AO or an
+        // arbitrary nonempty source. Unknown/disconnected identity is no proof.
+        var mount = equipment?.Mount;
+        if (mount is not { Connected: true } || string.IsNullOrWhiteSpace(mount.Name) ||
+            string.Equals(mount.Name, equipment!.AdaptiveOptics?.Name, StringComparison.Ordinal))
+            return null;
+        if (previous is not null && !string.Equals(previous.LastStep.Mount, mount.Name, StringComparison.Ordinal))
+            previous = null;
+        if (!string.Equals(step.Mount, mount.Name, StringComparison.Ordinal))
+            return previous; // Interleaved AO/foreign events cannot advance or erase a mount series.
         if (step.Frame is not { } frame || frame < 0) return null;
         if (previous is not null && (frame <= previous.LastFrame || now <= previous.UpdatedUtc))
             return previous;
-        if (step.Mount != "Mount" || step.ErrorCode is not (null or 0 or 1) ||
+        if (step.ErrorCode is not (null or 0 or 1) ||
             step.RaGuideDistancePixels is not { } ra || !double.IsFinite(ra) ||
             step.DecGuideDistancePixels is not { } dec || !double.IsFinite(dec) ||
             step.RaDurationMilliseconds is < 0 || step.DecDurationMilliseconds is < 0)

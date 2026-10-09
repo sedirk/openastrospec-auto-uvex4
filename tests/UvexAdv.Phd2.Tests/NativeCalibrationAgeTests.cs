@@ -80,6 +80,11 @@ public sealed class NativeCalibrationAgeTests
     [InlineData("wrong-path", false)]
     [InlineData("bad-rate", false)]
     [InlineData("bad-orthogonality", false)]
+    [InlineData("guide-speed-doubled", false)]
+    [InlineData("guide-speed-equal", true)]
+    [InlineData("guide-speed-missing", false)]
+    [InlineData("guide-speed-runtime-equal", true)]
+    [InlineData("guide-speed-runtime-doubled", false)]
     public async Task FreshClientUsesOwnerExportWithoutGuidingOrMotion(string scenario, bool valid)
     {
         var directory = Path.Combine(Path.GetTempPath(), "uvex-native-age-" + Guid.NewGuid().ToString("N"));
@@ -89,6 +94,8 @@ public sealed class NativeCalibrationAgeTests
         if (scenario == "old-native") time = DateTime.Now.AddDays(-37);
         if (scenario == "future-native") time = DateTime.Now.AddDays(1);
         var export = Export(time.ToString("yyyy/M/d H:mm:ss", CultureInfo.InvariantCulture));
+        if (scenario != "guide-speed-missing")
+            export += "\n/profile/2/scope/calibration/ra_guide_rate\t1\t0.002083333333333\n/profile/2/scope/calibration/dec_guide_rate\t1\t0.002083333333333";
         if (scenario == "changed-native") export = export.Replace("-2.31682", "-2.4");
         await File.WriteAllTextAsync(path, export);
         try
@@ -120,15 +127,26 @@ public sealed class NativeCalibrationAgeTests
             });
             await using var client = new Phd2Client(new Phd2ClientOptions { Port = server.Port });
             await client.ConnectAsync(CancellationToken.None);
+            var runtime = scenario.Contains("runtime", StringComparison.Ordinal)
+                ? new Phd2RuntimeCalibrationProof(Profile, Active, client.Snapshot.ConnectionEpoch,
+                    client.Snapshot.CalibrationChangeSequence, DateTimeOffset.UtcNow.AddMinutes(-3)) : null;
             var result = await client.ValidateCalibrationAsync(new Phd2CalibrationRequirement(
                 2, Profile.Name, DateTimeOffset.UtcNow.AddDays(-37), TimeSpan.FromDays(30),
                 MaximumOrthogonalityErrorDegrees: scenario == "bad-orthogonality" ? 15 : 60)
-            { ReadNativeCalibrationTimestamp = true }, CancellationToken.None);
+            { ReadNativeCalibrationTimestamp = true,
+                RuntimeProof = runtime,
+                RequireGuideRateMatch = scenario.StartsWith("guide-speed-", StringComparison.Ordinal),
+                CurrentRaGuideRateArcsecondsPerSecond = scenario.EndsWith("doubled", StringComparison.Ordinal) ? 15 : 7.5,
+                CurrentDecGuideRateArcsecondsPerSecond = scenario.EndsWith("doubled", StringComparison.Ordinal) ? 15 : 7.5,
+            }, CancellationToken.None);
             Assert.Equal(valid, result.IsValid);
+            if (scenario.EndsWith("doubled", StringComparison.Ordinal))
+                Assert.All(result.Failures, error => Assert.Contains("PHD2_GUIDE_RATE_CHANGED", error));
             if (valid)
             {
                 Assert.InRange(result.CalibrationAge!.Value.TotalSeconds, 180, 190);
-                Assert.Contains("orig_timestamp", result.CalibrationTimestampSource, StringComparison.Ordinal);
+                if (runtime is not null) Assert.Equal("ObservedNativeRecalibration", result.CalibrationTimestampSource);
+                else Assert.Contains("orig_timestamp", result.CalibrationTimestampSource, StringComparison.Ordinal);
             }
             Assert.Equal(new[] { "get_profile", "get_calibration_data", "export_config_settings", "get_profile" },
                 server.ReceivedMethods.ToArray());

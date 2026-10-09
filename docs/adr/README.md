@@ -29,3 +29,5 @@ Current accepted decisions:
 - [ADR-0016: Verified configurable UVEX serial binding](0016-verified-configurable-uvex-serial-binding.md)
 - [ADR-0017: Standing authorization to repair reported blockers and restart N.I.N.A.](0017-standing-blocker-repair-and-nina-restart.md)
 - [ADR-0018: Run-local main-telescope focus, independent of UVEX calibration](0018-run-local-main-focus-position.md)
+- [ADR-0019: Native spectroscopy night sequences](0019-native-spectroscopy-night-sequences.md)
+- [ADR-0020: PHD2-owned calibration and advisory metadata](0020-phd2-owned-calibration-advisory-metadata.md)

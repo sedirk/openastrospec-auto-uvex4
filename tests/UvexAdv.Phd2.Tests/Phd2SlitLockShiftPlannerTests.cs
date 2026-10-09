@@ -806,6 +806,25 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.Equal(0.75, result.Stage.AppliedResidualToleranceScale, 9);
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void OwnerManagedPlannerDoesNotReapplyLegacyCalibrationNumericalGate(bool ownerManaged, bool expected)
+    {
+        var fixture = CreateFixture(calibrationData: new(true, null, 0, "?", null, 0, "?", null), ownerManaged: ownerManaged);
+        Assert.Equal(expected, fixture.Qualification.IsQualified);
+    }
+
+    [Fact]
+    public void OwnerManagedPierHandlingStillRequiresRealKnownSideAndUnchangedSensorIdentity()
+    {
+        var source = Topology();
+        var accepted = Phd2PierAdaptiveTopologyPolicy.Resolve(source, source.ComputeFingerprintSha256(), "West", false, true);
+        Assert.True(accepted.IsAllowed);
+        Assert.False(Phd2PierAdaptiveTopologyPolicy.Resolve(source, source.ComputeFingerprintSha256(), "Unknown", false, true).IsAllowed);
+        Assert.False(Phd2PierAdaptiveTopologyPolicy.Resolve(source, Hash('a'), "West", false, true).IsAllowed);
+    }
+
     private static Fixture CreateFixture(
         SlitPlacementMappingAuthority authority = SlitPlacementMappingAuthority.GradedPhd2CalibrationLockShift,
         Phd2SensorRotationAuthority rotationAuthority = Phd2SensorRotationAuthority.QualifiedPhd2Calibration,
@@ -816,7 +835,8 @@ public sealed class Phd2SlitLockShiftPlannerTests
         int attempts = 0,
         double cumulative = 0,
         string? lastFrameSha = null,
-        Phd2CalibrationData? calibrationData = null)
+        Phd2CalibrationData? calibrationData = null,
+        bool ownerManaged = false)
     {
         topology ??= Topology(rotationAuthority: rotationAuthority);
         var profile = new Phd2Profile(2, "c11+ccdt67+slit+2210");
@@ -836,7 +856,7 @@ public sealed class Phd2SlitLockShiftPlannerTests
             TimeSpan.FromHours(1),
             orthogonality,
             Array.Empty<string>(),
-            Array.Empty<string>());
+            Array.Empty<string>()) { OwnerManaged = ownerManaged };
         var qualificationLimits = new Phd2LockShiftQualificationLimits(
             TimeSpan.FromDays(1),
             TimeSpan.FromSeconds(5),

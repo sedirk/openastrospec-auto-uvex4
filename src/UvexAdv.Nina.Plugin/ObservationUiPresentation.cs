@@ -53,6 +53,17 @@ public static partial class ObservationUiPresentation
     private static readonly IReadOnlyDictionary<string, string> ChineseMetricNames =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            ["calibrationAgeDays"] = "校准年龄（天）",
+            ["orthogonalityErrorDegrees"] = "正交误差（度）",
+            ["calibrationRaGuideRateArcsecondsPerSecond"] = "校准记录 RA 导星速率（角秒/秒）",
+            ["calibrationDecGuideRateArcsecondsPerSecond"] = "校准记录 DEC 导星速率（角秒/秒）",
+            ["currentRaGuideRateArcsecondsPerSecond"] = "当前赤道仪 RA 导星速率（角秒/秒）",
+            ["currentDecGuideRateArcsecondsPerSecond"] = "当前赤道仪 DEC 导星速率（角秒/秒）",
+            ["guideOrRecalibrationCommandSent"] = "已发送导星或重校准命令",
+            ["expectedGuideExposureMilliseconds"] = "本轮要求导星曝光（毫秒）",
+            ["actualGuideExposureMilliseconds"] = "原始帧实际导星曝光（毫秒）",
+            ["guideExposureToleranceMilliseconds"] = "曝光读回容差（毫秒）",
+            ["guideExposureMetadataValid"] = "曝光元数据有效（1=有效）",
             ["attempt"] = "尝试次数",
             ["attempts"] = "尝试次数",
             ["searchAttempts"] = "搜索次数",
@@ -63,6 +74,15 @@ public static partial class ObservationUiPresentation
             ["shortContourSpreadPixels"] = "多层轮廓位置分散（像素）",
             ["shortPositionSpreadPixels"] = "粗定位位置分散尺度（像素）",
             ["shortRepeatSeparationPixels"] = "两张短帧位置差（像素）",
+            ["handoffPredictionResidualPixels"] = "本帧距预测位置（像素）",
+            ["handoffSlitResidualPixels"] = "本帧距狭缝中点（像素）",
+            ["priorHandoffPredictionResidualPixels"] = "前帧距预测位置（像素）",
+            ["priorHandoffSlitResidualPixels"] = "前帧距狭缝中点（像素）",
+            ["maximumHandoffResidualPixels"] = "原交接半径（像素）",
+            ["handoffBoundaryRecheckUsed"] = "已使用边界独立复核",
+            ["shortPairConfirmed"] = "短帧位置一致性通过",
+            ["currentHandoffGeometryPassed"] = "本帧交接范围通过",
+            ["priorHandoffGeometryPassed"] = "前帧交接范围通过",
             ["maximumShortRepeatSeparationPixels"] = "短帧一致性上限（像素）",
             ["shortPositionFrames"] = "短曝光复核帧数",
             ["maximumShortPositionFrames"] = "短曝光复核帧数上限",
@@ -286,7 +306,10 @@ public static partial class ObservationUiPresentation
             : EnglishIssueSummary(gate.Code, effectiveCode, gate.Message);
         var impact = Impact(stage, chinese);
         var recovery = Recovery(stage, gate, chinese);
-        var recommendation = Recommendation(stage, gate.Code, effectiveCode, chinese);
+        var recommendation = Recommendation(stage, gate.Code,
+            gate.Code == "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" &&
+            gate.Message.Contains("G3_SEP_PARENT_BLEND_UNRESOLVED", StringComparison.Ordinal)
+                ? "G3_SEP_PARENT_BLEND_UNRESOLVED" : effectiveCode, chinese);
         var technical = string.IsNullOrWhiteSpace(gate.Message)
             ? gate.Code
             : $"{gate.Code}: {gate.Message.Trim()}";
@@ -454,9 +477,15 @@ public static partial class ObservationUiPresentation
             "G3_SEARCH_PULSE_GUIDING_ACTIVE" => "赤道仪仍报告导星脉冲正在执行；未启动新的 G3 获取或定位移动",
             "PHD2_STOP_MOUNT_IDLE_TIMEOUT" => "PHD2 已停止采集，但赤道仪导星脉冲结束及连续静止读回未在等待上限内确认；未重新取场或移动",
             "STAGE_EXCEPTION" => "当前阶段发生未分类异常，流程已在动作边界停止",
+            Phd2GuidingExposurePolicy.MismatchCode => "PHD2 新导星帧的曝光时间与本轮锁定设置不一致；后续光谱曝光已停止。不是 ATR 制冷失败，也不是云层判定，请查看实际/期望曝光数值",
             "PHD2_GUIDING_FRAME_TIMEOUT" => "PHD2 未在有界等待内交付新的导星帧，不能确认当前目标位置；这不是目标太暗或导星精度不合格的判定",
+            "PHD2_NATIVE_FRAME_TIMEOUT" => "PHD2 原生单帧取图超时，尚未取得本次导星相机图像；不是 WCS 解析失败，也不能据此归因于月光、云或目标亮度",
+            "PHD2_CALIBRATION_GEOMETRY_UNSAFE" => "PHD2 当前校准的两轴几何仍不合格，不能据此开始导星；本轮重校准已用或运动账本不允许再校准",
+            "PHD2_GUIDE_RATE_UNCONFIRMED" => "无法核对当前赤道仪导星速率与 PHD2 校准时速率；未开始导星或重校准，不能把未知速率当成一致",
+            "PHD2_CALIBRATION_REFRESH_MOTION_HISTORY" => "PHD2 校准需要更新，但本轮已有运动账本，不能在恢复途中重新校准；已停止并保留原始记录",
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
+            Phd2StageFailurePolicy.PlacementStarLost => "入缝复核时 PHD2 明确报告丢星，不只是稳定等待超时；未确认目标仍在缝内，新的曝光已阻止",
             "PHD2_GUIDE_OUTPUT_UNAVAILABLE" => "PHD2 连续请求修正但没有导星脉冲输出；连接标志和星点位置不代表赤道仪连接有效",
             "PHD2_GUIDE_OUTPUT_RETURN_PENDING" => "PHD2 导星脉冲输出失效，已停止；仍有未结精调责任，未伪报物理回程或重置预算",
             "PHD2_GUIDE_OUTPUT_STOP_UNCONFIRMED" => "PHD2 导星输出失效且本轮停止未获确认；未重连、未发送新的移动或曝光",
@@ -466,7 +495,7 @@ public static partial class ObservationUiPresentation
             "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED" => "入缝新帧未在本轮时限内达到所选质量策略；已确认返回原锁点并停止导星，没有再做无预算的全场重建",
             "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" => "本轮入缝账本的剩余预算不足；请查看实际次数、位移、已用时间和原始原因，不代表继承了前夜用量",
             "PHD2_LOCK_MANIFEST_UNREADABLE" => "PHD2 锁点关联的运行记录无法读取或校验；请查看原始原因中的运行日期和文件，不代表本帧导星质量不合格",
-            "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星证据需要重建，但原精调预算不能授权新的移动；未启动回退定位，已保存光谱保留",
+            "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星/目标证据失效，后续恢复的运动余额不足；不是曝光时长超限。未启动回退定位，原始原因见技术详情，已保存光谱保留",
             "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED" => "试拍前的导星会话或狭缝证据已失效；需要有界复核，不能用旧证据开始下一帧",
             "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；没有追加移动或曝光",
             "PHD2_SCIENCE_IN_PLACE_CHECK_FAILED" => "原位复核导星与狭缝证据时发生异常；已保留原始原因，没有因此重建定位或追加移动",
@@ -489,6 +518,8 @@ public static partial class ObservationUiPresentation
             "G3_CATALOG_WCS_AUTHORITY_INVALID" => "目录/WCS 目标几何证据格式无效，不能据此授权入缝位移",
             "G3_CATALOG_REFERENCE_MISSING" => "目录定位的原始 WCS 参考星场未传递到精调接管；这是参考证据衔接问题，不是星等不合格，未用附近亮峰替代目标",
             "G3_POST_WCS_SHORT_UNCONFIRMED" => "小范围修正后，SEP 短帧未确认一致的近缝目标；已保留目录与狭缝，未重复整套解算，未把预测位置当成实测入缝",
+            G3PostWcsShortHandoffPolicy.OutsideCode => "SEP 短帧位置一致性已通过，但实测位置未全部落入原预测/狭缝交接范围；未授权 PHD2 接管，请查看两种距离与交接半径",
+            G3PostWcsShortHandoffPolicy.RecheckCode => "SEP 两帧一致但跨过交接边界；正在原六帧上限内补一对独立短帧，不移动、不重解算、不扩大交接范围",
             "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID" => "饱和目标的目录身份、实心核质心或光通量不适用标记不一致，不能据此授权入缝位移",
             "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED" => "连续 fresh 导星帧仍无法可靠辨认物理狭缝，有界补拍次数已经用尽",
             "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" => "微调阶段的剩余时间不足以取得完整的新目标/狭缝测量窗口；不是已测整组导星精度不合格",
@@ -505,7 +536,7 @@ public static partial class ObservationUiPresentation
             "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" => "G3 邻场搜索未找到可接受目标，赤道仪已返回保存的搜索起点",
             "G3_SEARCH_NOT_STARTED_RETURNED" => "邻场搜索尚未执行：首步前置检查未通过，赤道仪已确认返回保存的起点；请查看预算数值与原始原因，不是已搜索但未找到目标",
             "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" => ShortPositionIssue(raw),
-            "G3_SEP_PARENT_BLEND_UNRESOLVED" => "短曝光星像持续被 SEP 分成多个子峰；位置接近，但还不能排除邻星混叠，未把整个混合光斑直接当作目标",
+            "G3_SEP_PARENT_BLEND_UNRESOLVED" => "短曝光星像持续被 SEP 分成多个子峰；也可能是空心、离焦或异常光路造成，不能仅凭分块判定为双星。未确认可靠目标中心",
             "G3_MOTION_CRASH_RETURN_BLOCKED" => raw.Contains("G3_SEARCH_PIER_SIDE_CHANGED", StringComparison.Ordinal)
                 ? "上轮回程记录与赤道仪当前侧别不同；不能执行跨侧旧位移，尚未确认旧回程到位。不是哈希不一致或星点识别失败"
                 : "上轮回程尚未取得到位确认；请查看原始回程原因，不能通过重启直接视为完成",
@@ -570,6 +601,7 @@ public static partial class ObservationUiPresentation
             _ when effectiveCode.Contains("WEATHER", StringComparison.Ordinal) || effectiveCode.Contains("SAFETY", StringComparison.Ordinal) => "天气或安全能力没有给出允许继续的可信状态",
             _ when HasCodeToken(effectiveCode, "ROOF", "COVER") => "屋顶或光路盖状态没有得到命令完成与读回确认",
             _ when effectiveCode.Contains("BUDGET", StringComparison.Ordinal) || effectiveCode.Contains("EXHAUSTED", StringComparison.Ordinal) => "本轮有界恢复的次数、位移或时间预算已经用尽",
+            "PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID" => "旧运行的未结入缝记录需要恢复，但当前校准不能用于该恢复；尚未发送导星或重校准命令。这不是当前手动导星不稳定的判定",
             _ when effectiveCode.Contains("CALIBRATION", StringComparison.Ordinal) => "当前校准证据未通过适用于本阶段的质量门",
             _ when effectiveCode.Contains("PHD2", StringComparison.Ordinal) || effectiveCode.Contains("GUIDE", StringComparison.Ordinal) => "PHD2 导星或入缝证据未达到本阶段要求",
             _ when effectiveCode.Contains("G3", StringComparison.Ordinal) || effectiveCode.Contains("WCS", StringComparison.Ordinal) => "G3/WCS 证据不足以证明目标位置或授权下一步动作",
@@ -594,7 +626,7 @@ public static partial class ObservationUiPresentation
     private static string EnglishIssueSummary(string outerCode, string effectiveCode, string raw)
     {
         if (effectiveCode == "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE")
-            return "Guiding evidence requires reacquisition, but the original fine-motion budget cannot authorize replacement. No fallback repositioning was started; saved spectra retain their quality flags.";
+            return "Guiding/target evidence became invalid and the remaining motion budget cannot fund recovery; this is not an exposure-duration limit. No fallback repositioning was started. See technical details for the original cause; saved spectra retain their quality flags.";
         if (!string.IsNullOrWhiteSpace(raw) && !ContainsCjk(raw)) return raw.Trim();
         var nested = !string.Equals(outerCode, effectiveCode, StringComparison.Ordinal)
             ? $" Inner code: {effectiveCode}."
@@ -681,7 +713,7 @@ public static partial class ObservationUiPresentation
             _ when raw.Contains("G3_SEP_SATURATED", StringComparison.Ordinal) => "识别区强星像仍有饱和，本次降曝光或帧数限额已到；未用旁边的弱小候选替代目标",
             _ when raw.Contains("G3_SEP_UNMEASURED", StringComparison.Ordinal) => "SEP 尚未提取到信号与像素支撑充分的未饱和星像",
             _ when raw.Contains("G3_SEP_AMBIGUOUS", StringComparison.Ordinal) => "SEP 星像分量尚不能唯一关联到目录目标",
-            _ when raw.Contains("G3_SEP_PARENT_BLEND_UNRESOLVED", StringComparison.Ordinal) => "完整星像在复核帧中持续分裂，尚缺独立的未分裂新帧或目录主星证据，不能仅按同一父区域排除混叠",
+            _ when raw.Contains("G3_SEP_PARENT_BLEND_UNRESOLVED", StringComparison.Ordinal) => "完整星像在复核帧中持续分裂，可能来自空心/离焦星像、异常光路或邻星；不等于已确认双星。尚无可靠目标中心，不能用亮边质心继续入缝",
             _ when raw.Contains("G3_SHORT_UNSATURATED_UNMEASURED", StringComparison.Ordinal) => "尚未在未饱和短帧中测出符合轮廓和局部信噪比要求的星像",
             _ when raw.Contains("G3_SHORT_UNSATURATED_AMBIGUOUS", StringComparison.Ordinal) => "短帧中仍有多颗独立恒星候选，不能唯一对应目标",
             _ when raw.Contains("G3_SHORT_CONTOUR_BLENDED", StringComparison.Ordinal) => "内外层轮廓尺寸或长短轴比异常，不能确认独立星点",
@@ -701,11 +733,23 @@ public static partial class ObservationUiPresentation
 
     private static string HardStopReason(string code, bool chinese)
     {
+        if (code == Phd2StageFailurePolicy.PlacementStarLost)
+            return chinese
+                ? "丢星不能按大风精度警告放行；保留原运动账本，不重置预算、不伪报回程。停止是否确认请查看 stopConfirmed 和本轮丢星证据。"
+                : "StarLost cannot be waived as a wind precision warning. Preserve the motion ledger without resetting budgets or claiming a return; inspect stopConfirmed and the native loss evidence.";
+        if (code == G3PostWcsShortHandoffPolicy.OutsideCode)
+            return chinese
+                ? "保留独立短帧及原交接半径；临界位置只允许在原六帧上限内补一对新帧，未通过时沿原预算停止/回程，不重复开新窗口。是否已回程以本轮运动记录为准。"
+                : "Preserve the independent frames and original handoff radius. A marginal pair permits at most one new pair within six frames; otherwise stop/return under the original ledger. See the run motion record for return completion.";
+        if (code == Phd2GuidingExposurePolicy.MismatchCode)
+            return chinese
+                ? "保留原始帧和运动账本；不覆盖运行中改变的 PHD2 曝光设置，不混用不同曝光的质量窗口，不自动重新定位或重启设备。"
+                : "Preserve raw frames and motion ledgers; do not overwrite changed PHD2 exposure settings, mix exposure-quality windows, reacquire or restart equipment automatically.";
         if (code.StartsWith("PHD2_GUIDE_OUTPUT_", StringComparison.Ordinal))
             return chinese
                 ? "这是导星输出链故障，不是精度警告；未发出精调时最多自动重连一次，已有精调则保留未结责任。详见本轮停止/重连证据，不以重复粗定位代替修复连接。"
                 : "This is a guide-output failure, not a precision warning. One reconnect is permitted before exact-lock motion; outstanding motion responsibility is retained. Stop/reconnect evidence records the actual outcome; repeated coarse centering is not connection repair.";
-        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
+        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout or Phd2StageFailurePolicy.NativeFrameTimeout)
             return chinese
                 ? "当前缺少新的取图或所有者状态证据；需先确认停止并恢复 PHD2/相机连接，随后重新定位，不能复用旧帧或在曝光中重启设备。"
                 : "fresh frame or owner-state evidence is missing; confirm stopped owners and restore PHD2/camera connectivity before reacquisition. Do not reuse an old frame or restart equipment during an exposure.";
@@ -735,6 +779,18 @@ public static partial class ObservationUiPresentation
     private static string Recommendation(ObservationStage stage, string outerCode, string effectiveCode, bool chinese)
     {
         var code = effectiveCode;
+        if (code == "G3_SEP_PARENT_BLEND_UNRESOLVED")
+            return chinese
+                ? "打开“实时图像 → 光谱仪导星相机”查看本次未通过的短帧，并对照原始 FITS；若为空心圈或多瓣星像，先检查 C11 主镜焦点和导星光路，不要用 UVEX M2 代替主镜调焦。结束本轮、确认空闲后再人工处理；这不是 PHD2 校准不一致，也不应靠放宽混叠门或重复延长曝光解决。仍须排查邻星，调焦/运动不会自动执行。"
+                : "Open Live images > Spectrograph guide camera for the current rejected short frame and compare its raw FITS. Hollow rings or lobes call for inspecting C11 main focus and the guide optical path, not substituting UVEX M2 focus. End the run and confirm idle before manual intervention. This is not a PHD2 calibration mismatch; do not bypass blend checks or repeatedly lengthen exposure. Neighbouring sources still need checking. No automatic focus or motion is started.";
+        if (code == G3PostWcsShortHandoffPolicy.OutsideCode)
+            return chinese
+                ? "对照短帧一致性、目标距预测位置、目标距狭缝中点与原交接半径；位置一致不等于已在交接范围内，更不等于精确入缝。不仅凭本错误归因于云或对焦。"
+                : "Compare pair consistency, target-to-prediction and target-to-slit distances with the original handoff radius. Consistency is not handoff acceptance or exact placement; this code alone does not establish clouds or defocus.";
+        if (code == Phd2GuidingExposurePolicy.MismatchCode)
+            return chinese
+                ? "核对质量数值中的本轮期望/实际导星曝光，以及 PHD2 日志中的曝光选择或自动曝光变化。结束本轮并确认空闲后，保持本轮已验证曝光，或显式修改下一轮标定配置；随后从正式前端重新验证导星和入缝。无需因此重连 ATR 或重新校准 PHD2。"
+                : "Compare expected/actual guide exposure and PHD2 exposure-selection/auto-exposure history. End the run and confirm idle, then keep the commissioned exposure or explicitly commission the next run's setting. Revalidate guiding/slit evidence through the frontend; this does not require ATR reconnection or PHD2 recalibration.";
         if (code is "G3_SEARCH_PULSE_GUIDING_ACTIVE" or Phd2MountIdleWait.TimeoutCode)
             return chinese
                 ? "查看 PHD2 停止回执、赤道仪 IsPulseGuiding / Slewing 读回及驱动脉冲错误。只有本轮停止身份仍有效、导星脉冲结束且静止读回通过后才能重取目标；不要反复校准或忽略运动标志。"
@@ -751,7 +807,7 @@ public static partial class ObservationUiPresentation
             return chinese
                 ? "检查 PHD2 原生导星日志的修正请求与 RA/DEC 脉冲时长，以及 ASCOM/RPC 错误；在无曝光、导星已停止的边界恢复原设备连接。存在未结精调时先核验其责任，不能只清状态或放宽导星精度。"
                 : "Compare requested corrections with native RA/DEC pulse durations and inspect ASCOM/RPC errors. Restore the bound equipment only with exposures idle and guiding stopped. Reconcile outstanding lock motion; do not merely clear state or relax precision.";
-        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout)
+        if (code is Phd2StageFailurePolicy.FrameTimeout or Phd2StageFailurePolicy.StatusTimeout or Phd2StageFailurePolicy.NativeFrameTimeout)
             return chinese
                 ? "检查同一时刻的 PHD2 原始日志、相机曝光超时/重连记录和 USB/供电。先结束本轮并确认停止，再由 PHD2 唯一所有者恢复连接；从前台重新定位、找缝、导星后重拍。旧 FITS 和运动账本保留，单凭超时不能归因于云或相机厂商。"
                 : "Inspect the matching PHD2 debug log, camera capture/reconnect failures and USB/power. End this run and confirm stopped owners before restoring the camera through PHD2, then reacquire through the frontend. Preserve FITS and motion ledgers; a timeout alone does not identify cloud or a camera-vendor defect.";
@@ -761,11 +817,15 @@ public static partial class ObservationUiPresentation
                 ? "查看 G3 导星选星帧和每次拒绝的边缘/目标晕/狭缝距离。程序会先做有界重新选星；耗尽后只能使用已明确启用的有人监督直导目标分支，或人工调整构图。"
                 : "Inspect the G3 guide-selection frame and the edge/target-halo/slit distances for each rejection. Bounded reselection runs first; after exhaustion, use only an explicitly enabled supervised direct-target route or adjust framing manually.";
         }
+        if (code == "PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID")
+            return chinese
+                ? "校准由 PHD2 管理；年龄、速率及历史资料只作警告，插件不强制重校准。请查看原始详情中的校准缺失、设备身份或连接变化，以及旧运行。若已人工接管：先结束曝光、停止手动导星并取消旧自动运行，再点击“清除导星相机旧状态”确认接管；旧记录按未完成归档，不声称回程成功。新一轮仍须确认实际导星与入缝，不要反复恢复旧锁点。"
+                : "PHD2 owns calibration; age, rates and historical metadata are advisory, without plugin-forced recalibration. Inspect details for absent calibration, changed identity/connection and the source run. After manual takeover, finish exposures, stop manual guiding and cancel automation; use Clear old guide-camera state and explicitly confirm takeover. The old intent remains incomplete history, not a verified return. A new run must verify actual guiding and slit placement; do not repeatedly resume the old lock.";
         if (code.Contains("CALIBRATION", StringComparison.Ordinal))
         {
             return chinese
-                ? "查看 PHD2 当前 active calibration 的轴速率、正交性、奇偶性、pier side、时间戳和 post-settle 残差。程序最多执行一次强制重新校准；仍失败时不要反复校准，先检查赤道仪/导星连接和参数。"
-                : "Inspect the active PHD2 calibration axis rates, orthogonality, parity, pier side, timestamp and post-settle residual. At most one forced recalibration is attempted; if it still fails, inspect the mount/guider connection and parameters instead of recalibrating repeatedly.";
+                ? "校准由 PHD2 管理。年龄、正交性、速率、奇偶性及历史校准资料只作警告，插件不强制重校准。若仍阻断，请查看当前 PHD2 设备身份、校准是否存在、连接变化及实际导星/入缝证据；旧运动账本另行保留。"
+                : "PHD2 owns calibration. Age, geometry, rates, parity and historical metadata are advisory; the plugin never forces recalibration. A remaining block concerns current identity, absent calibration, changed connection, actual guiding/slit evidence or an unresolved motion ledger.";
         }
         if (code.Contains("G3", StringComparison.Ordinal) || code.Contains("SLIT", StringComparison.Ordinal) || code.Contains("PHD2", StringComparison.Ordinal))
         {

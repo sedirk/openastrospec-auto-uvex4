@@ -442,7 +442,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
     }
 
     [Fact]
-    public void ForcedPhd2CalibrationInvalidatesPreCalibrationFieldBeforeExactLock()
+    public void OwnerNativePhd2CalibrationInvalidatesPreCalibrationFieldBeforeExactLock()
     {
         var body = MethodBody(
             Phd2SlitPlacementSource,
@@ -450,7 +450,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
 
         var guide = body.IndexOf("GuideAndSettleAsync", StringComparison.Ordinal);
-        var forceBranch = body.IndexOf("if (forceRecalibration)", guide, StringComparison.Ordinal);
+        var forceBranch = body.IndexOf("if (settle.NativeCalibrationOccurred)", guide, StringComparison.Ordinal);
+        Assert.True(forceBranch > guide);
         var stop = body.IndexOf("StopPhdAndWaitAsync", forceBranch, StringComparison.Ordinal);
         var invalidate = body.IndexOf("lastG3Field = null", stop, StringComparison.Ordinal);
         var reacquire = body.IndexOf("AcquireG3SlitFieldAsync", invalidate, StringComparison.Ordinal);
@@ -466,7 +467,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.True(firstLockRead > recurse);
         Assert.True(firstExactLock > firstLockRead);
         Assert.Contains("exactLockCommandIssued = false", body, StringComparison.Ordinal);
-        Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body, StringComparison.Ordinal);
+        Assert.Contains("postCalibrationReacquisitionDepth == 0", body, StringComparison.Ordinal);
+        Assert.Contains("PHD2_OWNER_CALIBRATION_UNAVAILABLE", body, StringComparison.Ordinal);
         Assert.True(CountOccurrences(
             body,
             "allowChargedCurrentPositionHandoff: true") >= 2);
@@ -483,14 +485,16 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var loop = body.IndexOf("StartLoopingAndWaitForFreshFrameAsync", StringComparison.Ordinal);
         var binding = body.IndexOf("var preGuideBinding", loop, StringComparison.Ordinal);
         var finalValidation = body.IndexOf(
-            "calibrationBefore = await phd2.ValidateCalibrationAsync(\n                hardRequirement",
+            "calibrationBefore = await phd2.ValidateCalibrationAsync(hardRequirement",
             binding,
             StringComparison.Ordinal);
+        Assert.True(finalValidation > binding);
         var guide = body.IndexOf("GuideAndSettleAsync", finalValidation, StringComparison.Ordinal);
 
         Assert.True(loop >= 0 && binding > loop && finalValidation > binding && guide > finalValidation);
-        Assert.Contains("forceRecalibration = calibrationBefore.Status != Phd2ValidationStatus.Valid", body[finalValidation..guide], StringComparison.Ordinal);
-        Assert.Contains("PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE", body[finalValidation..guide], StringComparison.Ordinal);
+        Assert.Contains("if (!calibrationBefore.CanStartNativeGuide)", body[finalValidation..guide], StringComparison.Ordinal);
+        Assert.Contains("PHD2_OWNER_CALIBRATION_UNAVAILABLE", body[finalValidation..guide], StringComparison.Ordinal);
+        Assert.Contains("phd2.ValidateIdentityAsync", body[finalValidation..guide], StringComparison.Ordinal);
     }
 
     [Fact]

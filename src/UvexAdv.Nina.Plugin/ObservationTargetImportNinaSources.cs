@@ -283,8 +283,11 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
             if (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False)
                 throw new InvalidOperationException("No selected catalogue object.");
 
-            var canonicalName = ReadNonBlankString(root, "name");
-            if (canonicalName is null) throw new InvalidOperationException("Selected object has no stable name.");
+            var selectionIdentity = ReadStellariumSelectionIdentity(root);
+            var canonicalName = selectionIdentity.Name ?? selectionIdentity.PrimaryDesignation;
+            if (canonicalName is null)
+                throw new ObservationTargetImportException("STELLARIUM_TARGET_IDENTITY_MISSING",
+                    "Stellarium 当前目标没有名称或目录编号（name / designation / designations）；未覆盖目标草稿。请在星图中选择有目录身份的目标。");
             if (!TryReadFiniteDouble(root, "raJ2000", out var rightAscensionDegrees) ||
                 !TryReadFiniteDouble(root, "decJ2000", out var declinationDegrees))
             {
@@ -302,8 +305,10 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
                 throw new InvalidOperationException("Stellarium time, observer or astrometry settings changed during import.");
             using var selectionAfter = await Read("api/objects/info?format=json").ConfigureAwait(false);
             var last = selectionAfter.RootElement;
-            if (ReadNonBlankString(last, "name") != canonicalName ||
+            if ((last.TryGetProperty("found", out var lastFound) && lastFound.ValueKind == JsonValueKind.False) ||
+                ReadStellariumSelectionIdentity(last) != selectionIdentity ||
                 ReadNonBlankString(last, "type") != ReadNonBlankString(root, "type") ||
+                ReadNonBlankString(last, "object-type") != ReadNonBlankString(root, "object-type") ||
                 !TryReadFiniteDouble(last, "raJ2000", out var lastRa) ||
                 !TryReadFiniteDouble(last, "decJ2000", out var lastDec) ||
                 AngularSeparationArcSeconds(selectedCoordinates, new(lastRa, lastDec)) > 0.1)
@@ -314,9 +319,11 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
 
             var resolved = ResolveStellariumIdentity(
                 canonicalName,
-                ReadNonBlankString(root, "localized-name"),
-                ReadNonBlankString(root, "designation"),
-                ninaDisplayName);
+                selectionIdentity.LocalizedName,
+                selectionIdentity.PrimaryDesignation,
+                // When only a DSO designation exists, the same-response identity
+                // owns its name. Do not borrow a stale/native display alias.
+                selectionIdentity.Name is null ? null : ninaDisplayName);
             var metadata = ParseStellariumCatalogMetadata(root, resolved.TargetName, resolved.CatalogId,
                 expectedCoordinates, DateTimeOffset.UtcNow);
             if (metadata is null) throw new InvalidOperationException("Selected-object metadata did not match its coordinates.");
@@ -332,6 +339,10 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
         {
             throw;
         }
+        catch (ObservationTargetImportException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             // Unknown apparent-place semantics must not be relabelled as a
@@ -341,6 +352,22 @@ public sealed class NinaPlanetariumTargetSource : IObservationPlanetariumTargetS
                 ObservationTargetImportErrors.SafeMessage(ex), ex);
         }
     }
+
+    private sealed record StellariumSelectionIdentity(
+        string? Name, string? LocalizedName, string? Designation, string? Designations)
+    {
+        // Nebula::getInfoMap uses a plural, ordered list separated by " - ".
+        // Split that delimiter only: PK/PN and BD identifiers contain signs.
+        // Keep the complete list in record equality to detect a selection change
+        // even when both objects have blank names and nearly identical positions.
+        public string? PrimaryDesignation => Designation ?? Designations?
+            .Split(" - ", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+    }
+
+    private static StellariumSelectionIdentity ReadStellariumSelectionIdentity(JsonElement root) => new(
+        ReadNonBlankString(root, "name"), ReadNonBlankString(root, "localized-name"),
+        ReadNonBlankString(root, "designation"), ReadNonBlankString(root, "designations"));
 
     /// <summary>
     /// Splits Stellarium's selected-object identity into the human target name used

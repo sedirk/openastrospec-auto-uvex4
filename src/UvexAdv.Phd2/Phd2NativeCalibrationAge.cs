@@ -8,6 +8,9 @@ namespace UvexAdv.Phd2;
 public static class Phd2NativeCalibrationAge
 {
     public static DateTimeOffset Read(string export, Phd2Profile profile, Phd2CalibrationData active,
+        CultureInfo culture, TimeZoneInfo timeZone) => ReadDetails(export, profile, active, culture, timeZone).Timestamp;
+
+    public static Phd2NativeCalibrationDetails ReadDetails(string export, Phd2Profile profile, Phd2CalibrationData active,
         CultureInfo culture, TimeZoneInfo timeZone)
     {
         var lines = export.Split('\n');
@@ -61,6 +64,14 @@ public static class Phd2NativeCalibrationAge
         local = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
         if (timeZone.IsInvalidTime(local) || timeZone.IsAmbiguousTime(local))
             throw new InvalidDataException("Native original calibration local time is ambiguous or invalid.");
-        return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local, timeZone));
+        double? GuideRate(string key) => values.TryGetValue("scope/calibration/" + key, out var text) &&
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate) &&
+            double.IsFinite(rate) && rate > 0 ? rate * 3600 : null;
+        // PHD2 stores these in degrees/sec, unlike its xRate/yRate pixel speeds.
+        return new(new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local, timeZone)),
+            GuideRate("ra_guide_rate"), GuideRate("dec_guide_rate"));
     }
 }
+
+public sealed record Phd2NativeCalibrationDetails(DateTimeOffset Timestamp,
+    double? RaGuideRateArcsecondsPerSecond, double? DecGuideRateArcsecondsPerSecond);

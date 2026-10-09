@@ -154,6 +154,9 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     private readonly SimpleCommand refreshCommissioningProfilesCommand;
     private readonly SimpleCommand applySelectedCommissioningProfileCommand;
     private readonly SimpleCommand refreshProfileOwnershipCommand;
+    private readonly SimpleCommand recheckPreparationCommand;
+    private bool showHistoricalCommissioningProfiles;
+    private IReadOnlyList<string> commissioningValidationIssues = Array.Empty<string>();
     private readonly SimpleCommand enableMountTrackingCommand;
     private readonly SimpleCommand applyRecommendedImageFilePatternCommand;
     private readonly SimpleCommand restorePreviousImageFilePatternCommand;
@@ -446,6 +449,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             ApplySelectedCommissioningProfile,
             () => CanEditTargetPlan() && SelectedCommissioningProfile is not null);
         refreshProfileOwnershipCommand = new SimpleCommand(RefreshProfileOwnership);
+        recheckPreparationCommand = new SimpleCommand(RecheckPreparation, CanEditTargetPlan);
         enableMountTrackingCommand = new SimpleCommand(EnableMountTrackingForCommissioning);
         applyRecommendedImageFilePatternCommand = new SimpleCommand(
             ApplyRecommendedImageFilePattern,
@@ -594,6 +598,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public ICommand RefreshCommissioningProfilesCommand => refreshCommissioningProfilesCommand;
     public ICommand ApplySelectedCommissioningProfileCommand => applySelectedCommissioningProfileCommand;
     public ICommand RefreshProfileOwnershipCommand => refreshProfileOwnershipCommand;
+    public ICommand RecheckPreparationCommand => recheckPreparationCommand;
     public ICommand EnableMountTrackingCommand => enableMountTrackingCommand;
     public ICommand ApplyRecommendedImageFilePatternCommand => applyRecommendedImageFilePatternCommand;
     public ICommand RestorePreviousImageFilePatternCommand => restorePreviousImageFilePatternCommand;
@@ -624,6 +629,13 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public ObservableCollection<ObservationEvidenceRow> EvidenceRows { get; } = new();
 
     public IReadOnlyList<CommissioningProfileChoice> CommissioningProfiles => commissioningProfiles;
+    public IReadOnlyList<CommissioningProfileChoice> VisibleCommissioningProfiles =>
+        CommissioningProfileCatalog.VisibleProfiles(commissioningProfiles, selectedCommissioningProfile?.Id, ShowHistoricalCommissioningProfiles);
+    public bool ShowHistoricalCommissioningProfiles
+    {
+        get => showHistoricalCommissioningProfiles;
+        set { showHistoricalCommissioningProfiles = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(VisibleCommissioningProfiles)); }
+    }
     public IReadOnlyList<DeviceIdentityChoice> TelescopeCandidates => telescopeCandidates;
     public IReadOnlyList<DeviceIdentityChoice> AtrCameraCandidates => atrCameraCandidates;
     public IReadOnlyList<DeviceIdentityChoice> G3CameraCandidates => g3CameraCandidates;
@@ -634,13 +646,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         get => selectedCommissioningProfile;
         set
         {
-            if (Equals(selectedCommissioningProfile, value)) return;
+            if (!CanEditTargetPlan() || Equals(selectedCommissioningProfile, value)) return;
             selectedCommissioningProfile = value;
-            if (value is not null)
-            {
-                settings.SelectedCommissioningProfileId = value.Id;
-                settings.SelectedCommissioningProfilePath = value.BindingsPath ?? string.Empty;
-            }
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(SelectedCommissioningProfileDescription));
             applySelectedCommissioningProfileCommand?.RaiseCanExecuteChanged();
@@ -1181,9 +1188,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         }
     }
     public bool CanEditSynchronizedPhotometry => NinaInstancePolicy.IsMaster(settings) && CanEditTargetPlan();
-    public string SynchronizedPhotometryStatus => ObservationUiPresentation.Text(
-        settings.SynchronizedPhotometryEnabled ? "开启 · 与光谱同时拍摄" : "关闭 · 仅保留定位短曝",
-        settings.SynchronizedPhotometryEnabled ? "ON · capture alongside spectra" : "OFF · acquisition witnesses only", UiCulture);
+    public string SynchronizedPhotometryStatus => PhotometryUiPresentation.SwitchSummary(
+        settings.SynchronizedPhotometryEnabled, settings.QhyServiceUrl, UiCulture);
 
     public bool QhyG3FastPairEnabled
     {
@@ -1589,8 +1595,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
                 NinaProfileOwnerPreflight.NoPhysicalFilterWheelDeviceId,
                 StringComparison.Ordinal)
                 ? ObservationUiPresentation.Text(
-                    "✓ N.I.N.A. 滤镜轮为 No_Device；QHY 物理滤镜轮只归独立 QHY 服务所有。",
-                    "✓ The N.I.N.A. filter wheel is No_Device; the physical QHY wheel remains solely owned by the QHY service.",
+                    "✓ 光谱主控滤镜轮为 No_Device；QHY 物理滤镜轮只归独立测光端所有。",
+                    "✓ The spectroscopy filter wheel is No_Device; the physical QHY wheel belongs only to the photometry worker.",
                     UiCulture)
                 : ObservationUiPresentation.Text(
                     $"✗ N.I.N.A. 当前滤镜轮为“{selected}”；真实模式必须先在 N.I.N.A. 设备选择器中改为 No_Device，避免重复打开 QHY 物理轮。",
@@ -1755,7 +1761,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
     public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
         ? ObservationUiPresentation.Text("当前静态运行参数检查无阻断；不代表实时设备已经就绪。", "Current static run-parameter checks have no blockers; this does not mean live equipment is ready.", UiCulture)
-        : ObservationUiPresentation.Text($"静态运行参数有 {AutomaticPreparationIssueCount} 项待处理；请按启动清单定位，详细原因在高级设置。", $"Static run parameters have {AutomaticPreparationIssueCount} outstanding checks; use the preparation checklist, with detailed reasons in Advanced settings.", UiCulture);
+        : ObservationUiPresentation.Text($"有 {AutomaticPreparationIssueCount} 项静态条件待处理，具体原因如下。修改后点击“重新检查当前配置”。", $"{AutomaticPreparationIssueCount} static checks need attention; see the reasons below, then recheck the current setup.", UiCulture);
     public string AutomaticPreparationSummary => FormatPreparationSummary(PreparationChecklistIssueCount, UiCulture);
     internal static string FormatPreparationSummary(int issueCount, CultureInfo culture) => issueCount == 0
         ? ObservationUiPresentation.Text("当前静态清单无待处理项；尚未检查设备连接、实际光学状态或实时安全条件。", "The current static checklist has no outstanding items; device connections, actual optical state and live safety conditions have not been checked.", culture)
@@ -1764,6 +1770,15 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public IReadOnlyList<string> PreparationChecklistIssues => BuildPreparationChecklistIssues(
         RealModeEligibilityIssues(), IsTargetPreparationMissing, IsDevicePreparationMissing,
         IsCommissioningPreparationMissing, IsNightSetupPreparationMissing, IsSlitChoiceMissing, UiCulture);
+
+    public IReadOnlyList<string> PreparationBlockingDetails =>
+        RealModeEligibilityIssues().Concat(commissioningValidationIssues)
+            .Concat(IsTargetPreparationMissing ? new[] { TargetPreparationStatus } : Array.Empty<string>())
+            .Concat(IsSlitChoiceMissing ? new[] { PreparationSlitStatus } : Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal).ToArray();
+    public string PreparationOwnerSummary => ObservationUiPresentation.Text(
+        $"光谱主控 Profile：{activeProfileService.ActiveProfile.Name}；当前相机：{activeProfileService.ActiveProfile.CameraSettings.LastDeviceName}。应为 ATR585M；PHD2 独占 G3；独立测光端独占 QHY 相机与滤镜轮。候选的来源 Profile 名称不代表所有者。",
+        $"Spectroscopy Profile: {activeProfileService.ActiveProfile.Name}; selected camera: {activeProfileService.ActiveProfile.CameraSettings.LastDeviceName}. ATR585M belongs here; PHD2 owns G3; the photometry worker owns QHY and its wheel. Candidate source labels are not device ownership.", UiCulture);
 
     internal static IReadOnlyList<string> BuildPreparationChecklistIssues(
         IEnumerable<string> staticIssues, bool targetMissing, bool devicesMissing,
@@ -2504,7 +2519,9 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             var result = CommissioningProfileCatalog.Discover(
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NINA", "Profiles"),
                 programDataRoot,
-                settings.SelectedCommissioningProfilePath);
+                settings.SelectedCommissioningProfilePath,
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UVEX-ADV"),
+                activeProfileService.ActiveProfile.Id.ToString());
             preparationEvidence = AutomaticPreparationService.Discover(programDataRoot);
             commissioningProfiles = result.Profiles;
             telescopeCandidates = IncludeCurrentCandidate(result.Telescopes, settings.ExpectedTelescopeId, "当前保存的赤道仪", "OpenAstroSpec 当前配置");
@@ -2531,6 +2548,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
                     ?? commissioningProfiles.FirstOrDefault(item => item.IsAutomatic)
                     ?? commissioningProfiles.FirstOrDefault();
             RaisePropertyChanged(nameof(SelectedCommissioningProfile));
+            RaisePropertyChanged(nameof(VisibleCommissioningProfiles));
             RaisePropertyChanged(nameof(SelectedCommissioningProfileDescription));
             MatchSelectedDeviceCandidates();
 
@@ -2552,6 +2570,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
 
     private void ApplySelectedCommissioningProfile(bool startup)
     {
+        if (!CanEditTargetPlan()) return;
         if (SelectedCommissioningProfile is not { } profile) return;
         try
         {
@@ -2606,10 +2625,10 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         // never compiled into the open-source plugin. Neither path manufactures
         // commissioning/Night Setup evidence or grants real-mode authority.
         settings.RealModeCommissioned = false;
-        if (telescopeCandidates.FirstOrDefault() is { } telescope) SelectedTelescopeCandidate = telescope;
-        if (atrCameraCandidates.FirstOrDefault() is { } atr) SelectedAtrCameraCandidate = atr;
-        if (g3CameraCandidates.FirstOrDefault() is { } g3) SelectedG3CameraCandidate = g3;
-        if (qhyCameraCandidates.FirstOrDefault() is { } qhy) SelectedQhyCameraCandidate = qhy;
+        if (CommissioningProfileCatalog.SavedOrUniqueCandidate(telescopeCandidates, settings.ExpectedTelescopeId) is { } telescope) SelectedTelescopeCandidate = telescope;
+        if (CommissioningProfileCatalog.SavedOrUniqueCandidate(atrCameraCandidates, settings.ObservationExpectedAtrCameraId) is { } atr) SelectedAtrCameraCandidate = atr;
+        if (CommissioningProfileCatalog.SavedOrUniqueCandidate(g3CameraCandidates, settings.Phd2CameraStableId) is { } g3) SelectedG3CameraCandidate = g3;
+        if (CommissioningProfileCatalog.SavedOrUniqueCandidate(qhyCameraCandidates, settings.ObservationExpectedQhyCameraId) is { } qhy) SelectedQhyCameraCandidate = qhy;
 
         var site = activeProfileService.ActiveProfile.AstrometrySettings;
         settings.ObservatoryLatitudeDegrees = site.Latitude;
@@ -2640,21 +2659,25 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         settings.RequireOpenOpticalCover = !weak;
     }
 
-    private string TryAutoApproveSelectedCommissioningPackage(CommissioningProfileChoice profile)
+    private string TryAutoApproveSelectedCommissioningPackage(CommissioningProfileChoice profile, bool explicitRecheck = false)
     {
         settings.RealModeCommissioned = false;
+        commissioningValidationIssues = Array.Empty<string>();
         if (profile.IsAutomatic || string.IsNullOrWhiteSpace(profile.BindingsPath)) return string.Empty;
-        if (!settings.AutoApproveValidatedCommissioningPackage)
+        if (!settings.AutoApproveValidatedCommissioningPackage && !explicitRecheck)
         {
-            return "自动确认已关闭；请人工复核后确认。";
+            return "自动确认已关闭；请点击“重新检查当前配置”执行文件校验。";
         }
 
         try
         {
-            settings.RealModeCommissioned = true;
             var configuration = realRunnerFactory.CaptureConfiguration(settings);
+            // Validate evidence on an isolated snapshot, not by temporarily
+            // granting authority to the mutable Profile. Target/native device
+            // selections remain independent startup gates, not calibration facts.
+            configuration = configuration with { Commissioning = configuration.Commissioning with { RealModeCommissioned = true } };
             var plan = ObservationPlanFactory.FromSettings(settings, configuration);
-            var staticIssues = RealModeEligibilityIssues().Concat(plan.Validate()).ToList();
+            var staticIssues = new List<string>();
             var loadedPreset = RealCommissioningPresetLoader
                 .LoadAsync(configuration, CancellationToken.None)
                 .GetAwaiter()
@@ -2679,19 +2702,33 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
                 .ToArray();
             if (failures.Length == 0)
             {
+                settings.RealModeCommissioned = true;
                 return settings.WeakSupervisionEnabled
                     ? "SHA-256、内部引用和设备身份静态校验通过，已自动确认；当前为有人弱监督，不是无人值守。"
                     : "SHA-256、内部引用和设备身份静态校验通过，已自动确认。";
             }
 
             settings.RealModeCommissioned = false;
-            return $"自动确认未通过（{failures.Length} 项），保留为未确认；";
+            commissioningValidationIssues = failures;
+            return $"标定文件校验未通过：{string.Join("；", failures)}；";
         }
         catch (Exception ex)
         {
             settings.RealModeCommissioned = false;
+            commissioningValidationIssues = new[] { ex.Message };
             return $"自动确认失败：{ex.Message}；";
         }
+    }
+
+    private void RecheckPreparation()
+    {
+        if (!CanEditTargetPlan()) return;
+        // Recheck the APPLIED package, not an un-applied dropdown selection.
+        var applied = commissioningProfiles.FirstOrDefault(item => SameIdentity(item.Id, settings.SelectedCommissioningProfileId));
+        if (applied is not null) CommissioningProfileLoadStatus = TryAutoApproveSelectedCommissioningPackage(applied, explicitRecheck: true);
+        RefreshProfileOwnership();
+        RaisePropertyChanged(nameof(PreparationBlockingDetails));
+        OperatorNotice = "已重新检查当前保存的配置；未加载旧方案、未连接设备，也未启动观测。";
     }
 
     private int ApplyOperationalProfileValues(string path)
@@ -3190,7 +3227,56 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
 
     private async Task ClearG3RecoveryStateAsync()
     {
+        // Unlike New Run, this visible command may explicitly abandon a
+        // cancelled PHD2 intent after the human has taken over the hardware.
+        // Never hide this transition in restart/Resume or stop manual guiding.
+        string? phdRetirementAudit = null;
+        try
+        {
+            var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UVEX-ADV", "observations");
+            var records = await Phd2LockShiftPendingStore.DiscoverAsync(root, lifetime.Token);
+            if (records.Any(x => x.Error is not null || x.State is null))
+                throw new InvalidOperationException("存在不可读 PHD2 入缝记录，请先检查证据；未清除任何状态。");
+            var pending = records.Where(x => x.State!.Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger).ToArray();
+            if (pending.Length > 0)
+            {
+                if (pending.Length != 1 || IsControllable || cameraMediator.GetInfo().IsExposing)
+                    throw new InvalidOperationException("请先结束曝光、停止手动导星并取消旧自动运行；人工接管要求唯一未结入缝记录，不会替你停止设备。");
+                var confirm = MessageBox.Show(
+                    ObservationUiPresentation.Text(
+                        "是否确认已人工接管设备，放弃旧自动入缝的恢复？\n原位置和已用预算完整保留，旧记录归档为未完成；不回程、不校准，不声称入缝成功。下一轮仍须重新定位并验证校准。\n请先停止手动导星，确认没有曝光或运动。",
+                        "Have you taken manual control and abandoned the old automatic slit recovery?\nThe original positions and budget remain as incomplete history. No return, calibration or slit success is claimed. The next run must reacquire and validate calibration.\nFirst stop manual guiding and ensure exposure/motion are idle.", UiCulture),
+                    ObservationUiPresentation.Text("接管旧入缝记录", "Take over old slit intent", UiCulture),
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                if (confirm != MessageBoxResult.Yes) return;
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                await using var client = new Phd2Client(new Phd2ClientOptions { Host = settings.Phd2Host, Port = settings.Phd2Port });
+                await client.ConnectAsync(timeout.Token); // RPC only; never connects physical equipment.
+                var profile = await client.GetProfileAsync(timeout.Token);
+                var equipment = await client.GetCurrentEquipmentAsync(timeout.Token);
+                var phdState = await client.GetAppStateAsync(timeout.Token);
+                var mount = telescopeMediator.GetInfo();
+                var camera = cameraMediator.GetInfo();
+                var witness = new Phd2OperatorRetirementWitness(true, !IsControllable,
+                    camera.Connected && !camera.IsExposing && !captureManualAtrSpectrumCommand.IsExecuting,
+                    mount.Connected, !mount.Slewing && !mount.IsPulseGuiding, mount.DeviceId,
+                    phdState, profile.Id == settings.Phd2ProfileId && profile.Name == settings.Phd2ProfileName &&
+                        equipment.Camera?.Connected == true && equipment.Camera.Name == settings.Phd2RuntimeCameraName,
+                    DateTimeOffset.UtcNow);
+                var audit = await Phd2OperatorRetirement.RetireAsync(root, pending[0], witness, timeout.Token);
+                phdRetirementAudit = audit;
+                OperatorNotice = $"旧 PHD2 入缝记录已按人工接管归档为未完成；未回程、未校准。审计：{audit}";
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = $"人工接管旧入缝记录失败：{ex.Message}";
+            return;
+        }
         await RetireG3RecoveryStateAsync().ConfigureAwait(true);
+        if (phdRetirementAudit is not null)
+            OperatorNotice += $" PHD2 旧入缝也已归档为未完成（未回程、未确认入缝），审计：{phdRetirementAudit}";
     }
 
     /// <summary>
@@ -3620,12 +3706,14 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
                 .Select(issue => $"亮目标翼部质心：{issue}"));
         }
         if (string.IsNullOrWhiteSpace(settings.Phd2ProfileEvidenceSha256)) issues.Add("缺少 PHD2 注册表证据 SHA-256。");
+        if (!SameIdentity(activeProfileService.ActiveProfile.CameraSettings.Id, settings.ObservationExpectedAtrCameraId))
+            issues.Add("光谱主控的 N.I.N.A. 相机选择与 ATR585M 绑定不一致：在设备 → 相机选择 ATR585M；QHYminiCam8M 只在独立测光端连接。");
         if (!string.Equals(
                 activeProfileService.ActiveProfile.FilterWheelSettings.Id,
                 NinaProfileOwnerPreflight.NoPhysicalFilterWheelDeviceId,
                 StringComparison.Ordinal))
         {
-            issues.Add("N.I.N.A. Profile 的滤镜轮必须为 No_Device；QHY 物理滤镜轮由独立 QHY 服务独占。");
+            issues.Add("光谱主控的滤镜轮必须为 No_Device（无设备）；QHY 物理滤镜轮只在独立测光端连接。在设备 → 滤镜轮修改选择。");
         }
         if (!string.Equals(
                 activeProfileService.ActiveProfile.GuiderSettings.GuiderName,
@@ -4296,6 +4384,9 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         createNightSetupDraftCommand.RaiseCanExecuteChanged();
         openPreparationDraftFolderCommand.RaiseCanExecuteChanged();
         applySelectedCommissioningProfileCommand.RaiseCanExecuteChanged();
+        recheckPreparationCommand.RaiseCanExecuteChanged();
+        RaisePropertyChanged(nameof(PreparationBlockingDetails));
+        RaisePropertyChanged(nameof(PreparationOwnerSummary));
         applyRecommendedImageFilePatternCommand.RaiseCanExecuteChanged();
         restorePreviousImageFilePatternCommand.RaiseCanExecuteChanged();
     }

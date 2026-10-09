@@ -86,7 +86,7 @@ public sealed class PhotometryWorkerDockable : DockableVM, IDisposable
         : host.LatestJob is { } job ? PhotometryUiPresentation.JobState(job.State, Culture)
         : T("测光端：正在等待主控任务", "Photometry instance: waiting for a master job");
     public string NextAction => IsSpectroscopyMaster
-        ? T("先完成两端配对，再回到“自动观测”设置同步测光开关并启动。地址已保存不代表另一实例已连接。", "Pair both instances, then use the simultaneous-photometry switch and Start in Automatic observation. A saved address does not prove a peer connection.")
+        ? PhotometryUiPresentation.MasterNextAction(settings.QhyServiceUrl, Culture)
         : host.Enabled ? PhotometryUiPresentation.JobAdvice(host.LatestJob, host.OperatorPaused, Culture)
         : !string.IsNullOrWhiteSpace(host.SetupIssue) ? PhotometryUiPresentation.Error(host.SetupIssue, Culture)
         : T("本地配置检查通过。点击“开始接收主控任务”；主控下发经过检查的任务之前不会连接设备或曝光。", "Local configuration checks passed. Enable reception; no equipment connects or exposes until the master submits a checked job.");

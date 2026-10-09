@@ -7,6 +7,85 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2StageFailurePolicyTests
 {
+    [Theory]
+    [InlineData("Outbound exact-lock stage failed or became ambiguous:")]
+    [InlineData("Post-lock operation-bound settle failed:")]
+    [InlineData("Fresh post-stage G3 residual failed:")]
+    public void InnerReturnHandlersCannotSwallowTypedGuideLoss(string returnReason)
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var reasonIndex = source.IndexOf(returnReason, StringComparison.Ordinal);
+        Assert.True(reasonIndex >= 0);
+        var catchIndex = source.LastIndexOf("catch (Exception ex)", reasonIndex, StringComparison.Ordinal);
+        Assert.True(catchIndex >= 0);
+        var handler = source[catchIndex..reasonIndex];
+        Assert.StartsWith("catch (Exception ex) when (Phd2StageFailurePolicy.FindLostFrame(ex) is null)", handler);
+        Assert.Contains("ReturnPhd2LockToOriginAsync", handler);
+    }
+
+    [Fact]
+    public void NativeFrameFourteenLossRetainsCaptureEvenIfOwnerLaterRecovers()
+    {
+        var lostStep = new Phd2GuideStep(14, null, null, 0, null, null, 2);
+        var snapshot = Phd2StateSnapshot.Disconnected with
+        {
+            IsConnected = true, AppState = Phd2AppState.LostLock,
+            ConnectionEpoch = 1, GuideEpoch = 104, LastGuideStep = lostStep,
+        };
+        var error = new Phd2GuidingFrameLostException(snapshot);
+        var laterSnapshot = snapshot with { AppState = Phd2AppState.Guiding, GuideEpoch = 105, LastGuideStep = null };
+        var found = Phd2StageFailurePolicy.FindLostFrame(new InvalidOperationException("frame wrapper", error));
+        Assert.NotNull(found);
+        Assert.Same(error, found);
+        Assert.Equal(14, found.LostFrame!.Frame);
+        Assert.Equal(0, found.LostFrame.Snr);
+        Assert.Equal(2, found.LostFrame.ErrorCode);
+        Assert.Equal(Phd2AppState.LostLock, found.Snapshot.AppState);
+        Assert.NotEqual(found.Snapshot.GuideEpoch, laterSnapshot.GuideEpoch);
+        // The same message without the native typed event is not a loss authority.
+        Assert.Null(Phd2StageFailurePolicy.FindLostFrame(new InvalidOperationException(error.Message)));
+    }
+
+    [Fact]
+    public void PlacementLossRetainsTypedEventWithoutGrantingAnotherRecovery()
+    {
+        var loss = new Phd2GuidingFrameLostException(Phd2StateSnapshot.Disconnected with
+            { IsConnected = true, AppState = Phd2AppState.LostLock });
+        Assert.Same(loss, Phd2StageFailurePolicy.FindLostFrame(new InvalidOperationException("wrapper", loss)));
+        Assert.Null(Phd2StageFailurePolicy.FindLostFrame(new InvalidOperationException("StarLost wind timeout")));
+        var gate = GateResult.Unknown(Phd2StageFailurePolicy.PlacementStarLost, loss.Message);
+        Assert.False(ObservationAutomaticRecoveryPolicy.For(ObservationStage.PlaceTargetOnSlit, gate).IsRecoverable);
+        var presentation = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, new CultureInfo("zh-CN"));
+        Assert.Contains("丢星", presentation.Summary);
+        Assert.Contains("不只是", presentation.Summary);
+        Assert.Contains("不重置预算", presentation.AutomaticRecovery);
+        var guidance = ObservationOperatorGuidance.For(ObservationStage.PlaceTargetOnSlit, gate, new CultureInfo("zh-CN"));
+        Assert.Equal(ObservationPreviewChannel.G3SlitField, guidance.PreviewChannel);
+    }
+
+    [Fact]
+    public void PlacementTerminalLossRecordsStopWithoutClearingMotionDebt()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var start = source.IndexOf("var lostFrameFailure =", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var end = source.IndexOf("private async Task<Exception?>", start, StringComparison.Ordinal);
+        var handler = source[start..end];
+        Assert.Contains("phd2-placement-star-lost", handler);
+        Assert.Contains("stopConfirmed = true", handler);
+        Assert.Contains("windCauseConfirmed = false", handler);
+        Assert.Contains("Phd2StageFailurePolicy.PlacementStarLost", handler);
+        Assert.Contains("Phase = Phd2LockShiftPendingPhase.ReturnRequired", handler);
+        Assert.Contains("Phd2LockShiftPendingStore.WriteAtomicAsync", handler);
+        Assert.Contains("finally", handler);
+        Assert.Contains("lostGuideFrame", handler);
+        Assert.DoesNotContain("AttemptsUsed =", handler);
+        Assert.DoesNotContain("CumulativeCommandedPixels =", handler);
+        Assert.DoesNotContain("GuideEpoch =", handler);
+        Assert.DoesNotContain("pendingPhd2LockShift = null", handler);
+        Assert.DoesNotContain("SetExactLockPositionAsync", handler);
+    }
+
     [Fact]
     public void TypedLostStarUsesExistingBoundedRecoveryNotTimeoutClassification()
     {
@@ -62,6 +141,7 @@ public sealed class Phd2StageFailurePolicyTests
     [Theory]
     [InlineData("fresh guiding-frame evidence", Phd2StageFailurePolicy.FrameTimeout)]
     [InlineData("get_app_state", Phd2StageFailurePolicy.StatusTimeout)]
+    [InlineData("native single-frame capture", Phd2StageFailurePolicy.NativeFrameTimeout)]
     public void TypedTimeoutHasSpecificPresentationButNeverGrantsRestart(string operation, string code)
     {
         var error = new Phd2CommandTimeoutException(operation, TimeSpan.FromSeconds(20));

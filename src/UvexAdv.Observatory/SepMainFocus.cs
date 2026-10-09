@@ -59,6 +59,13 @@ public sealed record SepFocusState(int Position, string Binding, int BacklashIn,
 public sealed record SepFocusSample(int Group, int Position, string Path, SepFocusFrame Measurement);
 public sealed record SepFocusPoint(int Position, double R50, double R80, double Error, int Frames);
 public sealed record SepFocusFit(int Position, double RSquared);
+public sealed record SepFocusStarMedian(int Id, double R50, double R80);
+public sealed record SepFocusValidationGroup(int Group, int Position, string[] FramePaths, SepFocusStarMedian[] Stars);
+public sealed record SepFocusStarRatio(int Id, double R50Ratio, double R80Ratio);
+public sealed record SepFocusValidationPair(int AGroup, int BGroup, SepFocusStarRatio[] Stars,
+    double R50Ratio, double R80Ratio, bool Accepted);
+public sealed record SepFocusRepeatedComparison(SepFocusReference[] Reference, int[] StarIds,
+    SepFocusValidationGroup[] Groups, SepFocusValidationPair[] Pairs, SepFocusPoint[] AbsolutePoints, bool Improved);
 public sealed record SepMainFocusResult(string Status, int Origin, int? FinalPosition, int? Candidate,
     bool Improved, bool ReturnConfirmed, string Message, string Directory, SepFocusPoint[] Curve, SepFocusSample[] Samples)
 {
@@ -85,7 +92,9 @@ public sealed class SepMainFocusRunner(ISepMainFocusHardware hardware)
         return (a[(a.Length - 1) / 2] + a[a.Length / 2]) / 2;
     }
 
-    public static SepFocusPoint[] Summarize(IReadOnlyList<SepFocusSample> samples)
+    private sealed record ComparableSamples(int[] StarIds, SepFocusSample[][] Groups);
+
+    private static ComparableSamples SelectComparableSamples(IReadOnlyList<SepFocusSample> samples)
     {
         // Select ONE fixed cohort supported by at least two frames at EVERY
         // focus position. A third frame dropping one star must not veto both
@@ -110,20 +119,72 @@ public sealed class SepMainFocusRunner(ISepMainFocusHardware hardware)
         }
         var selected = candidates.OrderByDescending(c => System.Numerics.BitOperations.PopCount(c))
             .ThenByDescending(c => samples.Count(s => (Mask(s) & c) == c)).ThenBy(c => c).First();
-        var common = Enumerable.Range(0, 30).Where(i => (selected & (1u << i)) != 0).ToHashSet();
-        return samples.GroupBy(s => s.Group).OrderBy(g => g.Key).Select(group =>
+        var common = Enumerable.Range(0, 30).Where(i => (selected & (1u << i)) != 0).ToArray();
+        var groups = samples.GroupBy(s => s.Group).OrderBy(g => g.Key).Select(group =>
         {
-            var frames = group.Where(s => common.All(id => s.Measurement.Stars.Any(x => x.Id == id)))
-                .Select(s => s.Measurement.Stars.Where(x => common.Contains(x.Id)).ToArray()).ToArray();
+            var frames = group.Where(s => common.All(id => s.Measurement.Stars.Any(x => x.Id == id))).ToArray();
             if (frames.Length < 2) throw new InvalidOperationException("某焦位不足2张共同星群有效帧；保留原位。");
+            return frames;
+        }).ToArray();
+        return new(common, groups);
+    }
+
+    public static SepFocusPoint[] Summarize(IReadOnlyList<SepFocusSample> samples) => Summarize(SelectComparableSamples(samples));
+
+    private static SepFocusPoint[] Summarize(ComparableSamples selection) => selection.Groups.Select(group =>
+        {
+            var frames = group.Select(s => s.Measurement.Stars.Where(x => selection.StarIds.Contains(x.Id)).ToArray()).ToArray();
             var r50 = frames.Select(f => Median(f.Select(s => s.R50))).ToArray();
             var median = Median(r50);
-            return new SepFocusPoint(group.First().Position, median,
+            return new SepFocusPoint(group[0].Position, median,
                 Median(frames.Select(f => Median(f.Select(s => s.R80)))),
                 Math.Max(.15, 1.4826 * Median(r50.Select(x => Math.Abs(x - median)))), frames.Length);
         }).ToArray();
+
+    /// <summary>Pure ABAB replay: one coverage-selected cohort, per-star group medians, then paired B/A ratios.</summary>
+    public static SepFocusRepeatedComparison CompareRepeatedSamples(IReadOnlyList<SepFocusSample> samples)
+    {
+        var selection = SelectComparableSamples(samples);
+        var selectedFrames = selection.Groups.SelectMany(g => g).ToArray();
+        var reference = selectedFrames[0].Measurement.Reference;
+        // Only complete frames participate. Early frames before reference initialization
+        // can be retained as missing data, but different usable ID maps cannot be mixed.
+        if (reference is null || reference.Length is < 3 or > 30
+            || reference.Any(p => !double.IsFinite(p.X) || !double.IsFinite(p.Y))
+            || selectedFrames.Any(s => s.Measurement.Reference is null || !reference.SequenceEqual(s.Measurement.Reference)))
+            throw new InvalidOperationException("往返验证的完整帧参考星纪元不一致；不能按相同 ID 配对。");
+        if (selectedFrames.Any(s => s.Measurement.Stars.Select(x => x.Id).Distinct().Count() != s.Measurement.Stars.Length
+            || s.Measurement.Stars.Any(x => x.Id < 0 || x.Id >= reference.Length
+                || !double.IsFinite(x.R50) || !double.IsFinite(x.R80) || x.R50 <= 0 || x.R80 < x.R50)))
+            throw new InvalidDataException("Invalid paired focus measurements; missing values are not zero-filled.");
+        if (selection.Groups.Length != 4
+            || selection.Groups.Any(g => g.Any(s => s.Position != g[0].Position))
+            || selection.Groups[0][0].Position != selection.Groups[2][0].Position
+            || selection.Groups[1][0].Position != selection.Groups[3][0].Position)
+            throw new InvalidOperationException("往返验证必须包含同一参考星纪元的四组 A/B/A/B 测量。");
+
+        var groups = selection.Groups.Select(g => new SepFocusValidationGroup(g[0].Group, g[0].Position,
+            g.Select(s => s.Path).ToArray(), selection.StarIds.Select(id =>
+            {
+                var stars = g.Select(s => s.Measurement.Stars.Single(x => x.Id == id)).ToArray();
+                return new SepFocusStarMedian(id, Median(stars.Select(s => s.R50)), Median(stars.Select(s => s.R80)));
+            }).ToArray())).ToArray();
+        var pairs = new[] { 0, 2 }.Select(i =>
+        {
+            var stars = groups[i].Stars.Select(a =>
+            {
+                var b = groups[i + 1].Stars.Single(s => s.Id == a.Id);
+                return new SepFocusStarRatio(a.Id, b.R50 / a.R50, b.R80 / a.R80);
+            }).ToArray();
+            var r50 = Median(stars.Select(s => s.R50Ratio));
+            var r80 = Median(stars.Select(s => s.R80Ratio));
+            return new SepFocusValidationPair(groups[i].Group, groups[i + 1].Group, stars, r50, r80,
+                double.IsFinite(r50) && double.IsFinite(r80) && r50 <= .95 && r80 <= 1.1);
+        }).ToArray();
+        return new(reference.ToArray(), selection.StarIds, groups, pairs, Summarize(selection), pairs.All(p => p.Accepted));
     }
 
+    // Legacy absolute-point diagnostic only; production ABAB acceptance uses paired stars above.
     public static bool AcceptRepeatedValidation(SepFocusPoint[] points) => points.Length == 4
         && new[] { 0, 2 }.All(i => points[i + 1].R50 <= .95 * points[i].R50 && points[i + 1].R80 <= 1.1 * points[i].R80);
 
@@ -225,15 +286,34 @@ public sealed class SepMainFocusRunner(ISepMainFocusHardware hardware)
         {
             await Sample(initial.Position);
             if (reference is null) throw new InvalidOperationException("基准帧未取得至少3颗参考星；未开始扫焦。");
+            // The native report needs the same two-frame, three-star baseline
+            // summary. Prove it before scanning, not after a successful move.
+            try { _ = Summarize(samples.Where(s => s.Group == 0).ToArray()); }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException("基准组未取得至少2帧、同一组至少3颗可比星；未开始扫焦。" + ex.Message, ex);
+            }
             samplingCurve = true;
             foreach (var position in positions) await Sample(position);
             curve = Summarize(samples.Where(s => s.Group > 0).ToArray());
             curveProgress?.Report(curve);
             await Move(initial.Position, deadline.Token);
             var fit = await hardware.FitAsync(curve, deadline.Token);
+            if (!double.IsFinite(fit.RSquared))
+                throw new InvalidOperationException($"拟合优度 R² 无效（非有限值）；已回到原位 {initial.Position}，保留曲线供检查。");
             Save("native-fit.json", fit);
-            if (!double.IsFinite(fit.RSquared) || fit.RSquared < .8 || fit.Position <= positions.Min() || fit.Position >= positions.Max())
-                throw new InvalidOperationException("曲线没有可靠的区间内低谷；已回到起点，保留曲线供检查。");
+            if (fit.RSquared < .8)
+                throw new InvalidOperationException($"拟合优度 R² {fit.RSquared:F3} 低于 0.8；已回到原位 {initial.Position}，保留曲线供检查。");
+            var minimum = positions.Min();
+            var maximum = positions.Max();
+            if (fit.Position <= minimum || fit.Position >= maximum)
+            {
+                var side = fit.Position <= minimum ? "较小焦位侧" : "较大焦位侧";
+                var reason = fit.Position < minimum || fit.Position > maximum
+                    ? "超出已采样范围，该值仅为外推估计"
+                    : "位于已采样范围边界，缺少两侧采样支持";
+                throw new InvalidOperationException($"拟合低谷 {fit.Position} 步{reason}；已采样范围 {minimum}–{maximum} 步，不能据此声称最佳焦点。已回到原位 {initial.Position}；请先在已授权软限位内扩大{side}采样范围并另行复核。本轮不自动扩界，也不应用该拟合值。");
+            }
             candidate = fit.Position;
             samplingCurve = false;
             {
@@ -241,9 +321,11 @@ public sealed class SepMainFocusRunner(ISepMainFocusHardware hardware)
                 // New local star reference prevents long-sweep drift from becoming a fixed-coordinate veto.
                 reference = null;
                 foreach (var p in new[] { initial.Position, candidate.Value, initial.Position, candidate.Value }) await Sample(p);
-                var validation = Summarize(samples.Skip(start).ToArray());
-                improved = AcceptRepeatedValidation(validation);
-                Save("validation.json", new { validation, improved });
+                var paired = CompareRepeatedSamples(samples.Skip(start).ToArray());
+                var validation = paired.AbsolutePoints; // Preserve the native absolute metric for diagnosis only.
+                improved = paired.Improved;
+                Save("validation.json", new { schema = 2, validation, paired, improved,
+                    estimator = "Median of same-star B/A ratios after each star's group median; both pairs require R50 <=0.95 and R80 <=1.10." });
                 if (!improved && Math.Abs((long)candidate.Value - initial.Position) <= options.Step / 2d)
                 {
                     await Sample(initial.Position);
@@ -257,7 +339,7 @@ public sealed class SepMainFocusRunner(ISepMainFocusHardware hardware)
             final = expected;
             confirmed = true;
             status = improved ? "Improved" : verifiedOrigin ? "VerifiedAtOrigin" : "Unchanged";
-            message = improved ? $"往返验证通过，主镜保留在 {final}；下轮需重新建立 Night Setup 和入缝证据。"
+            message = improved ? $"往返验证通过，主镜保留在 {final}；下轮需建立新的本轮焦位锁，并重新取得目标/WCS/狭缝/导星证据；不改写原 Night Setup。"
                 : verifiedOrigin ? $"对焦验证通过：原位 {final} 已在本次最佳焦区内，回位新帧与往返测量一致；保留原位，不声称额外改善。"
                 : $"未证明候选焦点有重复优势，主镜保留原位 {final}。这不是观测阻断。";
         }

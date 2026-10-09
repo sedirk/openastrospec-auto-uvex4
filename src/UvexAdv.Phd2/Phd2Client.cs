@@ -265,7 +265,14 @@ public sealed partial class Phd2Client : IPhd2Client
             ParseDevice(result, "aux_mount"),
             ParseDevice(result, "AO"),
             ParseDevice(result, "rotator"));
-        UpdateSnapshot(current => current with { Equipment = equipment });
+        UpdateSnapshot(current => current with
+        {
+            Equipment = equipment,
+            // A new identity/readback boundary breaks an unconfirmed series,
+            // but it cannot clear a latched output fault without checked recovery.
+            GuideOutput = current.GuideOutput?.Failed == true || current.Equipment == equipment
+                ? current.GuideOutput : null,
+        });
         lock (stateGate)
         {
             if (approvedIdentityValidation?.Equipment != equipment)
@@ -367,16 +374,22 @@ public sealed partial class Phd2Client : IPhd2Client
         var timestamp = requirement.CalibrationTimestampUtc;
         var timestampSource = "Configured";
         string? nativeAgeFailure = null;
+        Phd2NativeCalibrationDetails? nativeDetails = null;
         if (requirement.RuntimeProof is { } runtimeProof &&
             runtimeProof.Matches(profileBefore, calibration, snapshotBefore, Snapshot))
         {
             timestamp = runtimeProof.StartedUtc;
             timestampSource = "ObservedNativeRecalibration";
         }
-        else if (requirement.ReadNativeCalibrationTimestamp)
+        if ((requirement.ReadNativeCalibrationTimestamp && timestampSource != "ObservedNativeRecalibration") ||
+            requirement.RequireGuideRateMatch)
         {
-            timestamp = null;
-            timestampSource = "NativeExportUnconfirmed";
+            var useNativeAge = requirement.ReadNativeCalibrationTimestamp && timestampSource != "ObservedNativeRecalibration";
+            if (useNativeAge)
+            {
+                timestamp = null;
+                timestampSource = "NativeExportUnconfirmed";
+            }
             try
             {
                 // A returned filename can only be read on this machine. Do not
@@ -393,9 +406,13 @@ public sealed partial class Phd2Client : IPhd2Client
                 var file = new FileInfo(path);
                 if (!file.Exists || file.Length > 4 * 1024 * 1024 || file.LinkTarget is not null)
                     throw new InvalidDataException("Native calibration export is unavailable or exceeds the diagnostic size bound.");
-                timestamp = Phd2NativeCalibrationAge.Read(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false),
+                nativeDetails = Phd2NativeCalibrationAge.ReadDetails(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false),
                     profileBefore, calibration, System.Globalization.CultureInfo.CurrentCulture, TimeZoneInfo.Local);
-                timestampSource = "PHD2.export_config_settings:scope/calibration/orig_timestamp";
+                if (useNativeAge)
+                {
+                    timestamp = nativeDetails.Timestamp;
+                    timestampSource = "PHD2.export_config_settings:scope/calibration/orig_timestamp";
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -428,23 +445,28 @@ public sealed partial class Phd2Client : IPhd2Client
             snapshotBefore.CalibrationChangeSequence != snapshotAfter.CalibrationChangeSequence)
             failures.Add("PHD2 connection or calibration changed during calibration validation");
 
-        if (nativeAgeFailure is not null) indeterminate.Add(nativeAgeFailure);
+        var qualityFailures = requirement.OwnerManaged ? new List<string>() : failures;
+        var qualityUnknown = requirement.OwnerManaged ? new List<string>() : indeterminate;
+        if (nativeAgeFailure is not null) qualityUnknown.Add(nativeAgeFailure);
+        if (requirement.RequireGuideRateMatch)
+            Phd2GuideRateMatch.Validate(nativeDetails, requirement.CurrentRaGuideRateArcsecondsPerSecond,
+                requirement.CurrentDecGuideRateArcsecondsPerSecond, qualityFailures, qualityUnknown);
         TimeSpan? age = null;
         if (timestamp.HasValue)
         {
             age = evaluatedUtc - timestamp.Value;
             if (age < TimeSpan.Zero)
             {
-                failures.Add("calibration timestamp is in the future");
+                qualityFailures.Add("calibration timestamp is in the future");
             }
             else if (age > requirement.MaximumAge)
             {
-                failures.Add($"calibration age {age.Value} exceeds the limit {requirement.MaximumAge}");
+                qualityFailures.Add($"calibration age {age.Value} exceeds the limit {requirement.MaximumAge}");
             }
         }
         else if (requirement.RequireKnownAge)
         {
-            indeterminate.Add(
+            qualityUnknown.Add(
                 "PHD2 get_calibration_data does not expose calibration age; a trusted timestamp was not supplied");
         }
 
@@ -460,17 +482,17 @@ public sealed partial class Phd2Client : IPhd2Client
                 calibration.RaRatePixelsPerSecond,
                 requirement.MinimumAxisRatePixelsPerSecond,
                 requirement.MaximumAxisRatePixelsPerSecond,
-                failures);
+                qualityFailures);
             ValidateAxisRate(
                 "Dec",
                 calibration.DecRatePixelsPerSecond,
                 requirement.MinimumAxisRatePixelsPerSecond,
                 requirement.MaximumAxisRatePixelsPerSecond,
-                failures);
+                qualityFailures);
 
             if (!IsFinite(calibration.RaAngleDegrees) || !IsFinite(calibration.DecAngleDegrees))
             {
-                failures.Add("calibration RA/Dec angles are missing or non-finite");
+                qualityFailures.Add("calibration RA/Dec angles are missing or non-finite");
             }
             else
             {
@@ -479,7 +501,7 @@ public sealed partial class Phd2Client : IPhd2Client
                     calibration.DecAngleDegrees!.Value);
                 if (orthogonalityError > requirement.MaximumOrthogonalityErrorDegrees)
                 {
-                    failures.Add(
+                    qualityFailures.Add(
                         $"calibration orthogonality error is {orthogonalityError.Value:F1}°, " +
                         $"above the limit {requirement.MaximumOrthogonalityErrorDegrees:F1}°");
                 }
@@ -495,10 +517,16 @@ public sealed partial class Phd2Client : IPhd2Client
             failures,
             indeterminate)
         {
+            OwnerManaged = requirement.OwnerManaged,
+            AllowNativeCalibration = requirement.AllowNativeCalibration,
+            Warnings = requirement.OwnerManaged ? qualityFailures.Concat(qualityUnknown).ToArray() : Array.Empty<string>(),
             CalibrationTimestampUtc = timestamp,
             CalibrationTimestampSource = timestampSource,
             ConnectionEpoch = snapshotAfter.ConnectionEpoch,
             CalibrationChangeSequence = snapshotAfter.CalibrationChangeSequence,
+            NativeDetails = nativeDetails,
+            CurrentRaGuideRateArcsecondsPerSecond = requirement.CurrentRaGuideRateArcsecondsPerSecond,
+            CurrentDecGuideRateArcsecondsPerSecond = requirement.CurrentDecGuideRateArcsecondsPerSecond,
         };
         UpdateSnapshot(current => current with { CalibrationValidation = validation });
         return validation;
@@ -1418,12 +1446,14 @@ public sealed partial class Phd2Client : IPhd2Client
                 EnsureCalibrationApprovedForGuiding();
             }
 
+            var ownerCalibrationAllowed = !forceRecalibration &&
+                Snapshot.CalibrationValidation is { OwnerManaged: true, AllowNativeCalibration: true };
             var localOperationId = Interlocked.Increment(ref nextSettleOperationId);
             operationId = localOperationId;
             using var waiter = RegisterEventWaiter(message =>
                 message.Name == "SettleDone" &&
                 Snapshot.LastSettleOperationId == localOperationId);
-            using var calibrationWaiter = forceRecalibration
+            using var calibrationWaiter = forceRecalibration || ownerCalibrationAllowed
                 ? RegisterEventWaiter(message =>
                     message.Name is "CalibrationComplete" or "CalibrationFailed" &&
                     Snapshot.PendingSettleOperationId == localOperationId &&
@@ -1443,6 +1473,7 @@ public sealed partial class Phd2Client : IPhd2Client
                     PendingTakeoverLoopStopAllowed = current.AppState == Phd2AppState.Looping,
                     PendingLateLoopFrameAllowed = current.AppState == Phd2AppState.Looping,
                     PendingForceRecalibration = forceRecalibration,
+                    PendingOwnerCalibrationAllowed = ownerCalibrationAllowed,
                     PendingCalibrationStartSequence = null,
                     PendingCalibrationTerminalSequence = null,
                 };
@@ -1490,7 +1521,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 options.EventTimeoutMargin + options.EventTimeoutMargin +
                 TimeSpan.FromMilliseconds(2d * verifiedFrameMilliseconds);
             Phd2EventMessage? calibrationTerminal = null;
-            if (calibrationWaiter is not null)
+            if (calibrationWaiter is not null && forceRecalibration)
             {
                 calibrationTerminal = await WaitForEventAsync(
                         calibrationWaiter,
@@ -1499,6 +1530,28 @@ public sealed partial class Phd2Client : IPhd2Client
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+
+            if (ownerCalibrationAllowed && calibrationWaiter is not null)
+            {
+                // Ordinary guide(recalibrate=false): PHD2 may reuse its calibration
+                // or perform one itself. Race the real operation-bound events;
+                // never wait for a calibration event when PHD2 reused its data.
+                try
+                {
+                    await Task.WhenAny(waiter.Task, calibrationWaiter.Task)
+                        .WaitAsync(options.ForcedCalibrationEventTimeout + eventTimeout, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    throw new Phd2CommandTimeoutException("PHD2-owned calibration/guide", options.ForcedCalibrationEventTimeout + eventTimeout);
+                }
+                if (calibrationWaiter.Task.IsCompletedSuccessfully)
+                    calibrationTerminal = await calibrationWaiter.Task.ConfigureAwait(false);
+            }
+            if (calibrationTerminal?.Name == "CalibrationFailed")
+                throw new Phd2CalibrationRejectedException("PHD2 reported calibration failure: " +
+                    (GetOptionalString(calibrationTerminal.Payload, "Reason") ?? "unspecified"));
 
             var settledEvent = await WaitForEventAsync(waiter, "guide settle", eventTimeout, cancellationToken)
                 .ConfigureAwait(false);
@@ -1527,7 +1580,9 @@ public sealed partial class Phd2Client : IPhd2Client
             }
 
             operationCompleted = true;
-            return result;
+            return calibrationTerminal?.Name == "CalibrationComplete"
+                ? result with { NativeCalibrationOccurred = true }
+                : result;
         }
         catch (OperationCanceledException)
         {
@@ -2310,7 +2365,7 @@ public sealed partial class Phd2Client : IPhd2Client
         current = current with
         {
             GuideOutput = Phd2GuideOutputStatus.Observe(current.GuideOutput, step,
-                current.LastEventUtc ?? DateTimeOffset.UtcNow),
+                current.LastEventUtc ?? DateTimeOffset.UtcNow, current.Equipment),
         };
         if (!IsPendingSettleOperationCurrent(current))
         {
@@ -2349,7 +2404,7 @@ public sealed partial class Phd2Client : IPhd2Client
         Phd2EventMessage message)
     {
         var expected = IsPendingSettleOperationCurrent(current) &&
-            current.PendingForceRecalibration &&
+            (current.PendingForceRecalibration || current.PendingOwnerCalibrationAllowed) &&
             !current.PendingCalibrationStartSequence.HasValue &&
             !current.PendingSettleBeginSequence.HasValue &&
             current.PendingSettleArmedAfterSequence.HasValue &&
@@ -2378,7 +2433,7 @@ public sealed partial class Phd2Client : IPhd2Client
         Phd2EventMessage message)
     {
         if (!IsPendingSettleOperationCurrent(current) ||
-            !current.PendingForceRecalibration ||
+            (!current.PendingForceRecalibration && !current.PendingOwnerCalibrationAllowed) ||
             !current.PendingCalibrationStartSequence.HasValue ||
             current.PendingCalibrationTerminalSequence.HasValue ||
             message.Sequence <= current.PendingCalibrationStartSequence.Value)
@@ -2411,6 +2466,7 @@ public sealed partial class Phd2Client : IPhd2Client
         PendingTakeoverLoopStopAllowed = source.PendingTakeoverLoopStopAllowed,
         PendingLateLoopFrameAllowed = source.PendingLateLoopFrameAllowed,
         PendingForceRecalibration = source.PendingForceRecalibration,
+        PendingOwnerCalibrationAllowed = source.PendingOwnerCalibrationAllowed,
         PendingCalibrationStartSequence = source.PendingCalibrationStartSequence,
         PendingCalibrationTerminalSequence = source.PendingCalibrationTerminalSequence,
     };
@@ -2475,6 +2531,7 @@ public sealed partial class Phd2Client : IPhd2Client
             PendingTakeoverLoopStopAllowed = false,
             PendingLateLoopFrameAllowed = false,
             PendingForceRecalibration = false,
+            PendingOwnerCalibrationAllowed = false,
             PendingCalibrationStartSequence = null,
             PendingCalibrationTerminalSequence = null,
             LastSettleConnectionEpoch = current.ConnectionEpoch,
@@ -2497,6 +2554,7 @@ public sealed partial class Phd2Client : IPhd2Client
             PendingTakeoverLoopStopAllowed = false,
             PendingLateLoopFrameAllowed = false,
             PendingForceRecalibration = false,
+            PendingOwnerCalibrationAllowed = false,
             PendingCalibrationStartSequence = null,
             PendingCalibrationTerminalSequence = null,
             LastSettleOperationId = null,
@@ -2747,7 +2805,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 "PHD2 guiding is blocked until calibration has passed the sanity gate.");
         }
 
-        if (!validation.IsValid)
+        if (!validation.CanStartNativeGuide)
         {
             throw new Phd2CalibrationRejectedException(
                 $"PHD2 guiding is blocked because calibration status is {validation.Status}: " +
@@ -3062,13 +3120,13 @@ public sealed partial class Phd2Client : IPhd2Client
             throw new ArgumentException("Expected calibration profile id and name are required.", nameof(requirement));
         }
 
-        if (requirement.MaximumAge <= TimeSpan.Zero ||
+        if (!requirement.OwnerManaged && (requirement.MaximumAge <= TimeSpan.Zero ||
             !double.IsFinite(requirement.MaximumOrthogonalityErrorDegrees) ||
             requirement.MaximumOrthogonalityErrorDegrees is < 0 or > 90 ||
             !double.IsFinite(requirement.MinimumAxisRatePixelsPerSecond) ||
             !double.IsFinite(requirement.MaximumAxisRatePixelsPerSecond) ||
             requirement.MinimumAxisRatePixelsPerSecond <= 0 ||
-            requirement.MaximumAxisRatePixelsPerSecond <= requirement.MinimumAxisRatePixelsPerSecond)
+            requirement.MaximumAxisRatePixelsPerSecond <= requirement.MinimumAxisRatePixelsPerSecond))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(requirement),

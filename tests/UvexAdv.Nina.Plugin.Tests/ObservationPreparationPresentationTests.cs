@@ -10,6 +10,42 @@ public sealed class ObservationPreparationPresentationTests
     private static readonly string Source = File.ReadAllText(Path.Combine(
         AppContext.BaseDirectory, "Sources", "ObservationDockable.cs"));
 
+    [Fact]
+    public void CalibrationApprovalDoesNotTemporarilyGrantAuthorityOrDependOnTargetStartupGates()
+    {
+        var start = Source.IndexOf("private string TryAutoApproveSelectedCommissioningPackage", StringComparison.Ordinal);
+        var end = Source.IndexOf("private void RecheckPreparation", start, StringComparison.Ordinal);
+        var body = Source[start..end];
+        Assert.Contains("configuration = configuration with", body);
+        Assert.DoesNotContain("RealModeEligibilityIssues()", body);
+        Assert.DoesNotContain("plan.Validate()", body);
+        Assert.Contains("RealCommissioningPresetLoader", body);
+        Assert.Contains("LockedNightSetupSnapshotLoader", body);
+        Assert.True(body.IndexOf("settings.RealModeCommissioned = true;", StringComparison.Ordinal) >
+            body.IndexOf("if (failures.Length == 0)", StringComparison.Ordinal));
+        Assert.Contains("commissioningValidationIssues = failures", body);
+        // Startup still validates the original native ownership requirements.
+        Assert.Contains("activeProfileService.ActiveProfile.CameraSettings.Id, settings.ObservationExpectedAtrCameraId", Source);
+        Assert.Contains("activeProfileService.ActiveProfile.FilterWheelSettings.Id", Source);
+    }
+
+    [Fact]
+    public void BrowsingPackagesDoesNotPersistOrApplyAndRecheckUsesAppliedPackage()
+    {
+        var start = Source.IndexOf("public CommissioningProfileChoice? SelectedCommissioningProfile", StringComparison.Ordinal);
+        var end = Source.IndexOf("public string SelectedCommissioningProfileDescription", start, StringComparison.Ordinal);
+        Assert.DoesNotContain("settings.SelectedCommissioningProfile", Source[start..end]);
+        Assert.DoesNotContain("ApplyCommissioningBindings", Source[start..end]);
+        start = Source.IndexOf("private void RecheckPreparation()", StringComparison.Ordinal);
+        end = Source.IndexOf("private int ApplyOperationalProfileValues", start, StringComparison.Ordinal);
+        var body = Source[start..end];
+        Assert.Contains("if (!CanEditTargetPlan()) return;", body);
+        Assert.Contains("settings.SelectedCommissioningProfileId", body);
+        Assert.Contains("explicitRecheck: true", body);
+        Assert.Contains("!settings.AutoApproveValidatedCommissioningPackage && !explicitRecheck", Source);
+        Assert.DoesNotContain("ApplySelectedCommissioningProfile(", body);
+    }
+
     [Theory]
     [InlineData(0, false, false, 0)]
     [InlineData(0, true, false, 1)]

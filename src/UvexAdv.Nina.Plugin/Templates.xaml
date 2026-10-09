@@ -781,7 +781,7 @@
                     ToolTip="按当前设置新开一轮。用于切换超亮目标等会改变动作哈希的分支：先结束旧运行并审计退役旧光谱仪导星相机恢复链，再按当前表单捕获新哈希并启动。不会把新设置热替换进旧运行，也不要求把设置改回去。" />
             <Button Content="清除导星相机旧状态" Command="{Binding ClearG3RecoveryStateCommand}"
                     Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
-                    ToolTip="清除旧光谱仪导星相机状态：取消当前失败运行，接受人工接管后的当前状态并关闭过时的光谱仪导星相机自动返回账本。不会移动赤道仪；原账本与审计记录会保留。清除后可直接重新启动。" />
+                    ToolTip="人工接管旧定位/入缝记录。存在未结 PHD2 入缝时，先结束曝光、停止导星并取消旧自动运行，再确认接管；保留原位置与预算，归档为未完成。不回程、不校准、不自动开始新观测。" />
             <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="取消当前运行并执行安全收尾。" />
           </WrapPanel>
           <WrapPanel Margin="0,4,0,0">
@@ -1111,74 +1111,56 @@
               <TabItem Header="核对与入口">
                 <ScrollViewer x:Name="AutomaticPreparationScrollViewer" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                  <WrapPanel Margin="6">
-                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsTargetPreparationMissing}" Margin="0,0,8,8">
+                  <StackPanel Margin="6">
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsTargetPreparationMissing}">
                       <StackPanel>
-                        <TextBlock Text="目标与采集计划" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding TargetPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
-                        <TextBlock Text="目标、定位策略和曝光预算统一在观测计划中设置。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
-                        <WrapPanel Margin="0,7,0,0">
+                        <TextBlock Text="1 · 目标与曝光" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding TargetPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <WrapPanel>
                           <Button Style="{StaticResource PreparationSecondaryButton}" Content="目标与定位策略" Command="{Binding ShowObservationPlanCommand}" />
                           <Button Style="{StaticResource PreparationSecondaryButton}" Content="采集计划" Command="{Binding ShowAcquisitionPlanCommand}" />
                         </WrapPanel>
                       </StackPanel>
                     </Border>
-                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsNightSetupPreparationMissing}" Margin="0,0,8,8">
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsCommissioningPreparationMissing}">
                       <StackPanel>
-                        <TextBlock Text="本夜光学配置" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding NightSetupPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="2 · 当前设备与光学配置" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding PreparationOwnerSummary}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <TextBlock Text="{Binding PreparationDeviceSummary}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" />
+                        <TextBlock Text="{Binding CommissioningPreparationStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <TextBlock Text="{Binding NightSetupPreparationStatus}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         <TextBlock Text="{Binding PreparationSlitStatus}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" />
-                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="核对本夜配置" Command="{Binding ShowNightSetupPreparationCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
-                      </StackPanel>
-                    </Border>
-                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsDevicePreparationMissing}" Margin="0,0,8,8">
-                      <StackPanel>
-                        <TextBlock Text="期望设备" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding PreparationDeviceSummary}" TextWrapping="Wrap" Margin="0,5,0,4" />
-                        <TextBlock Text="仅更换设备或重新部署时修改。设备已记录，不等于已连接。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
-                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="高级设置 · 设备绑定" Command="{Binding ShowDeviceBindingsSettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
-                      </StackPanel>
-                    </Border>
-                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsCommissioningPreparationMissing}" Margin="0,0,8,8">
-                      <StackPanel>
-                        <TextBlock Text="台站方案与安装标定" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding CommissioningPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
-                        <TextBlock Text="设备身份、狭缝标定和运动范围随台站方案整体加载；不需要每次观测重新填写。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
-                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="管理方案与标定包" Command="{Binding ShowDeviceBindingsSettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
-                      </StackPanel>
-                    </Border>
-                    <Border Width="360" Style="{StaticResource PreparationPanelBorder}" Margin="0,0,8,8">
-                      <StackPanel>
-                        <TextBlock Text="监督方式" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="0,5,0,4" />
-                        <TextBlock Text="本页不确认现场安全，也不授权真实控制。监督方式的详细设置统一在高级设置中维护。" TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" />
-                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="高级设置 · 站点与模拟" Command="{Binding ShowSafetySettingsCommand}" HorizontalAlignment="Left" Margin="0,7,0,0" />
-                      </StackPanel>
-                    </Border>
-                    <Border Width="360" Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsAutomationPolicyPreparationMissing}" Margin="0,0,8,8">
-                      <StackPanel>
-                        <TextBlock Text="配置检查" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="{Binding AutomationPolicyPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
-                        <ItemsControl ItemsSource="{Binding PreparationChecklistIssues}" Margin="0,0,0,5">
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,5" Foreground="#D9B86C" /></DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <Button Style="{StaticResource PreparationSecondaryButton}" Content="查看配置分类" Command="{Binding ShowAdvancedSettingsCommand}" HorizontalAlignment="Left" />
-                      </StackPanel>
-                    </Border>
-                    <Border Width="360" Style="{StaticResource PreparationPanelBorder}" Margin="0,0,8,8">
-                      <StackPanel>
-                        <TextBlock Text="准备工具与运行记录" FontSize="14" FontWeight="Bold" />
-                        <TextBlock Text="需要时打开相应工具；导航本身不会对焦、移动设备或启动观测。" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,7" />
+                        <TextBlock Text="日常观测沿用当前安装标定，不必每晚选方案、填哈希或生成草稿。仅更换设备或光学配置时再修改。"
+                                   TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" Margin="0,4,0,3" />
                         <WrapPanel>
-                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="主镜对焦…" Command="{Binding ShowMainFocusCommand}" />
-                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="狭缝 / M2 手控…" Command="{Binding ShowManualUvexControlCommand}" />
-                          <Button x:Name="PreparationToolsEndButton" Style="{StaticResource PreparationSecondaryButton}" Content="实时流程节点" Command="{Binding ShowWorkflowCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="更换安装标定…" Command="{Binding ShowDeviceBindingsSettingsCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="核对本夜配置" Command="{Binding ShowNightSetupPreparationCommand}" />
                         </WrapPanel>
                       </StackPanel>
                     </Border>
-                  </WrapPanel>
+                    <Border Style="{StaticResource PreparationFieldBorder}" Tag="{Binding IsAutomationPolicyPreparationMissing}">
+                      <StackPanel>
+                        <TextBlock Text="3 · 待处理项（具体原因）" FontSize="14" FontWeight="Bold" />
+                        <TextBlock Text="{Binding AutomationPolicyPreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,4" />
+                        <ItemsControl ItemsSource="{Binding PreparationBlockingDetails}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,3,0,5" Foreground="#FDE68A" /></DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <WrapPanel>
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="重新检查当前配置" Command="{Binding RecheckPreparationCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="高级设置…" Command="{Binding ShowAdvancedSettingsCommand}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="3,5" />
+                    <WrapPanel>
+                      <Button Style="{StaticResource PreparationSecondaryButton}" Content="监督方式…" Command="{Binding ShowSafetySettingsCommand}" />
+                      <Button Style="{StaticResource PreparationSecondaryButton}" Content="主镜对焦…" Command="{Binding ShowMainFocusCommand}" />
+                      <Button Style="{StaticResource PreparationSecondaryButton}" Content="狭缝 / M2 手控…" Command="{Binding ShowManualUvexControlCommand}" />
+                      <Button x:Name="PreparationToolsEndButton" Style="{StaticResource PreparationSecondaryButton}" Content="实时流程节点" Command="{Binding ShowWorkflowCommand}" />
+                    </WrapPanel>
+                  </StackPanel>
                 </ScrollViewer>
               </TabItem>
               <TabItem Header="本夜配置">
@@ -2023,7 +2005,8 @@
                         <TextBlock Text="长期保存的设备配置集中在这里维护。加载方案会更新后续运行设置，但不会连接设备或移动机构。"
                                    Foreground="{StaticResource PreparationSecondaryTextBrush}" TextWrapping="Wrap" Margin="0,5,0,7" />
                         <StackPanel IsEnabled="{Binding IsTargetPlanEditable}">
-                          <ComboBox ItemsSource="{Binding CommissioningProfiles}" SelectedItem="{Binding SelectedCommissioningProfile, Mode=TwoWay}"
+                          <CheckBox Content="显示历史标定包（调试记录，通常无需选择）" IsChecked="{Binding ShowHistoricalCommissioningProfiles}" Margin="0,0,0,6" />
+                          <ComboBox ItemsSource="{Binding VisibleCommissioningProfiles}" SelectedItem="{Binding SelectedCommissioningProfile, Mode=TwoWay}"
                                     DisplayMemberPath="DisplayName" HorizontalAlignment="Stretch" />
                           <TextBlock Text="{Binding SelectedCommissioningProfileDescription}" TextWrapping="Wrap" Margin="0,5,0,4" />
                           <WrapPanel>
@@ -2041,6 +2024,7 @@
                       <StackPanel>
                         <TextBlock Text="期望设备 · 不执行连接" FontSize="14" FontWeight="Bold" />
                         <TextBlock Text="{Binding DevicePreparationStatus}" TextWrapping="Wrap" Margin="0,5,0,7" />
+                        <TextBlock Text="{Binding PreparationOwnerSummary}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,0,0,7" />
                         <StackPanel IsEnabled="{Binding IsTargetPlanEditable}">
                           <TextBlock Text="赤道仪（光谱主控）" />
                           <ComboBox ItemsSource="{Binding TelescopeCandidates}" SelectedItem="{Binding SelectedTelescopeCandidate, Mode=TwoWay}" DisplayMemberPath="DisplayName" Margin="0,3,0,7" />
@@ -2076,7 +2060,8 @@
                     </Border>
                     <TextBlock Text="设备身份、哈希与路径（工程核对）" FontSize="15" FontWeight="Bold" Foreground="#7DD3FC" Margin="0,0,0,8" TextWrapping="Wrap" />
                     <StackPanel Margin="0,4,0,0">
-                    <CheckBox Content="标定包静态校验已通过（最新完整包默认自动确认；不会绕过运行时硬门）" IsChecked="{Binding RealModeCommissioned}" Margin="0,0,0,6" />
+                    <CheckBox Content="标定包静态校验已通过（由文件校验得出，不能手工勾选）" IsChecked="{Binding RealModeCommissioned, Mode=OneWay}" IsEnabled="False" Margin="0,0,0,6" />
+                    <Button Content="重新检查当前配置" Command="{Binding RecheckPreparationCommand}" HorizontalAlignment="Left" Margin="0,0,0,6" />
                     <TextBlock Text="设备标定文件"/><TextBox Text="{Binding CommissioningPresetPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
                     <TextBlock Text="设备标定方案 ID"/><TextBox Text="{Binding CommissioningPresetId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
                     <TextBlock Text="设备标定方案 SHA-256"/><TextBox Text="{Binding CommissioningPresetSha256, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />

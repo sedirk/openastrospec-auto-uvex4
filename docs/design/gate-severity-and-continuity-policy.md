@@ -79,6 +79,26 @@ The following conditions are explicitly non-blocking in the production route:
 
 ## 4. Automatic recovery before an error
 
+### QHY/GS350 focus freshness during long spectroscopy runs (2026-10-05)
+
+Before live setup validation, the shared production runner may refresh QHY
+stellar-shape evidence from an already-owned, same-run photometry job. Require
+matching job/run/camera identity, no operator-intervention flag, a photometry
+frame with stars, finite positive FWHM, no quality flags and a valid SHA-256
+identifier. The frame must fall within the job timeline and not be in the future.
+Use the frame's exposure-end timestamp plus the existing 30-minute lifetime;
+polling an unchanged snapshot never extends validity. This is a read-only
+quality refresh, not a WCS refresh, camera reconnect, exposure or motion request.
+
+When optional QHY/GS350 evidence still fails, retain its original failure in a
+`QHY_LIVE_SETUP_DEGRADED` warning and isolate that branch before the live-setup
+hard return. Discard its quality/position authority, do not start further jobs,
+and retain the existing owner-job handle for checked terminal cleanup. Isolation
+does not by itself attest that a previously running job has stopped. Independent
+ATR temperature/saturation, G3/slit/guide, C11/M2, identity and safety gates remain
+mandatory. Cloud-associated guide discontinuity must not be accepted merely
+because the guide owner is back in `Guiding` at exposure end.
+
 An error is reported only after the relevant bounded recovery has been tried:
 
 - N.I.N.A. tracking-enable request followed by driver readback wait;
@@ -122,6 +142,12 @@ cross an explicit safety boundary, lose target/slit provenance, or knowingly
 produce invalid new science data.
 
 ## 6. Review rule
+
+`PHD2_PLACEMENT_GUIDE_STAR_LOST` preserves a typed native StarLost observed
+during placement. Unlike a settle-only quality warning it prevents new spectra;
+it grants no generic rebuild or budget reset. Its terminal record separately
+states whether stopping was confirmed and retains outstanding motion debt.
+Wind is not inferred from this code.
 
 Every new gate must be added to this classification in the same change. Its
 test must prove either that a warning advances without pausing or that an error

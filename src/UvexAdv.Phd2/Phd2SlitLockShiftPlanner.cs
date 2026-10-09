@@ -119,7 +119,8 @@ public static class Phd2PierAdaptiveTopologyPolicy
         Phd2SensorTopology commissionedSourceTopology,
         string lockedSourceFingerprintSha256,
         string currentPierSide,
-        bool automaticPierFlipEvidenceComplete)
+        bool automaticPierFlipEvidenceComplete,
+        bool ownerManagedCalibration = false)
     {
         ArgumentNullException.ThrowIfNull(commissionedSourceTopology);
         var sourceSide = NormalizePierSide(commissionedSourceTopology.PierSide);
@@ -145,7 +146,7 @@ public static class Phd2PierAdaptiveTopologyPolicy
         }
 
         if (!string.Equals(sourceSide, runtimeSide, StringComparison.Ordinal) &&
-            !automaticPierFlipEvidenceComplete)
+            !automaticPierFlipEvidenceComplete && !ownerManagedCalibration)
         {
             return new(
                 false,
@@ -162,7 +163,7 @@ public static class Phd2PierAdaptiveTopologyPolicy
                 : "PHD2_PIER_SIDE_ADAPTED",
             string.Equals(sourceSide, runtimeSide, StringComparison.Ordinal)
                 ? "The runtime side matches the hash-locked PHD2 calibration source side."
-                : "PHD2 automatic meridian-flip calibration handling is commissioned; a fresh guide/settle epoch will validate the current side before lock-shift motion.",
+                : "PHD2 handles calibration for the current pier side; a fresh guide/settle epoch and measured target/slit geometry are required before lock-shift motion.",
             runtime);
     }
 
@@ -411,15 +412,20 @@ public static class Phd2SlitLockShiftPlanner
             failures.Add("runtime PHD2 camera/mount identity or connection differs from the topology");
         }
 
-        ValidateQualificationLimits(request.Limits, failures);
+        if (request.Calibration.OwnerManaged)
+        {
+            if (request.Limits.MaximumValidationAge <= TimeSpan.Zero)
+                failures.Add("current owner-readback freshness limit is invalid");
+        }
+        else ValidateQualificationLimits(request.Limits, failures);
         var validationAge = request.EvaluatedUtc - request.Calibration.EvaluatedUtc;
         if (validationAge < TimeSpan.Zero || validationAge > request.Limits.MaximumValidationAge)
         {
             failures.Add("calibration validation snapshot is stale or from the future");
         }
-        if (!request.Calibration.CalibrationAge.HasValue ||
+        if (!request.Calibration.OwnerManaged && (!request.Calibration.CalibrationAge.HasValue ||
             request.Calibration.CalibrationAge.Value < TimeSpan.Zero ||
-            request.Calibration.CalibrationAge.Value > request.Limits.MaximumCalibrationAge)
+            request.Calibration.CalibrationAge.Value > request.Limits.MaximumCalibrationAge))
         {
             failures.Add("calibration age is unknown, negative, or expired");
         }
@@ -429,21 +435,23 @@ public static class Phd2SlitLockShiftPlanner
         {
             failures.Add("PHD2 mount calibration is absent");
         }
-        ValidateAxis("RA", calibration.RaAngleDegrees, calibration.RaRatePixelsPerSecond, calibration.RaParity, request.Limits, failures);
-        ValidateAxis("Dec", calibration.DecAngleDegrees, calibration.DecRatePixelsPerSecond, calibration.DecParity, request.Limits, failures);
-        if (!IsFinite(calibration.DeclinationDegrees) || calibration.DeclinationDegrees!.Value is < -90 or > 90)
+        if (!request.Calibration.OwnerManaged)
         {
-            failures.Add("calibration declination is absent, non-finite, or outside [-90, 90] degrees");
-        }
-        if (IsFinite(calibration.RaAngleDegrees) && IsFinite(calibration.DecAngleDegrees))
-        {
-            var orthogonality = OrthogonalityError(calibration.RaAngleDegrees!.Value, calibration.DecAngleDegrees!.Value);
-            if (orthogonality > request.Limits.MaximumOrthogonalityErrorDegrees)
+            ValidateAxis("RA", calibration.RaAngleDegrees, calibration.RaRatePixelsPerSecond, calibration.RaParity, request.Limits, failures);
+            ValidateAxis("Dec", calibration.DecAngleDegrees, calibration.DecRatePixelsPerSecond, calibration.DecParity, request.Limits, failures);
+            if (!IsFinite(calibration.DeclinationDegrees) || calibration.DeclinationDegrees!.Value is < -90 or > 90)
             {
-                failures.Add($"calibration orthogonality error {orthogonality:F3}° exceeds the limit");
+                failures.Add("calibration declination is absent, non-finite, or outside [-90, 90] degrees");
+            }
+            if (IsFinite(calibration.RaAngleDegrees) && IsFinite(calibration.DecAngleDegrees))
+            {
+                var orthogonality = OrthogonalityError(calibration.RaAngleDegrees!.Value, calibration.DecAngleDegrees!.Value);
+                if (orthogonality > request.Limits.MaximumOrthogonalityErrorDegrees)
+                {
+                    failures.Add($"calibration orthogonality error {orthogonality:F3}° exceeds the limit");
+                }
             }
         }
-
         var qualified = failures.Count == 0;
         return new Phd2LockShiftQualification(
             qualified,

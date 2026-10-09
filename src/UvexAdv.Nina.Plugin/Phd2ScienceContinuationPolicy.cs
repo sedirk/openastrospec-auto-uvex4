@@ -23,7 +23,32 @@ internal static class Phd2ScienceContinuationPolicy
         ledger.Phase == Phd2LockShiftPendingPhase.SettledBudgetLedger &&
         ledger.AttemptsUsed < ledger.MaximumAttempts &&
         ledger.CumulativeCommandedPixels < ledger.MaximumCumulativePixels - 1e-9 &&
-        now >= ledger.StartedUtc && (now - ledger.StartedUtc).TotalSeconds < ledger.MaximumElapsedSeconds;
+        ledger.Validate().Count == 0 && now >= ledger.MotionClockStartedUtc &&
+        (now - ledger.MotionClockStartedUtc).TotalSeconds < ledger.MaximumElapsedSeconds;
+
+    // Only a completed, explicitly timed ATR capture at an already settled
+    // endpoint may be excluded. No credit for pauses, crashes, failed captures,
+    // readout overhead, unverified motion, or changes to the durable ledger.
+    internal static Phd2LockShiftPendingState? CreditExposure(
+        Phd2LockShiftPendingState before, Phd2LockShiftPendingState after,
+        DateTimeOffset openedUtc, DateTimeOffset completedUtc, double requestedSeconds,
+        double monotonicElapsedSeconds)
+    {
+        if (before != after || before.Validate().Count != 0 ||
+            before.Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger ||
+            openedUtc < before.UpdatedUtc || completedUtc < openedUtc ||
+            !double.IsFinite(requestedSeconds) || requestedSeconds <= 0 ||
+            !double.IsFinite(monotonicElapsedSeconds) || monotonicElapsedSeconds <= 0)
+            return null;
+        var credit = Math.Min(requestedSeconds,
+            Math.Min(monotonicElapsedSeconds, (completedUtc - openedUtc).TotalSeconds));
+        if (credit <= 0) return null;
+        return before with
+        {
+            ExcludedAtrExposureSeconds = before.ExcludedAtrExposureSeconds + credit,
+            UpdatedUtc = completedUtc,
+        };
+    }
 
     private static double Distance(Phd2Point point, double x, double y) =>
         Math.Sqrt((point.X - x) * (point.X - x) + (point.Y - y) * (point.Y - y));

@@ -45,7 +45,7 @@ internal sealed partial class RealObservationStageRunner
         return phd2SettledHandoffBudget is not { } spent ? initial :
             Phd2CoarseHandoffPolicy.LimitToRemainingLedger(initial, preset.BuildMotionLimits(),
                 preset.CalibrationQualityPolicy.DegradedMaximumLockShiftScale, preset.MaximumResidualGrowthPixels,
-                spent.AttemptsUsed, spent.CumulativeCommandedPixels, DateTimeOffset.UtcNow - spent.StartedUtc);
+                spent.AttemptsUsed, spent.CumulativeCommandedPixels, DateTimeOffset.UtcNow - spent.MotionClockStartedUtc);
     }
 
     private bool NeedsG3CoarseCentering(G3FieldState field) =>

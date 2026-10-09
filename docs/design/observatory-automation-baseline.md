@@ -144,8 +144,8 @@ Random unbounded mount nudging is not an automated strategy.
 3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Only the fresh post-move G3 WCS may prove response and arrival. If direct G3 solving fails, the coordinator uses a bounded overlapping neighbouring-field search; an applicable QHY-to-G3 transfer remains optional. It must retain every attempt and confidence score.
 4. The expected target is identified using catalogue coordinates, WCS, temporal continuity, and stellar morphology. Brightness alone is insufficient.
 5. The target centroid is moved to the calibrated slit locus using a selected,
-   versioned fine-motion authority. The preferred authority is a current,
-   quality-classified PHD2 calibration followed by bounded runtime lock-position
+   versioned fine-motion authority. Under ADR-0020 the preferred authority is
+   PHD2-owned active calibration followed by bounded runtime lock-position
    shifts; an independently commissioned four-direction G3 pixel-to-mount model
    remains a fallback. Plate-solve rotation alone is not motion authority.
 6. Every fine-motion stage requires operation-bound settle evidence and a fresh
@@ -162,10 +162,14 @@ Random unbounded mount nudging is not an automated strategy.
    around a uniquely identified ultra-bright target, an explicitly configured
    degraded mode may guide directly on that target with the shortest commissioned
    stable-centroid exposure; the frame is not accepted as focus evidence.
-4. Retain and rank PHD2 calibration candidates with a versioned multi-metric
-   policy. Orthogonality error is one quality term, not a universal binary
-   threshold. Exact profile/equipment/topology, axis rates/parity, pier side,
-   age, settle and fresh post-movement residuals remain mandatory.
+4. PHD2 alone manages guiding calibration (ADR-0020). Calibration age,
+   geometry, rates/parity and historical calibration provenance are recorded
+   as warnings, not duplicate authorization thresholds. The plugin never forces
+   recalibration. A motion-free native guide operation may let PHD2 calibrate;
+   observed calibration requires fresh target/slit acquisition before placement.
+   Current profile/equipment/sensor identity, connection/guide epochs, actual
+   settle and fresh post-movement residuals remain mandatory. Unresolved motion
+   ledgers do not grant new calibration motion or disappear on a warning.
 5. When the selected fine-motion authority is PHD2 calibration, start and settle
    the guide epoch before final placement, then use bounded exact runtime-lock
    stages to bring the measured target to the measured slit. Re-measure after
@@ -351,9 +355,10 @@ Raw acquisition files are immutable. Repairs or calibration produce new files wi
 - Coarse acquisition has bounded retries and returns or stops predictably.
 - Target/slit evidence is produced before every accepted science block and after every significant recovery/flip.
 - Bright-star and planetary-nebula commissioning runs achieve repeatable automatic slit placement within the measured tolerance.
-- A graded, current PHD2 calibration and operation-bound guide settle gate every
-  new PHD2 lock-shift stage and spectral block; a degraded calibration is never
-  represented as an excellent one.
+- A current PHD2 owner readback and operation-bound guide settle/fresh optical
+  evidence gate every new PHD2 lock-shift stage and spectral block. Calibration
+  metadata warnings cannot block or force recalibration (ADR-0020); an
+  operational acceptance is not represented as an excellent calibration.
 - ATR, G3 and QHY operate concurrently for a multi-hour run without ownership conflicts or hidden disconnects.
 - Every ATR spectrum maps unambiguously to QHY photometric samples and guide-quality intervals.
 - Exposure selection avoids saturation and documents its metric-based decision.
@@ -372,7 +377,7 @@ The design intentionally does not invent these values:
 - G3 full-frame acquisition route through PHD2, plate scale, orientation and usable solve exposure;
 - pixel locus and width of each physical slit in every supported G3 ROI/binning mode;
 - mount small-correction scale, backlash, settle time and safe search radius;
-- versioned PHD2 calibration-grade boundaries, exact-lock stage limits, guide/lock
+- exact-lock stage limits, guide/lock
   and target/slit residual limits, and representative performance by pier side;
 - target-on-slit tolerance and throughput-versus-offset curves for 15, 25 and 35 µm slits;
 - azimuth-dependent wall/horizon profile and operational altitude margins;

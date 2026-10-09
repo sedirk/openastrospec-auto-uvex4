@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.IO;
 using UvexAdv.Observatory;
 using UvexAdv.Phd2;
@@ -427,9 +428,16 @@ internal sealed record Phd2LockShiftPendingState(
     double OriginTargetX = double.NaN,
     double OriginTargetY = double.NaN,
     double OriginSlitX = double.NaN,
-    double OriginSlitY = double.NaN)
+    double OriginSlitY = double.NaN,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    double ExcludedAtrExposureSeconds = 0)
 {
     public const int CurrentSchemaVersion = 3;
+
+    // Additive, zero-omitted field preserves the exact serialization/hash of
+    // historical schema-3 records. It never changes the durable lineage start.
+    [JsonIgnore]
+    public DateTimeOffset MotionClockStartedUtc => StartedUtc.AddSeconds(ExcludedAtrExposureSeconds);
 
     /// <summary>
     /// Advances only the process-local guide epoch after a locally issued lock
@@ -473,7 +481,7 @@ internal sealed record Phd2LockShiftPendingState(
         new Phd2Point(CurrentLockX, CurrentLockY),
         AttemptsUsed,
         CumulativeCommandedPixels,
-        StartedUtc,
+        MotionClockStartedUtc,
         LastAcceptedFrameSha256);
 
     /// <summary>
@@ -516,6 +524,9 @@ internal sealed record Phd2LockShiftPendingState(
             issues.Add("Consumed cumulative pixels is invalid.");
         if (AttemptsUsed < 0 || AttemptsUsed > MaximumAttempts) issues.Add("Consumed attempts is invalid.");
         if (StartedUtc == default || CreatedUtc < StartedUtc || UpdatedUtc < CreatedUtc) issues.Add("Pending timestamps are invalid.");
+        if (!double.IsFinite(ExcludedAtrExposureSeconds) || ExcludedAtrExposureSeconds < 0 ||
+            ExcludedAtrExposureSeconds > (UpdatedUtc - StartedUtc).TotalSeconds)
+            issues.Add("Excluded ATR exposure time is invalid.");
         if (LastAcceptedFrameSha256 is not null && !IsSha(LastAcceptedFrameSha256)) issues.Add("Last accepted frame SHA-256 is invalid.");
         return issues.AsReadOnly();
     }
@@ -633,7 +644,8 @@ internal static class Phd2LockShiftBudgetHandoff
             issues.Add("guide mode or a bounded-motion limit changed");
         if (source.AttemptsUsed != currentCopy.AttemptsUsed ||
             !Same(source.CumulativeCommandedPixels, currentCopy.CumulativeCommandedPixels) ||
-            source.StartedUtc != currentCopy.StartedUtc)
+            source.StartedUtc != currentCopy.StartedUtc ||
+            !Same(source.ExcludedAtrExposureSeconds, currentCopy.ExcludedAtrExposureSeconds))
             issues.Add("consumed attempts, pixels or earliest budget clock changed");
         if (!Same(source.OriginLockX, currentCopy.OriginLockX) ||
             !Same(source.OriginLockY, currentCopy.OriginLockY) ||
