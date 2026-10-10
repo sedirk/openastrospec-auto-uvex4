@@ -71,7 +71,8 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
     Phd2CalibrationQualityPolicy CalibrationQualityPolicy,
     string CalibrationQualityPolicySha256,
     int? OffSlitGuidingExposureMilliseconds = null,
-    int? DirectTargetGuidingExposureMilliseconds = null)
+    int? DirectTargetGuidingExposureMilliseconds = null,
+    double MaximumGuideLockWarningResidualPixels = 0)
 {
     public IReadOnlyList<string> Validate()
     {
@@ -117,6 +118,8 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         NonNegative(issues, MinimumOffSlitGuideDistancePixels, nameof(MinimumOffSlitGuideDistancePixels));
         NonNegative(issues, MinimumOffSlitGuideTargetSeparationPixels, nameof(MinimumOffSlitGuideTargetSeparationPixels));
         NonNegative(issues, MaximumGuideLockResidualPixels, nameof(MaximumGuideLockResidualPixels));
+        if (!Phd2PlacementGuideWindowPolicy.IsValidWarningCeiling(MaximumGuideLockResidualPixels, MaximumGuideLockWarningResidualPixels))
+            issues.Add("PHD2 guide warning ceiling must be disabled (0) or between the preferred tolerance and min(1.5 times preferred, 3 pixels).");
         NonNegative(issues, MaximumDegradedDirectTargetGuideLockResidualPixels, nameof(MaximumDegradedDirectTargetGuideLockResidualPixels));
         NonNegative(issues, MaximumDirectTargetCentroidSeparationPixels, nameof(MaximumDirectTargetCentroidSeparationPixels));
         if (!double.IsFinite(MinimumFluxMetric) || !double.IsFinite(MaximumFluxMetric) || MaximumFluxMetric <= MinimumFluxMetric)
@@ -158,11 +161,16 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         EffectiveAcquisitionResidualPixels,
         MinimumOffSlitGuideDistancePixels,
         MinimumOffSlitGuideTargetSeparationPixels,
-        MaximumGuideLockResidualPixels,
+        EffectiveGuideLockResidualPixels,
         MaximumDegradedDirectTargetGuideLockResidualPixels,
         MaximumDirectTargetCentroidSeparationPixels,
         MinimumFluxMetric,
         MaximumFluxMetric);
+
+    // This optical guide-star quality ceiling does not widen the slit, exact
+    // lock readback, motion/return limits, or any identity/safety authority.
+    public double EffectiveGuideLockResidualPixels => MaximumGuideLockWarningResidualPixels > 0
+        ? MaximumGuideLockWarningResidualPixels : MaximumGuideLockResidualPixels;
 
     // The recognition/reacquisition window is not a promise that its entire
     // radius can be traversed while reserving an exact-lock return.

@@ -23,7 +23,7 @@ internal sealed partial class RealObservationStageRunner
         var camera = cameraMediator.GetInfo();
         if (!camera.Connected || camera.IsExposing) errors.Add("ATR 未确认连接且曝光空闲。");
         var telescope = telescopeMediator.GetInfo();
-        if (!telescope.Connected || telescope.Slewing) errors.Add("赤道仪未确认连接且停止运动。");
+        if (!telescope.Connected || telescope.Slewing || telescope.IsPulseGuiding) errors.Add("赤道仪未确认连接、停止运动且无导星脉冲。");
         if (activeQhyJobs.Count != 0 || pendingQhyRequests.Count != 0) errors.Add("测光作业尚未确认结束。");
         if (requireSettledMotion && (pendingSlitPlacement is { Phase: not SlitPlacementPendingPhase.SettledBudgetLedger } ||
             pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } ||
@@ -33,7 +33,7 @@ internal sealed partial class RealObservationStageRunner
     }
 
     // The night owner calls this only after all target tasks/owners have joined.
-    // Reuse the exact selected-adapter, parked-before-roof and checked-terminal
+    // Reuse the exact selected-adapter, commissioned roof-clearance and checked-terminal
     // implementation used by the single-target production route.
     internal async Task<IReadOnlyList<string>> CloseSequenceNightAsync(CancellationToken token)
     {

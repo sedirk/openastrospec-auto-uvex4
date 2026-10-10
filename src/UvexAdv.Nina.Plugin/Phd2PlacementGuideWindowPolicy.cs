@@ -11,8 +11,53 @@ internal sealed record Phd2CorrectionWindowDecision(
     bool CanContinue, string Code, double? LatestGuideResidualPixels = null,
     double? MaximumEndpointSpreadPixels = null);
 
+// Structured measurement rejection, not an exception-message allow-list.
+// Only the initial pre-motion caller may turn this into a checked quality skip.
+internal sealed class Phd2PlacementGuideWindowRejectedException(
+    int completedWindows, IReadOnlyList<double> residuals, double tolerance,
+    long connectionEpoch, long guideEpoch, Phd2Point expectedLock) : InvalidOperationException(
+        "PHD2_GUIDE_WINDOW_NOT_STABLE: The bounded same-lock fresh-frame windows did not all meet the commissioned guide residual; no extra lock movement or budget reset was allowed.")
+{
+    internal const string StoppedCode = "PHD2_PRE_MOTION_GUIDE_WINDOW_REJECTED";
+    internal int CompletedWindows { get; } = completedWindows;
+    internal IReadOnlyList<double> Residuals { get; } = residuals.ToArray();
+    internal double Tolerance { get; } = tolerance;
+    internal long ConnectionEpoch { get; } = connectionEpoch;
+    internal long GuideEpoch { get; } = guideEpoch;
+    internal Phd2Point ExpectedLock { get; } = expectedLock;
+
+    internal bool CanClassifyBeforeMotion(Phd2StateSnapshot current, bool hasExactLockHistory) =>
+        !hasExactLockHistory && CompletedWindows > 0 && Residuals.Count >= 3 &&
+        double.IsFinite(Tolerance) && Tolerance > 0 &&
+        Residuals.All(value => double.IsFinite(value) && value >= 0) &&
+        !Phd2PlacementGuideWindowPolicy.AllWithinTolerance(Residuals, Tolerance) &&
+        current.IsConnected && !current.AutomationPaused && !current.Phd2Paused &&
+        current.AppState == Phd2AppState.Guiding && !current.PendingSettleOperationId.HasValue &&
+        current.ConnectionEpoch == ConnectionEpoch && current.GuideEpoch == GuideEpoch &&
+        current.GuideOutput is { Failed: false, ConsecutiveMissingOutputs: 0 };
+}
+
 internal static class Phd2PlacementGuideWindowPolicy
 {
+    internal static bool IsValidWarningCeiling(double preferred, double ceiling) =>
+        double.IsFinite(preferred) && preferred >= 0 && double.IsFinite(ceiling) &&
+        (ceiling == 0 || (preferred > 0 && ceiling >= preferred && ceiling <= Math.Min(3, preferred * 1.5)));
+
+    // Each index is an entirely new, complete window, never a re-interpretation
+    // of a rejected frame set. The caller retains its original time budget.
+    internal static double ToleranceForFreshWindow(double preferred, double ceiling, int window)
+    {
+        if (!IsValidWarningCeiling(preferred, ceiling) || window < 1)
+            throw new ArgumentOutOfRangeException(nameof(ceiling));
+        return ceiling == 0 ? preferred : preferred + (ceiling - preferred) * Math.Min(2, window - 1) / 2;
+    }
+
+    internal static bool CanAcceptWarningWindow(IReadOnlyList<Phd2SlitFieldMeasurement> samples,
+        IReadOnlyList<double> residuals, double tolerance, bool sameEpochAndLock, bool liveOutputConfirmed) =>
+        sameEpochAndLock && liveOutputConfirmed && samples.Count >= 3 && samples.Count == residuals.Count &&
+        samples.All(item => item.GuidePositionMeasuredInFrame && item.TargetIdentityConfirmed &&
+            HasMeasuredPositionAuthority(item.TargetPositionAuthority)) && AllWithinTolerance(residuals, tolerance);
+
     internal static bool CanRollCorrectionWindow(bool supervised, Phd2SlitGuideMode guideMode,
         bool planAllowed, bool planComplete, bool waitingForLock, int availableFrames, int requiredFrames) =>
         supervised && guideMode == Phd2SlitGuideMode.OffSlitGuideStar && planAllowed && !planComplete &&

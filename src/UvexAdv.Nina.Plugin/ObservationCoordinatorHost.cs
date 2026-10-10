@@ -665,8 +665,26 @@ internal sealed class DashboardStageRunner(
     public Task OnCancelledAsync(ObservationContext context, CancellationToken cancellationToken) =>
         inner.OnCancelledAsync(context, cancellationToken);
 
-    public Task OnFaultedAsync(ObservationContext context, Exception cause, CancellationToken cancellationToken) =>
-        inner.OnFaultedAsync(context, cause, cancellationToken);
+    public async Task OnFaultedAsync(ObservationContext context, Exception cause, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (cause is ObservationCheckpointGateException checkpoint)
+            {
+                var persistence = host.PersistenceHealthGate();
+                if (persistence.Disposition != GateDisposition.Passed)
+                    throw new InvalidOperationException($"{persistence.Code}: {persistence.Message}");
+                host.PublishGate(checkpoint.Stage, checkpoint.Gate);
+            }
+        }
+        finally
+        {
+            // Preserve the diagnostic even if stopping fails, but never let a
+            // persistence/presentation fault suppress the owner stop boundary.
+            // Native skip authorization separately requires completed cleanup.
+            await inner.OnFaultedAsync(context, cause, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public Task<ObservationSnapshot> CommitCompletionAsync(
         Func<ObservationSnapshot> createCompletedSnapshot,
@@ -690,11 +708,13 @@ internal sealed class SequencerStageBridge : IObservationStageRunner, IObservati
     private readonly object sync = new();
     private StageRequest? pending;
     private bool disposed;
+    private int terminalGateResult;
 
     public SequencerStageBridge(IObservationStageRunner inner) => this.inner = inner;
 
     public bool EndRunOnGateFailure { get; init; }
     public bool HasCompletedFinalMarker { get; private set; }
+    public bool HasTerminalGateResult => Volatile.Read(ref terminalGateResult) != 0;
     public Func<GateResult?>? BoundaryGate { get; init; }
     public string RealObservationOwnershipLockPath =>
         (inner as IRealObservationRunOwnershipSource)?.RealObservationOwnershipLockPath ?? string.Empty;
@@ -759,8 +779,22 @@ internal sealed class SequencerStageBridge : IObservationStageRunner, IObservati
                     : new StageResult(stop);
                 if (expectedStage == ObservationStage.FinalizeObservation && result.CanAdvance)
                     HasCompletedFinalMarker = true;
+                // Publish before waking the coordinator. Its Faulted notification
+                // releases the native marker before manifest persistence joins.
+                // That is a terminal gate, not an early native condition boundary.
+                if (!result.CanAdvance && EndRunOnGateFailure)
+                    Volatile.Write(ref terminalGateResult, 1);
                 request.Completion.TrySetResult(result);
                 if (result.CanAdvance) return;
+            }
+            catch (ObservationCheckpointGateException ex) when (EndRunOnGateFailure &&
+                !markerToken.IsCancellationRequested && !request.CoordinatorToken.IsCancellationRequested)
+            {
+                // A nested recovery checkpoint can unwind past the real
+                // runner's stage catch. Preserve its structured veto through
+                // the same terminal-result channel, not a native item error.
+                Volatile.Write(ref terminalGateResult, 1);
+                request.Completion.TrySetResult(new StageResult(ex.Gate));
             }
             catch (Exception ex)
             {
@@ -785,8 +819,12 @@ internal sealed class SequencerStageBridge : IObservationStageRunner, IObservati
     public Task OnCancelledAsync(ObservationContext context, CancellationToken cancellationToken) =>
         inner.OnCancelledAsync(context, cancellationToken);
 
-    public Task OnFaultedAsync(ObservationContext context, Exception cause, CancellationToken cancellationToken) =>
-        inner.OnFaultedAsync(context, cause, cancellationToken);
+    public Task OnFaultedAsync(ObservationContext context, Exception cause, CancellationToken cancellationToken)
+    {
+        if (cause is ObservationCheckpointGateException && EndRunOnGateFailure)
+            Volatile.Write(ref terminalGateResult, 1);
+        return inner.OnFaultedAsync(context, cause, cancellationToken);
+    }
 
     public void Abort(Exception cause)
     {

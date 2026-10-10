@@ -156,7 +156,12 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
     public void StructuredLossCatchChecksStopBeforeClearingItsOwnerOrCapturingAgain()
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
-        var start = source.IndexOf("if (IsStructuredPhd2GuideSessionLoss(ex)", StringComparison.Ordinal);
+        var adaptiveStart = source.IndexOf("if (AdaptiveGuideRecoveryEnabled &&", StringComparison.Ordinal);
+        var adaptiveStop = source.IndexOf("var recoveryStop = await EnsurePhdStoppedForAutomaticRebuildAsync(", adaptiveStart, StringComparison.Ordinal);
+        var adaptiveReturn = source.IndexOf("return Attention(ObservationStage.PlaceTargetOnSlit, \"PHD2_STRUCTURED_GUIDE_SESSION_LOSS\"", adaptiveStop, StringComparison.Ordinal);
+        Assert.True(adaptiveStart >= 0 && adaptiveStop > adaptiveStart && adaptiveReturn > adaptiveStop);
+        Assert.Contains("if (recoveryStop.Disposition != GateDisposition.Passed) return new StageResult(recoveryStop)", source[adaptiveStop..adaptiveReturn]);
+        var start = source.IndexOf("if (!AdaptiveGuideRecoveryEnabled && IsStructuredPhd2GuideSessionLoss(ex)", StringComparison.Ordinal);
         Assert.True(start >= 0);
         var end = source.IndexOf("return await PlaceTargetOnSlitWithPhd2Async(", start, StringComparison.Ordinal);
         Assert.True(end > start);

@@ -88,9 +88,61 @@ public sealed class ScreenshotRendererTests
     public void NativeNightEditorShowsDeadlineCloseoutAndRuntimeWithoutExpanders(string name)
     {
         var result = RenderPhotometry(name);
-        Assert.Contains(result.VisibleTexts, x => x.Contains("结束本夜并收口", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("关顶与整夜收口", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("测试结束保持开顶", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("继续监视 AIWeather", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("初始导星", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("普通取消", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("目标 2/3", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("确认 Park → 开顶并回读", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("Park 并回读 → 关顶并回读", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("全姿态无干涉", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("Home 再 Park", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("Home 超时", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("晨光结束", StringComparison.Ordinal));
+    }
+    [Theory]
+    [InlineData("native-target-editor")]
+    [InlineData("native-target-editor-narrow")]
+    [InlineData("native-target-editor-en")]
+    [InlineData("native-target-pair")]
+    public void NativeTargetEditorActuallyEditsIndependentProductionTargets(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.True(result.NativeTargetEditsRoundTrip, result.NativeTargetDiagnostics);
+        Assert.Contains(result.VisibleTexts, x => x.Contains("3 × 300 s", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("PHD2", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("translation unavailable", StringComparison.OrdinalIgnoreCase));
+        var layout = Assert.IsType<NativeTargetLayoutDiagnostics>(result.NativeTargetLayout);
+        Assert.Equal(name == "native-target-pair" ? 2 : 1, layout.EditorCount);
+        Assert.True(layout.CoordinateControlsNative);
+        Assert.True(layout.NegativeZeroPreserved);
+        Assert.True(layout.TargetsIndependent);
+        Assert.True(layout.CommandsBound);
+        Assert.True(layout.InputsVisible);
+        Assert.True(layout.LabelsReadable);
+        Assert.True(layout.NoCentralTargetSelector);
+        if (name == "native-target-pair")
+            Assert.Contains(result.VisibleTexts, x => x.Contains("4 × 90 s", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NativeNightInlineHeaderDoesNotContainPerTargetEditors()
+    {
+        var result = RenderPhotometry("native-night-inline");
+        Assert.True(result.NativeNightHasNoTargetEditor);
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("Synthetic A", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("强制 PHD2", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("选择要编辑的目标", StringComparison.Ordinal));
+    }
+    [Theory]
+    [InlineData("roof-noninterfering", "全姿态无干涉")]
+    [InlineData("roof-noninterfering-narrow", "全姿态无干涉")]
+    [InlineData("roof-noninterfering-en", "all mount positions clear")]
+    public void RoofModeDisclosesBoundAttestationAndIndependentCloseout(string name, string text)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, x => x.Contains(text, StringComparison.Ordinal));
     }
     [Theory]
     [InlineData("atr-reduced")]

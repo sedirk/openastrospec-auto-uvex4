@@ -300,6 +300,22 @@ public static partial class ObservationUiPresentation
                     : Text("无需操作。", "No operator action is required.", culture),
                 string.IsNullOrWhiteSpace(gate.Message) ? gate.Code : $"{gate.Code}: {gate.Message.Trim()}");
         }
+        if (gate.Code == "CANCEL_CLEANUP_FAILED")
+        {
+            // A cancellation request is not a stopped-device attestation. In
+            // particular, do not reuse the stage's ordinary "chain stopped"
+            // impact text or hide this failure behind an inner device code.
+            return new ObservationIssuePresentation(
+                Text("已请求取消，但停止采集或设备空闲尚未得到确认；不能视为已安全取消。",
+                    "Cancellation was requested, but stopped acquisition or idle devices have not been confirmed; safe cancellation is not established.", culture),
+                Text("未授权新的运动或曝光；设备停止状态仍需核实，原始帧和未结运动责任保留。",
+                    "No new motion or exposure is authorized. Device stop state still needs verification; raw frames and outstanding motion responsibility are retained.", culture),
+                Text("停止确认失败已保留为故障；未启动机械回程，也未再次执行故障收尾。",
+                    "Unconfirmed stop cleanup remains a fault. No mechanical return or second fault-cleanup pass was started.", culture),
+                Text("核对本轮停止回执及相机、PHD2、赤道仪的只读状态。未确认空闲前不要强制关闭设备所有者、开始下一目标或清除账本。",
+                    "Inspect this run's stop receipts and read-only camera, PHD2 and mount states. Do not force-close an owner, start another target or clear journals before idle is confirmed.", culture),
+                $"{gate.Code}: {gate.Message.Trim()}");
+        }
         var effectiveCode = EffectiveCode(gate.Code, gate.Message);
         var summary = chinese
             ? DescribeSerialBindingIssue(gate.Code + ": " + gate.Message) ?? ChineseIssueSummary(gate.Code, effectiveCode, gate.Message)
@@ -477,6 +493,7 @@ public static partial class ObservationUiPresentation
             "G3_SEARCH_PULSE_GUIDING_ACTIVE" => "赤道仪仍报告导星脉冲正在执行；未启动新的 G3 获取或定位移动",
             "PHD2_STOP_MOUNT_IDLE_TIMEOUT" => "PHD2 已停止采集，但赤道仪导星脉冲结束及连续静止读回未在等待上限内确认；未重新取场或移动",
             "STAGE_EXCEPTION" => "当前阶段发生未分类异常，流程已在动作边界停止",
+            "CANCEL_CLEANUP_FAILED" => "已请求取消，但停止采集或设备空闲尚未得到确认；不能视为已安全取消，未授权新的运动或曝光",
             Phd2GuidingExposurePolicy.MismatchCode => "PHD2 新导星帧的曝光时间与本轮锁定设置不一致；后续光谱曝光已停止。不是 ATR 制冷失败，也不是云层判定，请查看实际/期望曝光数值",
             "PHD2_GUIDING_FRAME_TIMEOUT" => "PHD2 未在有界等待内交付新的导星帧，不能确认当前目标位置；这不是目标太暗或导星精度不合格的判定",
             "PHD2_NATIVE_FRAME_TIMEOUT" => "PHD2 原生单帧取图超时，尚未取得本次导星相机图像；不是 WCS 解析失败，也不能据此归因于月光、云或目标亮度",
@@ -484,7 +501,9 @@ public static partial class ObservationUiPresentation
             "PHD2_GUIDE_RATE_UNCONFIRMED" => "无法核对当前赤道仪导星速率与 PHD2 校准时速率；未开始导星或重校准，不能把未知速率当成一致",
             "PHD2_CALIBRATION_REFRESH_MOTION_HISTORY" => "PHD2 校准需要更新，但本轮已有运动账本，不能在恢复途中重新校准；已停止并保留原始记录",
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
+            Phd2PlacementGuideWindowRejectedException.StoppedCode => "入缝微调前导星光学精度未通过，已确认停止；整夜序列核对账本后跳过本目标，不触发目标间关顶",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
+            Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode => "初始导星未稳定，已确认停止且未开始入缝微调；整夜序列复核空闲后跳过本目标，不代表已入缝",
             Phd2StageFailurePolicy.PlacementStarLost => "入缝复核时 PHD2 明确报告丢星，不只是稳定等待超时；未确认目标仍在缝内，新的曝光已阻止",
             "PHD2_GUIDE_OUTPUT_UNAVAILABLE" => "PHD2 连续请求修正但没有导星脉冲输出；连接标志和星点位置不代表赤道仪连接有效",
             "PHD2_GUIDE_OUTPUT_RETURN_PENDING" => "PHD2 导星脉冲输出失效，已停止；仍有未结精调责任，未伪报物理回程或重置预算",
@@ -594,11 +613,19 @@ public static partial class ObservationUiPresentation
             "ATR_TIER_NOT_SELECTED" => "ATR 探测曝光尚未选出合格档位，科学曝光不会开始",
             "ATR_SAVED_FRAME_TEMPERATURE_INVALID" => "光谱原始 FITS 的温度或保存后相机读回不合格；文件已保留，但未计入合格帧，后续曝光已停止",
             "HORIZON_BLOCKED" => "目标高度或预计运行时段触及本地地平线/围墙限制",
+            HorizonEvaluation.WindowExhaustedCode => "当前目标仍高于地平线，但剩余可观测窗口不足以覆盖后续流程；仅停止本目标，整夜序列须确认采集停止且运动账本已结清后才能跳过。这不表示所有目标都不可观测",
             "RAIN_DETECTED" => "安全链报告降雨，新的运动和曝光已被禁止",
             "REAL_PROFILE_DRIFT" => "当前 N.I.N.A. Profile 与本轮锁定的真实设备配置不一致",
             _ when effectiveCode.Contains("IDENTITY", StringComparison.Ordinal) => "设备或目标身份与本轮锁定证据不一致",
             _ when effectiveCode.Contains("HASH", StringComparison.Ordinal) || effectiveCode.Contains("FINGERPRINT", StringComparison.Ordinal) => "证据哈希或硬件指纹不一致，不能把当前数据当作本轮授权依据",
             _ when effectiveCode.Contains("WEATHER", StringComparison.Ordinal) || effectiveCode.Contains("SAFETY", StringComparison.Ordinal) => "天气或安全能力没有给出允许继续的可信状态",
+            "ROOF_OPEN_MOUNT_MOVING" => "开顶前赤道仪的停止状态未通过：转动、导星脉冲或跟踪仍未确认停止；尚未发出开顶命令，请查看实际状态数值",
+            "ROOF_OPEN_TRACKING_STOP_TIMEOUT" => "开顶前已尝试关闭一次跟踪，但限时内未取得连续停止读回；没有开顶，也不会无限重试",
+            "ROOF_OPEN_TRACKING_STOP_UNSUPPORTED" => "开顶前仍在跟踪，但驱动未报告可控制跟踪；未开顶，请先检查赤道仪连接与驱动能力",
+            "ROOF_OPEN_MOUNT_IDENTITY_INVALID" => "开顶前赤道仪连接或设备身份不匹配；未改跟踪或打开屋顶",
+            "ROOF_OPEN_MOUNT_PREPARATION_FAILED" => "开顶前赤道仪准备发生异常；未打开屋顶，请查看原始错误与实测状态",
+            "ROOF_OPEN_GUIDER_ACTIVE" => "开顶前 PHD2 尚未确认停止；未打开屋顶，不是天气或屋顶驱动拒绝",
+            "ROOF_OPEN_ACQUISITION_ACTIVE" => "开顶前仍有采集任务；未修改跟踪，也未打开屋顶",
             _ when HasCodeToken(effectiveCode, "ROOF", "COVER") => "屋顶或光路盖状态没有得到命令完成与读回确认",
             _ when effectiveCode.Contains("BUDGET", StringComparison.Ordinal) || effectiveCode.Contains("EXHAUSTED", StringComparison.Ordinal) => "本轮有界恢复的次数、位移或时间预算已经用尽",
             "PHD2_LOCK_RECOVERY_PRE_GUIDE_CALIBRATION_INVALID" => "旧运行的未结入缝记录需要恢复，但当前校准不能用于该恢复；尚未发送导星或重校准命令。这不是当前手动导星不稳定的判定",
@@ -733,6 +760,10 @@ public static partial class ObservationUiPresentation
 
     private static string HardStopReason(string code, bool chinese)
     {
+        if (code == HorizonEvaluation.WindowExhaustedCode)
+            return chinese
+                ? "不重试或放宽当前目标的高度窗口。高级序列仅在已选择跳过策略、停止确认且运动责任结清时继续下一目标；安全或停止核验失败仍结束本夜。"
+                : "Do not retry or relax this target's visibility window. A native night continues only with the explicit skip policy, confirmed idle and settled motion; safety or stop failures still end the night.";
         if (code == Phd2StageFailurePolicy.PlacementStarLost)
             return chinese
                 ? "丢星不能按大风精度警告放行；保留原运动账本，不重置预算、不伪报回程。停止是否确认请查看 stopConfirmed 和本轮丢星证据。"
@@ -779,6 +810,14 @@ public static partial class ObservationUiPresentation
     private static string Recommendation(ObservationStage stage, string outerCode, string effectiveCode, bool chinese)
     {
         var code = effectiveCode;
+        if (code == HorizonEvaluation.WindowExhaustedCode)
+            return chinese
+                ? "查看当前高度、受保护时长和预计触及地平线的时刻，以及高级序列的本目标结果。后续目标会分别重新检查；不要清空运动账本、降低地平线或把全部目标已完成误当成均已拍摄。"
+                : "Inspect current altitude, protected duration, predicted horizon crossing and this target's night outcome. Later targets are checked independently; do not clear motion journals, lower the horizon or interpret native FINISHED as science success.";
+        if (code.StartsWith("ROOF_OPEN_", StringComparison.Ordinal))
+            return chinese
+                ? "查看赤道仪转动、导星脉冲、跟踪和 PHD2 状态；无干涉屋顶也必须在停止状态才开。仅残留跟踪时程序会关闭一次并限时核验，真实转动或导星未停仍阻断。整夜已经结束后，请先重置原生高级序列或重新载入同一文件，再启动；仅点击已全部完成的序列不会重新执行。不要用手工开顶掩盖未停止状态。"
+                : "Check mount slew, guide pulses, tracking and PHD2 state. Even a non-interfering roof opens only after stopped readback. Residual tracking is disabled once with a bounded verification; active slew/guiding still blocks. After the night ends, reset the native sequence or reload the same file before starting; Play on finished items does not rerun them. Do not manually open the roof to conceal an unconfirmed stop.";
         if (code == "G3_SEP_PARENT_BLEND_UNRESOLVED")
             return chinese
                 ? "打开“实时图像 → 光谱仪导星相机”查看本次未通过的短帧，并对照原始 FITS；若为空心圈或多瓣星像，先检查 C11 主镜焦点和导星光路，不要用 UVEX M2 代替主镜调焦。结束本轮、确认空闲后再人工处理；这不是 PHD2 校准不一致，也不应靠放宽混叠门或重复延长曝光解决。仍须排查邻星，调焦/运动不会自动执行。"

@@ -306,6 +306,8 @@ internal sealed class UvexPluginSettings
     public bool RequireOpenOpticalCover { get => values.GetValueBoolean(nameof(RequireOpenOpticalCover), true); set => values.SetValueBoolean(nameof(RequireOpenOpticalCover), value); }
     public bool WeakSupervisionEnabled { get => values.GetValueBoolean(nameof(WeakSupervisionEnabled), true); set => values.SetValueBoolean(nameof(WeakSupervisionEnabled), value); }
     public bool OpenDomeOrRoofOnStart { get => values.GetValueBoolean(nameof(OpenDomeOrRoofOnStart), true); set => values.SetValueBoolean(nameof(OpenDomeOrRoofOnStart), value); }
+    // Enabled only by a matching, hash-bound owner attestation in the commissioning preset.
+    public bool RoofNeverInterferesWithMount { get => values.GetValueBoolean(nameof(RoofNeverInterferesWithMount), false); set => values.SetValueBoolean(nameof(RoofNeverInterferesWithMount), value); }
     public bool CloseDomeOrRoofOnFinalize { get => values.GetValueBoolean(nameof(CloseDomeOrRoofOnFinalize), true); set => values.SetValueBoolean(nameof(CloseDomeOrRoofOnFinalize), value); }
     public bool CloseDomeOrRoofOnFailure { get => values.GetValueBoolean(nameof(CloseDomeOrRoofOnFailure), true); set => values.SetValueBoolean(nameof(CloseDomeOrRoofOnFailure), value); }
     public int DomeOrRoofTransitionTimeoutSeconds { get => values.GetValueInt32(nameof(DomeOrRoofTransitionTimeoutSeconds), 180); set => values.SetValueInt32(nameof(DomeOrRoofTransitionTimeoutSeconds), value); }

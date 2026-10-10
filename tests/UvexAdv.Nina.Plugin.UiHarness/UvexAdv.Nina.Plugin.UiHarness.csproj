@@ -36,5 +36,8 @@
     <Reference Include="Newtonsoft.Json" HintPath="$(NinaInstallDir)\Newtonsoft.Json.dll" Private="true" />
     <Reference Include="System.ComponentModel.Composition" HintPath="$(NinaInstallDir)\System.ComponentModel.Composition.dll" Private="true" />
     <Reference Include="CommunityToolkit.Mvvm" HintPath="$(NinaInstallDir)\CommunityToolkit.Mvvm.dll" Private="true" />
+    <!-- Actual InputTarget astrometry used by the native editor fixture. -->
+    <Reference Include="Nito.Disposables" HintPath="$(NinaInstallDir)\Nito.Disposables.dll" Private="true" />
+    <None Include="$(NinaInstallDir)\SQLite.Interop.dll" Link="SQLite.Interop.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

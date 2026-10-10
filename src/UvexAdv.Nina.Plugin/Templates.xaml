@@ -4,7 +4,15 @@
                     xmlns:local="clr-namespace:UvexAdv.Nina.Plugin"
                     xmlns:seq="clr-namespace:UvexAdv.Nina.Plugin.SequenceItems"
                     xmlns:ninaSeq="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
+                    xmlns:ninaControls="clr-namespace:NINA.CustomControlLibrary;assembly=NINA.CustomControlLibrary"
+                    xmlns:ninaViews="clr-namespace:NINA.WPF.Base.View;assembly=NINA.WPF.Base"
+                    xmlns:ninaConverters="clr-namespace:NINA.Core.Utility.Converters;assembly=NINA.Core"
+                    xmlns:ninaRules="clr-namespace:NINA.Core.Utility.ValidationRules;assembly=NINA.Core"
+                    xmlns:ninaUtil="clr-namespace:NINA.Core.Utility;assembly=NINA.Core"
+                    xmlns:ninaBehaviors="clr-namespace:NINA.Sequencer.Behaviors;assembly=NINA.Sequencer"
+                    xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
                     xmlns:spec="clr-namespace:UvexAdv.Spectroscopy;assembly=UvexAdv.Spectroscopy">
+  <ninaConverters:DecDegreeConverter x:Key="NativeTargetDecDegreeConverter"/>
   <DataTemplate x:Key="NativeFailurePolicySelector">
     <ComboBox x:Name="NativeFailurePolicyCombo" ItemsSource="{Binding AvailableFailurePolicies}"
               DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding FailurePolicy}"
@@ -1585,6 +1593,7 @@
                                   SelectedValue="{Binding SelectedPreparationSafetyCapability, Mode=TwoWay}" IsEnabled="{Binding IsTargetPlanEditable}" />
                         <TextBlock Text="{Binding SelectedPreparationSafetyCapabilityDescription}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,4" />
                         <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="0,4,0,4" />
+                        <TextBlock Text="{Binding RoofClearanceSummary}" TextWrapping="Wrap" Foreground="#D9B86C" Margin="0,4,0,4" />
                         <Button Content="返回启动前核对" Command="{Binding ShowPreparationChecklistCommand}" HorizontalAlignment="Left" Margin="0,5,0,0" />
                       </StackPanel>
                     </Border>
@@ -2213,35 +2222,129 @@
   <DataTemplate DataType="{x:Type seq:MoveFocusItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="相对步数"/><TextBox Width="80" Text="{Binding DeltaSteps}"/></StackPanel></DataTemplate>
   <DataTemplate DataType="{x:Type seq:MaintenanceModeItem}"><CheckBox local:ObservationStaticTextLocalization.IsEnabled="True" Content="进入维护模式（取消为退出）" IsChecked="{Binding EnterMaintenance}"/></DataTemplate>
 
-  <DataTemplate x:Key="NativeSpectroscopyNightPanel">
+  <DataTemplate x:Key="NativeSpectroscopyNightSettingsPanel">
         <StackPanel Margin="6">
           <TextBlock Text="整夜光谱：按下方目标顺序执行，目标间不关盖、不关顶，整夜结束统一收口。" TextWrapping="Wrap" FontWeight="Bold"/>
           <TextBlock Text="把 UVEX4 目标观测拖入此处，可复制、调整顺序并保存原生模板。真实模式必须先通过完整安全链；停放不等于机械回零。" TextWrapping="Wrap" Margin="0,4"/>
+          <TextBlock Text="默认开夜：AIWeather / 天气安全 → 确认 Park → 开顶并回读 → 开镜盖。" TextWrapping="Wrap" Margin="0,2"/>
+          <TextBlock Text="默认收夜：停止采集/导星 → 关镜盖 → Park 并回读 → 关顶并回读；目标之间不重复开关顶。" TextWrapping="Wrap" Margin="0,2"/>
+          <TextBlock Text="本台站若已导入全姿态无干涉确认：开顶不要求 Park；收尾先停止运动、关顶，再独立停放。当前模式见高级设置 → 站点与模拟。" TextWrapping="Wrap" Margin="0,2"/>
           <WrapPanel Margin="0,4">
-            <CheckBox Content="晨光结束" IsChecked="{Binding StopAtDawn}" Margin="0,0,8,0"/>
+            <CheckBox ToolTip="收口先 Home 再 Park（仅无干涉台站）" AutomationProperties.LabeledBy="{Binding ElementName=NativeHomeBeforeParkLabel}" IsChecked="{Binding HomeBeforeParkOnFinalize}" Margin="0,0,6,0"/>
+            <TextBlock x:Name="NativeHomeBeforeParkLabel" Text="收口先 Home 再 Park（仅无干涉台站）" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <TextBlock Text="Home 超时(s)" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding MountHomeTimeoutSeconds}" Width="60" Margin="4,0"/>
+          </WrapPanel>
+          <TextBlock Text="先确认关顶，再执行一次 Home 和一次 Park；已 Park 不再回零，失败保留原因，不循环重试。普通取消仍不执行机械收口。" TextWrapping="Wrap" Margin="0,2"/>
+          <WrapPanel Margin="0,4">
+            <CheckBox ToolTip="晨光结束" AutomationProperties.LabeledBy="{Binding ElementName=NativeStopAtDawnLabel}" IsChecked="{Binding StopAtDawn}" Margin="0,0,6,0"/>
+            <TextBlock x:Name="NativeStopAtDawnLabel" Text="晨光结束" VerticalAlignment="Center" Margin="0,0,12,0"/>
             <TextBlock Text="太阳高度 °" VerticalAlignment="Center"/>
             <TextBox Text="{Binding DawnSunAltitudeDegrees}" Width="55" Margin="4,0,12,0"/>
             <TextBlock Text="截止时间（含时区，可留空）" VerticalAlignment="Center"/>
             <TextBox Text="{Binding EndAtIso8601}" Width="240" Margin="4,0" ToolTip="例如 2026-09-21T05:00:00+08:00"/>
           </WrapPanel>
           <TextBlock Text="普通截止在阶段/已保存帧边界停止，不截断长曝；安全事件立即停止。普通取消不发机械收口命令。" TextWrapping="Wrap" Margin="0,4"/>
-          <Button Content="结束本夜并收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
+          <WrapPanel Margin="0,4">
+            <TextBlock Text="初始导星：半径(px，0 沿用配置)" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding InitialGuideSettlePixels}" Width="45" Margin="4,0,10,0"/>
+            <TextBlock Text="持续(s)" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding InitialGuideStableSeconds}" Width="45" Margin="4,0,10,0"/>
+            <TextBlock Text="等待上限(s)" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding InitialGuideTimeoutSeconds}" Width="55" Margin="4,0"/>
+          </WrapPanel>
+          <TextBlock Text="仅影响开始导星的稳定等待，不改变实际入缝、丢星或设备输出检查。未稳定且停止确认后，按目标策略跳过。" TextWrapping="Wrap" Margin="0,2"/>
+          <Separator Margin="0,6"/>
+          <WrapPanel Margin="0,4">
+            <CheckBox ToolTip="测试结束保持开顶，关顶收口单独操作" AutomationProperties.LabeledBy="{Binding ElementName=NativeHoldOpenLabel}" IsChecked="{Binding HoldOpenAfterTargets}" Margin="0,0,6,0"/>
+            <TextBlock x:Name="NativeHoldOpenLabel" Text="测试结束保持开顶，关顶收口单独操作" VerticalAlignment="Center"/>
+          </WrapPanel>
+          <TextBlock Text="保持开顶时整夜序列仍在等待，继续监视 AIWeather；到截止、晨光或不安全时自动收口。未知/设备故障仍按安全收口处理。更改仅对下一次启动生效。" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <Button Content="关顶与整夜收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
           <TextBlock Text="{Binding NightState}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,6"/>
           <TextBlock Text="{Binding JournalPath}" TextWrapping="Wrap" Opacity="0.7"/>
         </StackPanel>
   </DataTemplate>
-  <HierarchicalDataTemplate DataType="{x:Type seq:UvexNightSequenceContainer}" ItemsSource="{Binding Items}">
-    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
-      <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyNightPanel}"/>
-      </ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
-    </ninaSeq:HierarchicalSequenceContainerView>
-  </HierarchicalDataTemplate>
-
-  <HierarchicalDataTemplate DataType="{x:Type seq:UvexTargetObservationContainer}" ItemsSource="{Binding Items}">
-    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
-      <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
-        <StackPanel Margin="5">
+  <DataTemplate x:Key="NativeSpectroscopyTargetPanel">
+        <StackPanel Margin="6" IsEnabled="{Binding CanEditPlan}" local:ObservationStaticTextLocalization.IsEnabled="True">
+          <StackPanel.Resources>
+            <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}"/></Style>
+          </StackPanel.Resources>
+          <!-- Native InputTarget and NINA coordinate controls; no night-level selected target. -->
+          <Border Background="{DynamicResource SecondaryBackgroundBrush}" Padding="6" Margin="0,0,0,6" IsEnabled="{Binding CanEditTargetIdentity}">
+            <i:Interaction.Behaviors>
+              <ninaBehaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" DragOverCenterText="替换此目标"/>
+              <ninaBehaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.TargetSequenceContainer" OnDropCommand="DropTargetCommand"/>
+            </i:Interaction.Behaviors>
+            <ninaControls:DetachingExpander x:Name="NativeTargetIdentity" IsExpanded="{Binding Target.Expanded}" Foreground="{DynamicResource PrimaryBrush}">
+              <ninaControls:DetachingExpander.Header>
+                <WrapPanel>
+                  <TextBlock Text="目标" FontWeight="Bold" Margin="0,0,12,0"/>
+                  <TextBlock Text="{Binding TargetName}" Margin="0,0,12,0"/>
+                  <TextBlock Text="{Binding Target.InputCoordinates.Coordinates.RAString}" Margin="0,0,12,0"/>
+                  <TextBlock Text="{Binding Target.InputCoordinates.Coordinates.DecString}"/>
+                </WrapPanel>
+              </ninaControls:DetachingExpander.Header>
+              <WrapPanel Margin="6,6,0,0">
+                <StackPanel Width="420" Margin="0,0,16,4">
+                  <DockPanel Margin="0,0,0,6">
+                    <TextBlock Text="目标名称" Width="75" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetName" Text="{Binding TargetName, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/>
+                  </DockPanel>
+                  <WrapPanel Margin="0,0,0,6">
+                    <Button x:Name="NativeTargetFromPlanetarium" Content="从星图读取" Command="{Binding CoordsFromPlanetariumCommand}" Padding="8,3" Margin="0,0,8,0"/>
+                    <Button x:Name="NativeTargetToFraming" Content="发送到构图助手" Command="{Binding CoordsToFramingCommand}" Padding="8,3"/>
+                  </WrapPanel>
+                  <StackPanel Orientation="Horizontal" DataContext="{Binding Target.InputCoordinates}" Margin="0,3">
+                    <TextBlock Text="赤经 RA" Width="75" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetRaHours" Width="45" TextAlignment="Right"><TextBox.Text><Binding Path="RAHours" UpdateSourceTrigger="LostFocus"><Binding.ValidationRules><ninaRules:HoursRule/></Binding.ValidationRules></Binding></TextBox.Text></TextBox><TextBlock Text="h" Margin="3,0,8,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetRaMinutes" Width="45" TextAlignment="Right"><TextBox.Text><Binding Path="RAMinutes" UpdateSourceTrigger="LostFocus"><Binding.ValidationRules><ninaRules:MinutesRule/></Binding.ValidationRules></Binding></TextBox.Text></TextBox><TextBlock Text="m" Margin="3,0,8,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetRaSeconds" Width="65" TextAlignment="Right"><TextBox.Text><Binding Path="RASeconds" UpdateSourceTrigger="LostFocus" StringFormat="0.###"><Binding.ValidationRules><ninaRules:SecondsRule/></Binding.ValidationRules></Binding></TextBox.Text></TextBox><TextBlock Text="s" Margin="3,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" DataContext="{Binding Target.InputCoordinates}" Margin="0,3">
+                    <TextBlock Text="赤纬 Dec" Width="75" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetDecDegrees" Width="45" TextAlignment="Right"><TextBox.Text><MultiBinding Converter="{StaticResource NativeTargetDecDegreeConverter}" UpdateSourceTrigger="LostFocus"><Binding Path="NegativeDec"/><Binding Path="DecDegrees"><Binding.ValidationRules><ninaRules:DegreesRule/></Binding.ValidationRules></Binding></MultiBinding></TextBox.Text></TextBox><TextBlock Text="°" Margin="3,0,8,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetDecMinutes" Width="45" TextAlignment="Right"><TextBox.Text><Binding Path="DecMinutes" UpdateSourceTrigger="LostFocus"><Binding.ValidationRules><ninaRules:MinutesRule/></Binding.ValidationRules></Binding></TextBox.Text></TextBox><TextBlock Text="′" Margin="3,0,8,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="NativeTargetDecSeconds" Width="65" TextAlignment="Right"><TextBox.Text><Binding Path="DecSeconds" UpdateSourceTrigger="LostFocus" StringFormat="0.###"><Binding.ValidationRules><ninaRules:SecondsRule/></Binding.ValidationRules></Binding></TextBox.Text></TextBox><TextBlock Text="″" Margin="3,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Text="J2000 · 可将右侧保存的目标拖到这里替换；只改名称不查星。" TextWrapping="Wrap" Opacity="0.8" Margin="0,5,0,0"/>
+                  <TextBlock Text="{Binding TargetEditorStatus}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                </StackPanel>
+                <Grid Width="400" Height="165" Margin="0,0,0,4">
+                  <Grid.Resources><ninaUtil:BindingProxy x:Key="TargetNighttimeProxy" Data="{Binding NighttimeData}"/></Grid.Resources>
+                  <ninaViews:AltitudeChart DataContext="{Binding Target.DeepSkyObject}" NighttimeData="{Binding Source={StaticResource TargetNighttimeProxy}, Path=Data}" AnnotateAltitudeAxis="False" local:ObservationStaticTextLocalization.IsEnabled="False"/>
+                </Grid>
+              </WrapPanel>
+            </ninaControls:DetachingExpander>
+          </Border>
+          <TextBlock Text="{Binding ExecutionModeLabel}" FontWeight="Bold" Margin="0,2" TextWrapping="Wrap"/>
+          <TextBlock Text="光谱采集" FontWeight="Bold" Margin="0,10,0,3"/>
+          <WrapPanel Margin="0,3">
+            <StackPanel Margin="0,0,12,4"><TextBlock Text="合格科学帧"/><TextBox x:Name="NativeTargetFrames" Text="{Binding ScienceFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="90"/></StackPanel>
+            <StackPanel Margin="0,0,12,4"><TextBlock Text="固定曝光 / 秒（0 = 自动选档）"/><TextBox x:Name="NativeTargetExposure" Text="{Binding FixedExposureSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="190"/></StackPanel>
+            <StackPanel Margin="0,0,12,4"><TextBlock Text="最多尝试"/><TextBox Text="{Binding MaximumScienceAttempts, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="90"/></StackPanel>
+            <StackPanel Margin="0,0,0,4"><TextBlock Text="可见窗口预算 / 分钟"/><TextBox Text="{Binding DurationMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="140"/></StackPanel>
+          </WrapPanel>
+          <WrapPanel Margin="0,5">
+            <CheckBox x:Name="NativeForceCalibration" IsChecked="{Binding ForceGuideCalibration, Mode=TwoWay}" ToolTip="本目标开始时强制 PHD2 校准一次" AutomationProperties.LabeledBy="{Binding ElementName=NativeForceCalibrationLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBlock x:Name="NativeForceCalibrationLabel" Text="本目标开始时强制 PHD2 校准一次" VerticalAlignment="Center" TextWrapping="Wrap"/>
+          </WrapPanel>
+          <TextBlock Text="默认沿用 PHD2 校准；勾选后本目标仅强制一次，校准后重新取场。" TextWrapping="Wrap" Opacity="0.85"/>
+          <WrapPanel Margin="0,5">
+            <CheckBox x:Name="NativeAutomaticGuideRecovery" IsChecked="{Binding AutomaticGuideRecovery, Mode=TwoWay}" AutomationProperties.LabeledBy="{Binding ElementName=NativeAutomaticGuideRecoveryLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBlock x:Name="NativeAutomaticGuideRecoveryLabel" Text="本目标导星自动恢复" VerticalAlignment="Center"/>
+            <TextBlock Text="星点等待上限 / 秒" VerticalAlignment="Center" Margin="16,0,6,0"/>
+            <TextBox x:Name="NativeGuideStarWait" Text="{Binding GuideStarWaitSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="65"/>
+          </WrapPanel>
+          <TextBlock Text="疑似云雾先检测星点并等待；星场恢复后重选星一次，仍异常再由 PHD2 强制校准一次。失败时确认停止后按下方策略处理。" TextWrapping="Wrap" Opacity="0.85"/>
+          <WrapPanel Margin="0,5">
+            <TextBlock Text="本目标失败策略" VerticalAlignment="Center"/>
+            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeFailurePolicySelector}"/>
+          </WrapPanel>
+          <TextBlock x:Name="NativeTargetSummary" Text="{Binding TargetSummary}" TextWrapping="Wrap" Margin="0,3"/>
+          <TextBlock Text="{Binding LastOutcomeLabel}" TextWrapping="Wrap" Opacity="0.8"/>
+          <Expander Header="本目标高级选项" Foreground="{DynamicResource PrimaryBrush}" Margin="0,8,0,0">
+          <StackPanel Margin="6">
           <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
             <Border CornerRadius="3" Padding="8,3" Margin="0,0,10,0">
               <Border.Style>
@@ -2256,35 +2359,46 @@
               </Border.Style>
               <TextBlock Text="{Binding ExecutionModeLabel}" Foreground="White" FontWeight="Bold" />
             </Border>
-            <CheckBox Content="此序列请求 REAL 模式" IsChecked="{Binding UseRealMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+            <CheckBox ToolTip="此序列请求 REAL 模式" AutomationProperties.LabeledBy="{Binding ElementName=NativeTargetRealLabel}" IsChecked="{Binding UseRealMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <TextBlock x:Name="NativeTargetRealLabel" Text="此序列请求 REAL 模式" VerticalAlignment="Center"/>
           </StackPanel>
           <TextBlock Text="{Binding ExecutionModeWarning}" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,5" />
           <TextBlock Text="单独运行：失败暂停；放入整夜容器：按本目标失败策略结束或跳过。所有目标共用已验证的定位、入缝和科学曝光流程。" TextWrapping="Wrap" />
-          <WrapPanel Margin="0,6">
-            <TextBlock Text="合格科学帧" VerticalAlignment="Center"/><TextBox Text="{Binding ScienceFrames}" Width="55" Margin="4,0,10,0"/>
-            <TextBlock Text="最多尝试" VerticalAlignment="Center"/><TextBox Text="{Binding MaximumScienceAttempts}" Width="55" Margin="4,0,10,0"/>
-            <TextBlock Text="固定曝光 / 秒（0 = 自动选档）" VerticalAlignment="Center"/><TextBox Text="{Binding FixedExposureSeconds}" Width="65" Margin="4,0"/>
-          </WrapPanel>
-          <WrapPanel Margin="0,3">
-            <TextBlock Text="整夜失败策略" VerticalAlignment="Center"/>
-            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeFailurePolicySelector}"/>
-            <TextBlock Text="{Binding LastOutcome}" VerticalAlignment="Center" Margin="8,0"/>
-          </WrapPanel>
           <TextBlock Text="光谱单目标完整流程（11 阶段）。翻转请将目标放入光谱整夜序列，添加 OpenAstroSpec · 光谱中天翻转；不要混用普通翻转触发器。"
                      TextWrapping="Wrap" Margin="0,3" Opacity="0.85"/>
-          <WrapPanel Margin="0,5,0,0">
-            <TextBlock Text="目标" VerticalAlignment="Center"/><TextBox Width="125" Text="{Binding TargetName}" Margin="4,0,9,0"/>
-            <TextBlock Text="RA°" VerticalAlignment="Center"/><TextBox Width="75" Text="{Binding RightAscensionDegrees}" Margin="4,0,9,0"/>
-            <TextBlock Text="Dec°" VerticalAlignment="Center"/><TextBox Width="75" Text="{Binding DeclinationDegrees}" Margin="4,0,9,0"/>
-            <TextBlock Text="分钟" VerticalAlignment="Center"/><TextBox Width="60" Text="{Binding DurationMinutes}" Margin="4,0"/>
-          </WrapPanel>
           <WrapPanel Margin="0,4,0,0">
             <TextBlock Text="定位策略" VerticalAlignment="Center"/><ComboBox Width="210" ItemsSource="{Binding AvailableTargetObservabilityClasses}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding TargetObservability}" Margin="4,0,9,0"/>
             <TextBlock Text="围墙" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonMinimumDegrees}" Margin="4,0,9,0"/>
             <TextBlock Text="启动裕量" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonStartMarginDegrees}" Margin="4,0,9,0"/>
             <TextBlock Text="继续裕量" VerticalAlignment="Center"/><TextBox Width="50" Text="{Binding HorizonContinueMarginDegrees}" Margin="4,0"/>
           </WrapPanel>
+          </StackPanel>
+          </Expander>
         </StackPanel>
+  </DataTemplate>
+
+  <DataTemplate x:Key="NativeSpectroscopyNightPanel">
+    <StackPanel Margin="6" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <StackPanel.Resources>
+        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}"/></Style>
+      </StackPanel.Resources>
+      <TextBlock Text="按下方目标顺序执行；展开各自的目标卡片修改坐标、曝光和强制校准。" TextWrapping="Wrap"/>
+      <Expander x:Name="NativeNightSettingsExpander" Header="夜间设置" IsExpanded="False" Foreground="{DynamicResource PrimaryBrush}" Margin="0,5,0,0">
+        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyNightSettingsPanel}"/>
+      </Expander>
+    </StackPanel>
+  </DataTemplate>
+  <HierarchicalDataTemplate DataType="{x:Type seq:UvexNightSequenceContainer}" ItemsSource="{Binding Items}">
+    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
+      <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
+        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyNightPanel}"/>
+      </ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
+    </ninaSeq:HierarchicalSequenceContainerView>
+  </HierarchicalDataTemplate>
+  <HierarchicalDataTemplate DataType="{x:Type seq:UvexTargetObservationContainer}" ItemsSource="{Binding Items}">
+    <ninaSeq:HierarchicalSequenceContainerView local:ObservationStaticTextLocalization.IsEnabled="True">
+      <ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
+        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSpectroscopyTargetPanel}"/>
       </ninaSeq:HierarchicalSequenceContainerView.SequenceContainerContent>
     </ninaSeq:HierarchicalSequenceContainerView>
   </HierarchicalDataTemplate>

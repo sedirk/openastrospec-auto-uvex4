@@ -5,6 +5,32 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class EnvironmentSupervisionPolicyTests
 {
+    [Theory]
+    [InlineData(false, "AIWeatherSafetyMonitor", "No_Device", true)]
+    [InlineData(true, "AIWeatherSafetyMonitor", "No_Device", false)]
+    [InlineData(false, "different-monitor", "No_Device", false)]
+    [InlineData(false, "No_Device", "No_Device", false)]
+    [InlineData(false, "AIWeatherSafetyMonitor", "NINA.OpenMeteo.Client", false)]
+    public void AiWeatherAuthorityRequiresExplicitPolicyAndExactSelections(
+        bool requireWeather, string monitor, string weather, bool expected)
+    {
+        var devices = new NinaEnvironmentDeviceSelection(monitor, "roof", weather, "cover");
+        Assert.Equal(expected, devices.UsesAiWeatherAuthority(requireWeather));
+        var capabilities = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
+            true, true, requireWeather, true, false, devices.UsesAiWeatherAuthority(requireWeather));
+        var selections = devices.ValidateForMode(false, requireWeather);
+        Assert.Equal(expected, capabilities.Disposition == GateDisposition.Passed && selections.Disposition == GateDisposition.Passed);
+    }
+
+    [Theory]
+    [InlineData("No_Device", "cover")]
+    [InlineData("roof", "No_Device")]
+    public void AiWeatherPolicyDoesNotWaiveRoofOrCover(string roof, string cover)
+    {
+        var devices = new NinaEnvironmentDeviceSelection("AIWeatherSafetyMonitor", roof, "No_Device", cover);
+        Assert.NotEqual(GateDisposition.Passed, devices.ValidateForMode(false, false).Disposition);
+    }
+
     private static readonly string RunnerSource = File.ReadAllText(Path.Combine(
         FindRepositoryRoot(),
         "src",
@@ -202,6 +228,17 @@ public sealed class EnvironmentSupervisionPolicyTests
         var end = RunnerSource.IndexOf(endMarker, start + 1, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start, $"Could not isolate {startMarker}.");
         return RunnerSource[start..end];
+    }
+
+    [Fact]
+    public void NativeNightTargetCannotCloseRoofBeforeSkipDecision()
+    {
+        var stage = MethodBody("private async Task<StageResult> CompleteStageResultAsync(", "public override async Task OnPausedAsync(");
+        var revalidate = MethodBody("public override async Task<GateResult> RevalidateAsync(", "private async Task<StageResult> CompleteStageResultAsync(");
+        var cleanup = MethodBody("private async Task<IReadOnlyList<string>> CleanupAfterFailureAsync(", "private async Task<IReadOnlyList<string>> CleanupAfterFailureCoreAsync(");
+        Assert.Contains("configuration.SequencePlan?.DeferObservatoryCloseout == true", stage);
+        Assert.Contains("configuration.SequencePlan?.DeferObservatoryCloseout != true", revalidate);
+        Assert.Contains("allowMechanicalActions && configuration.SequencePlan?.DeferObservatoryCloseout != true", cleanup);
     }
 
     private static string FindRepositoryRoot()

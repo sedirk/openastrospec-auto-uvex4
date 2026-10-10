@@ -8,6 +8,22 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2SlitPlacementCommissioningTests
 {
     [Fact]
+    public void ExplicitGuideWarningCeilingChangesOnlyOpticalGuideTolerance()
+    {
+        var old=CreatePreset() with { MaximumGuideLockResidualPixels=2 };
+        var graded=old with { MaximumGuideLockWarningResidualPixels=3 };
+        Assert.Empty(graded.Validate());
+        Assert.Equal(old.BuildMotionLimits() with { MaximumGuideLockResidualPixels=3 },graded.BuildMotionLimits());
+        Assert.Equal(2,old.EffectiveGuideLockResidualPixels);
+        Assert.NotEmpty((old with { MaximumGuideLockWarningResidualPixels=3.1 }).Validate());
+        var json=System.Text.Json.JsonSerializer.Serialize(graded);
+        var tool=System.Text.Json.JsonSerializer.Deserialize<UvexAdv.Commissioning.Tool.Phd2SlitPlacementContract>(json)!;
+        Assert.Empty(tool.Validate());
+        Assert.Equal(3,tool.MaximumGuideLockWarningResidualPixels);
+        Assert.NotEmpty((tool with { MaximumGuideLockWarningResidualPixels=3.1 }).Validate());
+    }
+
+    [Fact]
     public void FreshResidualReferencesRunLedGeometryWithoutSearchingForDarknessInStarlight()
     {
         var body = Section(

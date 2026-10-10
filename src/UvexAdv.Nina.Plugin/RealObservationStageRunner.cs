@@ -46,8 +46,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     // durable ledger reserves and charges this wider endpoint explicitly.
     private const double G3SearchStableEndpointToleranceArcseconds =
         G3LocalSearchLimits.StableEndpointAllowanceArcseconds;
-    // Some ASCOM mounts acknowledge Tracking=true before their polled state
-    // catches up. Send the command exactly once, then give N.I.N.A. a bounded
+    // N.I.N.A. returns the immediate tracking state, not command acceptance.
+    // Send the command exactly once, then give its polled state a bounded
     // interval to observe the transition. Re-sending can create a command
     // storm when a meridian/limit condition is genuinely refusing tracking.
     private static readonly TimeSpan MountTrackingEnableTimeout = TimeSpan.FromSeconds(15);
@@ -126,7 +126,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private long? validatedG3GuideConnectionEpoch;
     private long? validatedG3GuideEpoch;
     private Phd2SlitPlacementSession? phd2SlitPlacementSession;
+    private Phd2CompletedInitialGuideStopReceipt? phd2CompletedInitialGuideStopReceipt;
     private Phd2LockShiftPendingState? pendingPhd2LockShift;
+    private readonly NativeGuideCalibrationRequest nativeGuideCalibrationRequest = new();
     private Guid? photometryJobId;
     private int qhyPhotometryAttempt;
     private bool qhyAvailableForRun = true;
@@ -320,7 +322,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             labels["allowSupervisedSlitQualityWarning"] = configuration.AllowSupervisedSlitQualityWarning.ToString(CultureInfo.InvariantCulture);
             labels["requireSafetyMonitor"] = configuration.Environment.RequireSafetyMonitor.ToString(CultureInfo.InvariantCulture);
             labels["requireOpenDomeOrRoof"] = configuration.Environment.RequireOpenDomeOrRoof.ToString(CultureInfo.InvariantCulture);
+            labels["roofClearanceMode"] = configuration.Environment.RoofNeverInterferesWithMount ? "NonInterfering" : "ParkRequired";
             labels["requireWeatherData"] = configuration.Environment.RequireWeatherData.ToString(CultureInfo.InvariantCulture);
+            labels["weatherAuthority"] = configuration.Environment.SafetyMonitorOwnsWeather
+                ? "AIWeatherSafetyMonitor" : "IndependentWeatherAdapter";
             labels["requireOpenOpticalCover"] = configuration.Environment.RequireOpenOpticalCover.ToString(CultureInfo.InvariantCulture);
             labels["wideToSlitTransferMode"] = configuration.G3.WideToSlitTransferMode.ToString();
             labels["qhyG3FastPairEnabled"] = configuration.G3.EffectiveFastSolvePair.Enabled.ToString();
@@ -497,6 +502,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 }).ConfigureAwait(false);
                 continue;
             }
+            catch (ObservationCheckpointGateException ex)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await WriteAuditBestEffortAsync("checkpoint-action-withheld", new
+                {
+                    stage = stage.ToString(), ex.Gate.Code, ex.Gate.Message, ex.Gate.Metrics,
+                    noNewPhysicalAction = true,
+                }).ConfigureAwait(false);
+                return await CompleteStageResultAsync(stage, new StageResult(ex.Gate), cancellationToken).ConfigureAwait(false);
+            }
             catch (PhysicalActionGateException ex)
             {
                 await WriteAuditBestEffortAsync("physical-action-withheld", new
@@ -552,6 +567,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             catch (Exception ex)
             {
                 var failureCode = Phd2StageFailurePolicy.CodeFor(ex) ?? "STAGE_EXCEPTION";
+                string? adaptiveRecoveryFailure = null;
+                // A typed loss during a science-frame read must reach the same
+                // bounded path BEFORE generic exception cleanup can end a night.
+                if (AdaptiveGuideRecoveryEnabled && HasNoOutstandingGuideRecoveryMotion &&
+                    phd2.IsConnected && AdaptiveGuidingRecovery.Handles(stage, failureCode))
+                {
+                    try
+                    {
+                        var recovery = await PrepareAdaptiveGuidingRecoveryAsync(stage,
+                            new StageResult(GateResult.Unknown(failureCode, ex.Message)), context, cancellationToken).ConfigureAwait(false);
+                        if (recovery.Retry) continue;
+                        return await CompleteStageResultAsync(stage, recovery.Result, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (ResumeStageRestartException) { continue; }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception recoveryError)
+                    {
+                        // An unclassified recovery fault is not a quality skip.
+                        adaptiveRecoveryFailure = recoveryError.ToString();
+                        failureCode = "PHD2_ADAPTIVE_RECOVERY_FAULT";
+                    }
+                }
                 var ownerAtFailure = phd2.Snapshot;
                 var cleanup = await CleanupAfterFailureAsync(
                     $"{stage}: {ex.Message}",
@@ -569,6 +606,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 {
                     stage = stage.ToString(),
                     failureCode,
+                    adaptiveRecoveryFailure,
                     exception = ex.ToString(),
                     phd2OwnerAtFailure = new
                     {
@@ -594,6 +632,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationContext context,
         CancellationToken cancellationToken)
     {
+        if (AdaptiveGuideRecoveryEnabled && AdaptiveGuidingRecovery.Handles(stage, result.Gate.Code))
+            return await PrepareAdaptiveGuidingRecoveryAsync(stage, result, context, cancellationToken).ConfigureAwait(false);
         var decision = session.Evaluate(stage, result.Gate);
         var plan = decision.Plan;
         if (!plan.IsRecoverable)
@@ -756,25 +796,50 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var expectedLock = owned?.LastMeasurement.Frame.NativeLockPosition;
             var actualLock = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
             var snapshot = phd2.Snapshot;
+            var initialGuideReceipt = owned is null && stage == ObservationStage.PlaceTargetOnSlit &&
+                sourceCode == "PHD2_STRUCTURED_GUIDE_SESSION_LOSS" &&
+                Phd2DependencyRebuildStopPolicy.CanStopInitialGuideAfterSingleLoss(
+                    snapshot, Volatile.Read(ref phd2GuidingEverStarted) != 0,
+                    phd2CompletedInitialGuideStopReceipt, actualLock, pendingPhd2LockShift is not null)
+                    ? phd2CompletedInitialGuideStopReceipt : null;
+            var ownedConnectionEpoch = owned?.ConnectionEpoch ?? initialGuideReceipt?.ConnectionEpoch;
+            expectedLock ??= initialGuideReceipt?.Lock;
+            var sourcePath = owned?.LastMeasurement.Frame.Path ??
+                (initialGuideReceipt is not null ? lastG3Field?.FramePath : null);
             if (!Phd2DependencyRebuildStopPolicy.CanStopOwnedSession(
                 snapshot, Volatile.Read(ref phd2GuidingEverStarted) != 0,
-                owned?.ConnectionEpoch, expectedLock, actualLock))
+                ownedConnectionEpoch, expectedLock, actualLock) || sourcePath is null)
                 return GateResult.Unknown("PHD2_REBUILD_CAPTURE_NOT_OWNED",
                     $"自动重建未能确认当前 {snapshot.AppState} 属于本轮且锁点未变；不停止外部导星、标定或人工暂停的会话。");
             await PublishRunJsonEvidenceAsync("phd2-dependency-rebuild-stop-intent",
                 "Checked stop of this run's guide session before fresh full-frame acquisition",
                 new { stage = stage.ToString(), sourceCode, snapshot.ConnectionEpoch, snapshot.GuideEpoch,
                     state = snapshot.AppState.ToString(), expectedLock, actualLock,
+                    initialGuideReceipt, stopAuthorityOnly = true, placementProven = false,
                     targetIdentityReusedForScience = false, durableMotionBudgetsReset = false },
-                owned!.LastMeasurement.Frame.Path, cancellationToken).ConfigureAwait(false);
+                sourcePath, cancellationToken).ConfigureAwait(false);
+            if (initialGuideReceipt is not null)
+            {
+                // Publishing the intent is asynchronous. Recheck this narrow
+                // receipt immediately before stop so an intervening external
+                // pause/reselect/new guide cannot be adopted across that gap.
+                _ = await phd2.GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+                actualLock = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
+                if (!Phd2DependencyRebuildStopPolicy.CanStopInitialGuideAfterSingleLoss(
+                    phd2.Snapshot, Volatile.Read(ref phd2GuidingEverStarted) != 0,
+                    initialGuideReceipt, actualLock, pendingPhd2LockShift is not null))
+                    return GateResult.Unknown("PHD2_REBUILD_CAPTURE_NOT_OWNED",
+                        "初始导星丢锁后的原生操作回执在停止前已失效；未停止其他会话，未重建或重置预算。");
+            }
             Report("PHD2 导星证据已失效；确认停止本轮导星后重建新帧、目标与狭缝证据，不重置运动账本");
             var stopped = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
             ValidateConfirmedPhdStop(stopped, "automatic dependency rebuild");
+            phd2CompletedInitialGuideStopReceipt = null;
             var stopEvidence = await PublishRunJsonEvidenceAsync("phd2-dependency-rebuild-stop-confirmed",
                 "PHD2 Stopped confirmed before dependency evidence is invalidated",
                 new { stage = stage.ToString(), sourceCode, stopped.ConfirmedIdle,
                     finalState = stopped.FinalState.ToString(), durableMotionBudgetsReset = false },
-                owned.LastMeasurement.Frame.Path, cancellationToken).ConfigureAwait(false);
+                sourcePath, cancellationToken).ConfigureAwait(false);
             automaticRebuildStopProof = new(snapshot.ConnectionEpoch, phd2.Snapshot.GuideEpoch, stopEvidence);
             return GateResult.Pass("PHD2_REBUILD_STOP_CONFIRMED", "已确认本轮 PHD2 停止；可以重建新鲜证据，尚未恢复科学曝光。");
         }
@@ -791,6 +856,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var validation = await EvaluateInterlocksAsync(context, connectQhy: false, cancellationToken).ConfigureAwait(false);
         if (validation.Disposition != GateDisposition.Passed &&
             !configuration.Environment.WeakSupervisionEnabled &&
+            configuration.SequencePlan?.DeferObservatoryCloseout != true &&
             Volatile.Read(ref domeOrRoofOpenEstablished) != 0)
         {
             var cleanup = await CleanupAfterFailureAsync(
@@ -815,6 +881,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         if (result.Gate.Disposition == GateDisposition.Passed ||
             configuration.Environment.WeakSupervisionEnabled ||
+            configuration.SequencePlan?.DeferObservatoryCloseout == true ||
             Volatile.Read(ref domeOrRoofOpenEstablished) == 0)
         {
             return result;
@@ -1229,7 +1296,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         environmentSafetyShutdownTask = Task.Run(async () =>
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(
-                configuration.Environment.DomeOrRoofTransitionTimeoutSeconds +
+                configuration.Environment.RoofCloseoutTimeoutSeconds +
                 configuration.Environment.OpticalCoverTransitionTimeoutSeconds + 120));
             IReadOnlyList<string> failures;
             try
@@ -1615,7 +1682,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         context.Set("realRunConfigurationSha256", configuration.ActionConfigurationSha256);
         context.Set("commissioningPresetSha256", commissioning.Sha256);
 
-        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToGateResult();
+        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToRuntimeGateResult();
         if (horizon.Disposition != GateDisposition.Passed) return horizon;
         var coverGate = await EnsureOpticalCoverOpenAsync(context, cancellationToken).ConfigureAwait(false);
         if (coverGate.Disposition != GateDisposition.Passed) return coverGate;
@@ -2016,7 +2083,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         var current = CaptureCurrentEnvironmentDeviceSelection();
         return current == configuration.Environment.Devices
-            ? configuration.Environment.Devices.ValidateForMode(configuration.Environment.WeakSupervisionEnabled)
+            ? configuration.Environment.Devices.ValidateForMode(configuration.Environment.WeakSupervisionEnabled,
+                configuration.Environment.RequireWeatherData)
             : GateResult.Fail(
                 "NINA_ENVIRONMENT_DEVICE_SELECTION_DRIFT",
                 $"N.I.N.A. environment selections changed after run lock. " +
@@ -2223,13 +2291,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var telescope = telescopeMediator.GetInfo();
             if (!telescope.Connected)
             {
-                return GateResult.Unknown("ROOF_OPEN_MOUNT_DISCONNECTED", "The mount must be connected and parked before opening the roll-off roof.");
+                return GateResult.Unknown("ROOF_OPEN_MOUNT_DISCONNECTED", "The bound mount must be connected before opening the roll-off roof.");
             }
             if (telescope.Slewing)
             {
                 return GateResult.Unknown("ROOF_OPEN_MOUNT_MOVING", "The mount is moving; the roll-off roof will not be opened.");
             }
-            if (!telescope.AtPark)
+            if (configuration.Environment.RoofNeverInterferesWithMount)
+            {
+                var authorityIssue = await ValidateIndependentRoofAuthorityAsync(cancellationToken).ConfigureAwait(false);
+                if (authorityIssue is not null) return GateResult.Unknown("ROOF_CLEARANCE_NOT_AUTHORIZED", authorityIssue);
+                if (!await IndependentRoofGuiderIdleAsync(cancellationToken).ConfigureAwait(false))
+                    return GateResult.Unknown("ROOF_OPEN_GUIDER_ACTIVE", "PHD2 must be stopped before non-interfering roof opening; no mount or guide command was issued.");
+                if (cameraMediator.GetInfo().IsExposing || activeQhyJobs.Count != 0 || pendingQhyRequests.Count != 0)
+                    return GateResult.Unknown("ROOF_OPEN_ACQUISITION_ACTIVE", "Roof not opened: acquisition is still active; tracking was not changed.");
+                Report("开顶准备：核对赤道仪静止；如仍在跟踪，关闭一次并限时确认，不执行 Home 或 Park");
+                var prepare = await PrepareMountForIndependentRoofOpenAsync(telescopeMediator,
+                    configuration.ExpectedTelescopeId, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(250),
+                    cancellationToken).ConfigureAwait(false);
+                await WriteAuditBestEffortAsync("unattended-roof-open-preparation", prepare).ConfigureAwait(false);
+                if (prepare.Disposition != GateDisposition.Passed) return prepare;
+            }
+            else if (!telescope.AtPark)
             {
                 if (!telescope.CanPark)
                 {
@@ -2245,6 +2328,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 if (parkGate.Disposition != GateDisposition.Passed) return parkGate;
             }
 
+            // The guider query may wait for RPC. Re-read the synchronous safety,
+            // roof and mount state after it, not before that possible delay.
+            if (configuration.Environment.RoofNeverInterferesWithMount &&
+                !await IndependentRoofGuiderIdleAsync(cancellationToken).ConfigureAwait(false))
+                return GateResult.Unknown("ROOF_OPEN_GUIDER_ACTIVE", "PHD2 became active during opening preparation; no roof-open command was issued.");
             await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
             prerequisite = ValidateRoofOpeningPrerequisites(context, plan);
             if (prerequisite.Disposition != GateDisposition.Passed) return prerequisite;
@@ -2258,7 +2346,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "The locked RRCI connection, identity or closed state changed immediately before the open command.");
             }
 
-            Report("全无人监管：AIWeather、安全天气门和停放状态均通过，委托 N.I.N.A./RRCI 打开平移顶");
+            if (configuration.Environment.RoofNeverInterferesWithMount && !IndependentRoofMountStopped())
+                return GateResult.Unknown("ROOF_OPEN_MOUNT_MOVING", "Mount stopped state changed immediately before roof opening.");
+            Report(configuration.Environment.RoofNeverInterferesWithMount
+                ? "无干涉屋顶：AIWeather 与停止状态通过，直接开顶；不要求 Park，不移动赤道仪"
+                : "全无人监管：AIWeather、安全天气门和停放状态均通过，委托 N.I.N.A./RRCI 打开平移顶");
             // Arm the fail-safe before sending the command so an unsafe event
             // that arrives during the opening transition starts closure rather
             // than being mistaken for a still-closed pre-run state.
@@ -2288,6 +2380,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 adapter = configuration.Environment.Devices.DomeOrRoofId,
                 safetyMonitor = configuration.Environment.Devices.SafetyMonitorId,
                 weather = configuration.Environment.Devices.WeatherDataId,
+                roofClearanceMode = configuration.Environment.RoofNeverInterferesWithMount ? "NonInterfering" : "ParkRequired",
+                mountParked = telescopeMediator.GetInfo().AtPark,
+                configuration.Commissioning.PresetSha256,
                 openGate.Code,
                 disposition = openGate.Disposition.ToString(),
                 openGate.Message,
@@ -3263,6 +3358,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 return $"Connected roof adapter '{dome.DeviceId}' does not match locked selection '{configuration.Environment.Devices.DomeOrRoofId}'; no roof command was sent.";
             }
+            if (configuration.Environment.RoofNeverInterferesWithMount)
+                return await CloseIndependentRoofAsync(reason, cancellationToken).ConfigureAwait(false);
             if (dome.ShutterStatus == ShutterState.ShutterClosed)
             {
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
@@ -3446,7 +3543,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.Environment.RequireOpenDomeOrRoof,
             configuration.Environment.RequireWeatherData,
             configuration.Environment.RequireOpenOpticalCover,
-            configuration.Environment.WeakSupervisionEnabled);
+            configuration.Environment.WeakSupervisionEnabled,
+            configuration.Environment.SafetyMonitorOwnsWeather);
         if (capability.Disposition != GateDisposition.Passed) return capability;
 
         var environmentWarnings = new List<string>();
@@ -3530,7 +3628,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 return GateResult.Unknown("WEATHER_ADAPTER_SELECTION_MISSING", "A selected and connected weather adapter is required for this unattended REAL observation.");
             }
-            environmentWarnings.Add("weather adapter not selected");
+            environmentWarnings.Add(configuration.Environment.SafetyMonitorOwnsWeather
+                ? "AIWeather is the commissioned weather authority; no network forecast adapter is used"
+                : "weather adapter not selected");
         }
         else
         {
@@ -3576,7 +3676,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
         }
 
-        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToGateResult();
+        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToRuntimeGateResult();
         if (horizon.Disposition != GateDisposition.Passed) return horizon;
         return environmentWarnings.Count == 0
             ? horizon
@@ -3738,73 +3838,103 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         Report("赤道仪未跟踪；通过 N.I.N.A. 单次启用恒星时跟踪，等待驱动回读确认");
-        var requestedUtc = DateTimeOffset.UtcNow;
-        var accepted = telescopeMediator.SetTrackingEnabled(true);
+        var result = await EnableAndVerifyMountTrackingAsync(telescopeMediator,
+            configuration.ExpectedTelescopeId, MountTrackingEnableTimeout,
+            MountTrackingEnablePollInterval, cancellationToken).ConfigureAwait(false);
+        await WriteAuditBestEffortAsync("telescope-tracking-enable", new
+        {
+            context.Plan.ObservationRunId,
+            gate = result.Code,
+            result.Metrics,
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    internal static async Task<GateResult> EnableAndVerifyMountTrackingAsync(
+        ITelescopeMediator telescopeMediator, string expectedId, TimeSpan timeout,
+        TimeSpan pollInterval, CancellationToken cancellationToken)
+    {
+        if (timeout <= TimeSpan.Zero || pollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        cancellationToken.ThrowIfCancellationRequested();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var verified = telescopeMediator.GetInfo();
+        bool? returnedTrackingState = null;
+        var commandCount = 0;
         var pollCount = 0;
-        while (accepted &&
-               verified.Connected &&
-               !verified.AtPark &&
-               !verified.TrackingEnabled)
+
+        GateResult Finish(GateResult gate) => gate with
+        {
+            Metrics = new Dictionary<string, double>
+            {
+                ["commandCount"] = commandCount,
+                ["pollCount"] = pollCount,
+                ["elapsedMilliseconds"] = elapsed.Elapsed.TotalMilliseconds,
+                ["timeoutSeconds"] = timeout.TotalSeconds,
+                ["returnedTrackingState"] = returnedTrackingState is { } state ? (state ? 1 : 0) : -1,
+                ["verified"] = verified.TrackingEnabled ? 1 : 0,
+                ["connected"] = verified.Connected ? 1 : 0,
+                ["atPark"] = verified.AtPark ? 1 : 0,
+                ["slewing"] = verified.Slewing ? 1 : 0,
+                ["pulseGuiding"] = verified.IsPulseGuiding ? 1 : 0,
+            },
+        };
+
+        GateResult? StateIssue()
+        {
+            if (!verified.Connected)
+                return GateResult.Unknown("TELESCOPE_TRACKING_CONNECTION_LOST",
+                    "Mount connection is unavailable while confirming tracking; no slew was started.");
+            if (!EnvironmentAdapterIdentityMatches(verified.DeviceId, expectedId))
+                return GateResult.Unknown("TELESCOPE_TRACKING_IDENTITY_CHANGED",
+                    "The mount identity changed while confirming tracking; no slew was started.");
+            if (verified.AtPark)
+                return GateResult.Unknown("TELESCOPE_TRACKING_ENABLE_PARKED",
+                    "N.I.N.A. reports the mount parked while confirming tracking; no slew was started.");
+            if (verified.Slewing || verified.IsPulseGuiding)
+                return GateResult.Unknown("TELESCOPE_TRACKING_UNEXPECTED_MOTION",
+                    "Unexpected slew or guide pulse appeared while confirming tracking; no new slew was started.");
+            return null;
+        }
+
+        if (StateIssue() is { } initialIssue) return Finish(initialIssue);
+        if (verified.TrackingEnabled)
+            return Finish(GateResult.Pass("TELESCOPE_TRACKING_ENABLED", "Mount tracking is already enabled."));
+
+        try
+        {
+            commandCount = 1;
+            // False can simply be the old state. Only the subsequent verified
+            // state authorizes a slew; never repeat this command to chase it.
+            returnedTrackingState = telescopeMediator.SetTrackingEnabled(true);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return Finish(GateResult.Unknown("TELESCOPE_TRACKING_ENABLE_REJECTED",
+                $"The single N.I.N.A. tracking request raised {ex.GetType().Name}: {ex.Message}. No slew was started."));
+        }
+
+        verified = telescopeMediator.GetInfo();
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var elapsed = DateTimeOffset.UtcNow - requestedUtc;
-            var remaining = MountTrackingEnableTimeout - elapsed;
-            if (remaining <= TimeSpan.Zero) break;
+            if (StateIssue() is { } issue) return Finish(issue);
+            if (verified.TrackingEnabled)
+                return Finish(GateResult.Pass("TELESCOPE_TRACKING_ENABLED",
+                    $"N.I.N.A. verified tracking after {elapsed.Elapsed.TotalSeconds:F2} s ({pollCount} polls, one command)."));
+            var remaining = timeout - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+                return Finish(GateResult.Unknown("TELESCOPE_TRACKING_ENABLE_TIMEOUT",
+                    $"After one tracking request N.I.N.A. still reports tracking off after {timeout.TotalSeconds:F0} s. Inspect driver status or a meridian/limit refusal; no slew, automatic home or repeated request was started."));
 
             await Task.Delay(
-                    remaining < MountTrackingEnablePollInterval
-                        ? remaining
-                        : MountTrackingEnablePollInterval,
+                    remaining < pollInterval ? remaining : pollInterval,
                     cancellationToken)
                 .ConfigureAwait(false);
             verified = telescopeMediator.GetInfo();
             pollCount++;
         }
-
-        var elapsedMilliseconds = Math.Max(0d, (DateTimeOffset.UtcNow - requestedUtc).TotalMilliseconds);
-        await WriteAuditBestEffortAsync("telescope-tracking-enable", new
-        {
-            accepted,
-            verified = verified.TrackingEnabled,
-            commandCount = 1,
-            pollCount,
-            elapsedMilliseconds,
-            timeoutSeconds = MountTrackingEnableTimeout.TotalSeconds,
-            connected = verified.Connected,
-            atPark = verified.AtPark,
-            slewing = verified.Slewing,
-            sideOfPier = verified.SideOfPier.ToString(),
-        }).ConfigureAwait(false);
-
-        if (!accepted)
-        {
-            return GateResult.Unknown(
-                "TELESCOPE_TRACKING_ENABLE_REJECTED",
-                "N.I.N.A. rejected the single tracking-enable request; no slew was started and the command was not repeated.");
-        }
-        if (!verified.Connected)
-        {
-            return GateResult.Unknown(
-                "TELESCOPE_TRACKING_CONNECTION_LOST",
-                "The telescope disconnected while N.I.N.A. was waiting for tracking confirmation; no slew was started.");
-        }
-        if (verified.AtPark)
-        {
-            return GateResult.Unknown(
-                "TELESCOPE_TRACKING_ENABLE_PARKED",
-                "N.I.N.A. still reports the mount parked after accepting tracking enable; no slew was started.");
-        }
-        if (!verified.TrackingEnabled)
-        {
-            return GateResult.Unknown(
-                "TELESCOPE_TRACKING_ENABLE_TIMEOUT",
-                $"N.I.N.A. accepted one tracking-enable request but did not report tracking within {MountTrackingEnableTimeout.TotalSeconds:F0} s. This is no longer treated as an immediate-readback failure; inspect a meridian/limit refusal or home the mount. No slew was started.");
-        }
-
-        return GateResult.Pass(
-            "TELESCOPE_TRACKING_ENABLED",
-            $"N.I.N.A. enabled and verified mount tracking after {elapsedMilliseconds / 1000d:F2} s ({pollCount} polls, one command).");
     }
 
     private async Task<StageResult> AcquireOptionalQhyWideFieldAsync(
@@ -12629,6 +12759,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private async Task<StageResult> PlaceTargetOnSlitLockedAsync(ObservationContext context, CancellationToken cancellationToken)
     {
         if (commissioning is null) return Attention(ObservationStage.PlaceTargetOnSlit, "COMMISSIONING_PRESET_REQUIRED", "Trusted slit geometry, transform and motion limits are not loaded.");
+        if (configuration.SequencePlan?.ForceGuideCalibration == true &&
+            commissioning.Value.FineMotionAuthority == RealSlitPlacementAuthority.IndependentMountTransform)
+            return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_EXPLICIT_CALIBRATION_ROUTE_REQUIRED",
+                "本目标要求 PHD2 强制校准，但标定包选择了独立精调路线；未静默忽略开关，请选择已验收的 PHD2 路线。");
         var phd2Recovery = await RecoverOutstandingPhd2LockBeforePlacementAsync(context, cancellationToken).ConfigureAwait(false);
         if (phd2Recovery is not null) return phd2Recovery;
         if (lastG3Field?.TargetIdentification.Target is null || lastG3Field.Gate.Disposition != GateDisposition.Passed)
@@ -12649,6 +12783,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             var phd2Result = await PlaceTargetOnSlitWithPhd2Async(context, cancellationToken).ConfigureAwait(false);
             if (phd2Result.CanAdvance ||
+                configuration.SequencePlan?.ForceGuideCalibration == true ||
                 commissioning.Value.FineMotionAuthority == RealSlitPlacementAuthority.Phd2CalibrationLockShift ||
                 !CanUseIndependentFallbackAfterPhd2Preflight(phd2Result.Gate.Code))
             {
@@ -14050,10 +14185,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             configuration.Environment.RequireOpenDomeOrRoof,
             configuration.Environment.RequireWeatherData,
             configuration.Environment.RequireOpenOpticalCover,
-            configuration.Environment.WeakSupervisionEnabled);
+            configuration.Environment.WeakSupervisionEnabled,
+            configuration.Environment.SafetyMonitorOwnsWeather);
         if (capability.Disposition != GateDisposition.Passed) issues.Add(capability.Message);
         var environmentSelections = configuration.Environment.Devices.ValidateForMode(
-            configuration.Environment.WeakSupervisionEnabled);
+            configuration.Environment.WeakSupervisionEnabled, configuration.Environment.RequireWeatherData);
         if (environmentSelections.Disposition != GateDisposition.Passed)
         {
             issues.Add(environmentSelections.Message);
@@ -16120,7 +16256,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return await CleanupAfterFailureCoreAsync(
                 reason,
                 cancellationToken,
-                allowMechanicalActions).ConfigureAwait(false);
+                // The native night owns mechanical closeout, including unsafe
+                // shutdown. A target only stops owners and preserves its ledgers.
+                allowMechanicalActions && configuration.SequencePlan?.DeferObservatoryCloseout != true).ConfigureAwait(false);
         }
         finally
         {
@@ -16239,7 +16377,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var roofRecovery = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            roofRecovery.CancelAfter(TimeSpan.FromSeconds(configuration.Environment.DomeOrRoofTransitionTimeoutSeconds + 30));
+            roofRecovery.CancelAfter(TimeSpan.FromSeconds(configuration.Environment.RoofCloseoutTimeoutSeconds));
             try
             {
                 var roofIssue = await ParkMountAndCloseDomeOrRoofAsync(reason, roofRecovery.Token).ConfigureAwait(false);

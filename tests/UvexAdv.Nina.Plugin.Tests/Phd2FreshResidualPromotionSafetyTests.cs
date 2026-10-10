@@ -27,7 +27,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(",
             "var chargedLedger = ledger with",
             "exact = await phd2.SetExactLockPositionAsync(");
-        Assert.Contains("preset.MaximumGuideLockResidualPixels, completionTolerance, requiredCompletionFrames)", Source);
+        Assert.Contains("preset.EffectiveGuideLockResidualPixels, completionTolerance, requiredCompletionFrames)", Source);
         Assert.Contains("!Phd2PlacementGuideWindowPolicy.AllWithinTolerance(completionResiduals, completionTolerance)", Source);
     }
 

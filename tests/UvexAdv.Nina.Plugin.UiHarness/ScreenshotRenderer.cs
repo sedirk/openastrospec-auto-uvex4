@@ -34,7 +34,15 @@ public sealed record ScreenshotRenderResult(
     public PreparationLayoutDiagnostics? PreparationLayout { get; init; }
     public IReadOnlyList<string> NativePopupTexts { get; init; } = [];
     public bool NativeSelectionRoundTrips { get; init; }
+    public bool NativeTargetEditsRoundTrip { get; init; }
+    public string? NativeTargetDiagnostics { get; init; }
+    public NativeTargetLayoutDiagnostics? NativeTargetLayout { get; init; }
+    public bool NativeNightHasNoTargetEditor { get; init; }
 }
+
+public sealed record NativeTargetLayoutDiagnostics(int EditorCount, bool CoordinateControlsNative,
+    bool NegativeZeroPreserved, bool TargetsIndependent, bool CommandsBound,
+    bool InputsVisible, bool LabelsReadable, bool NoCentralTargetSelector);
 
 public sealed record WorkflowLayoutDiagnostics(int NodeCount, int ExpanderCount,
     bool GraphViewportVisible, bool ToolbarVisible, bool DetailVisible, bool DetailTabsReachable,
@@ -124,13 +132,43 @@ public static class ScreenshotRenderer
         host.SetValue(TextElement.ForegroundProperty, new SolidColorBrush(Color.FromRgb(226, 232, 240)));
         host.SetValue(TextElement.FontFamilyProperty, new FontFamily("Segoe UI"));
         host.Resources.MergedDictionaries.Add(OfflineNightTheme.Create());
-        if (scenario.TemplateKey == "NativeFailurePolicySelector")
+        if (scenario.RenderNativeTargetPair)
+        {
+            // Two target containers expanded on the same sequence page, not a selected-item editor.
+            // The template and view models are both production code; this is only an offline host.
+            var cards = new StackPanel();
+            foreach (var model in ((NativeNightMock)scenario.AlternateViewModel!).Items)
+                cards.Children.Add(new ContentControl
+                {
+                    Content = model, ContentTemplate = template,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0, 0, 0, 16)
+                });
+            host.Child = cards;
+        }
+        if (scenario.TemplateKey is "NativeSpectroscopyNightPanel" or "NativeSpectroscopyNightSettingsPanel" or "NativeSpectroscopyTargetPanel")
+        {
+            // N.I.N.A.'s switch template deliberately has no ContentPresenter.
+            // Render that real style so switch labels cannot pass only with WPF defaults.
+            host.Resources.MergedDictionaries.Add(new ResourceDictionary
+            { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/CheckBox.xaml") });
+        }
+        if (scenario.TemplateKey is "NativeSpectroscopyNightPanel" or "NativeSpectroscopyTargetPanel")
+        {
+            host.Resources.MergedDictionaries.Add(new ResourceDictionary
+            { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/TabControl.xaml") });
+            host.Resources.MergedDictionaries.Add(new ResourceDictionary
+            { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/TextBlock.xaml") });
+            host.Resources.MergedDictionaries.Add(new ResourceDictionary
+            { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/Expander.xaml") });
+        }
+        if (scenario.TemplateKey is "NativeFailurePolicySelector" or "NativeSpectroscopyNightPanel" or "NativeSpectroscopyTargetPanel")
         {
             // Load the installed N.I.N.A. template, including its TextBlock +
             // InlineUIContainer wrapper. Default WPF ComboBox styles hid this bug.
             host.Resources.MergedDictionaries.Add(new ResourceDictionary
             { Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/ComboBox.xaml") });
-            ((ContentControl)host.Child).VerticalContentAlignment = VerticalAlignment.Top;
+            if (host.Child is ContentControl content) content.VerticalContentAlignment = VerticalAlignment.Top;
         }
 
         BitmapSource bitmap;
@@ -144,6 +182,10 @@ public static class ScreenshotRenderer
         PreparationLayoutDiagnostics? preparationLayout = null;
         IReadOnlyList<string> nativePopupTexts = [];
         bool nativeSelectionRoundTrips = false;
+        bool nativeTargetEditsRoundTrip = false;
+        string? nativeTargetDiagnostics = null;
+        NativeTargetLayoutDiagnostics? nativeTargetLayout = null;
+        bool nativeNightHasNoTargetEditor = false;
         var window = new Window
         {
             Width = scenario.Width,
@@ -189,6 +231,19 @@ public static class ScreenshotRenderer
             PumpLoadedAndRender(window.Dispatcher);
 
             planScroll = InspectPlanScrolling(host, scenario);
+            if (scenario.TemplateKey == "NativeSpectroscopyTargetPanel")
+            {
+                (nativeTargetEditsRoundTrip, nativeTargetLayout, nativeTargetDiagnostics) = InspectNativeTargetEditors(host, scenario);
+            }
+            if (scenario.TemplateKey == "NativeSpectroscopyNightPanel")
+            {
+                nativeNightHasNoTargetEditor =
+                    !Descendants<ComboBox>(host).Any(x => x.Name == "NativeNightTargetSelector") &&
+                    !Descendants<TextBox>(host).Any(x => x.Name == "NativeTargetName") &&
+                    !Descendants<CheckBox>(host).Any(x => x.Name == "NativeForceCalibration") &&
+                    Descendants<Expander>(host).Any() &&
+                    Descendants<Expander>(host).All(x => !x.IsExpanded);
+            }
             focusLayout = InspectFocusLayout(host, scenario);
             targetStrategyLayout = InspectTargetStrategyLayout(host, scenario);
             workflowLayout = InspectWorkflowLayout(host, scenario);
@@ -266,7 +321,110 @@ public static class ScreenshotRenderer
             PreparationLayout = preparationLayout,
             NativePopupTexts = nativePopupTexts,
             NativeSelectionRoundTrips = nativeSelectionRoundTrips,
+            NativeTargetEditsRoundTrip = nativeTargetEditsRoundTrip,
+            NativeTargetDiagnostics = nativeTargetDiagnostics,
+            NativeTargetLayout = nativeTargetLayout,
+            NativeNightHasNoTargetEditor = nativeNightHasNoTargetEditor,
         };
+    }
+
+    private static (bool Passed, NativeTargetLayoutDiagnostics Layout, string Diagnostic) InspectNativeTargetEditors(
+        FrameworkElement host, ScreenshotScenario scenario)
+    {
+        var roots = Descendants<ContentControl>(host)
+            .Where(x => x.ContentTemplate is not null &&
+                x.Content is UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer &&
+                Descendants<TextBox>(x).Any(box => box.Name == "NativeTargetName"))
+            .ToArray();
+        var firstRoot = roots.First();
+        var first = (UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer)firstRoot.Content;
+        var otherRoot = roots.Skip(1).FirstOrDefault();
+        var other = otherRoot?.Content as UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer;
+        var otherBefore = other is null ? null : new
+        {
+            other.TargetName, other.RightAscensionDegrees, other.DeclinationDegrees,
+            other.ScienceFrames, other.FixedExposureSeconds, other.ForceGuideCalibration,
+            other.AutomaticGuideRecovery, other.GuideStarWaitSeconds
+        };
+        static TextBox Box(DependencyObject root, string name) => Descendants<TextBox>(root).Single(x => x.Name == name);
+        static void Edit(DependencyObject root, string name, string value)
+        {
+            var box = Box(root, name);
+            box.Text = value;
+            if (box.GetBindingExpression(TextBox.TextProperty) is { } binding) binding.UpdateSource();
+            else BindingOperations.GetMultiBindingExpression(box, TextBox.TextProperty)!.UpdateSource();
+        }
+        Edit(firstRoot, "NativeTargetName", "Edited target");
+        Edit(firstRoot, "NativeTargetRaHours", "7");
+        Edit(firstRoot, "NativeTargetRaMinutes", "2");
+        Edit(firstRoot, "NativeTargetRaSeconds", "3");
+        Edit(firstRoot, "NativeTargetDecMinutes", "30");
+        Edit(firstRoot, "NativeTargetDecSeconds", "15");
+        Edit(firstRoot, "NativeTargetDecDegrees", "-0");
+        Edit(firstRoot, "NativeTargetFrames", "3");
+        Edit(firstRoot, "NativeTargetExposure", "300");
+        Descendants<CheckBox>(firstRoot).Single(x => x.Name == "NativeForceCalibration").IsChecked = true;
+        Descendants<CheckBox>(firstRoot).Single(x => x.Name == "NativeAutomaticGuideRecovery").IsChecked = false;
+        Edit(firstRoot, "NativeGuideStarWait", "180");
+        PumpLoadedAndRender(host.Dispatcher);
+        var negativeZero = Math.Abs(first.DeclinationDegrees - (-0.5 - 15d / 3600)) < 1e-9 &&
+            Box(firstRoot, "NativeTargetDecDegrees").Text.StartsWith("-", StringComparison.Ordinal);
+        var edits = first.TargetName == "Edited target" && Math.Abs(first.RightAscensionDegrees - 105.5125) < 1e-9 &&
+            first.ScienceFrames == 3 && first.FixedExposureSeconds == 300 && first.ForceGuideCalibration &&
+            !first.AutomaticGuideRecovery && first.GuideStarWaitSeconds == 180 &&
+            Descendants<TextBlock>(firstRoot).Single(x => x.Name == "NativeTargetSummary").Text == first.TargetSummary;
+        var independent = other is null || (other.TargetName == otherBefore!.TargetName &&
+            other.RightAscensionDegrees == otherBefore.RightAscensionDegrees &&
+            other.DeclinationDegrees == otherBefore.DeclinationDegrees && other.ScienceFrames == otherBefore.ScienceFrames &&
+            other.FixedExposureSeconds == otherBefore.FixedExposureSeconds && other.ForceGuideCalibration == otherBefore.ForceGuideCalibration &&
+            other.AutomaticGuideRecovery == otherBefore.AutomaticGuideRecovery && other.GuideStarWaitSeconds == otherBefore.GuideStarWaitSeconds);
+        if (otherRoot is not null && other is not null)
+        {
+            Edit(otherRoot, "NativeTargetName", "Second target");
+            Edit(otherRoot, "NativeTargetRaHours", "8");
+            Edit(otherRoot, "NativeTargetRaMinutes", "0");
+            Edit(otherRoot, "NativeTargetRaSeconds", "0");
+            Edit(otherRoot, "NativeTargetFrames", "4");
+            Edit(otherRoot, "NativeTargetExposure", "90");
+            Descendants<CheckBox>(otherRoot).Single(x => x.Name == "NativeForceCalibration").IsChecked = false;
+            PumpLoadedAndRender(host.Dispatcher);
+            independent &= other.TargetName == "Second target" && other.RightAscensionDegrees == 120 &&
+                other.ScienceFrames == 4 && other.FixedExposureSeconds == 90 && !other.ForceGuideCalibration &&
+                first.TargetName == "Edited target" && first.ScienceFrames == 3 && first.FixedExposureSeconds == 300 &&
+                first.ForceGuideCalibration && Math.Abs(first.RightAscensionDegrees - 105.5125) < 1e-9 &&
+                Box(firstRoot, "NativeTargetName").Text == "Edited target" &&
+                Descendants<CheckBox>(firstRoot).Single(x => x.Name == "NativeForceCalibration").IsChecked == true;
+        }
+        string[] coordinateNames = ["NativeTargetRaHours", "NativeTargetRaMinutes", "NativeTargetRaSeconds",
+            "NativeTargetDecDegrees", "NativeTargetDecMinutes", "NativeTargetDecSeconds"];
+        var coordinatePaths = new Dictionary<string, string>
+        {
+            ["NativeTargetRaHours"] = "RAHours", ["NativeTargetRaMinutes"] = "RAMinutes", ["NativeTargetRaSeconds"] = "RASeconds",
+            ["NativeTargetDecMinutes"] = "DecMinutes", ["NativeTargetDecSeconds"] = "DecSeconds"
+        };
+        var nativeCoordinates = roots.All(root =>
+        {
+            var model = (UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer)root.Content;
+            var degrees = BindingOperations.GetMultiBinding(Box(root, "NativeTargetDecDegrees"), TextBox.TextProperty);
+            return coordinateNames.All(name => ReferenceEquals(Box(root, name).DataContext, model.Target.InputCoordinates)) &&
+                coordinatePaths.All(pair => BindingPath(Box(root, pair.Key), TextBox.TextProperty) == pair.Value &&
+                    BindingOperations.GetBinding(Box(root, pair.Key), TextBox.TextProperty)!.ValidationRules.Count > 0) &&
+                degrees?.Converter.GetType().Name == "DecDegreeConverter" &&
+                degrees.Bindings.OfType<Binding>().Select(binding => binding.Path.Path).SequenceEqual(new[] { "NegativeDec", "DecDegrees" });
+        });
+        var commandsBound = roots.All(root => new[] { "CoordsFromPlanetariumCommand", "CoordsToFramingCommand" }.All(command =>
+            Descendants<Button>(root).Any(button => BindingPath(button, Button.CommandProperty) == command && button.Command is not null)));
+        var labels = roots.Select(root => Descendants<TextBlock>(root).Single(x => x.Name == "NativeForceCalibrationLabel")).ToArray();
+        var readable = labels.All(label => label.IsVisible && label.Foreground is SolidColorBrush brush &&
+            brush.Color.R > 150 && brush.Color.G > 150 && brush.Color.B > 150);
+        var visible = roots.All(root => coordinateNames.Concat(new[] { "NativeTargetName", "NativeTargetFrames", "NativeTargetExposure" })
+            .All(name => IsFullyInside(Box(root, name), host))) && labels.All(label => IsFullyInside(label, host));
+        var noSelector = !Descendants<ComboBox>(host).Any(x => x.Name == "NativeNightTargetSelector");
+        var layout = new NativeTargetLayoutDiagnostics(roots.Length, nativeCoordinates, negativeZero, independent,
+            commandsBound, visible, readable, noSelector);
+        var passed = edits && negativeZero && independent && nativeCoordinates && commandsBound && visible && readable && noSelector &&
+            roots.Length == (scenario.RenderNativeTargetPair ? 2 : 1);
+        return (passed, layout, $"Edits={edits}; layout={layout}; RA={first.RightAscensionDegrees}; Dec={first.DeclinationDegrees}; target={first.TargetSummary}");
     }
 
     private static PreparationLayoutDiagnostics? InspectPreparationLayout(FrameworkElement host, ScreenshotScenario scenario)
@@ -624,6 +782,8 @@ internal static class OfflineNightTheme
         app.Resources["PrimaryBrush"] = new SolidColorBrush(Color.FromRgb(226, 232, 240));
         app.Resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(62, 89, 108));
         app.Resources["BackgroundBrush"] = new SolidColorBrush(Color.FromRgb(31, 45, 52));
+        app.Resources["SecondaryBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(62, 89, 108));
+        app.Resources["TertiaryBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(16, 27, 40));
         app.Resources["ButtonBackgroundSelectedBrush"] = new SolidColorBrush(Color.FromRgb(0, 145, 132));
         app.Resources["ButtonForegroundBrush"] = app.Resources["PrimaryBrush"];
         app.Resources["ButtonForegroundDisabledBrush"] = new SolidColorBrush(Colors.Gray);

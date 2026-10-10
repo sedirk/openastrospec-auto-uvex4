@@ -10,9 +10,9 @@ internal sealed partial class RealObservationStageRunner
 
     private async Task<StageResult> WaitForPostCalibrationMountIdleAsync(
         Phd2DependencyRebuildStopProof stopProof, string expectedPierSide,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string phaseDescription = "PHD2 校准已通过并停止采集")
     {
-        Report("PHD2 校准已通过并停止采集；等待赤道仪导星脉冲结束及连续静止读回，再重新获取目标（最多 15 秒）");
+        Report($"{phaseDescription}；等待赤道仪导星脉冲结束及连续静止读回，再重新获取目标（最多 15 秒）");
         var samples = new List<object>();
         var gate = await Phd2MountIdleWait.WaitAsync(async token =>
         {
@@ -27,7 +27,7 @@ internal sealed partial class RealObservationStageRunner
         }, cancellationToken).ConfigureAwait(false);
         var evidence = await PublishRunJsonEvidenceAsync("phd2-post-calibration-mount-idle",
             "Read-only mount pulse drain after confirmed PHD2 stop",
-            new { gate, samples, expectedPierSide, stopProof.ConnectionEpoch, stopProof.GuideEpoch,
+            new { gate, samples, phaseDescription, expectedPierSide, stopProof.ConnectionEpoch, stopProof.GuideEpoch,
                 maximumWaitSeconds = Phd2MountIdleWait.MaximumWait.TotalSeconds,
                 requiredQuietSeconds = Phd2MountIdleWait.QuietPeriod.TotalSeconds,
                 originalBudgetsPreserved = true, motionOrCaptureIssued = false },

@@ -66,7 +66,8 @@ public sealed record Phd2SlitPlacementContract(
     Phd2CalibrationQualityPolicy? CalibrationQualityPolicy,
     string CalibrationQualityPolicySha256,
     int? OffSlitGuidingExposureMilliseconds,
-    int? DirectTargetGuidingExposureMilliseconds)
+    int? DirectTargetGuidingExposureMilliseconds,
+    double MaximumGuideLockWarningResidualPixels = 0)
 {
     /// <summary>
     /// Mirrors Phd2SlitPlacementCommissioningPreset.Validate in the production
@@ -117,6 +118,11 @@ public sealed record Phd2SlitPlacementContract(
         NonNegative(issues, MinimumOffSlitGuideDistancePixels, nameof(MinimumOffSlitGuideDistancePixels));
         NonNegative(issues, MinimumOffSlitGuideTargetSeparationPixels, nameof(MinimumOffSlitGuideTargetSeparationPixels));
         NonNegative(issues, MaximumGuideLockResidualPixels, nameof(MaximumGuideLockResidualPixels));
+        if (!double.IsFinite(MaximumGuideLockWarningResidualPixels) ||
+            (MaximumGuideLockWarningResidualPixels != 0 &&
+             (MaximumGuideLockResidualPixels <= 0 || MaximumGuideLockWarningResidualPixels < MaximumGuideLockResidualPixels ||
+              MaximumGuideLockWarningResidualPixels > Math.Min(3, MaximumGuideLockResidualPixels * 1.5))))
+            issues.Add("PHD2 guide warning ceiling must be disabled (0) or between the preferred tolerance and min(1.5 times preferred, 3 pixels).");
         NonNegative(issues, MaximumDegradedDirectTargetGuideLockResidualPixels, nameof(MaximumDegradedDirectTargetGuideLockResidualPixels));
         NonNegative(issues, MaximumDirectTargetCentroidSeparationPixels, nameof(MaximumDirectTargetCentroidSeparationPixels));
         if (!double.IsFinite(MinimumFluxMetric) || !double.IsFinite(MaximumFluxMetric) || MaximumFluxMetric <= MinimumFluxMetric)

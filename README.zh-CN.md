@@ -20,8 +20,9 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-10-09.md) ·
+[最新软件/实机收口](docs/closeout-2026-10-10.md) ·
 [原生光谱整夜序列](docs/native-spectroscopy-night-sequence.md) ·
+[可导入的光谱多目标模板](docs/spectroscopy-multi-target-template.md) ·
 [光谱中天翻转](docs/native-spectroscopy-meridian-flip.md) ·
 [实时光谱提取预览](docs/live-spectrum-preview.md) ·
 [SEP 检测与主镜对焦](docs/sep-main-mirror-focus-commissioning.md) ·
@@ -32,7 +33,19 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-10-09 收口](docs/closeout-2026-10-09.md)汇总 **0.4.0.224–240**：
+[2026-10-10 收口](docs/closeout-2026-10-10.md)汇总 **0.4.0.241–260**：
+原生多目标序列、停止确认后的质量失败跳过、有界导星精度警告、台站屋顶/天气策略，
+以及独立目标卡片编辑。每个目标独立保存曝光计划和默认关闭的一次性 PHD2 强制校准，
+整夜容器只保留夜间设置。ADR-0024 增加逐目标有界导星恢复：弱星场等待、星场恢复后重选，
+仍失败则请求一次 PHD2 校准；停止和运动结清后，按目标失败策略决定跳过，不把丢星一律当成整夜退出。
+**2,902 项 .NET、75 项后处理测试、Ruff 和四份冻结校验通过**；41 个重建文件与已安装
+**.260** 一致，146 个离线 UI 场景通过。此前 .259 的真实原生编辑/另存/重载验收仍属历史证据，
+不能代替 .260 的运行加载和实天恢复验收。
+最后七轮实测**没有 ATR 科学帧**；PHD2 相机停滞与原生跟踪跳点仍待实机核查。
+AI Weather Advanced 已单独升级至 **1.35.0.0**，按要求未备份旧版。软件收口时
+N.I.N.A. 与 PHD2 已关闭；未启动观测或机械动作，安装核验不等于实天或安全认证。
+
+历史[2026-10-09 收口](docs/closeout-2026-10-09.md)汇总 **0.4.0.224–240**：
 PHD2 自管校准与元数据 warning（ADR-0020）、有界导星窗口／短帧交接修复、曝光计时／
 测光连续性、准备界面简化，以及主镜同星配对复核。
 **2,619 项 .NET、75 项后处理测试、Ruff 及四份冻结设计校验通过**；独立 SEP 测试

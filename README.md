@@ -25,8 +25,9 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-09.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-10.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
+[importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
 [live spectrum preview](docs/live-spectrum-preview.md) ·
 [SEP detection and main-mirror focus](docs/sep-main-mirror-focus-commissioning.md) ·
@@ -37,7 +38,24 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 9 closeout](docs/closeout-2026-10-09.md) consolidates **0.4.0.224–240**:
+The [October 10 closeout](docs/closeout-2026-10-10.md) consolidates **0.4.0.241–260**:
+native multi-target sequencing, checked quality-failure skips, bounded guide-quality
+warnings, station-attested roof/weather policies, and independent target-card editing.
+Each target owns its exposure plan and default-off, one-shot PHD2 calibration switch;
+night-wide controls remain in the night container. ADR-0024 adds per-target bounded
+guiding recovery: wait for fresh usable stars, reselect once, then request one PHD2
+calibration if guiding still fails. Checked stop and settled motion are required;
+exhaustion follows the saved target failure policy, not a blanket night abort.
+**2,902 .NET tests, 75 reduction tests, Ruff and four frozen-design checks passed**.
+All 41 rebuilt plugin files match installed **.260**; 146 offline UI scenes passed.
+Native .259 edit/save/reload checks remain historical evidence, not .260 runtime
+acceptance. The last seven field runs produced **no ATR science
+frames**. PHD2 camera stalls and native tracking jumps still need on-sky investigation.
+AI Weather Advanced was separately upgraded to **1.35.0.0** without an old-version
+backup, as requested. N.I.N.A. and PHD2 are closed at software closeout; no observation
+or hardware action was started. Package verification is not sky or safety certification.
+
+The historical [October 9 closeout](docs/closeout-2026-10-09.md) consolidates **0.4.0.224–240**:
 PHD2-owned calibration with advisory metadata (ADR-0020), bounded guide-window and
 short-frame handoff fixes, exposure-clock/photometry continuity, simpler preparation,
 and same-star paired autofocus validation. **2,619 .NET tests, 75 reduction tests,

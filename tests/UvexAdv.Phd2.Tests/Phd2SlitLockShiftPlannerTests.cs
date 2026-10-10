@@ -825,6 +825,25 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.False(Phd2PierAdaptiveTopologyPolicy.Resolve(source, Hash('a'), "West", false, true).IsAllowed);
     }
 
+    [Fact]
+    public void WiderOpticalGuideLimitDoesNotWidenSlitCompletionOrMovementLimits()
+    {
+        var f=CreateFixture(ownerManaged:true);
+        var m=Measurement(new(102.85,100),new(200,200),new(215,200));
+        var limits=f.MotionLimits with { MaximumGuideLockResidualPixels=3 };
+        var old=Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification,Phd2SlitGuideMode.OffSlitGuideStar,
+            m,f.Ledger,f.Safety,f.Topology,f.MotionLimits,Now);
+        var warning=Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification,Phd2SlitGuideMode.OffSlitGuideStar,
+            m,f.Ledger,f.Safety,f.Topology,limits,Now);
+        Assert.False(old.IsAllowed);
+        Assert.True(warning.IsAllowed,warning.Message);
+        Assert.False(warning.IsComplete);
+        Assert.True(warning.Stage!.StagePixels<=f.MotionLimits.MaximumStagePixels);
+        var tooFar=Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification,Phd2SlitGuideMode.OffSlitGuideStar,
+            m with { GuideStar=new(103.01,100) },f.Ledger,f.Safety,f.Topology,limits,Now);
+        Assert.False(tooFar.IsAllowed);
+    }
+
     private static Fixture CreateFixture(
         SlitPlacementMappingAuthority authority = SlitPlacementMappingAuthority.GradedPhd2CalibrationLockShift,
         Phd2SensorRotationAuthority rotationAuthority = Phd2SensorRotationAuthority.QualifiedPhd2Calibration,

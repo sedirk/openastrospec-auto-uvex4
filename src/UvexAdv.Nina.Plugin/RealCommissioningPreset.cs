@@ -73,7 +73,8 @@ internal sealed record EnvironmentPreset(
     bool RequireWeatherData,
     double MaximumCloudCoverPercent,
     double MaximumHumidityPercent,
-    double MaximumWindSpeedMetersPerSecond);
+    double MaximumWindSpeedMetersPerSecond,
+    RoofClearanceAttestation? RoofClearance = null);
 
 internal sealed record LoadedCommissioningPreset(
     RealCommissioningPreset Value,
@@ -284,6 +285,14 @@ internal static class RealCommissioningPresetLoader
         RequireSame(issues, "maximum cloud cover", preset.Environment.MaximumCloudCoverPercent, configuration.Environment.MaximumCloudCoverPercent);
         RequireSame(issues, "maximum humidity", preset.Environment.MaximumHumidityPercent, configuration.Environment.MaximumHumidityPercent);
         RequireSame(issues, "maximum wind speed", preset.Environment.MaximumWindSpeedMetersPerSecond, configuration.Environment.MaximumWindSpeedMetersPerSecond);
+        issues.AddRange(RoofClearancePolicy.Validate(configuration.Environment.RoofNeverInterferesWithMount,
+            preset.Environment.RoofClearance, configuration.ExpectedTelescopeId,
+            configuration.Environment.Devices.DomeOrRoofId, DateTimeOffset.UtcNow));
+        if (configuration.Environment.RoofNeverInterferesWithMount &&
+            (configuration.Environment.WeakSupervisionEnabled || !configuration.Environment.RequireSafetyMonitor ||
+             !configuration.Environment.RequireOpenDomeOrRoof ||
+             (!configuration.Environment.RequireWeatherData && !configuration.Environment.SafetyMonitorOwnsWeather)))
+            issues.Add("Non-interfering roof mode requires the complete unattended safety chain.");
     }
 
     private static void RequireSame(List<string> issues, string name, double expected, double actual)

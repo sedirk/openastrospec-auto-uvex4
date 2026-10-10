@@ -5,6 +5,20 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class ObservationAutomationPolicyTests
 {
+    [Theory]
+    [InlineData(true, true, true, true)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, false, false)]
+    public void IntegratedWeatherStillRequiresSafetyRoofAndCover(bool safety, bool roof, bool cover, bool pass)
+    {
+        var gate = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
+            safety, roof, false, cover, false, weatherOwnedBySafetyMonitor: true);
+        Assert.Equal(pass, gate.Disposition == GateDisposition.Passed);
+        Assert.NotEqual(GateDisposition.Passed,
+            ObservationAutomationPolicy.ValidateFullAutomationCapabilities(true, true, false, true).Disposition);
+    }
+
     [Fact]
     public void SavedRealSequenceRequiresCurrentProfileAuthorization()
     {

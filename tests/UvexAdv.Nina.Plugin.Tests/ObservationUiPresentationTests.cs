@@ -7,6 +7,36 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class ObservationUiPresentationTests
 {
+    [Theory]
+    [InlineData("zh-CN")]
+    [InlineData("en-US")]
+    public void UnconfirmedCancellationNeverClaimsTheGuideChainStopped(string language)
+    {
+        const string raw = "PHD2 pause/stop was not confirmed: A task was canceled.";
+        var culture = CultureInfo.GetCultureInfo(language);
+        foreach (var stage in Enum.GetValues<ObservationStage>())
+        {
+            var issue = ObservationUiPresentation.Present(stage,
+                GateResult.Unknown("CANCEL_CLEANUP_FAILED", raw), culture);
+            Assert.Contains(raw, issue.TechnicalDetails);
+            Assert.Contains("CANCEL_CLEANUP_FAILED", issue.TechnicalDetails);
+            if (language == "zh-CN")
+            {
+                Assert.Contains("尚未得到确认", issue.Summary);
+                Assert.DoesNotContain("导星链已停止", issue.Impact);
+                Assert.Contains("未启动机械回程", issue.AutomaticRecovery);
+                Assert.Contains("不要强制关闭", issue.Recommendation);
+            }
+            else
+            {
+                Assert.Contains("not been confirmed", issue.Summary);
+                Assert.Contains("No mechanical return", issue.AutomaticRecovery);
+                Assert.False(ObservationUiPresentation.ContainsCjk(issue.Summary + issue.Impact +
+                    issue.AutomaticRecovery + issue.Recommendation));
+            }
+        }
+    }
+
     [Fact]
     public void PostCalibrationNestedBlendShowsTheImageProblemAndUsedRetryWindow()
     {

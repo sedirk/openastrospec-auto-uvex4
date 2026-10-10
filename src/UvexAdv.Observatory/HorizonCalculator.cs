@@ -14,6 +14,36 @@ public sealed record HorizonEvaluation(
     AltitudeSample? FirstFailure,
     IReadOnlyList<AltitudeSample> Samples)
 {
+    public const string WindowExhaustedCode = "TARGET_VISIBILITY_WINDOW_EXHAUSTED";
+
+    // The veto is unchanged. Only a currently clear target whose *future*
+    // protected block fails is a scheduling rejection. A target already below
+    // the wall, missing samples, or non-finite geometry remains a hard horizon gate.
+    public GateResult ToRuntimeGateResult()
+    {
+        var gate = ToGateResult();
+        if (Passed || Samples.Count < 2 || !Samples[0].Passed ||
+            FirstFailure is not { } failure || failure.TimestampUtc <= Samples[0].TimestampUtc ||
+            Samples.Any(s => !double.IsFinite(s.AltitudeDegrees) || !double.IsFinite(s.RequiredAltitudeDegrees)))
+            return gate;
+
+        var first = Samples[0];
+        var metrics = new Dictionary<string, double>(gate.Metrics!)
+        {
+            ["currentAltitudeDegrees"] = first.AltitudeDegrees,
+            ["currentRequiredAltitudeDegrees"] = first.RequiredAltitudeDegrees,
+            ["protectedDurationMinutes"] = (Samples[^1].TimestampUtc - first.TimestampUtc).TotalMinutes,
+            ["firstBlockedUtcUnixSeconds"] = failure.TimestampUtc.ToUnixTimeSeconds(),
+            ["minutesToFirstBlockedSample"] = (failure.TimestampUtc - first.TimestampUtc).TotalMinutes,
+            ["firstBlockedAltitudeDegrees"] = failure.AltitudeDegrees,
+            ["firstBlockedRequiredAltitudeDegrees"] = failure.RequiredAltitudeDegrees,
+        };
+        return GateResult.Fail(WindowExhaustedCode,
+            $"Target is currently above the horizon at {first.AltitudeDegrees:F2}°, but its remaining protected " +
+            $"{metrics["protectedDurationMinutes"]:F1}-minute block cannot fit. {gate.Message} " +
+            "No new action is authorized for this target; a native night may skip only after confirmed idle and settled motion.", metrics);
+    }
+
     public GateResult ToGateResult() => Passed
         ? GateResult.Pass(
             "HORIZON_CLEAR",

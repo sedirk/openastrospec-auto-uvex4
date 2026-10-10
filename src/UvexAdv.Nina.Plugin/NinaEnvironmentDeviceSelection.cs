@@ -31,12 +31,19 @@ internal sealed record NinaEnvironmentDeviceSelection(
         !string.Equals(id.Trim(), NoDeviceId, StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(id.Trim(), "No Device", StringComparison.OrdinalIgnoreCase);
 
-    public GateResult ValidateForMode(bool weakSupervisionEnabled)
+    // ADR-0022: this is an explicitly commissioned alternative, never an
+    // automatic fallback when a weather adapter fails. No parallel forecast
+    // adapter is selected, and the bound AIWeather monitor owns the verdict.
+    public bool UsesAiWeatherAuthority(bool requireWeatherData) =>
+        !requireWeatherData && !HasWeatherData &&
+        string.Equals(SafetyMonitorId, "AIWeatherSafetyMonitor", StringComparison.Ordinal);
+
+    public GateResult ValidateForMode(bool weakSupervisionEnabled, bool requireWeatherData = true)
     {
         var missing = new List<string>();
         if (!HasSafetyMonitor) missing.Add("safety monitor");
         if (!HasDomeOrRoof) missing.Add("dome/roll-off-roof adapter");
-        if (!HasWeatherData) missing.Add("weather adapter");
+        if (!HasWeatherData && !UsesAiWeatherAuthority(requireWeatherData)) missing.Add("weather adapter");
         if (!HasOpticalCover) missing.Add("optical-cover adapter");
 
         if (missing.Count == 0)
@@ -45,7 +52,9 @@ internal sealed record NinaEnvironmentDeviceSelection(
                 weakSupervisionEnabled
                     ? "WEAK_SUPERVISION_ALL_ENVIRONMENT_ADAPTERS_SELECTED"
                     : "UNATTENDED_ENVIRONMENT_ADAPTERS_SELECTED",
-                "The N.I.N.A. Profile selects all four environment adapters; their live connection and state still require fresh verification.");
+                UsesAiWeatherAuthority(requireWeatherData)
+                    ? "AIWeather owns the weather safety verdict; the bound monitor, roof and cover still require fresh live verification. No forecast adapter is used."
+                    : "The N.I.N.A. Profile selects all four environment adapters; their live connection and state still require fresh verification.");
         }
 
         return weakSupervisionEnabled

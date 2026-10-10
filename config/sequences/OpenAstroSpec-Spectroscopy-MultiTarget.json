@@ -1,0 +1,604 @@
+{
+  "$id": "1",
+  "$type": "NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer",
+  "Name": "OpenAstroSpec · 光谱多目标模板（模拟起步）",
+  "Strategy": {
+    "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+  },
+  "Conditions": {
+    "$values": []
+  },
+  "IsExpanded": true,
+  "Items": {
+    "$values": [
+      {
+        "$id": "2",
+        "$type": "NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer",
+        "Name": "开始 · 先核对，再运行",
+        "Strategy": {
+          "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+        },
+        "Conditions": {
+          "$values": []
+        },
+        "IsExpanded": true,
+        "Items": {
+          "$values": [
+            {
+              "$id": "3",
+              "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
+              "Text": "默认所有目标为模拟：不会连接、曝光或运动。先填写 A/B/C 的真实目标名和 J2000 坐标（当前 0°/0° 仅占位）；每目标默认 3 张 × 300 秒，最多 6 次科学尝试。未使用的目标请删除；要增加目标请复制整个 UVEX4 目标块。",
+              "Parent": {
+                "$ref": "2"
+              },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            },
+            {
+              "$id": "4",
+              "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
+              "Text": "站点、Night Setup、设备身份、同步测光和翻转时机沿用当前光谱主控 Profile；本文件不携带台站绑定。真实整夜需已验收的完整安全链及结束关盖/关顶，不能用有人弱监督替代。主镜对焦请在整夜运行前完成；不要额外添加普通居中、dither、自动对焦、连接/开关顶指令。",
+              "Parent": {
+                "$ref": "2"
+              },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            }
+          ]
+        },
+        "Triggers": {
+          "$values": []
+        },
+        "Parent": {
+          "$ref": "1"
+        },
+        "ErrorBehavior": 2,
+        "Attempts": 1
+      },
+      {
+        "$id": "5",
+        "$type": "NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer",
+        "Name": "目标 · 从上到下依次执行",
+        "Strategy": {
+          "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+        },
+        "Conditions": {
+          "$values": []
+        },
+        "IsExpanded": true,
+        "Items": {
+          "$values": [
+            {
+              "$id": "6",
+              "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexNightSequenceContainer, UvexAdv.Nina.Plugin",
+              "StopAtDawn": true,
+              "DawnSunAltitudeDegrees": -12,
+              "EndAtIso8601": "",
+              "Name": "光谱多目标 · 目标间保持，最后统一收口",
+              "Strategy": {
+                "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+              },
+              "Conditions": {
+                "$values": []
+              },
+              "IsExpanded": true,
+              "Items": {
+                "$values": [
+                  {
+                    "$id": "8",
+                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer, UvexAdv.Nina.Plugin",
+                    "TargetName": "目标 A（请填写名称和坐标）",
+                    "CatalogId": "",
+                    "TargetObservability": 0,
+                    "CatalogMetadata": null,
+                    "RightAscensionDegrees": 0,
+                    "DeclinationDegrees": 0,
+                    "DurationMinutes": 45,
+                    "ScienceFrames": 3,
+                    "MaximumScienceAttempts": 6,
+                    "FixedExposureSeconds": 300,
+                    "ForceGuideCalibration": false,
+                    "FailurePolicy": 0,
+                    "SimulationStageMilliseconds": 250,
+                    "UseRealMode": false,
+                    "Name": "UVEX4 · 目标 A",
+                    "Strategy": {
+                      "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+                    },
+                    "Conditions": {
+                      "$values": []
+                    },
+                    "IsExpanded": true,
+                    "Items": {
+                      "$values": [
+                        {
+                          "$id": "9",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 0,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "10",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 1,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "11",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 2,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "12",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 3,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "13",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 4,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "14",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 5,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "15",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 6,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "16",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 7,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "17",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 8,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "18",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 9,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "19",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 10,
+                          "Parent": {
+                            "$ref": "8"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        }
+                      ]
+                    },
+                    "Triggers": {
+                      "$values": []
+                    },
+                    "Parent": {
+                      "$ref": "6"
+                    },
+                    "ErrorBehavior": 0,
+                    "Attempts": 1
+                  },
+                  {
+                    "$id": "20",
+                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer, UvexAdv.Nina.Plugin",
+                    "TargetName": "目标 B（请填写名称和坐标）",
+                    "CatalogId": "",
+                    "TargetObservability": 0,
+                    "CatalogMetadata": null,
+                    "RightAscensionDegrees": 0,
+                    "DeclinationDegrees": 0,
+                    "DurationMinutes": 45,
+                    "ScienceFrames": 3,
+                    "MaximumScienceAttempts": 6,
+                    "FixedExposureSeconds": 300,
+                    "ForceGuideCalibration": false,
+                    "FailurePolicy": 0,
+                    "SimulationStageMilliseconds": 250,
+                    "UseRealMode": false,
+                    "Name": "UVEX4 · 目标 B",
+                    "Strategy": {
+                      "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+                    },
+                    "Conditions": {
+                      "$values": []
+                    },
+                    "IsExpanded": true,
+                    "Items": {
+                      "$values": [
+                        {
+                          "$id": "21",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 0,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "22",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 1,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "23",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 2,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "24",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 3,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "25",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 4,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "26",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 5,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "27",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 6,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "28",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 7,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "29",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 8,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "30",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 9,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "31",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 10,
+                          "Parent": {
+                            "$ref": "20"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        }
+                      ]
+                    },
+                    "Triggers": {
+                      "$values": []
+                    },
+                    "Parent": {
+                      "$ref": "6"
+                    },
+                    "ErrorBehavior": 0,
+                    "Attempts": 1
+                  },
+                  {
+                    "$id": "32",
+                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer, UvexAdv.Nina.Plugin",
+                    "TargetName": "目标 C（请填写名称和坐标）",
+                    "CatalogId": "",
+                    "TargetObservability": 0,
+                    "CatalogMetadata": null,
+                    "RightAscensionDegrees": 0,
+                    "DeclinationDegrees": 0,
+                    "DurationMinutes": 45,
+                    "ScienceFrames": 3,
+                    "MaximumScienceAttempts": 6,
+                    "FixedExposureSeconds": 300,
+                    "ForceGuideCalibration": false,
+                    "FailurePolicy": 0,
+                    "SimulationStageMilliseconds": 250,
+                    "UseRealMode": false,
+                    "Name": "UVEX4 · 目标 C",
+                    "Strategy": {
+                      "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+                    },
+                    "Conditions": {
+                      "$values": []
+                    },
+                    "IsExpanded": true,
+                    "Items": {
+                      "$values": [
+                        {
+                          "$id": "33",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 0,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "34",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 1,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "35",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 2,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "36",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 3,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "37",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 4,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "38",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 5,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "39",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 6,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "40",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 7,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "41",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 8,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "42",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 9,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        },
+                        {
+                          "$id": "43",
+                          "$type": "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
+                          "Stage": 10,
+                          "Parent": {
+                            "$ref": "32"
+                          },
+                          "ErrorBehavior": 0,
+                          "Attempts": 1
+                        }
+                      ]
+                    },
+                    "Triggers": {
+                      "$values": []
+                    },
+                    "Parent": {
+                      "$ref": "6"
+                    },
+                    "ErrorBehavior": 0,
+                    "Attempts": 1
+                  }
+                ]
+              },
+              "Triggers": {
+                "$values": [
+                  {
+                    "$id": "7",
+                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.SpectroscopyMeridianFlipTrigger, UvexAdv.Nina.Plugin",
+                    "BoundaryReserveSeconds": 120,
+                    "Parent": {
+                      "$ref": "6"
+                    }
+                  }
+                ]
+              },
+              "Parent": {
+                "$ref": "5"
+              },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            }
+          ]
+        },
+        "Triggers": {
+          "$values": []
+        },
+        "Parent": {
+          "$ref": "1"
+        },
+        "ErrorBehavior": 2,
+        "Attempts": 1
+      },
+      {
+        "$id": "44",
+        "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
+        "Name": "结束 · 核对结果与收口日志",
+        "Strategy": {
+          "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
+        },
+        "Conditions": {
+          "$values": []
+        },
+        "IsExpanded": true,
+        "Items": {
+          "$values": [
+            {
+              "$id": "45",
+              "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
+              "Text": "本行仅为说明，不操作设备、不宣告成功。真实整夜由光谱整夜容器统一停止采集、关盖、停放并关顶，须以回读和整夜日志为准；普通“取消”只停止采集，不执行机械收口。查看各目标结果及 %LOCALAPPDATA%\\UVEX-ADV\\nights\\night-*.json。",
+              "Parent": {
+                "$ref": "44"
+              },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            }
+          ]
+        },
+        "Triggers": {
+          "$values": []
+        },
+        "Parent": {
+          "$ref": "1"
+        },
+        "ErrorBehavior": 2,
+        "Attempts": 1
+      }
+    ]
+  },
+  "Triggers": {
+    "$values": []
+  },
+  "Parent": null,
+  "ErrorBehavior": 2,
+  "Attempts": 1
+}

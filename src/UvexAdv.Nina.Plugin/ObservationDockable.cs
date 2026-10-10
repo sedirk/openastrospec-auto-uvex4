@@ -68,6 +68,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     private static readonly IReadOnlyList<PreparationOptionChoice> SafetyCapabilityChoices =
     [
         new("NinaSafetyStack", "N.I.N.A. 安全链（全无人监管）", "自动连接安全监视器、天气、平移顶和镜盖；安全门通过后可开顶，结束/终端故障时先收镜盖和停放赤道仪再关顶。"),
+        new("AiWeatherSafetyStack", "AIWeather 现场安全链（不使用网络预报）", "须匹配已确认的方案；天气来源选择无设备，安全监视器选择 AIWeather。失联、过期或 Unsafe 仍停止并安全收口。"),
         new("OperatorWeakSupervision", "有人弱监督（默认）", "按当前 N.I.N.A. 选择逐项自动连接；未选择、连不上或缺指标的单项只警告降级，已连接设备明确报告危险或关闭时仍阻断。绝不授予无人值守权限。"),
     ];
 
@@ -1754,10 +1755,17 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         : ObservationUiPresentation.Text($"期望槽位 {ExpectedUvexSlitPosition}；仅为配置要求，不是实时位置或到位证明。", $"Expected slot {ExpectedUvexSlitPosition}; this is a configuration requirement, not live position or arrival evidence.", UiCulture);
     public string PreparationSafetySummary => settings.WeakSupervisionEnabled
         ? ObservationUiPresentation.Text("有人弱监督；不会自动开关屋顶，明确危险仍阻断。", "Supervised operation; no automatic roof motion, and explicit danger still blocks.", UiCulture)
+        : !settings.RequireWeatherData
+        ? ObservationUiPresentation.Text("AIWeather 现场安全链；不使用网络天气预报，Unsafe/失联仍收口。", "AIWeather site safety; no network forecast, with unsafe/disconnected shutdown retained.", UiCulture)
         : ObservationUiPresentation.Text("全无人监管策略；启动时必须通过环境与安全收尾能力核验。", "Full-unattended policy; live environment and safe-cleanup capabilities must pass startup validation.", UiCulture);
     public string SelectedPreparationSafetyCapabilityDescription => settings.WeakSupervisionEnabled
         ? ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。缺失的环境能力按项警告降级，不授予无人值守权限；已连接设备明确报告危险仍阻断。不会自动开关屋顶。", "This changes real-run safety requirements, not just draft notes. Missing environment capabilities degrade individually with warnings and never grant unattended authority; explicit danger from a connected device still blocks. No automatic roof motion is allowed.", UiCulture)
-        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。真实流程启动后，仅在实时安全门通过时才可开顶；结束或终端故障时需按顺序收镜盖、停放赤道仪并关顶。选择本身不会连接或移动设备。", "This changes real-run safety requirements, not just draft notes. After a real run starts, roof opening requires passing live safety gates; completion or terminal failure requires closing the cover, parking the mount and closing the roof in order. Selection itself does not connect or move equipment.", UiCulture);
+        : !settings.RequireWeatherData
+        ? ObservationUiPresentation.Text("使用已确认方案中的 AIWeather 现场安全判定。N.I.N.A. 气象来源须选无设备，安全监视器须选 AIWeather；旧方案不会自动取得此权限。连接丢失、数据过期或 Unsafe 仍阻断并安全收口，不把网络预报当现场测量。", "Use the commissioned AIWeather site verdict. Select no Weather device and select AIWeather as Safety Monitor. Old packages do not acquire this authority. Disconnection, stale data or Unsafe still blocks and closes safely; a forecast is not a local measurement.", UiCulture)
+        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求。启动后仅在实时安全门通过时开顶；结束或终端故障按本台站屋顶模式收口。选择本身不会连接或移动设备。", "This changes real-run safety requirements. Opening requires live safety gates; completion or terminal failure closes out using the commissioned roof mode. Selection does not connect or move equipment.", UiCulture);
+    public string RoofClearanceSummary => settings.RoofNeverInterferesWithMount
+        ? ObservationUiPresentation.Text("屋顶模式：全姿态无干涉。开顶不要求 Park；收尾先停止运动、关顶，再独立停放。须匹配本台站确认记录；天气与到位读回仍检查。", "Roof mode: all mount positions clear. Open without Park; stop motion and close before independent Park. A matching station attestation, weather checks and terminal readback remain required.", UiCulture)
+        : ObservationUiPresentation.Text("屋顶模式：默认 Park 联锁。开关顶前须确认停放；无干涉模式只能随本台站已确认的方案导入。", "Roof mode: Park interlock (default). Roof motion requires verified Park. Non-interfering mode can only be imported with a confirmed station package.", UiCulture);
     public bool IsAutomationPolicyPreparationMissing => AutomaticPreparationIssueCount > 0;
     public string AutomationPolicyPreparationStatus => AutomaticPreparationIssueCount == 0
         ? ObservationUiPresentation.Text("当前静态运行参数检查无阻断；不代表实时设备已经就绪。", "Current static run-parameter checks have no blockers; this does not mean live equipment is ready.", UiCulture)
@@ -2655,7 +2663,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         settings.WeakSupervisionEnabled = weak;
         settings.RequireSafetyMonitor = !weak;
         settings.RequireOpenDomeOrRoof = !weak;
-        settings.RequireWeatherData = !weak;
+        settings.RequireWeatherData = !weak && !string.Equals(
+            settings.PreparationSafetyCapabilityPreset, "AiWeatherSafetyStack", StringComparison.Ordinal);
         settings.RequireOpenOpticalCover = !weak;
     }
 
@@ -3586,7 +3595,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             settings.RequireOpenDomeOrRoof,
             settings.RequireWeatherData,
             settings.RequireOpenOpticalCover,
-            settings.WeakSupervisionEnabled);
+            settings.WeakSupervisionEnabled,
+            realRunnerFactory.CaptureConfiguration(settings).Environment.SafetyMonitorOwnsWeather);
         if (capabilities.Disposition != GateDisposition.Passed) issues.Add(capabilities.Message);
         if (!settings.RealModeCommissioned) issues.Add("真实模式尚未标记为已调试。");
         if (string.IsNullOrWhiteSpace(settings.CommissioningPresetPath) || !File.Exists(settings.CommissioningPresetPath)) issues.Add("缺少不可变设备标定文件。");
@@ -4403,6 +4413,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(DevicePreparationStatus));
         RaisePropertyChanged(nameof(PreparationDeviceSummary));
         RaisePropertyChanged(nameof(PreparationSafetySummary));
+        RaisePropertyChanged(nameof(RoofClearanceSummary));
         RaisePropertyChanged(nameof(SelectedPreparationSafetyCapabilityDescription));
         RaisePropertyChanged(nameof(IsCommissioningPreparationMissing));
         RaisePropertyChanged(nameof(CommissioningPreparationStatus));
@@ -5108,6 +5119,9 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             settings.SelectedCommissioningProfileId = Path.GetFullPath(path);
             settings.SelectedCommissioningProfilePath = Path.GetFullPath(path);
         }
+        // Importing an older package must not retain a previous station's roof exception.
+        if (!supplied.Contains(nameof(UvexPluginSettings.RoofNeverInterferesWithMount)))
+            settings.RoofNeverInterferesWithMount = false;
         return assignments.Count;
     }
 

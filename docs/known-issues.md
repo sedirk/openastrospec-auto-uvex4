@@ -1,6 +1,48 @@
 # Known issues
 
-## Current closeout boundary (2026-10-03, installed 0.4.0.223)
+## Current closeout boundary (2026-10-10, installed 0.4.0.260)
+
+The [October 10 closeout](closeout-2026-10-10.md) records the current source,
+deployment and software-only handoff. N.I.N.A. and PHD2 are not running at this
+check; installed device services were not changed.
+
+- The [last seven field runs](reports/2026-10-10-final-runs-maintenance.md) produced
+  no ATR science frames. PHD2's accepted-but-undelivered camera exposure and later
+  native guide-point jumps are documented, not claimed fixed by plugin regressions.
+  A new authorized short single-target run is the next acceptance step.
+- Checked-stop ownership, cancellation failure reporting and target/night result
+  separation were repaired. An unresolved motion ledger remains unresolved even
+  after Home/Park or roof closure; do not delete it to force the next night through.
+- Quality-only target failures may skip after confirmed idle and settled motion.
+  ADR-0024 handles reviewed guiding loss with fresh-star waiting, one reselection
+  and at most one forced PHD2 calibration; exhaustion may skip after independent
+  idle/ledger checks under the target's saved policy. Device failures, unknown
+  errors, unresolved movement and Unsafe are not blanket skips. Sparse/weak fields
+  may exhaust waiting without proving clouds; the original motion budgets still apply.
+  Bounded guide warning tiers do not prove strict slit placement or enlarge the
+  motion/return envelope.
+- Test standby avoids routine repeated roof closure only while the night remains
+  active and protected. Unsafe, dawn, deadline and terminal device faults still
+  close out. The last sessions' effective hold-open setting differed from the saved
+  template; its cause was not established. Verify the loaded value before testing.
+- Target-card editing and serialization were checked in installed .259. Actual
+  saved-target dragging and external planetarium integration were not exercised
+  in that session; per-target forced calibration still needs on-sky acceptance.
+- Installed .260 matches all 41 rebuilt files. Its 146 offline UI scenes and four
+  native-target edit round-trips passed; N.I.N.A. was not started for this deployment.
+  Loaded panels, cloud recovery and automatic calibration still require a separately
+  authorized runtime/sky check. Explicit or observed calibration already performed
+  for a target consumes its one-calibration recovery allowance; meridian continuation
+  does not renew it. Existing serialized `EndNight` remains `EndNight`.
+- AI Weather Advanced 1.35.0.0 passed package/file checks, but N.I.N.A. has remained
+  closed since the upgrade. Runtime loading and fresh site safety-chain behavior
+  have not been revalidated. Sky classification is not an independent wind/rain sensor.
+- Repeatable improved main focus, strict slit accuracy, uninterrupted multi-target
+  and meridian continuation, dual-N.I.N.A. photometry and unattended certification
+  remain separate acceptance work. Historical single-target success is not a
+  substitute for these tests.
+
+## Historical closeout boundary (2026-10-03, installed 0.4.0.223)
 
 The [October 3 closeout](closeout-2026-10-03.md) records the .210–.223 source,
 offline checks, installed-package equivalence and software-only shutdown.

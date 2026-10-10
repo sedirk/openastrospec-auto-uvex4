@@ -220,7 +220,7 @@ public sealed class ObservationRunCoordinator : IDisposable
             var horizonGate = HorizonCalculator.Evaluate(plan).ToGateResult();
             if (horizonGate.Disposition != GateDisposition.Passed)
             {
-                await PauseForAttentionAsync(plan, runner, context, ObservationStage.ValidateNightSetup, horizonGate.Message, horizonGate.Code, cancellationToken).ConfigureAwait(false);
+                await PauseForAttentionAsync(plan, runner, context, ObservationStage.ValidateNightSetup, horizonGate, cancellationToken).ConfigureAwait(false);
             }
 
             while (stageIndex < Stages.Count)
@@ -246,7 +246,7 @@ public sealed class ObservationRunCoordinator : IDisposable
                             result.Gate.Message, result.Gate.Message, result.Gate.Code, stageIndex);
                         return;
                     }
-                    await PauseForAttentionAsync(plan, runner, context, stage, result.Gate.Message, result.Gate.Code, cancellationToken).ConfigureAwait(false);
+                    await PauseForAttentionAsync(plan, runner, context, stage, result.Gate, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -321,6 +321,16 @@ public sealed class ObservationRunCoordinator : IDisposable
                 return;
             }
 
+            if (ex is ObservationCheckpointGateException checkpoint && cleanupFailure is null &&
+                runner is IObservationTerminalGatePolicy { EndRunOnGateFailure: true })
+            {
+                // Checkpoints between stages retain their exact gate just like
+                // checkpoints inside a stage. Cleanup failure must never take
+                // this path or masquerade as a skippable target outcome.
+                SetState(plan.ObservationRunId, ObservationRunState.Faulted, Stages.ElementAtOrDefault(stageIndex), null,
+                    checkpoint.Gate.Message, checkpoint.Gate.Message, checkpoint.Gate.Code, stageIndex);
+                return;
+            }
             SetState(plan.ObservationRunId, ObservationRunState.Faulted, Stages.ElementAtOrDefault(stageIndex), null, ex.Message, null, "RUN_FAULTED", stageIndex);
             if (cleanupFailure is null)
             {
@@ -344,7 +354,18 @@ public sealed class ObservationRunCoordinator : IDisposable
         int stageIndex)
     {
         try { await runner.OnCancelledAsync(context, CancellationToken.None).ConfigureAwait(false); }
-        catch (Exception ex) { AddEvent(ObservationRunState.Cancelling, null, "CANCEL_CLEANUP_FAILED", ex.Message); }
+        catch (Exception ex)
+        {
+            // A requested cancellation is not evidence that device acquisition
+            // actually stopped. Keep this failure terminal and visible; do not
+            // call OnFaultedAsync, which could authorize mechanical recovery
+            // that the cancellation explicitly forbids.
+            var message = $"Cancellation requested, but stop-only cleanup was not confirmed: {ex.Message}";
+            SetState(plan.ObservationRunId, ObservationRunState.Faulted,
+                Stages.ElementAtOrDefault(stageIndex), null, message, message,
+                "CANCEL_CLEANUP_FAILED", stageIndex);
+            return;
+        }
         SetState(plan.ObservationRunId, ObservationRunState.Cancelled, null, null, "Observation cancelled.", null, "RUN_CANCELLED", stageIndex);
     }
 
@@ -353,18 +374,17 @@ public sealed class ObservationRunCoordinator : IDisposable
         IObservationStageRunner runner,
         ObservationContext context,
         ObservationStage stage,
-        string reason,
-        string code,
+        GateResult gate,
         CancellationToken cancellationToken)
     {
         if (runner is IObservationTerminalGatePolicy { EndRunOnGateFailure: true })
-            throw new InvalidOperationException($"{code}: {reason}");
+            throw new ObservationCheckpointGateException(gate, stage);
         lock (sync)
         {
             pauseRequested = true;
-            requestedPauseReason = reason;
+            requestedPauseReason = gate.Message;
         }
-        await EnterPauseAsync(plan, runner, context, stage, ObservationRunState.PausedNeedsAttention, reason, code, cancellationToken).ConfigureAwait(false);
+        await EnterPauseAsync(plan, runner, context, stage, ObservationRunState.PausedNeedsAttention, gate.Message, gate.Code, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task WaitForManualPauseIfNeededAsync(
@@ -419,7 +439,7 @@ public sealed class ObservationRunCoordinator : IDisposable
             {
                 PlannedStartUtc = DateTimeOffset.UtcNow,
                 PlannedDuration = protectedDuration,
-            }).ToGateResult();
+            }).ToRuntimeGateResult();
             if (horizon.Disposition == GateDisposition.Passed) return;
 
             await PauseForAttentionAsync(
@@ -427,8 +447,7 @@ public sealed class ObservationRunCoordinator : IDisposable
                 runner,
                 context,
                 stage ?? ObservationStage.ValidateNightSetup,
-                horizon.Message,
-                horizon.Code,
+                horizon,
                 cancellationToken).ConfigureAwait(false);
         }
     }

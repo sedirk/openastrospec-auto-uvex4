@@ -1,4 +1,5 @@
 using UvexAdv.Nina.Plugin;
+using UvexAdv.Nina.Plugin.SequenceItems;
 using UvexAdv.Nina.Plugin.UiHarness;
 using UvexAdv.Observatory;
 
@@ -6,6 +7,81 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScenarioCatalogTests
 {
+    [Theory]
+    [InlineData("native-night-unsettled-closeout", false)]
+    [InlineData("native-night-cancel-stop-unconfirmed", true)]
+    public void NativeNightCloseoutScenariosUseProductionTerminalTextWithoutClaimingFullSuccess(string name, bool cancelled)
+    {
+        var scenario = ScenarioCatalog.Select(name).Single();
+        var vm = Assert.IsType<NativeNightMock>(scenario.AlternateViewModel);
+        Assert.Equal("NativeSpectroscopyNightSettingsPanel", scenario.TemplateKey);
+        Assert.True(scenario.ViewModel.IsSimulationMode);
+        var expected = cancelled
+            ? UvexNightSequenceContainer.DescribeTerminalState(true, true, false,
+                ["采集或设备停止未确认，未执行机械收口。"], Array.Empty<NativeNightTargetBoundaryFailure>())
+            : UvexNightSequenceContainer.DescribeTerminalState(true, false, true,
+                Array.Empty<string>(), [new NativeNightTargetBoundaryFailure("模拟中断目标", "SIM-NIGHT-BOUNDARY",
+                    ["运动回程责任未结清，禁止跳目标或声称收口成功。"])]);
+        Assert.Equal(expected, vm.NightState);
+        Assert.DoesNotContain("整夜已收口", vm.NightState);
+        if (cancelled)
+        {
+            Assert.Contains("已请求取消；停止/空闲未确认，未执行机械收口", vm.NightState);
+            Assert.DoesNotContain("已取消；只停止采集", vm.NightState);
+            Assert.True(scenario.Width <= 540);
+        }
+        else
+        {
+            Assert.Contains("物理收口已确认", vm.NightState);
+            Assert.Contains("观测运动/交接责任未结清", vm.NightState);
+            Assert.Contains("原始账本保留", vm.NightState);
+        }
+    }
+
+    [Theory]
+    [InlineData("cancel-stop-unconfirmed")]
+    [InlineData("cancel-stop-unconfirmed-narrow")]
+    [InlineData("cancel-stop-unconfirmed-en")]
+    public void CancellationFailureDoesNotClaimSafeStop(string name)
+    {
+        var vm = ScenarioCatalog.Select(name).Single().ViewModel;
+        Assert.Equal("CANCEL_CLEANUP_FAILED", vm.LastFailureCode);
+        Assert.True(vm.IsSimulationMode);
+        Assert.Equal(5, vm.SelectedWorkspaceTabIndex);
+        Assert.Contains(name.EndsWith("-en", StringComparison.Ordinal) ? "not been confirmed" : "尚未得到确认", vm.LastFailureHeadline);
+        Assert.Contains(name.EndsWith("-en", StringComparison.Ordinal) ? "No mechanical return" : "未启动机械回程", vm.LastFailureRecovery);
+        Assert.DoesNotContain("导星链已停止", vm.LastFailureImpact);
+    }
+
+    [Theory]
+    [InlineData("target-visibility-window")]
+    [InlineData("target-visibility-window-narrow")]
+    [InlineData("target-visibility-window-en")]
+    public void TargetWindowDoesNotClaimTheWholeNightIsUnobservable(string name)
+    {
+        var vm = ScenarioCatalog.Select(name).Single().ViewModel;
+        Assert.Equal(HorizonEvaluation.WindowExhaustedCode, vm.LastFailureCode);
+        Assert.Contains("currentAltitudeDegrees=51.48", vm.LastFailureMetrics);
+        Assert.Contains("00:23:37", vm.LastFailureTechnicalDetails);
+        Assert.Contains(name.EndsWith("-en", StringComparison.Ordinal) ? "settled motion" : "运动责任结清", vm.LastFailureRecovery);
+        Assert.Contains(name.EndsWith("-en", StringComparison.Ordinal) ? "Later targets" : "后续目标", vm.LastFailureRecommendation);
+    }
+
+    [Theory]
+    [InlineData("roof-opening-preparation")]
+    [InlineData("roof-opening-preparation-narrow")]
+    [InlineData("roof-opening-preparation-en")]
+    public void RoofOpeningFailureExplainsPreparationAndExplicitSequenceReload(string name)
+    {
+        var vm = ScenarioCatalog.Select(name).Single().ViewModel;
+        Assert.Equal("ROOF_OPEN_TRACKING_STOP_TIMEOUT", vm.LastFailureCode);
+        Assert.True(vm.IsSimulationMode);
+        Assert.Equal(5, vm.SelectedWorkspaceTabIndex);
+        Assert.Contains("trackingStopRequested=1", vm.LastFailureMetrics);
+        Assert.Contains(name.EndsWith("-en", StringComparison.Ordinal) ? "reload the same file" : "重新载入同一文件", vm.LastFailureRecommendation);
+        Assert.Contains("Roof not opened", vm.LastFailureTechnicalDetails);
+    }
+
     [Theory]
     [InlineData("workflow-idle")]
     [InlineData("workflow-running")]
@@ -158,12 +234,18 @@ public sealed class ScenarioCatalogTests
             .Concat(new[] { "g3-slit-extent", "g3-slit-extent-narrow" })
             .Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
         expected = expected.Concat(new[] { "atr-reduced", "atr-reduced-narrow", "atr-reduced-missing", "native-night", "native-night-narrow", "native-failure-popup", "native-failure-popup-en", "native-meridian", "native-meridian-narrow", "native-meridian-en" }).ToArray();
+        expected = expected.Concat(new[] { "cancel-stop-unconfirmed", "cancel-stop-unconfirmed-narrow", "cancel-stop-unconfirmed-en" }).ToArray();
+        expected = expected.Concat(new[] { "native-night-unsettled-closeout", "native-night-cancel-stop-unconfirmed" }).ToArray();
         expected = expected.Concat(new[] { "photometry-legacy-master", "photometry-legacy-master-en", "photometry-legacy-master-narrow" }).ToArray();
         expected = expected.Concat(new[] { "guide-exposure-mismatch", "guide-exposure-mismatch-en", "guide-exposure-mismatch-narrow" }).ToArray();
         expected = expected.Concat(new[] { "short-handoff-outside", "short-handoff-outside-en", "short-handoff-outside-narrow" }).ToArray();
         expected = expected.Concat(new[] { "guide-output-unavailable", "guide-output-unavailable-en", "guide-output-unavailable-narrow" }).ToArray();
         expected = expected.Concat(new[] { "lock-recovery-calibration", "lock-recovery-calibration-narrow", "lock-recovery-calibration-en" }).ToArray();
         expected = expected.Concat(new[] { "g3-split-morphology", "g3-split-morphology-narrow", "g3-split-morphology-en" }).ToArray();
+        expected = expected.Concat(new[] { "roof-noninterfering", "roof-noninterfering-narrow", "roof-noninterfering-en" }).ToArray();
+        expected = expected.Concat(new[] { "roof-opening-preparation", "roof-opening-preparation-narrow", "roof-opening-preparation-en" }).ToArray();
+        expected = expected.Concat(new[] { "target-visibility-window", "target-visibility-window-narrow", "target-visibility-window-en" }).ToArray();
+        expected = expected.Concat(new[] { "native-target-editor", "native-target-editor-narrow", "native-target-editor-en", "native-target-pair", "native-night-inline" }).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());

@@ -43,10 +43,24 @@ public sealed class NinaVerifiedHomeScriptTests
         Assert.Contains("-not $mount.TrackingEnabled", source);
         Assert.Contains("$confirmations.Count -ge 2", source);
         Assert.Contains("oldLedgerModified = $false", source);
-        Assert.Contains("$deadline", source);
+        Assert.Contains("[Diagnostics.Stopwatch]::StartNew()", source);
+        Assert.Contains("$elapsed.Elapsed.TotalSeconds -lt $TimeoutSeconds", source);
+        Assert.Contains("/equipment/mount/slew/stop", source);
         Assert.DoesNotContain("SerialPort", source);
         Assert.DoesNotContain("set_lock_position", source);
         Assert.DoesNotContain("/equipment/dome/", source);
         Assert.DoesNotContain("Remove-Item", source);
+    }
+
+    [Fact]
+    public void FaultedTargetNeedsMatchingTerminalIdleNightBeforeExplicitMaintenance()
+    {
+        var source = Script();
+        Assert.Contains("$snapshot.runState -eq 'Faulted' -and $TerminalNightJournal", source);
+        Assert.Contains("$night.phase -ne 'Terminal'", source);
+        Assert.Contains("$_.runId -eq $snapshot.observationRunId", source);
+        Assert.Contains("$matching[0].idleErrors.Count -ne 0", source);
+        Assert.Contains("$matching[0].settledErrors.Count -ne 0", source);
+        Assert.Contains("/sequence/state", source);
     }
 }

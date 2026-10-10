@@ -72,7 +72,8 @@ public sealed record EnvironmentContract(
     bool RequireWeatherData,
     double MaximumCloudCoverPercent,
     double MaximumHumidityPercent,
-    double MaximumWindSpeedMetersPerSecond);
+    double MaximumWindSpeedMetersPerSecond,
+    RoofClearanceAttestation? RoofClearance = null);
 
 /// <summary>
 /// Human-prepared measurement input. It is deliberately not a commissioned

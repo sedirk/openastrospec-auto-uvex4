@@ -807,6 +807,15 @@ public static class EvidenceBuilders
         if (preset.G3SaturationAdu is <= 0 or > ushort.MaxValue) issues.Add("Commissioned G3 saturation ADU is invalid.");
         if (preset.Motion is null) issues.Add("Commissioned motion limits are missing.");
         if (preset.Environment is null) issues.Add("Commissioned environment limits are missing.");
+        else if (preset.Environment.RoofClearance is { } clearance)
+        {
+            issues.AddRange(RoofClearancePolicy.Validate(true, clearance, preset.TelescopeDeviceId,
+                clearance.RoofDeviceId, DateTimeOffset.UtcNow));
+            // ADR-0022 permits an explicitly packaged AIWeather-only chain.
+            // Exact AIWeather/No_Device selection is verified by the runtime.
+            if (!preset.Environment.RequireSafetyMonitor || !preset.Environment.RequireOpenDomeOrRoof)
+                issues.Add("Non-interfering roof commissioning requires the complete unattended safety chain.");
+        }
         if (RequiresIndependentMountTransform(preset.FineMotionAuthority) && preset.MountTransform is null)
         {
             issues.Add("The selected fine-motion authority requires a commissioned pixel-to-mount transform.");
@@ -929,6 +938,7 @@ public static class EvidenceBuilders
             ["HorizonStartMarginDegrees"] = nightSetup.HorizonPolicy.StartMarginDegrees,
             ["HorizonContinueMarginDegrees"] = nightSetup.HorizonPolicy.ContinueMarginDegrees,
             ["RequireSafetyMonitor"] = preset.Environment.RequireSafetyMonitor,
+            ["RoofNeverInterferesWithMount"] = preset.Environment.RoofClearance is not null,
             ["RequireOpenDomeOrRoof"] = preset.Environment.RequireOpenDomeOrRoof,
             ["RequireWeatherData"] = preset.Environment.RequireWeatherData,
             // The schema-5 environment object owns the three external
@@ -940,7 +950,7 @@ public static class EvidenceBuilders
             ["WeakSupervisionEnabled"] = weakSupervision,
             ["PreparationSafetyCapabilityPreset"] = weakSupervision
                 ? "OperatorWeakSupervision"
-                : "NinaSafetyStack",
+                : preset.Environment.RequireWeatherData ? "NinaSafetyStack" : "AiWeatherSafetyStack",
             ["MaximumCloudCoverPercent"] = preset.Environment.MaximumCloudCoverPercent,
             ["MaximumHumidityPercent"] = preset.Environment.MaximumHumidityPercent,
             ["MaximumWindSpeedMetersPerSecond"] = preset.Environment.MaximumWindSpeedMetersPerSecond,

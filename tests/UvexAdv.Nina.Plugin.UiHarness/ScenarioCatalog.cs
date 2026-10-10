@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using UvexAdv.Nina.Plugin.SequenceItems;
 using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin.UiHarness;
@@ -17,6 +18,7 @@ public sealed record ScreenshotScenario(
     public object? AlternateViewModel { get; init; }
     public bool ExercisePlanScrolling { get; init; }
     public bool ExercisePreparationScrolling { get; init; }
+    public bool RenderNativeTargetPair { get; init; }
 }
 
 public static class ScenarioCatalog
@@ -24,6 +26,9 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("cancel-stop-unconfirmed", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed()),
+        new("cancel-stop-unconfirmed-narrow", 540, 900, ObservationDockMockViewModel.CancelStopUnconfirmed()),
+        new("cancel-stop-unconfirmed-en", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
         new("g3-split-morphology", 1040, 850, ObservationDockMockViewModel.SplitMorphology()),
         new("g3-split-morphology-narrow", 540, 850, ObservationDockMockViewModel.SplitMorphology()),
         new("g3-split-morphology-en", 1040, 850, ObservationDockMockViewModel.SplitMorphology(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
@@ -34,8 +39,30 @@ public static class ScenarioCatalog
         new("native-meridian-en", 540, 340, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyMeridianPanel", AlternateViewModel=new NativeMeridianMock { FlipStatus="Simulation: mount verified; accepted 2/5; reacquiring field / slit / guiding." }, Culture=CultureInfo.GetCultureInfo("en-US") },
         new("native-failure-popup", 470, 160, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeFailurePolicySelector", AlternateViewModel=new NativeFailurePolicyMock() },
         new("native-failure-popup-en", 470, 160, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeFailurePolicySelector", AlternateViewModel=new NativeFailurePolicyMock { FailurePolicy=UvexAdv.Nina.Plugin.SpectroscopyTargetFailurePolicy.SkipQualityFailure }, Culture=CultureInfo.GetCultureInfo("en-US") },
-        new("native-night", 960, 420, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
-        new("native-night-narrow", 540, 540, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-target-editor", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A") },
+        new("native-target-editor-narrow", 540, 760, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A") },
+        new("native-target-editor-en", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-target-pair", 1100, 1000, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=new NativeNightMock(), RenderNativeTargetPair=true },
+        new("native-night-inline", 960, 260, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-night", 960, 620, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-night-narrow", 540, 780, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-night-unsettled-closeout", 960, 620, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock
+            {
+                NightState = UvexNightSequenceContainer.DescribeTerminalState(true, false, true,
+                    Array.Empty<string>(), [new NativeNightTargetBoundaryFailure("模拟中断目标", "SIM-NIGHT-BOUNDARY",
+                        ["运动回程责任未结清，禁止跳目标或声称收口成功。"])])
+            }
+        },
+        new("native-night-cancel-stop-unconfirmed", 540, 780, ObservationDockMockViewModel.Idle())
+        {
+            TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock
+            {
+                NightState = UvexNightSequenceContainer.DescribeTerminalState(true, true, false,
+                    ["采集或设备停止未确认，未执行机械收口。"], Array.Empty<NativeNightTargetBoundaryFailure>())
+            }
+        },
         new("workflow-idle", 1180, 800, ObservationDockMockViewModel.WorkflowState("idle")),
         new("workflow-running", 1180, 800, ObservationDockMockViewModel.WorkflowState("running")),
         new("workflow-fallback", 1040, 850, ObservationDockMockViewModel.WorkflowState("fallback")),
@@ -134,6 +161,13 @@ public static class ScenarioCatalog
         new("atr-levels", 1040, 700, ObservationDockMockViewModel.AtrLive()),
         new("atr-narrow", 640, 800, ObservationDockMockViewModel.AtrLive()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
+        new("roof-opening-preparation", 1180, 900, ObservationDockMockViewModel.RoofOpeningPreparation()),
+        new("roof-opening-preparation-narrow", 760, 900, ObservationDockMockViewModel.RoofOpeningPreparation()),
+        new("roof-opening-preparation-en", 1180, 900, ObservationDockMockViewModel.RoofOpeningPreparation(true)),
+        new("target-visibility-window", 1180, 900, ObservationDockMockViewModel.TargetVisibilityWindow()),
+        new("target-visibility-window-narrow", 760, 900, ObservationDockMockViewModel.TargetVisibilityWindow()),
+        new("target-visibility-window-en", 1180, 900, ObservationDockMockViewModel.TargetVisibilityWindow(true))
+        { Culture = CultureInfo.GetCultureInfo("en-US") },
         new("lock-recovery-calibration", 1180, 900, ObservationDockMockViewModel.LockRecoveryCalibration()),
         new("lock-recovery-calibration-narrow", 760, 850, ObservationDockMockViewModel.LockRecoveryCalibration()),
         new("lock-recovery-calibration-en", 1180, 900, ObservationDockMockViewModel.LockRecoveryCalibration(true)) { Culture = CultureInfo.GetCultureInfo("en-US") },
@@ -163,6 +197,9 @@ public static class ScenarioCatalog
         new("narrow", 540, 900, ObservationDockMockViewModel.Narrow()),
         new("advanced", 1180, 1000, ObservationDockMockViewModel.Advanced()),
         new("advanced-narrow", 540, 700, ObservationDockMockViewModel.Advanced()),
+        new("roof-noninterfering", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 6, AdvancedCategoryIndex = 2, RoofNeverInterferesWithMount = true, SelectedPreparationSafetyCapability = "NinaSafetyStack" }),
+        new("roof-noninterfering-narrow", 540, 700, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 6, AdvancedCategoryIndex = 2, RoofNeverInterferesWithMount = true, SelectedPreparationSafetyCapability = "NinaSafetyStack" }),
+        new("roof-noninterfering-en", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 6, AdvancedCategoryIndex = 2, RoofNeverInterferesWithMount = true, SelectedPreparationSafetyCapability = "NinaSafetyStack" }) { Culture = CultureInfo.GetCultureInfo("en-US") },
         .. Enumerable.Range(0, 10).Select(index => new ScreenshotScenario($"advanced-category-{index}", 1040, 800,
             new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 6, AdvancedCategoryIndex = index })),
         new("photometry-off", 1180, 800, new ObservationDockMockViewModel { SynchronizedPhotometryEnabled = false }),
@@ -629,6 +666,10 @@ public sealed class ObservationDockMockViewModel
         ? ObservationUiPresentation.Text("有人弱监督；不会自动开关屋顶，明确危险仍阻断。", "Supervised operation; no automatic roof motion, and explicit danger still blocks.", ObservationStaticTextLocalization.EffectiveCulture)
         : ObservationUiPresentation.Text("全无人监管策略；启动时必须通过环境与安全收尾能力核验。", "Full-unattended policy; live environment and safe-cleanup capabilities must pass startup validation.", ObservationStaticTextLocalization.EffectiveCulture);
     public bool IsCommissioningPreparationMissing { get; init; } = true;
+    public bool RoofNeverInterferesWithMount { get; init; }
+    public string RoofClearanceSummary => RoofNeverInterferesWithMount
+        ? ObservationUiPresentation.Text("屋顶模式：全姿态无干涉。开顶不要求 Park；收尾先停止运动、关顶，再独立停放。须匹配本台站确认记录；天气与到位读回仍检查。", "Roof mode: all mount positions clear. Open without Park; stop motion and close before independent Park. A matching station attestation, weather checks and terminal readback remain required.", ObservationStaticTextLocalization.EffectiveCulture)
+        : ObservationUiPresentation.Text("屋顶模式：默认 Park 联锁。开关顶前须确认停放；无干涉模式只能随本台站已确认的方案导入。", "Roof mode: Park interlock (default). Roof motion requires verified Park. Non-interfering mode can only be imported with a confirmed station package.", ObservationStaticTextLocalization.EffectiveCulture);
     public string CommissioningPreparationStatus => IsCommissioningPreparationMissing
         ? ObservationUiPresentation.Text("标定方案尚待加载或核验；请在“高级设置 → 设备绑定”处理。", "The commissioning setup still needs loading or verification in Advanced settings → Device bindings.", ObservationStaticTextLocalization.EffectiveCulture)
         : ObservationUiPresentation.Text("已记录标定方案；完整性与适用性仍受启动校验约束。", "A commissioning setup is recorded; integrity and applicability remain subject to startup validation.", ObservationStaticTextLocalization.EffectiveCulture);
@@ -657,7 +698,7 @@ public sealed class ObservationDockMockViewModel
     public string SelectedPreparationSafetyCapability { get; set; } = "OperatorWeakSupervision";
     public string SelectedPreparationSafetyCapabilityDescription => SelectedPreparationSafetyCapability == "OperatorWeakSupervision"
         ? ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。缺失的环境能力按项警告降级，不授予无人值守权限；已连接设备明确报告危险仍阻断。不会自动开关屋顶。", "This changes real-run safety requirements, not just draft notes. Missing environment capabilities degrade individually with warnings and never grant unattended authority; explicit danger from a connected device still blocks. No automatic roof motion is allowed.", ObservationStaticTextLocalization.EffectiveCulture)
-        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求，不只是草稿备注。真实流程启动后，仅在实时安全门通过时才可开顶；结束或终端故障时需按顺序收镜盖、停放赤道仪并关顶。选择本身不会连接或移动设备。", "This changes real-run safety requirements, not just draft notes. After a real run starts, roof opening requires passing live safety gates; completion or terminal failure requires closing the cover, parking the mount and closing the roof in order. Selection itself does not connect or move equipment.", ObservationStaticTextLocalization.EffectiveCulture);
+        : ObservationUiPresentation.Text("此设置改变真实流程的安全要求。启动后仅在实时安全门通过时开顶；结束或终端故障按本台站屋顶模式收口。选择本身不会连接或移动设备。", "This changes real-run safety requirements. Opening requires live safety gates; completion or terminal failure closes out using the commissioned roof mode. Selection does not connect or move equipment.", ObservationStaticTextLocalization.EffectiveCulture);
     public bool PreparationOrderSortingFilterInstalled { get; set; }
     public string PreparationDraftStatus { get; init; } = "尚未生成本次观测配置草稿。";
     public bool IsSlitChoiceMissing { get; init; }
@@ -1029,6 +1070,55 @@ public sealed class ObservationDockMockViewModel
         };
     }
 
+    public static ObservationDockMockViewModel RoofOpeningPreparation(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown("ROOF_OPEN_TRACKING_STOP_TIMEOUT",
+            "Roof not opened: tracking-off/stopped readback was not confirmed within the opening preparation timeout; no retry was issued.",
+            new Dictionary<string, double> { ["trackingEnabled"] = 1, ["trackingStopRequested"] = 1,
+                ["slewing"] = 0, ["pulseGuiding"] = 0, ["stableReadbacks"] = 0 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.ValidateNightSetup, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "Night setup" : "验证并锁定本夜配置",
+            ProgressPercent = 0, ProgressSummary = "0/11 · 0%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Roof opening preparation" : "开顶前停止状态核对",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no hardware action." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel TargetVisibilityWindow(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Fail(HorizonEvaluation.WindowExhaustedCode,
+            "Target is currently at 51.48 degrees, but the protected 55-minute block reaches the 42-degree horizon at 2026-10-10T00:23:37+08:00. No new action for this target; skipping requires confirmed idle and settled motion.",
+            new Dictionary<string, double> { ["currentAltitudeDegrees"] = 51.48,
+                ["protectedDurationMinutes"] = 55, ["minutesToFirstBlockedSample"] = 48,
+                ["firstBlockedAltitudeDegrees"] = 41.95, ["firstBlockedRequiredAltitudeDegrees"] = 42 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = english ? "Target stopped; checking skip boundary" : "本目标已停止，核对跳过边界",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "PHD2 slit placement" : "PHD2 精确送入狭缝中点",
+            ProgressPercent = 45, ProgressSummary = "5/11 · 45%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "This target's visibility window" : "仅本目标可观测窗口不足",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no hardware action." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
     public static ObservationDockMockViewModel PostCalibrationPulseFailure(bool blend = false)
     {
         const string code = "POST_CALIBRATION_G3_REACQUISITION_BLOCKED";
@@ -1078,6 +1168,30 @@ public sealed class ObservationDockMockViewModel
             LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
             LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
             OperatorNotice = english ? "Offline replay; no hardware action." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel CancelStopUnconfirmed(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown("CANCEL_CLEANUP_FAILED",
+            "Cancellation requested, but stop-only cleanup was not confirmed: PHD2 pause/stop was not confirmed: A task was canceled.");
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = english ? "Faulted; stop unconfirmed" : "故障；停止未确认",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = english ? "PHD2 slit placement" : "PHD2 精确送入狭缝中点",
+            NextStageText = english ? "No automatic continuation" : "不再自动执行",
+            StatusMessage = issue.Summary,
+            ProgressPercent = 45,
+            ProgressSummary = english ? "Overall stages 5/11 · 45%" : "总体阶段 5/11 · 45%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Cancellation is not a stopped-device receipt" : "取消请求不等于设备已停止",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
         };
     }
 

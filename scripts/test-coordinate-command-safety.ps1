@@ -125,10 +125,17 @@ $excluded = @(
     [IO.Path]::GetFullPath($modulePath),
     [IO.Path]::GetFullPath($PSCommandPath)
 )
+# The exact stop-only endpoint has no coordinate payload. Keep every other slew
+# route under the hashed-coordinate rule, including similarly named suffixes.
+$slewEndpointPattern = '(?i)equipment/mount/slew(?!/stop(?:[''"\s?#]|$))'
+Assert-True ('equipment/mount/slew?ra=1' -match $slewEndpointPattern) 'Coordinate slew escaped the source guard.'
+Assert-True ('equipment/mount/slew' -match $slewEndpointPattern) 'Plain slew escaped the source guard.'
+Assert-True ('equipment/mount/slew/stop-other' -match $slewEndpointPattern) 'Unknown slew suffix escaped the source guard.'
+Assert-True ('equipment/mount/slew/stop' -notmatch $slewEndpointPattern) 'Stop-only command was mistaken for a coordinate slew.'
 $coordinateCommandFiles = Get-ChildItem -LiteralPath $PSScriptRoot -File | Where-Object {
     $_.Extension -in '.ps1', '.psm1' -and
     [IO.Path]::GetFullPath($_.FullName) -notin $excluded -and
-    (Get-Content -LiteralPath $_.FullName -Raw) -match '(?i)equipment/mount/slew'
+    (Get-Content -LiteralPath $_.FullName -Raw) -match $slewEndpointPattern
 }
 foreach ($file in $coordinateCommandFiles) {
     $source = Get-Content -LiteralPath $file.FullName -Raw

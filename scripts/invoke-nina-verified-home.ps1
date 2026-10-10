@@ -2,15 +2,31 @@
 param(
     [Parameter(Mandatory)][string]$ExpectedTelescopeId,
     [switch]$OperatorAuthorizedHoming,
-    [ValidateRange(30, 600)][int]$TimeoutSeconds = 180
+    [ValidateRange(30, 600)][int]$TimeoutSeconds = 180,
+    [string]$TerminalNightJournal = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $OperatorAuthorizedHoming) { throw 'Explicit operator homing authorization is required.' }
 $bridge = Join-Path $PSScriptRoot 'invoke-observation-automation-bridge.ps1'
 $snapshot = (& $bridge -Snapshot -ConnectTimeoutMilliseconds 30000).snapshot
-if ($snapshot.runState -notin @('Idle','Cancelled','Completed')) {
+if ($snapshot.runState -eq 'Faulted' -and $TerminalNightJournal) {
+    # A target may be Faulted after its native night has already joined all
+    # owners and finished closeout. Preserve that result, never reset its ledger.
+    $night = Get-Content -LiteralPath $TerminalNightJournal -Raw | ConvertFrom-Json
+    $matching = @($night.outcomes | Where-Object {
+        $_.PSObject.Properties['runId'] -and $_.runId -eq $snapshot.observationRunId
+    })
+    if ($night.phase -ne 'Terminal' -or $matching.Count -ne 1 -or
+        $matching[0].idleErrors.Count -ne 0 -or $matching[0].settledErrors.Count -ne 0) {
+        throw 'The supplied native night does not prove this faulted target joined idle owners with settled motion.'
+    }
+} elseif ($snapshot.runState -notin @('Idle','Cancelled','Completed')) {
     throw 'Finish the visible observation cancellation before homing.'
+}
+$sequence = Invoke-RestMethod 'http://127.0.0.1:1888/v2/api/sequence/state' -TimeoutSec 5
+if (-not $sequence.Success -or ($sequence.Response | ConvertTo-Json -Depth 40) -match '"Status"\s*:\s*"(RUNNING|PAUSED)"') {
+    throw 'The native sequence has not confirmed idle; no homing command was sent.'
 }
 function Read-PhdState {
     $tcp = [Net.Sockets.TcpClient]::new()
@@ -63,10 +79,10 @@ if (-not $mount.AtHome) {
     Save-Audit 'nina-home-response.json' $result
     if (-not $result.Success) { throw 'NINA rejected the homing request; inspect its recorded response.' }
 }
-$deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+$elapsed = [Diagnostics.Stopwatch]::StartNew()
 $confirmations = [Collections.Generic.List[object]]::new()
 $trackingStopSent = $false
-while ([DateTimeOffset]::UtcNow -lt $deadline) {
+while ($elapsed.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
     $mount = Read-Mount
     if ($mount.AtHome -and -not $mount.Slewing -and -not $mount.IsPulseGuiding) {
         if ($mount.TrackingEnabled -and -not $trackingStopSent) {
@@ -88,4 +104,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
     Start-Sleep -Seconds 2
 }
 Save-Audit 'unconfirmed-home.json' ([ordered]@{ timestampUtc = [DateTimeOffset]::UtcNow; mount = $mount; confirmed = $false })
+$mount = Read-Mount
+$stop = Invoke-RestMethod 'http://127.0.0.1:1888/v2/api/equipment/mount/slew/stop' -TimeoutSec 10
+Save-Audit 'timeout-stop-response.json' $stop
 throw 'Homing was not confirmed within the bounded wait; no automatic second homing command was sent.'

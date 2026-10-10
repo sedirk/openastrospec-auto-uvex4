@@ -263,6 +263,72 @@ public sealed class Phd2ClientTests
         Assert.False(File.Exists(destination));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeSingleFrameOwnerStallTimesOutWithoutRetryOrAcceptingLateCompletion(bool lateSuccess)
+    {
+        using var directory = new TemporaryDirectory();
+        var destination = Path.Combine(directory.Path, "late-native-single.fit");
+        var timeoutObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var stateBefore = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", stateBefore.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stateBefore, "Stopped", cancellationToken);
+
+            var capture = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("capture_single_frame", capture.GetProperty("method").GetString());
+            await session.ReplyResultAsync(capture, 0, cancellationToken);
+            // Reproduce an owner that accepts the command but supplies neither
+            // a frame nor a completion event until after the client deadline.
+            var stop = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("stop_capture", stop.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stop, 0, cancellationToken);
+            await timeoutObserved.Task.WaitAsync(cancellationToken);
+
+            if (lateSuccess)
+            {
+                await File.WriteAllBytesAsync(destination, [0x47, 0x33], cancellationToken);
+            }
+            await session.SendEventAsync(
+                new { Event = "SingleFrameComplete", Success = lateSuccess, Path = destination, Error = "Capture failed" },
+                cancellationToken);
+
+            // A fresh read is a receive-order barrier, not an automatic retry
+            // or proof that the timed-out exposure can become accepted evidence.
+            var stateAfter = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", stateAfter.GetProperty("method").GetString());
+            await session.ReplyResultAsync(stateAfter, "Stopped", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        var eventTimeout = TimeSpan.FromMilliseconds(150);
+        await using var client = CreateClient(
+            server,
+            eventTimeoutMargin: TimeSpan.FromMilliseconds(50),
+            minimumLoopingFrameEventTimeout: eventTimeout);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var error = await Assert.ThrowsAsync<Phd2CommandTimeoutException>(() =>
+            client.CaptureSingleFrameWithParametersAsync(
+                new Phd2SingleFrameRequest(10, 1, 0, destination),
+                CancellationToken.None));
+        timeoutObserved.SetResult();
+        Assert.Equal(Phd2AppState.Stopped, await client.GetAppStateAsync(CancellationToken.None));
+
+        Assert.Equal("native single-frame capture", error.Operation);
+        Assert.Equal(eventTimeout, error.Timeout);
+        Assert.Null(client.Snapshot.LastSingleFrame);
+        Assert.Equal(
+            ["get_app_state", "capture_single_frame", "stop_capture", "get_app_state"],
+            server.ReceivedMethods.ToArray());
+        Assert.Equal(lateSuccess, File.Exists(destination));
+        if (lateSuccess)
+        {
+            Assert.Equal(new byte[] { 0x47, 0x33 }, await File.ReadAllBytesAsync(destination));
+        }
+    }
+
     [Fact]
     public async Task CaptureFullFrameDiscardsFirstPipelineFrameAfterExposureChange()
     {
@@ -608,6 +674,9 @@ public sealed class Phd2ClientTests
             var stateAfterStop = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_app_state", stateAfterStop.GetProperty("method").GetString());
             await session.ReplyResultAsync(stateAfterStop, "Stopped", cancellationToken);
+            // This is a stop-confirmation scenario, not a disconnect scenario.
+            // Keep the owner connected until the client has consumed the reply.
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);

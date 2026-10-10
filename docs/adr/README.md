@@ -31,3 +31,7 @@ Current accepted decisions:
 - [ADR-0018: Run-local main-telescope focus, independent of UVEX calibration](0018-run-local-main-focus-position.md)
 - [ADR-0019: Native spectroscopy night sequences](0019-native-spectroscopy-night-sequences.md)
 - [ADR-0020: PHD2-owned calibration and advisory metadata](0020-phd2-owned-calibration-advisory-metadata.md)
+- [ADR-0021: Station-attested non-interfering roof](0021-station-attested-noninterfering-roof.md)
+- [ADR-0022: AIWeather site weather authority](0022-aiweather-site-weather-authority.md)
+- [ADR-0023: Explicit per-target PHD2 calibration request](0023-explicit-per-target-phd2-calibration.md)
+- [ADR-0024: Bounded adaptive guiding recovery](0024-bounded-adaptive-guiding-recovery.md)

@@ -79,6 +79,32 @@ The following conditions are explicitly non-blocking in the production route:
 
 ## 4. Automatic recovery before an error
 
+### Bounded optical guide-precision warning tiers (0.4.0.256)
+
+An explicitly versioned commissioning package can set
+`Phd2SlitPlacement.MaximumGuideLockWarningResidualPixels`; omitted/zero keeps the
+previous strict policy. The ceiling cannot exceed either 3 pixels or 1.5 times
+the preferred guide tolerance. For the owner's 2026-10-10 test, independent
+complete optical windows use 2.0, 2.5, then 3.0 pixels (maximum four windows,
+unchanged deadline). Every frame must pass the selected tier; no averaging,
+cherry-picking or retrospective acceptance of the preceding rejected window.
+
+A wider tier requires same-epoch/lock live guiding with output, no pause or
+pending settle, measured guide positions and confirmed target identity. The
+accepted warning advances the shared runner, is retained in run evidence and
+the placement gate, and uses the same bounded optical ceiling in downstream
+qualification/planning. Native post-lock settle still must succeed (up to the
+declared ceiling, at most five stable seconds, within 60% of the original stage
+time, leaving the rest for optical verification). This changes guide precision,
+not target-on-slit completion, exact-lock readback, identity, star-loss/output,
+motion/return accounting or observatory safety. It is not ADR-0013's permission
+to probe without exact slit completion. A passing slit gate does not retroactively
+claim the preferred guide precision. Initial complete-window rejection can only
+be skipped after checked stop and independent outer cleanup verification.
+
+This is an owner-authorized test policy, not a measured proof of throughput or
+unattended scientific quality. Original observations remain immutable.
+
 ### QHY/GS350 focus freshness during long spectroscopy runs (2026-10-05)
 
 Before live setup validation, the shared production runner may refresh QHY
@@ -142,6 +168,31 @@ cross an explicit safety boundary, lose target/slit provenance, or knowingly
 produce invalid new science data.
 
 ## 6. Review rule
+
+### Cancellation and night-closeout truthfulness (2026-10-10 / 0.4.0.257)
+
+`CANCEL_CLEANUP_FAILED` is a terminal fault, not a successful cancellation:
+the stop-only callback failed to establish its required stopped/idle boundary.
+Retain its failure as the last event and do not invoke a second mechanical
+fault-cleanup pass with a fresh token. It cannot authorize another target,
+force-closing an owner, or clearing motion responsibility. Ordinary confirmed
+cancellation remains `Cancelled`.
+
+Native night results record physical closeout and target motion/hand-off
+reconciliation separately. A verified closed roof/cover and parked mount do not
+settle an interrupted target's original ledger. Unsettled target responsibility
+remains visible in the terminal journal and prevents a clean success claim;
+it does not itself prevent emergency physical closeout once physical idleness
+has been confirmed. An unconfirmed stop is never displayed as safely cancelled.
+
+A locally completed initial PHD2 guide operation may supply **stop authority
+only** if the first structured guide loss occurs before a placement session or
+any exact-lock history exists. The receipt must match the current connection,
+unchanged commanded lock, exactly one loss epoch, and unchanged configuration
+and calibration event sequences, with no pause or pending settle. Recheck after
+publishing intent, then use the existing checked stop. This does not promote
+lost guiding to valid science, reset a motion budget, change quality thresholds,
+or take over an external/restarted guide session.
 
 `PHD2_PLACEMENT_GUIDE_STAR_LOST` preserves a typed native StarLost observed
 during placement. Unlike a settle-only quality warning it prevents new spectra;

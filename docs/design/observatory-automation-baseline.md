@@ -165,11 +165,22 @@ Random unbounded mount nudging is not an automated strategy.
 4. PHD2 alone manages guiding calibration (ADR-0020). Calibration age,
    geometry, rates/parity and historical calibration provenance are recorded
    as warnings, not duplicate authorization thresholds. The plugin never forces
-   recalibration. A motion-free native guide operation may let PHD2 calibrate;
+   recalibration from those diagnostics. ADR-0023 permits one explicit, saved
+   per-target operator request at the first verified motion-free guide boundary;
+   default is off, with no reissue on recovery or meridian continuation.
+   A motion-free native guide operation may otherwise let PHD2 calibrate;
    observed calibration requires fresh target/slit acquisition before placement.
    Current profile/equipment/sensor identity, connection/guide epochs, actual
    settle and fresh post-movement residuals remain mandatory. Unresolved motion
    ledgers do not grant new calibration motion or disappear on a warning.
+   ADR-0024 adds a separately bounded runtime exception: after checked stop with
+   all movement settled, suspected obscuration waits for fresh stellar frames.
+   Two usable frames permit one star-reselection recovery; a subsequent guiding
+   failure with fresh clear frames permits at most one native forced calibration
+   per logical target. Explicit or observed calibration consumes that allowance.
+   This does not use metadata mismatch as a trigger, reset motion budgets, or
+   bypass new target/slit acquisition. Exhaustion may skip a target only after
+   independent idle/ledger confirmation and under its saved failure policy.
 5. When the selected fine-motion authority is PHD2 calibration, start and settle
    the guide epoch before final placement, then use bounded exact runtime-lock
    stages to bring the measured target to the measured slit. Re-measure after
@@ -212,6 +223,12 @@ exposure/count settings do not mutate the Profile. Ordinary cancellation still
 authorizes no mechanical closeout; explicit end-night and commissioned unsafe
 shutdown are separate operations. Weak supervision does not gain roof authority.
 
+Under [ADR-0021](../adr/0021-station-attested-noninterfering-roof.md), only a
+station with explicit hash-bound owner confirmation of clearance at **all mount
+positions** may select non-interfering roof mode. It opens with fresh safety and
+stopped-mount evidence without Park; closure precedes a separately bounded Park.
+The default remains ParkRequired, and both frontends share this exact policy.
+
 The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Target Observation` container composes reusable items rather than putting all logic in one command:
 
 1. Validate and lock Night Setup.
@@ -228,7 +245,8 @@ The N.I.N.A. plugin is the orchestration layer. The planned top-level `UVEX Targ
 8. Capture ATR probe spectra and select an exposure tier.
 9. Run the ATR science block while QHY photometry and health monitoring continue asynchronously.
 10. Stop/finalize QHY photometry, close the selected main-optical-path cover,
-    park the mount and close the selected N.I.N.A./RRCI roll-off roof when the
+    park the mount and close the selected N.I.N.A./RRCI roll-off roof (or, only in
+    ADR-0021's attested mode, stop motion, close the roof then independently park) when the
     run is in the commissioned full-unattended mode; emit an observation
     summary containing every checked terminal state. Weak supervision leaves
     roof motion to the operator.
@@ -265,6 +283,15 @@ ownership and science acceptance remain unchanged. See `AGENTS.md` for scope.
 
 ## 9. Safety and horizon policy
 
+- Under owner-requested [ADR-0022](../adr/0022-aiweather-site-weather-authority.md),
+  a new hash-bound commissioning package may explicitly delegate weather safety
+  to the exact N.I.N.A. AIWeather Safety Monitor with no independent Weather
+  adapter. This narrowly replaces the mandatory separate Weather selection in
+  ADR-0010/0021, not the live safe/fresh/connected requirement. No automatic
+  fallback, forecast-as-sensor substitution, fabricated rain/wind metrics or
+  weakening of roof/cover, dawn/deadline or device-identity checks is allowed.
+  Old packages keep their independent-weather requirements. The owner's chosen
+  sky-monitor policy does not claim independent rain/wind sensor coverage.
 - The sequence must evaluate a configurable azimuth/altitude obstruction model. Until it exists, use a conservative 40° minimum altitude plus explicit start/continue margins.
 - It must predict target altitude through the whole requested block rather than check only at start.
 - A clear sky, camera image, or CCTV image is observational context, not a substitute for a connected safety monitor or explicit roof state.
@@ -276,6 +303,15 @@ ownership and science acceptance remain unchanged. See `AGENTS.md` for scope.
   with every transition bounded and attested. An unsafe event during a run
   starts the same fail-safe closure and permanently invalidates automatic
   resume for that run.
+- ADR-0021 narrowly replaces the parked-mount prerequisite for a station whose
+  owner attests all-position roof clearance. A versioned confirmation bound to
+  exact mount/roof IDs and the immutable commissioning hash is mandatory; unknown
+  clearance retains the default Park interlock. In this mode opening still needs
+  fresh safe/weather/identity/horizon and stopped/no-pulse/no-tracking evidence.
+  Closeout verifies acquisition/guiding/motion stopped, closes and verifies the
+  roof, then independently attempts bounded Park. Park failure is reported, never
+  allowed to prevent the prior roof closure or be relabeled as success. Controller
+  interlocks and weak-supervision prohibitions are unchanged.
 - Weak supervision is capability-by-capability: an unselected, disconnected or
   metric-incomplete Safety Monitor, Weather, Dome or Cover produces a warning
   and degrades only that capability. It never grants unattended authority and

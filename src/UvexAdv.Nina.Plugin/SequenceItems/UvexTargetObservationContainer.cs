@@ -25,28 +25,44 @@ namespace UvexAdv.Nina.Plugin.SequenceItems;
 [Export(typeof(ISequenceContainer))]
 [JsonObject(MemberSerialization.OptIn)]
 [SupportedOSPlatform("windows")]
-public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutableContainer, IDeepSkyObjectContainer
+public sealed partial class UvexTargetObservationContainer : SequenceContainer, IImmutableContainer, IDeepSkyObjectContainer
 {
     private readonly IProfileService profileService;
     private readonly INighttimeCalculator nighttimeCalculator;
     private readonly ObservationCoordinatorHost host;
     private readonly UvexPluginSettings settings;
     private readonly RealObservationStageRunnerFactory realRunnerFactory;
+    private readonly Func<IObservationStageRunner>? simulationRunnerFactory;
     private SequencerStageBridge? activeBridge;
     private CancellationTokenSource? targetLifetime;
     private bool useRealMode;
     private InputTarget target;
+    private bool loadingTarget = true;
+    private int scienceFrames, maximumScienceAttempts;
+    private double fixedExposureSeconds, durationMinutes;
+    private bool forceGuideCalibration;
+    private bool automaticGuideRecovery = true;
+    private int guideStarWaitSeconds = 300;
+    private SpectroscopyTargetFailurePolicy failurePolicy = SpectroscopyTargetFailurePolicy.SkipQualityFailure;
 
     [ImportingConstructor]
     public UvexTargetObservationContainer(
         IProfileService profileService,
         INighttimeCalculator nighttimeCalculator,
         ObservationCoordinatorHost host,
-        RealObservationStageRunnerFactory realRunnerFactory)
-        : this(profileService, nighttimeCalculator, host, realRunnerFactory, new UvexPluginSettings(profileService)) { }
+        RealObservationStageRunnerFactory realRunnerFactory,
+        NINA.WPF.Base.Interfaces.ViewModel.IFramingAssistantVM framingAssistant,
+        NINA.WPF.Base.Interfaces.Mediator.IApplicationMediator applicationMediator,
+        NINA.Equipment.Interfaces.IPlanetariumFactory planetariumFactory)
+        : this(profileService, nighttimeCalculator, host, realRunnerFactory, new UvexPluginSettings(profileService),
+            framingAssistant: framingAssistant, applicationMediator: applicationMediator, planetariumFactory: planetariumFactory) { }
 
     internal UvexTargetObservationContainer(IProfileService profileService, INighttimeCalculator nighttimeCalculator,
-        ObservationCoordinatorHost host, RealObservationStageRunnerFactory realRunnerFactory, UvexPluginSettings settings)
+        ObservationCoordinatorHost host, RealObservationStageRunnerFactory realRunnerFactory, UvexPluginSettings settings,
+        Func<IObservationStageRunner>? simulationRunnerFactory = null,
+        NINA.WPF.Base.Interfaces.ViewModel.IFramingAssistantVM? framingAssistant = null,
+        NINA.WPF.Base.Interfaces.Mediator.IApplicationMediator? applicationMediator = null,
+        NINA.Equipment.Interfaces.IPlanetariumFactory? planetariumFactory = null)
         : base(new SequentialStrategy())
     {
         this.profileService = profileService;
@@ -54,12 +70,18 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         this.host = host;
         this.realRunnerFactory = realRunnerFactory;
         this.settings = settings;
+        this.simulationRunnerFactory = simulationRunnerFactory;
+        this.framingAssistant = framingAssistant;
+        this.applicationMediator = applicationMediator;
+        this.planetariumFactory = planetariumFactory;
         target = CreateTarget(profileService);
         AttachTarget(target);
         NighttimeData = nighttimeCalculator.Calculate(null);
         nighttimeCalculator.OnReferenceDayChanged += OnReferenceDayChanged;
         LoadDefaults();
         SeedStageItems();
+        loadingTarget = false;
+        InitializeTargetEditorCommands();
     }
 
     private UvexTargetObservationContainer(UvexTargetObservationContainer copy)
@@ -70,6 +92,10 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         host = copy.host;
         settings = copy.settings;
         realRunnerFactory = copy.realRunnerFactory;
+        simulationRunnerFactory = copy.simulationRunnerFactory;
+        framingAssistant = copy.framingAssistant;
+        applicationMediator = copy.applicationMediator;
+        planetariumFactory = copy.planetariumFactory;
         target = CreateTarget(profileService);
         AttachTarget(target);
         NighttimeData = nighttimeCalculator.Calculate(null);
@@ -82,11 +108,15 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         RightAscensionDegrees = copy.RightAscensionDegrees;
         DeclinationDegrees = copy.DeclinationDegrees;
         Target.PositionAngle = copy.Target.PositionAngle;
+        Target.Expanded = copy.Target.Expanded;
         DurationMinutes = copy.DurationMinutes;
         ScienceFrames = copy.ScienceFrames;
         MaximumScienceAttempts = copy.MaximumScienceAttempts;
         FixedExposureSeconds = copy.FixedExposureSeconds;
         FailurePolicy = copy.FailurePolicy;
+        ForceGuideCalibration = copy.ForceGuideCalibration;
+        AutomaticGuideRecovery = copy.AutomaticGuideRecovery;
+        GuideStarWaitSeconds = copy.GuideStarWaitSeconds;
         NightSetupId = copy.NightSetupId;
         SiteLatitudeDegrees = copy.SiteLatitudeDegrees;
         SiteLongitudeDegreesEast = copy.SiteLongitudeDegreesEast;
@@ -103,6 +133,8 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         Conditions = new ObservableCollection<ISequenceCondition>(copy.Conditions.Select(item => (ISequenceCondition)item.Clone()));
         Triggers = new ObservableCollection<ISequenceTrigger>(copy.Triggers.Select(item => (ISequenceTrigger)item.Clone()));
         AttachChildren();
+        loadingTarget = false;
+        InitializeTargetEditorCommands();
     }
 
     [JsonProperty]
@@ -112,9 +144,11 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         set
         {
             if (ReferenceEquals(target, value) || value is null) return;
+            RequireEditablePlan();
             DetachTarget(target);
             target = value;
             AttachTarget(target);
+            InvalidateTargetCatalog();
             RaiseTargetPropertiesChanged();
         }
     }
@@ -132,6 +166,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         {
             var normalized = value ?? string.Empty;
             if (string.Equals(Target.TargetName, normalized, StringComparison.Ordinal)) return;
+            RequireEditablePlan();
             Target.TargetName = normalized;
             RaisePropertyChanged();
         }
@@ -143,7 +178,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     [JsonProperty]
     public TargetObservabilityClass TargetObservability { get; set; }
 
-    [JsonProperty]
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public TargetCatalogMetadata? CatalogMetadata { get; set; }
 
     [JsonIgnore]
@@ -165,17 +200,69 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     }
 
     [JsonProperty]
-    public double DurationMinutes { get; set; }
+    public double DurationMinutes { get => durationMinutes; set => SetPlanValue(ref durationMinutes, value); }
 
-    [JsonProperty] public int ScienceFrames { get; set; }
-    [JsonProperty] public int MaximumScienceAttempts { get; set; }
-    [JsonProperty] public double FixedExposureSeconds { get; set; }
-    [JsonProperty] public SpectroscopyTargetFailurePolicy FailurePolicy { get; set; }
+    [JsonProperty] public int ScienceFrames { get => scienceFrames; set => SetPlanValue(ref scienceFrames, value); }
+    [JsonProperty] public int MaximumScienceAttempts { get => maximumScienceAttempts; set => SetPlanValue(ref maximumScienceAttempts, value); }
+    [JsonProperty] public double FixedExposureSeconds { get => fixedExposureSeconds; set => SetPlanValue(ref fixedExposureSeconds, value); }
+    [JsonProperty] public SpectroscopyTargetFailurePolicy FailurePolicy { get => failurePolicy; set => SetPlanValue(ref failurePolicy, value); }
+    [JsonProperty] public bool ForceGuideCalibration { get => forceGuideCalibration; set => SetPlanValue(ref forceGuideCalibration, value); }
+    [JsonProperty] public bool AutomaticGuideRecovery { get => automaticGuideRecovery; set => SetPlanValue(ref automaticGuideRecovery, value); }
+    [JsonProperty] public int GuideStarWaitSeconds { get => guideStarWaitSeconds; set => SetPlanValue(ref guideStarWaitSeconds, value); }
+    [JsonIgnore] public bool CanEditPlan => targetLifetime is null && Parent is not UvexNightSequenceContainer { IsActive: true };
+    [JsonIgnore] public string TargetSummary => $"{TargetName} · {ScienceFrames} × {(FixedExposureSeconds > 0 ? $"{FixedExposureSeconds:0.###} s" : "AUTO")}";
     [JsonIgnore] public IReadOnlyList<SpectroscopyFailurePolicyChoice> AvailableFailurePolicies => SpectroscopyFailurePolicyChoice.Choices;
-    [JsonIgnore] public string LastOutcome { get; private set; } = "未执行";
+    private string lastOutcome = "未执行";
+    [JsonIgnore] public string LastOutcome { get => lastOutcome; private set { lastOutcome = value; RaisePropertyChanged(nameof(LastOutcomeLabel)); } }
+    [JsonIgnore] public string LastOutcomeLabel => LastOutcome == "未执行" ? UiText("未执行") : LastOutcome;
+    private static string UiText(string value) => ObservationStaticTextLocalization.Translate(value, ObservationStaticTextLocalization.EffectiveCulture);
 
     private NativeSequencePlan TargetSequencePlan() => new(ScienceFrames, MaximumScienceAttempts,
-        FixedExposureSeconds, LatitudeDegrees: SiteLatitudeDegrees, LongitudeDegrees: SiteLongitudeDegreesEast);
+        FixedExposureSeconds, LatitudeDegrees: SiteLatitudeDegrees, LongitudeDegrees: SiteLongitudeDegreesEast,
+        ForceGuideCalibration: ForceGuideCalibration, AutomaticGuideRecovery: AutomaticGuideRecovery,
+        GuideStarWaitSeconds: GuideStarWaitSeconds);
+
+    private void RequireEditablePlan()
+    {
+        if (!loadingTarget && !CanEditPlan) throw new InvalidOperationException("观测运行中不可修改目标；请先停止整个序列。");
+    }
+
+    private void SetPlanValue<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? property = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        RequireEditablePlan();
+        field = value;
+        RaisePropertyChanged(property);
+        RefreshTargetSummary();
+    }
+
+    private void RefreshTargetSummary()
+    {
+        RaisePropertyChanged(nameof(TargetSummary));
+        if (loadingTarget) return;
+        // Refresh generator-owned captions; leave an operator's custom label alone.
+        var prefix = System.Text.RegularExpressions.Regex.Match(Name ?? "", @"^\d+\s*·\s*");
+        if (prefix.Success) Name = prefix.Value + TargetSummary;
+    }
+
+    private void InvalidateTargetCatalog()
+    {
+        if (!loadingTarget)
+        {
+            CatalogMetadata = null;
+            CatalogId = string.Empty;
+            RaisePropertyChanged(nameof(CatalogMetadata));
+            RaisePropertyChanged(nameof(CatalogId));
+        }
+        RefreshTargetSummary();
+    }
+
+    internal void RefreshPlanEditability()
+    {
+        Interlocked.Increment(ref targetEditorGeneration);
+        RaisePropertyChanged(nameof(CanEditPlan));
+        RefreshTargetEditorCommands();
+    }
 
     [JsonProperty]
     public string NightSetupId { get; set; } = string.Empty;
@@ -217,6 +304,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         set
         {
             if (useRealMode == value) return;
+            RequireEditablePlan();
             useRealMode = value;
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(ExecutionModeLabel));
@@ -224,13 +312,13 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         }
     }
 
-    public string ExecutionModeLabel => UseRealMode
+    public string ExecutionModeLabel => UiText(UseRealMode
         ? "REAL · 将控制真实设备"
-        : "SIMULATOR · 不接触硬件";
+        : "SIMULATOR · 不接触硬件");
 
-    public string ExecutionModeWarning => UseRealMode
+    public string ExecutionModeWarning => UiText(UseRealMode
         ? "执行时仍须当前 Profile 明确启用真实模式；历史授权不会自动复用。"
-        : "此序列固定运行全流程模拟。";
+        : "此序列固定运行全流程模拟。");
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
@@ -239,8 +327,9 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         if (Interlocked.CompareExchange(ref targetLifetime, lifetime, null) is not null)
             throw new InvalidOperationException("该光谱目标已有执行中的任务。");
+        RefreshPlanEditability();
         try { await ExecuteOwnedAsync(progress, lifetime.Token).ConfigureAwait(false); }
-        finally { Interlocked.CompareExchange(ref targetLifetime, null, lifetime); }
+        finally { Interlocked.CompareExchange(ref targetLifetime, null, lifetime); RefreshPlanEditability(); }
     }
 
     private async Task ExecuteOwnedAsync(IProgress<ApplicationStatus> progress, CancellationToken token)
@@ -252,6 +341,26 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
             LastOutcome = "未执行：本夜已停止。";
             RaisePropertyChanged(nameof(LastOutcome));
             return;
+        }
+        if (night is not null && night.ApplyNight(TargetSequencePlan()).StopGateNow() is null)
+        {
+            token.ThrowIfCancellationRequested();
+            NinaInstancePolicy.RequireMaster(settings);
+            var authorization = ObservationAutomationPolicy.AuthorizeExecutionMode(
+                UseRealMode, settings.ObservationUseRealMode, settings.RealModeCommissioned);
+            if (authorization.Disposition != GateDisposition.Passed)
+                throw new InvalidOperationException($"{authorization.Code}: {authorization.Message}");
+            var configuration = UseRealMode ? realRunnerFactory.CaptureConfiguration(settings) : null;
+            if (configuration is not null) night.CheckConfiguration(configuration);
+            var candidate = BuildPlan(configuration);
+            if (NativeSequencePlan.PreflightHorizonSkip(candidate, FailurePolicy) is { } horizon)
+            {
+                await night.RecordPreflightHorizonSkipAsync(candidate, horizon, token).ConfigureAwait(false);
+                LastOutcome = $"未观测：高度窗口不足，已跳过（{horizon.Code}）。";
+                RaisePropertyChanged(nameof(LastOutcome));
+                Report(progress, LastOutcome);
+                return;
+            }
         }
         night?.BeginTarget(TargetName);
         try
@@ -310,8 +419,13 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         Report(progress, UseRealMode
             ? "启动 UVEX Target Observation 真实自动流程"
             : "启动 UVEX Target Observation 全流程模拟");
+        string? activeRunId = null;
         EventHandler<ObservationDashboardSnapshot> dashboardHandler = (_, dashboard) =>
         {
+            // Dashboard reset can briefly publish the previous target's terminal
+            // snapshot before the new coordinator starts. Never abort this bridge
+            // because its predecessor was a (correctly skipped) failure.
+            if (dashboard.Run.ObservationRunId != activeRunId) return;
             ApplyStageStatuses(dashboard);
             if (dashboard.Run.State is ObservationRunState.Cancelled or ObservationRunState.Faulted)
             {
@@ -331,10 +445,11 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         var plan = meridian?.TargetPlan is { } originalTarget
             ? originalTarget with { ObservationRunId = Guid.NewGuid().ToString("N"), PlannedStartUtc = DateTimeOffset.UtcNow }
             : BuildPlan(lockedConfiguration);
+        activeRunId = plan.ObservationRunId;
         if (meridian is not null) meridian.TargetPlan ??= plan;
         IObservationStageRunner inner = UseRealMode
             ? realRunner = realRunnerFactory.Create(host, settings, progress, lockedConfiguration)
-            : new SimulatedObservationStageRunner(host, Math.Clamp(SimulationStageMilliseconds, 250, 30_000), progress);
+            : simulationRunnerFactory?.Invoke() ?? new SimulatedObservationStageRunner(host, Math.Clamp(SimulationStageMilliseconds, 250, 30_000), progress);
         if (realRunner is not null) realRunner.NativeMeridian = meridian;
         using var bridge = new SequencerStageBridge(inner)
         { EndRunOnGateFailure = night is not null, BoundaryGate = sequencePlan.StopGateNow };
@@ -359,7 +474,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
                     $"UVEX coordinator ended in {host.Dashboard.Run.State}: {host.Dashboard.Run.StatusMessage}"));
             }
             await ninaSequenceRun.ConfigureAwait(false);
-            if (!bridge.HasCompletedFinalMarker && !coordinatorRun.IsCompleted)
+            if (!bridge.HasCompletedFinalMarker && !bridge.HasTerminalGateResult && !coordinatorRun.IsCompleted)
             {
                 // A native condition may end its block without executing every
                 // marker. Join the coordinator; never leave it waiting forever.
@@ -392,6 +507,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         }
         catch (Exception ex)
         {
+            boundaryFailure ??= $"NATIVE_TARGET_EXECUTION_FAILED: {ex.Message}";
             bridge.Abort(ex);
             host.Cancel();
             try { await coordinatorRun.ConfigureAwait(false); } catch { }
@@ -468,7 +584,8 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
                 settings.RequireOpenDomeOrRoof,
                 settings.RequireWeatherData,
                 settings.RequireOpenOpticalCover,
-                settings.WeakSupervisionEnabled);
+                settings.WeakSupervisionEnabled,
+                realRunnerFactory.CaptureConfiguration(settings).Environment.SafetyMonitorOwnsWeather);
             if (capabilities.Disposition != GateDisposition.Passed)
             {
                 Issues.Add($"{capabilities.Code}: {capabilities.Message}");
@@ -557,7 +674,10 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
 
     private void SetJ2000Coordinates(double rightAscensionDegrees, double declinationDegrees)
     {
-        if (!double.IsFinite(rightAscensionDegrees) || !double.IsFinite(declinationDegrees)) return;
+        RequireEditablePlan();
+        if (!double.IsFinite(rightAscensionDegrees) || rightAscensionDegrees is < 0 or >= 360 ||
+            !double.IsFinite(declinationDegrees) || declinationDegrees is < -90 or > 90)
+            throw new ArgumentOutOfRangeException(nameof(rightAscensionDegrees), "J2000 坐标须为 RA 0–360°（不含 360），Dec −90–90°。");
         var current = Target.InputCoordinates.Coordinates.Transform(Epoch.J2000);
         if (Math.Abs(current.RADegrees - rightAscensionDegrees) < 1e-12 &&
             Math.Abs(current.Dec - declinationDegrees) < 1e-12)
@@ -566,6 +686,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         }
         Target.InputCoordinates = new InputCoordinates(
             new Coordinates(rightAscensionDegrees, declinationDegrees, Epoch.J2000, Coordinates.RAType.Degrees));
+        InvalidateTargetCatalog();
         RaisePropertyChanged(nameof(RightAscensionDegrees));
         RaisePropertyChanged(nameof(DeclinationDegrees));
     }
@@ -584,6 +705,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
 
     private void OnTargetCoordinatesChanged(object? sender, EventArgs e)
     {
+        InvalidateTargetCatalog();
         RaisePropertyChanged(nameof(RightAscensionDegrees));
         RaisePropertyChanged(nameof(DeclinationDegrees));
     }
@@ -592,6 +714,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     {
         if (string.Equals(e.PropertyName, nameof(InputTarget.TargetName), StringComparison.Ordinal))
         {
+            InvalidateTargetCatalog();
             RaisePropertyChanged(nameof(TargetName));
         }
     }
@@ -602,6 +725,7 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
         RaisePropertyChanged(nameof(TargetName));
         RaisePropertyChanged(nameof(RightAscensionDegrees));
         RaisePropertyChanged(nameof(DeclinationDegrees));
+        RefreshTargetSummary();
     }
 
     private void OnReferenceDayChanged(object? sender, EventArgs e)
@@ -628,13 +752,27 @@ public sealed class UvexTargetObservationContainer : SequenceContainer, IImmutab
     [System.Runtime.Serialization.OnDeserializing]
     private void ClearFactoryDefaultsForTemplate(System.Runtime.Serialization.StreamingContext context)
     {
+        loadingTarget = true;
+        // An old template must not inherit the MEF prototype's checked switch.
+        forceGuideCalibration = false;
+        automaticGuideRecovery = true;
+        guideStarWaitSeconds = 300;
+        failurePolicy = SpectroscopyTargetFailurePolicy.SkipQualityFailure;
         // N.I.N.A. clones a populated MEF prototype before Json.NET Populate.
         // Without this, each template load appends another eleven markers.
         Items.Clear(); Conditions.Clear(); Triggers.Clear();
+        // Populate must never mutate the immutable record shared by MEF clones,
+        // or inherit a different target's optional coordinate provenance.
+        CatalogMetadata = null;
     }
 
     [System.Runtime.Serialization.OnDeserialized]
-    private void ReattachTemplateChildren(System.Runtime.Serialization.StreamingContext context) => AttachChildren();
+    private void ReattachTemplateChildren(System.Runtime.Serialization.StreamingContext context)
+    {
+        AttachChildren();
+        loadingTarget = false;
+        RefreshTargetSummary();
+    }
 
     private void ApplyStageStatuses(ObservationDashboardSnapshot dashboard)
     {

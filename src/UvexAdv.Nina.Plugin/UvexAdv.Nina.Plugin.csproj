@@ -34,6 +34,8 @@
     <Reference Include="NINA" HintPath="$(NinaInstallDir)\NINA.dll" Private="false" />
     <Reference Include="NINA.Astrometry" HintPath="$(NinaInstallDir)\NINA.Astrometry.dll" Private="false" />
     <Reference Include="NINA.Core" HintPath="$(NinaInstallDir)\NINA.Core.dll" Private="false" />
+    <Reference Include="NINA.CustomControlLibrary" HintPath="$(NinaInstallDir)\NINA.CustomControlLibrary.dll" Private="false" />
+    <Reference Include="Microsoft.Xaml.Behaviors" HintPath="$(NinaInstallDir)\Microsoft.Xaml.Behaviors.dll" Private="false" />
     <Reference Include="NINA.Equipment" HintPath="$(NinaInstallDir)\NINA.Equipment.dll" Private="false" />
     <Reference Include="NINA.Image" HintPath="$(NinaInstallDir)\NINA.Image.dll" Private="false" />
     <Reference Include="NINA.Plugin" HintPath="$(NinaInstallDir)\NINA.Plugin.dll" Private="false" />

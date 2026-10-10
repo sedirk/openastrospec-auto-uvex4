@@ -35,6 +35,8 @@
     <ProjectReference Include="..\..\src\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\config\sequences\*.json"
+          Link="SequenceTemplates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.ScienceContinuation.cs"
           Link="Sources\RealObservationStageRunner.ScienceContinuation.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.AtrCoolingRecovery.cs"
@@ -108,5 +110,7 @@
   <ItemGroup>
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.G3PriorReturnOrigin.cs"
           Link="Sources\RealObservationStageRunner.G3PriorReturnOrigin.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.AdaptiveGuidingRecovery.cs"
+          Link="Sources\RealObservationStageRunner.AdaptiveGuidingRecovery.cs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

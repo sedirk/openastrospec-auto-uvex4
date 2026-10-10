@@ -44,19 +44,22 @@ public static class ObservationAutomationPolicy
         bool requireOpenDomeOrRoof,
         bool requireWeatherData,
         bool requireOpenOpticalCover,
-        bool allowWeakSupervision = false)
+        bool allowWeakSupervision = false,
+        bool weatherOwnedBySafetyMonitor = false)
     {
         var disabled = new List<string>();
         if (!requireSafetyMonitor) disabled.Add("safety monitor");
         if (!requireOpenDomeOrRoof) disabled.Add("open roof/dome state");
-        if (!requireWeatherData) disabled.Add("weather data");
+        if (!requireWeatherData && !(weatherOwnedBySafetyMonitor && requireSafetyMonitor)) disabled.Add("weather data");
         if (!requireOpenOpticalCover) disabled.Add("open optical-cover state");
 
         if (disabled.Count == 0)
         {
             return GateResult.Pass(
                 "FULL_AUTOMATION_CAPABILITIES_REQUIRED",
-                "The immutable run requires safety-monitor, roof, weather and optical-cover evidence.");
+                weatherOwnedBySafetyMonitor
+                    ? "The immutable run requires a weather-authoritative safety monitor, roof and optical-cover evidence."
+                    : "The immutable run requires safety-monitor, roof, weather and optical-cover evidence.");
         }
 
         return allowWeakSupervision

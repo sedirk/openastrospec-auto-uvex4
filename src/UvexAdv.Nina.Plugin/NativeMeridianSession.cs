@@ -10,6 +10,7 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<double, bool> isDue)
 {
     public NativeSequencePlan Original { get; } = original;
+    internal AdaptiveGuidingRecovery GuidingRecovery { get; } = new();
     public int Accepted { get; private set; }
     public int Attempts { get; private set; }
     public int ReusedProbes { get; private set; }
@@ -37,6 +38,8 @@ internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<do
             ScienceFrames = Original.ScienceFrames - Accepted,
             MaximumAttempts = Original.MaximumAttempts - Attempts,
             DeferObservatoryCloseout = true,
+            // This is an operator choice once per logical target, not per segment.
+            ForceGuideCalibration = Original.ForceGuideCalibration && SegmentRunIds.Count == 0 && !Flipped,
         };
         if (remaining.Validate().Count != 0)
             throw new InvalidOperationException("剩余科学帧或尝试预算不足；翻转不能重新发放曝光尝试预算。");

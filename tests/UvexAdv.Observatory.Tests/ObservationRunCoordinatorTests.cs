@@ -190,6 +190,38 @@ public sealed class ObservationRunCoordinatorTests
         Assert.Equal(1, runner.CancelledCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnconfirmedCancellationCleanupRemainsVisibleWithoutFaultRecovery(bool cleanupTimeout)
+    {
+        using var coordinator = new ObservationRunCoordinator();
+        var runner = new FakeRunner
+        {
+            BlockAt = ObservationStage.AcquireG3SlitField,
+            CancelFailure = cleanupTimeout
+                ? new OperationCanceledException("PHD2 stop readback timed out")
+                : new InvalidOperationException("PHD2 stop readback not confirmed"),
+        };
+        var states = new List<ObservationRunState>();
+        coordinator.SnapshotChanged += (_, state) => states.Add(state.State);
+        var run = coordinator.StartAsync(CreatePlan(), runner);
+        await runner.BlockEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        coordinator.Cancel();
+        await run;
+
+        Assert.Equal(ObservationRunState.Faulted, coordinator.Snapshot.State);
+        Assert.Contains("PHD2 stop readback", coordinator.Snapshot.PauseReason);
+        Assert.Equal("CANCEL_CLEANUP_FAILED", coordinator.Snapshot.RecentEvents.Last().Code);
+        Assert.DoesNotContain(ObservationRunState.Cancelled, states);
+        Assert.DoesNotContain(ObservationRunState.Completed, states);
+        Assert.Equal(1, runner.CancelledCount);
+        Assert.Equal(0, runner.FaultedCount);
+        Assert.Equal(0, runner.FaultRecoverySegmentCount);
+        Assert.False(coordinator.Resume());
+    }
+
     [Fact]
     public async Task UnexpectedFaultInvokesCleanupAndPreservesOriginalFailure()
     {
@@ -462,6 +494,7 @@ public sealed class ObservationRunCoordinatorTests
         public Action? BeforeThrow { get; init; }
         public bool BlockFaultRecoveryBetweenSegments { get; init; }
         public Exception? PauseFailure { get; init; }
+        public Exception? CancelFailure { get; init; }
         public TaskCompletionSource BlockEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseBlock { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource FaultRecoveryEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -514,7 +547,7 @@ public sealed class ObservationRunCoordinatorTests
         public override Task OnCancelledAsync(ObservationContext context, CancellationToken cancellationToken)
         {
             CancelledCount++;
-            return Task.CompletedTask;
+            return CancelFailure is null ? Task.CompletedTask : Task.FromException(CancelFailure);
         }
 
         public override async Task OnFaultedAsync(ObservationContext context, Exception cause, CancellationToken cancellationToken)

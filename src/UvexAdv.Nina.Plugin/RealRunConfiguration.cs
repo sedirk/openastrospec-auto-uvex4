@@ -242,7 +242,8 @@ internal sealed record RealRunConfiguration(
                 settings.MountClockMaximumOffsetSeconds,
                 settings.MaximumCloudCoverPercent,
                 settings.MaximumHumidityPercent,
-                settings.MaximumWindSpeedMetersPerSecond),
+                settings.MaximumWindSpeedMetersPerSecond,
+                settings.RoofNeverInterferesWithMount),
             new SlitRunConfiguration(
                 settings.SlitTargetPredictionTolerancePixels,
                 settings.SlitPlacementTolerancePixels),
@@ -746,7 +747,15 @@ internal sealed record EnvironmentRunConfiguration(
     double MountClockMaximumOffsetSeconds,
     double MaximumCloudCoverPercent,
     double MaximumHumidityPercent,
-    double MaximumWindSpeedMetersPerSecond);
+    double MaximumWindSpeedMetersPerSecond,
+    bool RoofNeverInterferesWithMount = false)
+{
+    public bool SafetyMonitorOwnsWeather => RequireSafetyMonitor &&
+        Devices.UsesAiWeatherAuthority(RequireWeatherData);
+
+    public int RoofCloseoutTimeoutSeconds => DomeOrRoofTransitionTimeoutSeconds *
+        (RoofNeverInterferesWithMount ? 2 : 1) + 30;
+}
 
 internal sealed record SlitRunConfiguration(
     double TargetPredictionTolerancePixels,
