@@ -1594,6 +1594,15 @@
                         <TextBlock Text="{Binding SelectedPreparationSafetyCapabilityDescription}" TextWrapping="Wrap" Foreground="{StaticResource PreparationSecondaryTextBrush}" Margin="0,5,0,4" />
                         <TextBlock Text="{Binding PreparationSafetySummary}" TextWrapping="Wrap" Margin="0,4,0,4" />
                         <TextBlock Text="{Binding RoofClearanceSummary}" TextWrapping="Wrap" Foreground="#D9B86C" Margin="0,4,0,4" />
+                        <Separator Margin="0,6"/>
+                        <TextBlock Text="单次运行关顶（不控制整夜序列）" FontWeight="Bold"/>
+                        <WrapPanel IsEnabled="{Binding IsTargetPlanEditable}" Margin="0,5">
+                          <CheckBox IsChecked="{Binding StandaloneCloseRoofOnComplete}" ToolTip="单次完成后关顶" AutomationProperties.LabeledBy="{Binding ElementName=StandaloneCompleteRoofLabel}" Margin="0,0,6,0"/>
+                          <TextBlock x:Name="StandaloneCompleteRoofLabel" Text="单次完成后关顶" Margin="0,0,18,0"/>
+                          <CheckBox IsChecked="{Binding StandaloneCloseRoofOnFailure}" ToolTip="单次普通失败后关顶" AutomationProperties.LabeledBy="{Binding ElementName=StandaloneFailedRoofLabel}" Margin="0,0,6,0"/>
+                          <TextBlock x:Name="StandaloneFailedRoofLabel" Text="单次普通失败后关顶"/>
+                        </WrapPanel>
+                        <TextBlock Text="只影响下一次独立单目标运行；关闭后由人工接管屋顶，不是无人值守待机。整夜序列的目标不单独关顶，使用序列末尾的收口选择。运行中的安全事件仍执行安全收口。" TextWrapping="Wrap" Foreground="#D9B86C"/>
                         <Button Content="返回启动前核对" Command="{Binding ShowPreparationChecklistCommand}" HorizontalAlignment="Left" Margin="0,5,0,0" />
                       </StackPanel>
                     </Border>
@@ -2222,6 +2231,45 @@
   <DataTemplate DataType="{x:Type seq:MoveFocusItem}"><StackPanel Orientation="Horizontal" local:ObservationStaticTextLocalization.IsEnabled="True"><TextBlock Text="相对步数"/><TextBox Width="80" Text="{Binding DeltaSteps}"/></StackPanel></DataTemplate>
   <DataTemplate DataType="{x:Type seq:MaintenanceModeItem}"><CheckBox local:ObservationStaticTextLocalization.IsEnabled="True" Content="进入维护模式（取消为退出）" IsChecked="{Binding EnterMaintenance}"/></DataTemplate>
 
+  <DataTemplate x:Key="NativeRealStartupPanel">
+    <StackPanel Margin="6" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <WrapPanel>
+        <CheckBox IsChecked="{Binding EnableRealMode, Mode=TwoWay}" AutomationProperties.LabeledBy="{Binding ElementName=StartupRealLabel}" Margin="0,0,7,0"/>
+        <TextBlock x:Name="StartupRealLabel" Text="序列开始时选择真实模式" FontWeight="Bold"/>
+      </WrapPanel>
+      <TextBlock Margin="0,5" TextWrapping="Wrap" Text="仅选择模式，不启动目标、不授权后台控制；每张目标卡仍须明确设为 REAL，并通过原有设备与安全检查。放在开始区域，默认关闭。"/>
+    </StackPanel>
+  </DataTemplate>
+  <DataTemplate DataType="{x:Type seq:UvexSelectRealModeItem}">
+    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeRealStartupPanel}"/>
+  </DataTemplate>
+  <DataTemplate x:Key="NativeSafetyStartupPanel">
+    <StackPanel Margin="6" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <WrapPanel>
+        <CheckBox IsChecked="{Binding StartMonitoring, Mode=TwoWay}" AutomationProperties.LabeledBy="{Binding ElementName=StartupSafetyLabel}" Margin="0,0,7,0"/>
+        <TextBlock x:Name="StartupSafetyLabel" Text="序列开始时启动 AIWeather 安全检测" FontWeight="Bold"/>
+      </WrapPanel>
+      <TextBlock Margin="0,5" TextWrapping="Wrap" Text="通过 N.I.N.A. 连接已选中的 AIWeather，已连接不重复启动。连接不代表安全：后面仍须保留等待安全，不操作屋顶。放在开始区域，默认关闭。"/>
+    </StackPanel>
+  </DataTemplate>
+  <DataTemplate DataType="{x:Type seq:UvexStartSafetyMonitorItem}">
+    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeSafetyStartupPanel}"/>
+  </DataTemplate>
+  <DataTemplate x:Key="NativeObservatoryCloseoutPanel">
+    <StackPanel Margin="6" IsEnabled="{Binding CanEditPlan}" local:ObservationStaticTextLocalization.IsEnabled="True">
+      <WrapPanel>
+        <CheckBox IsChecked="{Binding CloseAfterTargets, Mode=TwoWay, ValidatesOnExceptions=True}" ToolTip="普通结束或失败后关顶收口" AutomationProperties.LabeledBy="{Binding ElementName=OptionalNightCloseoutLabel}" Margin="0,0,7,0"/>
+        <TextBlock x:Name="OptionalNightCloseoutLabel" Text="普通结束或失败后关顶收口" FontWeight="Bold"/>
+      </WrapPanel>
+      <TextBlock Text="开启：所有目标结束或阻断后统一关盖、停放、关顶。关闭：确认停止后保持开顶待处理，不启动后续目标、不清除未结账本。" TextWrapping="Wrap" Margin="0,4"/>
+      <TextBlock Text="放在光谱整夜容器最后，仅允许一个。截止、晨光、AIWeather 不安全或安全监视失联仍强制安全收口；普通取消不发机械命令。" TextWrapping="Wrap"/>
+    </StackPanel>
+  </DataTemplate>
+
+  <DataTemplate DataType="{x:Type seq:UvexObservatoryCloseoutItem}">
+    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeObservatoryCloseoutPanel}"/>
+  </DataTemplate>
+
   <DataTemplate x:Key="NativeSpectroscopyNightSettingsPanel">
         <StackPanel Margin="6">
           <TextBlock Text="整夜光谱：按下方目标顺序执行，目标间不关盖、不关顶，整夜结束统一收口。" TextWrapping="Wrap" FontWeight="Bold"/>
@@ -2241,9 +2289,10 @@
             <TextBlock x:Name="NativeStopAtDawnLabel" Text="晨光结束" VerticalAlignment="Center" Margin="0,0,12,0"/>
             <TextBlock Text="太阳高度 °" VerticalAlignment="Center"/>
             <TextBox Text="{Binding DawnSunAltitudeDegrees}" Width="55" Margin="4,0,12,0"/>
-            <TextBlock Text="截止时间（含时区，可留空）" VerticalAlignment="Center"/>
-            <TextBox Text="{Binding EndAtIso8601}" Width="240" Margin="4,0" ToolTip="例如 2026-09-21T05:00:00+08:00"/>
+            <TextBlock Text="截止时间（本机 HH:mm，可留空）" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding EndAtIso8601}" Width="180" Margin="4,0" ToolTip="例如 00:30 或 05:00；也兼容旧的带时区绝对日期时间"/>
           </WrapPanel>
+          <TextBlock Text="开始时间用前置的原生“等待到时间”。截止按中午到次日中午划分观测夜，启动时锁定；凌晨重试不会顺延一晚。留空仅按目标完成/晨光结束。" TextWrapping="Wrap" Margin="0,4"/>
           <TextBlock Text="普通截止在阶段/已保存帧边界停止，不截断长曝；安全事件立即停止。普通取消不发机械收口命令。" TextWrapping="Wrap" Margin="0,4"/>
           <WrapPanel Margin="0,4">
             <TextBlock Text="初始导星：半径(px，0 沿用配置)" VerticalAlignment="Center"/>
@@ -2259,7 +2308,8 @@
             <CheckBox ToolTip="测试结束保持开顶，关顶收口单独操作" AutomationProperties.LabeledBy="{Binding ElementName=NativeHoldOpenLabel}" IsChecked="{Binding HoldOpenAfterTargets}" Margin="0,0,6,0"/>
             <TextBlock x:Name="NativeHoldOpenLabel" Text="测试结束保持开顶，关顶收口单独操作" VerticalAlignment="Center"/>
           </WrapPanel>
-          <TextBlock Text="保持开顶时整夜序列仍在等待，继续监视 AIWeather；到截止、晨光或不安全时自动收口。未知/设备故障仍按安全收口处理。更改仅对下一次启动生效。" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <TextBlock Text="目标失败且已确认停止时也保持开顶待处理，不继续目标、不清除未结账本。待机仍监视 AIWeather；截止、晨光、不安全或安全监视器失联时自动收口。更改仅对下一次启动生效。" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <TextBlock Text="可把“关顶与整夜收口（可选）”拖入本容器最后；有该指令时以指令开关为准，上方保持开顶仅兼容旧序列。单次运行的关顶设置不影响本序列。" TextWrapping="Wrap" Margin="0,2,0,6"/>
           <Button Content="关顶与整夜收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
           <TextBlock Text="{Binding NightState}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,6"/>
           <TextBlock Text="{Binding JournalPath}" TextWrapping="Wrap" Opacity="0.7"/>

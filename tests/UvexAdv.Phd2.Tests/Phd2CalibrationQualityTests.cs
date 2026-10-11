@@ -4,7 +4,52 @@ namespace UvexAdv.Phd2.Tests;
 
 public sealed class Phd2CalibrationQualityTests
 {
+    [Theory]
+    [InlineData(2.5)]
+    [InlineData(3)]
+    [InlineData(4.967944545)]
+    [InlineData(30)]
+    public void AdvisoryMeasuredGuideResidualDoesNotCreateUnattendedVeto(double pixels)
+    {
+        var candidate = Candidate(0) with { FreshResidual = Residual() with {
+            ResidualPixels = pixels, MaximumResidualPixels = 3, IsAdvisoryMeasuredGuideLockResidual = true } };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.True(result.IsLockShiftAuthority);
+        Assert.True(result.IsUnattendedScienceAuthority);
+        Assert.False(result.RequiresOperatorSupervision);
+        Assert.Empty(result.HardFailures);
+        if (pixels > 3) Assert.Contains(result.Reasons, r => r.Contains("advisory threshold"));
+        foreach (var invalid in new[] {
+            candidate.FreshResidual with { TargetIdentityConfirmed = false },
+            candidate.FreshResidual with { TopologyMatched = false },
+            candidate.FreshResidual with { ResidualPixels = double.NaN },
+            candidate.FreshResidual with { CapturedUtc = Now.AddHours(-1) },
+            candidate.FreshResidual with { NoUnvalidatedCalibrationOrLockShiftAfterMeasurement = false } })
+            Assert.False(Phd2CalibrationQualityEvaluator.Evaluate(candidate with { FreshResidual = invalid },
+                Phd2CalibrationQualityPolicy.Default, Now).IsLockShiftAuthority);
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 1, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void MeasuredPostLockContinuationDoesNotDowngradeQualifiedGuidingToSupervised()
+    {
+        var evidence = Settle() with { Result = new(false, "timeout retained", 7, 0, Now.AddHours(-1)),
+            ReadOnlyPostLockWindow = true, ExactLockReadbackVerified = true,
+            FreshGuidingWindowAccepted = true, FreshGuidingSampleCount = 3,
+            FreshGuidingWindowCompletedUtc = Now.AddSeconds(-1), MeasuredPostLockContinuation = true,
+            GuideCommandAccepted = false, SettleBeginObserved = false };
+        var result = Phd2CalibrationQualityEvaluator.Evaluate(Candidate(0) with { Settle = evidence }, Phd2CalibrationQualityPolicy.Default, Now);
+        Assert.True(result.IsUnattendedScienceAuthority);
+        Assert.False(result.RequiresOperatorSupervision);
+        Assert.False(evidence.Result.Succeeded);
+        foreach (var bad in new[] { evidence with { FreshGuidingSampleCount = 2 },
+            evidence with { ExactLockReadbackVerified = false }, evidence with { SameGuideEpoch = false },
+            evidence with { FreshGuidingWindowAccepted = false }, evidence with { ReadOnlyPostLockWindow = false },
+            evidence with { FreshGuidingWindowCompletedUtc = Now.AddHours(-1) } })
+            Assert.False(Phd2CalibrationQualityEvaluator.Evaluate(Candidate(0) with { Settle = bad },
+                Phd2CalibrationQualityPolicy.Default, Now).IsUnattendedScienceAuthority);
+    }
 
     [Theory]
     [InlineData(true)]

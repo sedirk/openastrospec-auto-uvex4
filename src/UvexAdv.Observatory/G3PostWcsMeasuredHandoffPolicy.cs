@@ -3,6 +3,24 @@ namespace UvexAdv.Observatory;
 /// <summary>Skipping a redundant target-field solve requires a measured target, not a prediction alone.</summary>
 public static class G3PostWcsMeasuredHandoffPolicy
 {
+    /// <summary>
+    /// Admit a candidate to an image-only confirmation, not to guiding or science.
+    /// The neighbour prediction keeps its original uncertainty/destination fence;
+    /// the measured candidate may be farther away if the configured recognition
+    /// area and the remaining return-reserved PHD2 envelope both contain it.
+    /// </summary>
+    public static bool CanProposeBoundedShortConfirmation(
+        TargetIdentification identification, PixelPoint predictedTarget, double maximumUncertaintyPixels,
+        PixelPoint slit, int width, int height, double predictionRadiusPixels,
+        double targetSearchRadiusPixels, double remainingHandoffRadiusPixels) =>
+        double.IsFinite(targetSearchRadiusPixels) && targetSearchRadiusPixels > 0 &&
+        double.IsFinite(remainingHandoffRadiusPixels) && remainingHandoffRadiusPixels > 0 &&
+        G3PostWcsPredictionPolicy.Evaluate(predictedTarget, maximumUncertaintyPixels,
+            slit, width, height, predictionRadiusPixels).Authorized &&
+        HasMeasuredSource(identification, width, height) &&
+        Distance(identification.Target!.Centroid, predictedTarget) <= targetSearchRadiusPixels &&
+        Distance(identification.Target.Centroid, slit) <= remainingHandoffRadiusPixels;
+
     public static bool NeedsShortExposureConfirmation(TargetIdentification identification) =>
         identification.Authority == TargetIdentificationAuthority.BrightWingCentroid &&
         identification.Gate.Code == "TARGET_IDENTIFIED_SATURATED_TOPOLOGY";

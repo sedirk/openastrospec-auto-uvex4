@@ -29,6 +29,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private CancellationTokenSource? lifetime;
     private CancellationTokenSource? closeoutLifetime;
     private DateTimeOffset? lockedDeadline;
+    private NightDeadlineSchedule? lockedSchedule;
     private bool lockedStopAtDawn;
     private double lockedDawnAltitude;
     private bool lockedHomeBeforePark;
@@ -65,7 +66,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     [JsonProperty] public double InitialGuideSettlePixels { get; set; }
     [JsonProperty] public int InitialGuideStableSeconds { get; set; } = 5;
     [JsonProperty] public int InitialGuideTimeoutSeconds { get; set; } = 180;
-    // ISO-8601 offset is compulsory: an ambiguous machine-local midnight is not a deadline.
+    // Keep the wire name so older plugins reject HH:mm rather than ignoring a
+    // new field and running without a deadline. Legacy offset dates still work.
     [JsonProperty, Newtonsoft.Json.JsonConverter(typeof(OffsetDateTimeTextConverter))]
     public string EndAtIso8601 { get; set; } = string.Empty;
     [JsonIgnore] public string NightState { get => state; private set { state = value; RaisePropertyChanged(); } }
@@ -75,6 +77,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     [JsonIgnore] internal bool IsActive => lifetime is not null;
     [JsonIgnore] public bool CanEditPlan => !IsActive;
     [JsonIgnore] internal bool HasRecordedCurrentTarget => outcomes.Count == attemptedTargets;
+    [JsonIgnore] internal bool EffectiveHoldOpenAfterTargets =>
+        Items.OfType<UvexObservatoryCloseoutItem>().SingleOrDefault() is { } closeout
+            ? !closeout.CloseAfterTargets : HoldOpenAfterTargets;
 
     internal void StopAtNativeConditionBoundary() { endRequested = true; blocked = true; }
 
@@ -83,14 +88,21 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         unsafeTripped = true; blocked = true; lifetime?.Cancel(); host.Cancel();
     }
 
-    private DateTimeOffset? Deadline => string.IsNullOrWhiteSpace(EndAtIso8601) ? null :
-        DateTimeOffset.Parse(EndAtIso8601, System.Globalization.CultureInfo.InvariantCulture);
+    internal void LockDeadline(DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (IsActive) throw new InvalidOperationException("活动观测夜不能重新计算截止时间。");
+        lockedSchedule = NightDeadlineSchedule.Resolve(EndAtIso8601, now, zone);
+        lockedDeadline = lockedSchedule.DeadlineUtc;
+    }
 
     public override bool Validate()
     {
         var valid = base.Validate(); Issues.Clear();
-        if (Items.Count == 0 || Items.Any(x => x is not UvexTargetObservationContainer))
-            Issues.Add("第一版整夜容器只接受 UVEX4 目标观测；准备动作放在本容器之前。禁止并行目标。");
+        var closeouts = Items.OfType<UvexObservatoryCloseoutItem>().ToArray();
+        if (!Items.OfType<UvexTargetObservationContainer>().Any() ||
+            Items.Any(x => x is not (UvexTargetObservationContainer or UvexObservatoryCloseoutItem)) ||
+            closeouts.Length > 1 || (closeouts.Length == 1 && !ReferenceEquals(Items.Last(), closeouts[0])))
+            Issues.Add("整夜容器接受顺序 UVEX4 目标和最多一个末尾关顶收口指令；准备动作放在容器前，禁止并行目标。");
         foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(this)) Issues.Add(issue);
         foreach (var child in Items.OfType<UvexTargetObservationContainer>())
             foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(child)) Issues.Add(issue);
@@ -103,19 +115,15 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             InitialGuideSettlePixels: InitialGuideSettlePixels,
             InitialGuideStableSeconds: InitialGuideStableSeconds,
             InitialGuideTimeoutSeconds: InitialGuideTimeoutSeconds).Validate()) Issues.Add(issue);
-        if (HoldOpenAfterTargets && string.IsNullOrWhiteSpace(EndAtIso8601))
-            Issues.Add("测试后保持开顶须设置含时区的截止时间；等待期间仍保留天气保护。");
+        if ((closeouts.Length == 1 ? !closeouts[0].CloseAfterTargets : HoldOpenAfterTargets) && string.IsNullOrWhiteSpace(EndAtIso8601))
+            Issues.Add("测试后保持开顶须设置截止时间（例如 05:00）；等待期间仍保留天气保护。");
         if (HomeBeforeParkOnFinalize && Items.OfType<UvexTargetObservationContainer>().Any(x => x.UseRealMode) &&
             !settings.RoofNeverInterferesWithMount)
             Issues.Add("收口 Home → Park 仅适用于已确认全姿态无干涉的台站；先关顶，回零失败不再停放。");
-        if (!string.IsNullOrWhiteSpace(EndAtIso8601) &&
-            (!System.Text.RegularExpressions.Regex.IsMatch(EndAtIso8601, @"(Z|[+-]\d{2}:\d{2})$") ||
-             !DateTimeOffset.TryParse(EndAtIso8601, System.Globalization.CultureInfo.InvariantCulture,
-                 System.Globalization.DateTimeStyles.None, out _)))
-            Issues.Add("截止时间必须包含时区，例如 2026-09-21T05:00:00+08:00；留空只按晨光与目标完成结束。");
+        if (!NightDeadlineSchedule.IsValid(EndAtIso8601)) Issues.Add(NightDeadlineSchedule.InvalidText);
         if (Items.OfType<UvexTargetObservationContainer>().Any(x => x.UseRealMode) &&
-            (settings.WeakSupervisionEnabled || !settings.CloseDomeOrRoofOnFinalize || !settings.CloseOpticalCoverOnFinalize))
-            Issues.Add("整夜自动收口须先配置完整 N.I.N.A. 安全链并启用结束关盖/关顶；有人弱监督不能承诺自动关顶。");
+            settings.WeakSupervisionEnabled)
+            Issues.Add("整夜自动收口须先配置完整 N.I.N.A. 安全链；有人弱监督不能承诺自动关顶。");
         return valid && Issues.Count == 0;
     }
 
@@ -138,7 +146,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     {
         if (StopFollowingTargets) throw new InvalidOperationException("本夜已停止，不再开始新目标。");
         attemptedTargets++; targetsIdle = false;
-        NightState = $"目标 {attemptedTargets}/{Items.Count}：{target} · 正在执行；目标间保持屋顶与镜盖状态。";
+        NightState = $"目标 {attemptedTargets}/{Items.OfType<UvexTargetObservationContainer>().Count()}：{target} · 正在执行；目标间保持屋顶与镜盖状态。";
     }
 
     internal async Task RecordPreflightHorizonSkipAsync(ObservationPlan plan, GateResult gate, CancellationToken token)
@@ -153,7 +161,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         outcomes.Add(new { target = plan.Target.Name, outcome = "SkippedPreflightHorizon",
             gate = gate.Code, message = gate.Message, metrics = gate.Metrics,
             evaluatedPlan = plan, noTargetRunnerCreated = true });
-        NightState = $"目标 {attemptedTargets}/{Items.Count}：{plan.Target.Name} · 高度窗口不足，未启动设备动作并跳过。";
+        NightState = $"目标 {attemptedTargets}/{Items.OfType<UvexTargetObservationContainer>().Count()}：{plan.Target.Name} · 高度窗口不足，未启动设备动作并跳过。";
         await SaveJournalAsync("Targets").ConfigureAwait(false);
     }
 
@@ -172,18 +180,23 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         if (result.Run.State == ObservationRunState.Cancelled && !endRequested && !unsafeTripped) operatorCancelled = true;
         var skip = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
             qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
-            NativeSequencePlan.IsSkippableQualityFailure(failedGate?.Code) &&
+            NativeSequencePlan.IsSkippableQualityFailure(failedGate) &&
             result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && !unsafeTripped && !endRequested;
         if (!completed && !skip) blocked = true;
         if (!targetsIdle || settledErrors.Length != 0) blocked = true;
         outcomes.Add(new { target, runId = result.Run.ObservationRunId, result.ManifestPath,
             outcome = completed ? "Completed" : skip ? "SkippedQualityFailure" : "Stopped",
-            gate = failedGate?.Code, boundaryFailure, idleErrors, settledErrors,
+            gate = failedGate?.Code, failureScope = failedGate?.FailureScope.ToString(), boundaryFailure, idleErrors, settledErrors,
             qualitySkipRequested, endRequested, unsafeTripped, operatorCancelled,
             terminalCode = result.Run.RecentEvents.LastOrDefault()?.Code, result.AcquisitionProgress });
-        NightState = $"目标 {attemptedTargets}/{Items.Count}：{target} · " +
+        NightState = $"目标 {attemptedTargets}/{Items.OfType<UvexTargetObservationContainer>().Count()}：{target} · " +
             (completed ? "完成" : skip ? $"质量失败，已确认停止并跳过（{failedGate?.Code}）" : $"停止（{boundaryFailure ?? failedGate?.Code ?? result.Run.State.ToString()}）");
         await SaveJournalAsync("Targets").ConfigureAwait(false);
+        if (!completed && (result.Run.State == ObservationRunState.Faulted ||
+            boundaryFailure is not null || idleErrors.Length > 0 || settledErrors.Length > 0))
+            host.NotifyNativeTargetBoundary(this, result.Run.ObservationRunId, target,
+                failedGate?.Code ?? result.Run.State.ToString(), skip,
+                boundaryFailure ?? (settledErrors.Length > 0 ? string.Join("; ", settledErrors) : null));
     }
 
     internal void RecordUnsettledTargetBoundary(string target, string? runId, IReadOnlyList<string> errors)
@@ -199,9 +212,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
-        lockedDeadline = Deadline; lockedStopAtDawn = StopAtDawn; lockedDawnAltitude = DawnSunAltitudeDegrees;
+        LockDeadline(DateTimeOffset.UtcNow, TimeZoneInfo.Local);
+        lockedStopAtDawn = StopAtDawn; lockedDawnAltitude = DawnSunAltitudeDegrees;
         lockedHomeBeforePark = HomeBeforeParkOnFinalize; lockedHomeTimeoutSeconds = MountHomeTimeoutSeconds;
-        lockedHoldOpenAfterTargets = HoldOpenAfterTargets;
+        lockedHoldOpenAfterTargets = EffectiveHoldOpenAfterTargets;
         lockedInitialSettlePixels = InitialGuideSettlePixels;
         lockedInitialStableSeconds = InitialGuideStableSeconds; lockedInitialTimeoutSeconds = InitialGuideTimeoutSeconds;
         var firstTarget = Items.OfType<UvexTargetObservationContainer>().First();
@@ -212,6 +226,20 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         using var reservation = await host.ReserveNightAsync(this, real, token).ConfigureAwait(false);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime = cancellation; endRequested = unsafeTripped = blocked = operatorCancelled = false;
+        try { await ExecuteReservedNightAsync(progress, token, cancellation, real).ConfigureAwait(false); }
+        finally
+        {
+            // Cover initialization as well as execution/closeout. A failed UI
+            // notification or configuration capture must not leave an active
+            // night pointing at a disposed CancellationTokenSource.
+            lifetime = null;
+            RefreshPlanEditability();
+        }
+    }
+
+    private async Task ExecuteReservedNightAsync(IProgress<ApplicationStatus> progress, CancellationToken token,
+        CancellationTokenSource cancellation, bool real)
+    {
         RefreshPlanEditability();
         attemptedTargets = 0; targetsIdle = true; outcomes.Clear(); targetBoundaryFailures.Clear();
         JournalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -224,13 +252,17 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         {
             await SaveJournalAsync("Running").ConfigureAwait(false);
             // Native ordering, conditions, child statuses and template persistence.
-            await base.Execute(progress, cancellation.Token).ConfigureAwait(false);
+            try { await base.Execute(progress, cancellation.Token).ConfigureAwait(false); }
+            catch (Exception ex) { failure = ex; blocked = true; }
             // Stay inside the same night reservation and safety subscription.
             // This is idle standby, not an ended night with an unprotected roof.
-            if (lockedHoldOpenAfterTargets && !StopFollowingTargets && targetsIdle && !operatorCancelled)
+            // A target blocker prevents more targets, not protected idle standby.
+            // Never release the reservation/safety subscription with an open roof.
+            if (lockedHoldOpenAfterTargets && !endRequested && !unsafeTripped && targetsIdle &&
+                !operatorCancelled && !token.IsCancellationRequested)
                 await HoldOpenUntilCloseoutAsync(progress, cancellation.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) { failure = ex; blocked = true; }
+        catch (Exception ex) { failure ??= ex; blocked = true; }
         finally
         {
             var ordinaryCancel = (token.IsCancellationRequested || operatorCancelled) && !endRequested && !unsafeTripped;
@@ -275,8 +307,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 failure = failure?.Message, physicalHardware = real, physicalCloseoutConfirmed,
                 targetBoundariesSettled = targetBoundaryFailures.Count == 0,
                 targetBoundaryFailures = targetBoundaryFailures.ToArray() });
-            try { await SaveJournalAsync("Terminal").ConfigureAwait(false); }
-            finally { lifetime = null; RefreshPlanEditability(); }
+            await SaveJournalAsync("Terminal").ConfigureAwait(false);
             progress.Report(new ApplicationStatus { Source = "OpenAstroSpec 整夜", Status = NightState });
             if (closeErrors.Count > 0) throw new InvalidOperationException(NightState, failure);
             if (!ordinaryCancel && targetBoundaryFailures.Count > 0)
@@ -292,6 +323,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     {
         RaisePropertyChanged(nameof(CanEditPlan));
         foreach (var target in Items.OfType<UvexTargetObservationContainer>()) target.RefreshPlanEditability();
+        foreach (var closeout in Items.OfType<UvexObservatoryCloseoutItem>()) closeout.RefreshPlanEditability();
     }
 
     internal static string DescribeTerminalState(bool physicalHardware, bool ordinaryCancel,
@@ -312,12 +344,20 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
 
     private async Task HoldOpenUntilCloseoutAsync(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
-        NightState = "测试目标已结束：保持开顶、无新曝光；天气保护仍生效。可单独点“关顶与整夜收口”；截止/晨光/Unsafe 自动收口。";
+        NightState = blocked
+            ? "目标故障已停止：保持开顶待处理，不继续目标、不清除未结账本；天气保护仍生效。可单独点“关顶与整夜收口”；截止/晨光/Unsafe 自动收口。"
+            : "测试目标已结束：保持开顶、无新曝光；天气保护仍生效。可单独点“关顶与整夜收口”；截止/晨光/Unsafe 自动收口。";
         await SaveJournalAsync("TestStandby").ConfigureAwait(false);
         progress.Report(new ApplicationStatus { Source = "OpenAstroSpec 整夜", Status = NightState });
         while (true)
         {
             token.ThrowIfCancellationRequested();
+            if (lockedConfiguration is not null && !factory.IsNightSafetyCurrent(lockedConfiguration))
+            {
+                outcomes.Add(new { standbyStop = "NIGHT_SAFETY_UNAVAILABLE", message = "安全监视器不安全、断连或绑定改变，结束待机。" });
+                OnNightUnsafe();
+                token.ThrowIfCancellationRequested();
+            }
             if (standbyPlan!.StopGateNow() is { } gate)
             {
                 outcomes.Add(new { standbyStop = gate.Code, message = gate.Message });
@@ -334,6 +374,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             updatedUtc = DateTimeOffset.UtcNow, state = NightState,
             homeBeforeParkOnFinalize = lockedHomeBeforePark, mountHomeTimeoutSeconds = lockedHomeTimeoutSeconds,
             holdOpenAfterTargets = lockedHoldOpenAfterTargets, deadlineUtc = lockedDeadline,
+            deadlineSchedule = lockedSchedule,
             initialGuideSettlePixels = lockedInitialSettlePixels, initialGuideStableSeconds = lockedInitialStableSeconds,
             initialGuideTimeoutSeconds = lockedInitialTimeoutSeconds,
             targetBoundaryFailures = targetBoundaryFailures.ToArray(),

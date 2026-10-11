@@ -1,6 +1,48 @@
 # Known issues
 
-## Current closeout boundary (2026-10-10, installed 0.4.0.260)
+## Current closeout boundary (2026-10-11, installed 0.4.0.277)
+
+The [October 11 closeout](closeout-2026-10-11.md) consolidates .261–.277 and supersedes
+the current-status claims in the historical entries below, not their original evidence.
+
+- Scientific-quality warning consent no longer depends on weak supervision. Both
+  frontends use one production route with the full safety chain preserved. One-frame
+  rolling updates validate the complete three-frame window; target-local quality
+  exhaustion can skip only under the saved policy after independent terminal cleanup.
+  Unknown exceptions, ownership/safety failures, cancellation and unconfirmed physical
+  stop are not blanket skips. These fixes have regression coverage, not a completed
+  new-version sky acceptance run.
+- Terminal guide-state archival retains original records/hashes and explicitly does
+  **not** prove return, slit placement or scientific success. Same-target recovery and
+  meridian continuation retain their motion/time budgets; they are not new targets.
+  See [ADR-0027](adr/0027-terminal-target-guide-state-retirement.md).
+- Explicit native sequence closeout is independent of single-run roof preferences.
+  Ordinary keep-open is monitored standby. Unsafe, loss of safety proof, dawn, cutoff
+  and explicit end-night still invoke checked closure. Installation does not prove a
+  weather-triggered roof close or an unattended night.
+- Nine productive historical records replay with unchanged original inputs and accepted
+  counts (26 historical spectra). Replay uses recorded measurements plus test safety,
+  identity and clock fixtures; it is neither new capture nor full FITS reprocessing.
+  Weak/sparse fields, real guide-camera transport failures, loss of correction output
+  and focus/optical issues can still defeat acquisition.
+- [Workflow extraction](reports/2026-10-11-observation-workflow-boundaries.md) moves
+  actual stage loops/state ownership, not just files. WCS/neighbor primitives, initial
+  PHD2 preparation and cross-stage recovery still leave substantial shared-runner debt.
+  Some regression assertions still inspect source structure; behavior tests supplement
+  them rather than establishing complete hardware coverage.
+- The prior .277 installation verified all 41 files against its tested artifact, and runtime loading was
+  confirmed. **Three live-panel visual checks remain pending** after desktop automation
+  failed; 158 reviewed offline scenes and the prior .275 panel acceptance do not close
+  this gap. The last .277 installation snapshot is idle/disarmed with equipment and
+  the AIWeather safety monitor disconnected, not protected observing standby. The
+  final source-closeout whitespace cleanup changes the rebuilt plugin DLL/PDB hashes;
+  that rebuild was tested but not installed. Both hashes are recorded in the closeout.
+- Repeatable improved main focus, new-version multi-target/meridian completion,
+  dual-N.I.N.A. production photometry, calibrated spectral products and unattended
+  commissioning remain separate acceptance work. No such claim follows from passing
+  3,214 .NET tests and 75 reduction tests.
+
+## Historical closeout boundary (2026-10-10, installed 0.4.0.260)
 
 The [October 10 closeout](closeout-2026-10-10.md) records the current source,
 deployment and software-only handoff. N.I.N.A. and PHD2 are not running at this
@@ -193,7 +235,7 @@ Almach attempts remain failures. All nine retain slit-precision warnings.
   live dock acceptance, dual-N.I.N.A. photometry-worker acceptance, calibrated
   spectral quality and unattended operation remain separate open work.
 
-The installed plugin remains .190. The following sections are historical,
+At that September 13 closeout, the installed plugin remained .190. The following sections are historical,
 version-specific records; their then-pending status is not a current status list.
 
 ## USB-port rebinding follow-up (2026-09-12, source/build 0.4.0.178)

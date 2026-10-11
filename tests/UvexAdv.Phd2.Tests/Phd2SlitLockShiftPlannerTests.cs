@@ -115,13 +115,15 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.Equal("G3_FRAME_REUSED", result.Code);
     }
 
-    [Fact]
-    public void SupervisedMeasuredGuideOffsetUsesActualStarAndStillRequiresFrameProof()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MeasuredGuideOffsetUsesActualStarAndStillRequiresFrameProof(bool supervised)
     {
         var fixture = CreateFixture();
         var measurement = Measurement(new Phd2Point(104, 100), new Phd2Point(200, 200), new Phd2Point(205, 200))
             with { GuidePositionMeasuredInFrame = true };
-        var qualification = fixture.Qualification with { RequiresOperatorSupervision = true, IsUnattendedScienceAuthority = false };
+        var qualification = fixture.Qualification with { RequiresOperatorSupervision = supervised, IsUnattendedScienceAuthority = !supervised };
         var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(qualification, Phd2SlitGuideMode.OffSlitGuideStar,
             measurement, fixture.Ledger, fixture.Safety, fixture.Topology, fixture.MotionLimits, Now);
         Assert.True(result.IsAllowed, result.Message);

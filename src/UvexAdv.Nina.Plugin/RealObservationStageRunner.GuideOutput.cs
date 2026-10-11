@@ -8,37 +8,6 @@ internal sealed partial class RealObservationStageRunner
     private (long ConnectionEpoch, Phd2Point Lock)? phd2PreMotionOutputOwner;
     private int phd2OutputReconnectAttempts;
 
-    private async Task<StageResult> StopPreMotionGuideWindowQualityFailureAsync(
-        Phd2PlacementGuideWindowRejectedException rejected, CancellationToken cancellationToken)
-    {
-        var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
-        if (!identity.IsValid) throw new Phd2IdentityMismatchException(identity);
-        _ = await phd2.GetAppStateAsync(cancellationToken).ConfigureAwait(false);
-        var actual = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
-        phd2.ThrowIfGuideOutputFailed();
-        if (!rejected.CanClassifyBeforeMotion(phd2.Snapshot, pendingPhd2LockShift is not null) ||
-            phd2PreMotionOutputOwner is not { } owner || owner.ConnectionEpoch != rejected.ConnectionEpoch ||
-            !Phd2DependencyRebuildStopPolicy.CanStopOwnedSession(phd2.Snapshot,
-                Volatile.Read(ref phd2GuidingEverStarted) != 0, owner.ConnectionEpoch, owner.Lock, actual) ||
-            !Phd2DependencyRebuildStopPolicy.CanStopOwnedSession(phd2.Snapshot,
-                true, rejected.ConnectionEpoch, rejected.ExpectedLock, actual))
-            throw new InvalidOperationException("Pre-motion guide window owner changed before checked stop; not a skippable quality failure.");
-        var stopped = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
-        ValidateConfirmedPhdStop(stopped, "pre-motion optical guide window quality failure");
-        var evidence = await PublishRunJsonEvidenceAsync("phd2-pre-motion-guide-window-quality-stop",
-            "Completed optical windows rejected; owned guiding stopped before any exact-lock motion",
-            new { rejected.CompletedWindows, rejected.Residuals, rejected.Tolerance,
-                rejected.ConnectionEpoch, rejected.GuideEpoch, stopped,
-                exactLockMotionIssued = false, slitPlacementProven = false, budgetReset = false },
-            lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
-        automaticRebuildStopProof = new(rejected.ConnectionEpoch, phd2.Snapshot.GuideEpoch, evidence);
-        return new StageResult(GateResult.Unknown(Phd2PlacementGuideWindowRejectedException.StoppedCode,
-            "入缝微调前的光学导星窗口未满足精度，已确认停止；未发出精调或光谱曝光。整夜序列独立核对空闲与运动账本后跳过此目标，保持屋顶状态。",
-            new Dictionary<string, double> { ["completedGuideWindows"] = rejected.CompletedWindows,
-                ["minimumGuideResidualPixels"] = rejected.Residuals.Min(),
-                ["maximumGuideResidualPixels"] = rejected.Residuals.Max(),
-                ["guideTolerancePixels"] = rejected.Tolerance, ["stopConfirmed"] = 1 }), evidence);
-    }
 
     private async Task<StageResult> StopInitialGuideQualityFailureAsync(
         Phd2StateSnapshot terminal, Phd2SettleResult settle, CancellationToken cancellationToken)

@@ -24,7 +24,6 @@ public sealed class Phd2PostLockGuidingObservationTests
         Assert.False(accepted.HasAcceptedWindow(proxy.State with { GuideEpoch = 3 }));
         Assert.Same(native, accepted.ToCalibrationEvidence(native, proxy.State).Result);
         Assert.False(native.Succeeded);
-        Assert.Equal(0, proxy.SubscriberCount);
     }
 
     [Fact]
@@ -49,79 +48,13 @@ public sealed class Phd2PostLockGuidingObservationTests
     }
 
     [Fact]
-    public async Task SupervisedLongExposureYieldsAfterFirstValidStepWithoutClaimingSettled()
+    public void LiveFreshWindowPreservesFailedNativeSettleWithoutSendingAnyClientCommands()
     {
         var (client, proxy) = Client();
         var native = proxy.State.LastSettle!;
-        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
-            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
-            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
-        proxy.Publish(proxy.State with { EventSequence = 11, LastGuideStep = Step(11, 5) });
-        var result = await observation.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.True(result.YieldedToFreshResiduals);
-        Assert.False(result.TrackingWithinTolerance);
-        Assert.Equal(11, result.AfterEventSequence);
-        Assert.Equal(1, result.ObservedGuideFrames);
-        Assert.False(result.HasAcceptedWindow(proxy.State));
-        Assert.Throws<Phd2Exception>(() => result.AcceptResiduals(Frames(result)[..2], proxy.State));
-        Assert.True(result.AcceptResiduals(Frames(result), proxy.State).HasAcceptedWindow(proxy.State));
-        Assert.Same(native, proxy.State.LastSettle);
-        Assert.False(native.Succeeded);
-        Assert.Equal(0, proxy.SubscriberCount);
-    }
-
-    [Theory]
-    [InlineData(double.NaN, 0)]
-    [InlineData(1, 2)]
-    public async Task InvalidGuideSampleCannotYieldToOpticalWindow(double offset, int error)
-    {
-        var (client, proxy) = Client();
-        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
-            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
-            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
-        proxy.Publish(proxy.State with
-        {
-            EventSequence = 11, LastGuideStep = Step(11, offset) with { ErrorCode = error },
-        });
-        Assert.False(observation.IsCompleted);
-        proxy.Publish(proxy.State with { EventSequence = 12, LastGuideStep = Step(12, 3) });
-        var result = await observation.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.True(result.YieldedToFreshResiduals);
-        Assert.Equal(12, result.AfterEventSequence);
-        Assert.False(result.TrackingWithinTolerance);
-        Assert.Equal(0, proxy.SubscriberCount);
-    }
-
-    [Fact]
-    public async Task EarlyYieldStillRejectsLostLockRatherThanAcceptingLaterGuiding()
-    {
-        var (client, proxy) = Client();
-        var observation = Phd2PostLockGuidingObservation.ObserveAsync(
-            client, Exact(), 1, 2, 0.1, new Phd2SettleCriteria(2, 5, 15),
-            supervised: true, default, yieldToFreshResidualsAfterFirstGuideStep: true);
-        var initial = proxy.State;
-        proxy.Publish(initial with { AppState = Phd2AppState.LostLock, EventSequence = 11 });
-        proxy.Publish(initial with { EventSequence = 12, LastGuideStep = Step(12, 0) });
-        await Assert.ThrowsAsync<Phd2Exception>(() => observation);
-        Assert.Equal(0, proxy.SubscriberCount);
-    }
-
-    [Fact]
-    public async Task VerifiedShiftObservesExistingStreamWithoutAnyRpcOrSyntheticSettle()
-    {
-        var (client, proxy) = Client();
-        var native = proxy.State.LastSettle!;
-        var observation = Observe(client);
-        proxy.Publish(proxy.State with { EventSequence = 11, LastGuideStep = Step(11, 0.5) });
-        var result = await observation;
-        Assert.True(result.TrackingWithinTolerance);
-        Assert.Equal(1, result.ObservedGuideFrames);
-        Assert.False(result.HasAcceptedWindow(proxy.State));
-        Assert.Same(native, proxy.State.LastSettle);
-        Assert.False(proxy.State.HasCurrentSuccessfulSettle);
-        Assert.Equal(0, proxy.SubscriberCount);
-
-        var accepted = result.AcceptResiduals(Frames(result), proxy.State);
+        var proof = Begin(client);
+        Assert.False(proof.HasAcceptedWindow(proxy.State));
+        var accepted = proof.AcceptResiduals(Frames(proof), proxy.State);
         Assert.True(accepted.HasAcceptedWindow(proxy.State));
         var evidence = accepted.ToCalibrationEvidence(native, proxy.State);
         Assert.Same(native, evidence.Result);
@@ -133,70 +66,42 @@ public sealed class Phd2PostLockGuidingObservationTests
         Assert.True(evidence.FreshGuidingWindowAccepted);
     }
 
-    [Fact]
-    public async Task WindTimeoutIsOnlyObservationAndStillRequiresFreshOpticalWindow()
-    {
-        var (client, proxy) = Client();
-        var observation = Observe(client);
-        proxy.Publish(proxy.State with { EventSequence = 11, LastGuideStep = Step(11, 5) });
-        var result = await observation;
-        Assert.False(result.TrackingWithinTolerance);
-        Assert.Equal(1, result.ObservedGuideFrames);
-        Assert.False(result.HasAcceptedWindow(proxy.State));
-        Assert.Null(proxy.State.LastAlert);
-        Assert.Equal("original native timeout", proxy.State.LastSettle!.Error);
-        Assert.Equal(0, proxy.SubscriberCount);
-        Assert.True(result.AcceptResiduals(Frames(result), proxy.State).HasAcceptedWindow(proxy.State));
-    }
-
-    [Fact]
-    public async Task TransientLostLockIsNotCoalescedIntoLaterGuiding()
-    {
-        var (client, proxy) = Client();
-        var observation = Observe(client);
-        var initial = proxy.State;
-        proxy.Publish(initial with { AppState = Phd2AppState.LostLock, EventSequence = 11 });
-        proxy.Publish(initial with { EventSequence = 12, LastGuideStep = Step(12, 0) });
-        await Assert.ThrowsAsync<Phd2Exception>(() => observation);
-        Assert.Equal(0, proxy.SubscriberCount);
-    }
-
     [Theory]
     [InlineData("disconnect")]
     [InlineData("connection-epoch")]
     [InlineData("guide-epoch")]
     [InlineData("lock")]
+    [InlineData("missing-lock")]
+    [InlineData("lost")]
+    [InlineData("stopped")]
     [InlineData("pause")]
     [InlineData("automation-pause")]
     [InlineData("pending-settle")]
-    public async Task InvalidatedContinuityCannotBecomeWarningOnly(string mutation)
+    [InlineData("output-failed")]
+    public void InvalidatedContinuityCannotBecomeWarningOnly(string mutation)
     {
         var (client, proxy) = Client();
-        var observation = Observe(client);
-        var changed = mutation switch
+        var proof = Begin(client);
+        proxy.State = mutation switch
         {
             "disconnect" => proxy.State with { IsConnected = false },
             "connection-epoch" => proxy.State with { ConnectionEpoch = 2 },
             "guide-epoch" => proxy.State with { GuideEpoch = 3 },
             "lock" => proxy.State with { LockPosition = new Phd2Point(200, 200) },
+            "missing-lock" => proxy.State with { LockPosition = null },
+            "lost" => proxy.State with { AppState = Phd2AppState.LostLock },
+            "stopped" => proxy.State with { AppState = Phd2AppState.Stopped },
             "pause" => proxy.State with { Phd2Paused = true },
             "automation-pause" => proxy.State with { AutomationPaused = true },
+            "output-failed" => proxy.State with
+            {
+                GuideOutput = new(1, 3, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true, Step(1, 4)),
+            },
             _ => proxy.State with { PendingSettleOperationId = 42 },
         };
-        proxy.Publish(changed);
-        await Assert.ThrowsAsync<Phd2Exception>(() => observation);
-        Assert.Equal(0, proxy.SubscriberCount);
-    }
-
-    [Fact]
-    public async Task CancellationDoesNotBecomeQualityTimeout()
-    {
-        var (client, proxy) = Client();
-        using var cancellation = new CancellationTokenSource();
-        var observation = Observe(client, cancellation.Token);
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => observation);
-        Assert.Equal(0, proxy.SubscriberCount);
+        Assert.False(proof.IsCurrent(proxy.State));
+        Assert.Throws<Phd2Exception>(() => proof.AcceptResiduals(Frames(proof), proxy.State));
+        Assert.Throws<Phd2Exception>(() => Begin(client));
     }
 
     [Theory]
@@ -206,7 +111,7 @@ public sealed class Phd2PostLockGuidingObservationTests
     [InlineData("mismatched-readback")]
     [InlineData("nan-position")]
     [InlineData("future")]
-    public async Task UnverifiedOrUnsupervisedShiftCannotStartReadOnlyContinuation(string mutation)
+    public void UnverifiedOrUnsupervisedShiftCannotStartReadOnlyContinuation(string mutation)
     {
         var (client, proxy) = Client();
         var exact = Exact();
@@ -219,9 +124,8 @@ public sealed class Phd2PostLockGuidingObservationTests
             "future" => exact with { CompletedUtc = DateTimeOffset.UtcNow.AddMinutes(1) },
             _ => exact,
         };
-        await Assert.ThrowsAsync<Phd2Exception>(() => Phd2PostLockGuidingObservation.ObserveAsync(
-            client, exact, 1, 2, 0.1, new Phd2SettleCriteria(2, 0, 1), mutation != "strict", default));
-        Assert.Equal(0, proxy.SubscriberCount);
+        Assert.Throws<Phd2Exception>(() => Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, exact, 1, 2, 0.1, mutation != "strict", default));
     }
 
     [Theory]
@@ -235,12 +139,10 @@ public sealed class Phd2PostLockGuidingObservationTests
     [InlineData("exposure-changed")]
     [InlineData("loop-started")]
     [InlineData("two-frames")]
-    public async Task ReusedOrInterruptedOpticalEvidenceCannotAuthorizeContinuation(string mutation)
+    public void ReusedOrInterruptedOpticalEvidenceCannotAuthorizeContinuation(string mutation)
     {
         var (client, proxy) = Client();
-        var observation = Observe(client);
-        proxy.Publish(proxy.State with { EventSequence = 11, LastGuideStep = Step(11, 0) });
-        var result = await observation;
+        var result = Begin(client);
         var frames = Frames(result);
         frames[2] = mutation switch
         {
@@ -262,28 +164,40 @@ public sealed class Phd2PostLockGuidingObservationTests
     }
 
     [Fact]
-    public void OutboundSupervisedBranchDoesNotRequestNativeGuideAndStrictBranchStillDoes()
+    public void BothModesUseMeasuredPostLockWindowWithoutRedundantNativeGuide()
     {
-        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
-        var start = source.IndexOf("if (HasSupervisedScienceOptIn())\n", source.IndexOf("Phd2SettleResult stageSettle;", StringComparison.Ordinal), StringComparison.Ordinal);
-        // Source files can be checked out with either LF or CRLF.
-        if (start < 0) start = source.IndexOf("if (HasSupervisedScienceOptIn())\r\n", source.IndexOf("Phd2SettleResult stageSettle;", StringComparison.Ordinal), StringComparison.Ordinal);
+        var source = WorkflowSource.Convergence;
+        var start = source.IndexOf("Phd2SettleResult stageSettle;", StringComparison.Ordinal);
         Assert.True(start >= 0);
-        var end = source.IndexOf("else", start, StringComparison.Ordinal);
+        var end = source.IndexOf("var expectedTargetAfter", start, StringComparison.Ordinal);
         var supervised = source[start..end];
-        Assert.Contains("Phd2PostLockGuidingObservation.BeginFreshResidualObservation", supervised);
+        Assert.Contains("port.BeginFreshResidualObservation", supervised);
         Assert.DoesNotContain("ObserveAsync", supervised);
         Assert.Contains("stageSettle = session.Settle", supervised);
         Assert.DoesNotContain("GuideAndSettleAsync", supervised);
-        Assert.Contains("GuideAndSettleAsync", source[end..(end + 850)]);
+        Assert.Contains("measuredContinuation: true", WorkflowSource.Ports);
         Assert.Contains("stageReadOnlyObservation.AcceptResiduals", source);
         Assert.Contains("stageReadOnlyObservation?.ToCalibrationEvidence", source);
-        Assert.Contains("PHD2_FRESH_GUIDE_WINDOW_DEADLINE", source);
+        Assert.Contains("PHD2_FRESH_GUIDE_WINDOW_DEADLINE", WorkflowSource.Read("RealObservationStageRunner.Phd2SlitPlacement"));
     }
 
-    private static Task<Phd2PostLockGuidingObservation> Observe(IPhd2Client client, CancellationToken token = default) =>
-        Phd2PostLockGuidingObservation.ObserveAsync(client, Exact(), 1, 2, 0.1,
-            new Phd2SettleCriteria(2, 0, 1), supervised: true, token);
+    [Fact]
+    public void ExplicitMeasuredContinuationWorksWithoutSupervisionButNeverWithTwoFrames()
+    {
+        var (client, proxy) = Client();
+        var proof = Phd2PostLockGuidingObservation.BeginFreshResidualObservation(client,
+            Exact(), 1, 2, .1, supervised: false, default, measuredContinuation: true);
+        Assert.True(proof.MeasuredContinuation);
+        Assert.False(proof.HasAcceptedWindow(proxy.State));
+        Assert.Throws<Phd2Exception>(() => proof.AcceptResiduals(Frames(proof)[..2], proxy.State));
+        var accepted = proof.AcceptResiduals(Frames(proof), proxy.State);
+        Assert.True(accepted.ToCalibrationEvidence(proxy.State.LastSettle!, proxy.State).MeasuredPostLockContinuation);
+        Assert.False(accepted.HasAcceptedWindow(proxy.State with { AppState = Phd2AppState.LostLock }));
+    }
+
+    private static Phd2PostLockGuidingObservation Begin(IPhd2Client client) =>
+        Phd2PostLockGuidingObservation.BeginFreshResidualObservation(
+            client, Exact(), 1, 2, 0.1, supervised: true, default);
 
     private static Phd2ExactLockPositionResult Exact() => new(
         new Phd2Point(99, 100), new Phd2Point(100, 100), new Phd2Point(100, 100),
@@ -310,21 +224,16 @@ public sealed class Phd2PostLockGuidingObservationTests
         return (client, proxy);
     }
 
-    // Any call other than snapshots/subscription is a test failure, including
+    // Any call other than reading the snapshot is a test failure, including
     // guide, stop, set_lock_position, capture, or modifications to PHD2 settings.
     public class ReadOnlyClientProxy : DispatchProxy
     {
         public Phd2StateSnapshot State { get; set; } = Phd2StateSnapshot.Disconnected;
-        private EventHandler<Phd2StateSnapshot>? changed;
-        public int SubscriberCount => changed?.GetInvocationList().Length ?? 0;
-        public void Publish(Phd2StateSnapshot state) { State = state; changed?.Invoke(this, state); }
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             switch (targetMethod?.Name)
             {
                 case "get_Snapshot": return State;
-                case "add_SnapshotChanged": changed += (EventHandler<Phd2StateSnapshot>)args![0]!; return null;
-                case "remove_SnapshotChanged": changed -= (EventHandler<Phd2StateSnapshot>)args![0]!; return null;
                 default: throw new InvalidOperationException($"Forbidden client operation: {targetMethod?.Name}");
             }
         }

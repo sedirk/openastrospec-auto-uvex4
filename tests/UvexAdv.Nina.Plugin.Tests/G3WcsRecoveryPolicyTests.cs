@@ -8,6 +8,39 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(1, 0, true, 1128.4555079707877, 1200, 2, true)]
+    [InlineData(0, 0, true, 1128, 1200, 2, false)]
+    [InlineData(1, 1, true, 1128, 1200, 2, false)]
+    [InlineData(1, 0, false, 1128, 1200, 2, false)]
+    [InlineData(1, 0, true, 1199, 1200, 2, false)]
+    [InlineData(1, 0, true, double.NaN, 1200, 2, false)]
+    [InlineData(1, 0, true, 1128, double.PositiveInfinity, 2, false)]
+    [InlineData(1, 0, true, 1128, 1200, -1, false)]
+    public void FailedExteriorFieldCanTryActualTargetOnceWithinUnchangedSingleStep(
+        int failed, int attempts, bool solved, double distance, double limit, double tolerance, bool expected) =>
+        Assert.Equal(expected, G3WcsRecoveryPolicy.CanTryDirectAfterFailedNeighbour(failed, attempts, solved,
+            distance, limit, tolerance));
+
+    [Fact]
+    public void DirectAfterFailedNeighbourPersistsUseBeforeMoveAndKeepsFullPreflight()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var start = source.IndexOf("var directAfterFailedNeighbour =", StringComparison.Ordinal);
+        var charge = source.IndexOf("DirectApproachAfterNeighbourFailureAttempts = state.", start, StringComparison.Ordinal);
+        var persist = source.IndexOf("await PersistG3AcquisitionMotionAsync", charge, StringComparison.Ordinal);
+        var move = source.IndexOf("SlewToCoordinatesAsync", persist, StringComparison.Ordinal);
+        Assert.True(start > 0 && charge > start && persist > charge && move > persist);
+        var preflight = source[start..charge];
+        Assert.Contains("ValidateOutboundAndReturnReserve", preflight);
+        Assert.Contains("ValidateCommandCoordinateHorizon", preflight);
+        Assert.Contains("ValidateG3FieldMountBindingForMotionAsync", preflight);
+        Assert.Contains("ValidateG3DestinationPierSide", preflight);
+        Assert.Contains("ValidateSphericalCommand", preflight);
+        Assert.Contains("AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach", source[move..]);
+        Assert.Contains("DirectApproachAfterNeighbourFailureAttempts = lineageCopies.Max", source);
+    }
+
+    [Theory]
     [InlineData(35.4359007393, 37.1583296727, 2.49, 3.4679939326, .3826551718)]
     [InlineData(30.5223701788, 35.2387409441, 1.4248683292, 1.5234874450, .3819118812)]
     public void RecordedOctoberSmallResponseCanReplanOnceWithoutClaimingArrival(

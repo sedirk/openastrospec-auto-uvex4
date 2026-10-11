@@ -45,14 +45,15 @@ public sealed class AtrPreCoolingRunnerSafetyTests
     [Fact]
     public void FirstAtrProbeWaitsForStableMeasuredTemperature()
     {
-        var selectStart = Source.IndexOf(
-            "private async Task<StageResult> SelectAtrExposureAsync(",
+        var probe = WorkflowSource.Probe;
+        var selectStart = probe.IndexOf(
+            "internal async Task<StageResult> SelectAsync(",
             StringComparison.Ordinal);
-        var captureStart = Source.IndexOf(
-            "var probe = await CaptureAtrImageAsync(",
+        var captureStart = probe.IndexOf(
+            "var probe = await port.CaptureAtrImageAsync(",
             selectStart,
             StringComparison.Ordinal);
-        var waitStart = Source.IndexOf(
+        var waitStart = probe.IndexOf(
             "WaitForAtrScienceTemperatureAsync(context, cancellationToken)",
             selectStart,
             StringComparison.Ordinal);

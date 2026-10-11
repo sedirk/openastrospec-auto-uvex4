@@ -149,8 +149,8 @@ public sealed class AcquisitionPlanEditorTests
         Assert.Contains("previous.Apply(settings)", save);
         Assert.DoesNotContain("Mediator", save);
         Assert.Contains("AcquisitionPlan?.HasPendingChanges != true", source);
-        var runner = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        Assert.Contains("while (savedAtrFrames < configuration.Atr.ScienceFrameCount)", runner);
-        Assert.Contains("configuration.Atr.MaximumScienceAttempts", runner);
+        var runner = WorkflowSource.Science;
+        Assert.Contains("while (savedAtrFrames < configuration.ScienceFrameCount)", runner);
+        Assert.Contains("configuration.MaximumScienceAttempts", runner);
     }
 }

@@ -126,12 +126,19 @@ public sealed class AdaptiveGuidingRecoveryTests
         Assert.Contains("SequenceStopGate()", source);
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", source);
         Assert.Contains("ValidateG3FieldMountBindingForMotionAsync", source);
-        Assert.Contains("phd2.CaptureFullFrameAsync", source);
+        Assert.Contains("Phd2AdaptiveStarCapture.CaptureAsync", source);
+        Assert.DoesNotContain("phd2.CaptureFullFrameAsync", source);
         Assert.Contains("GuideRecovery.Observe", source);
         Assert.Contains("MarkResumeRecoveryRequired()", source);
         Assert.DoesNotContain("SetLockPosition", source);
         Assert.DoesNotContain("GuideAndSettleAsync", source);
         Assert.DoesNotContain("CloseDome", source);
         Assert.DoesNotContain("pendingPhd2LockShift = null", source);
+        var runner = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        Assert.DoesNotContain("PHD2_REBUILD_IDLE_OR_PREVIEW", runner);
+        Assert.Contains("StopPreviewAndConfirmAsync(before.ConnectionEpoch", runner);
+        Assert.Contains("automaticRebuildStopProof = proof", runner);
+        Assert.Contains("before.Profile != after.Profile", runner);
+        Assert.Contains("!proof.IsCurrent(phd2.Snapshot)", runner);
     }
 }

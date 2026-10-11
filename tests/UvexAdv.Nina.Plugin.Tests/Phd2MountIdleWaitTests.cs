@@ -101,7 +101,10 @@ public sealed class Phd2MountIdleWaitTests
         var acquire = source.IndexOf("AcquireG3SlitFieldAsync", wait, StringComparison.Ordinal);
         Assert.True(stop >= 0 && wait > stop && acquire > wait);
         Assert.Contains("if (!mountIdle.CanAdvance) return mountIdle", source[wait..acquire]);
-        Assert.Contains("reacquired.Gate.Metrics", source[acquire..]);
+        // Keep the whole result (including metrics, evidence and metadata),
+        // not an unknown wrapper that hides a skippable quality gate.
+        Assert.Contains("return reacquired;", source[acquire..]);
+        Assert.DoesNotContain("POST_CALIBRATION_G3_REACQUISITION_BLOCKED", source[acquire..]);
         var handoff = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Handoff.cs"));
         var start = handoff.IndexOf("private async Task<StageResult> WaitForPostCalibrationMountIdleAsync", StringComparison.Ordinal);
         var end = handoff.IndexOf("private double Phd2HandoffResidualPixels", start, StringComparison.Ordinal);

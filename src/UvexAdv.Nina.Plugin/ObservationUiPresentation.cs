@@ -79,6 +79,12 @@ public static partial class ObservationUiPresentation
             ["priorHandoffPredictionResidualPixels"] = "前帧距预测位置（像素）",
             ["priorHandoffSlitResidualPixels"] = "前帧距狭缝中点（像素）",
             ["maximumHandoffResidualPixels"] = "原交接半径（像素）",
+            ["measuredHandoffRadiusPixels"] = "剩余预算允许的实测交接半径（像素）",
+            ["measuredHandoffRequiredRadiusPixels"] = "实测交接所需半径（含两帧分散，像素）",
+            ["measuredHandoffBoundaryExcessPixels"] = "超出剩余精调范围（像素）",
+            ["measuredHandoffBoundaryRecheck"] = "正在复核剩余精调边界",
+            ["handoffBoundaryExcessPixels"] = "最大越界量（像素）",
+            ["handoffBoundaryMeasuredSpreadPixels"] = "本对位置分散（像素）",
             ["handoffBoundaryRecheckUsed"] = "已使用边界独立复核",
             ["shortPairConfirmed"] = "短帧位置一致性通过",
             ["currentHandoffGeometryPassed"] = "本帧交接范围通过",
@@ -317,6 +323,16 @@ public static partial class ObservationUiPresentation
                 $"{gate.Code}: {gate.Message.Trim()}");
         }
         var effectiveCode = EffectiveCode(gate.Code, gate.Message);
+        if (gate.Code == Phd2FreshTargetWindow.FailureCode)
+            return new ObservationIssuePresentation(
+                Text("目标位置连续复核仍失败：已在原时限内补取新帧，未用预测位置或分裂星像代替实测；序列确认停止及旧状态归档后可跳过本目标。",
+                    "Fresh consecutive target measurements still failed after bounded retries. Predictions or split cores were not accepted as measured positions; the sequence may skip this target after independent idle and journal checks.", culture),
+                Impact(stage, chinese),
+                Text("单帧识别歧义会清空当前测量窗口，最多重新取证两次；原截止时间、设备设置和运动预算不变。持续失败不会重校准或全场重建。",
+                    "An ambiguous frame resets the consecutive measurement window, at most twice. The original deadline, device settings and motion budget are unchanged; persistent failure does not trigger calibration or a field rebuild.", culture),
+                Text("查看最新失败原帧与目标分块诊断，核对主镜星像、饱和和目标身份；不要把分裂亮块或旧位置直接当成入缝位置。",
+                    "Inspect the latest rejected FITS and source topology, focus/PSF, saturation and target identity. Do not use a split component or old coordinate as slit-position proof.", culture),
+                $"{gate.Code}: {gate.Message}");
         var summary = chinese
             ? DescribeSerialBindingIssue(gate.Code + ": " + gate.Message) ?? ChineseIssueSummary(gate.Code, effectiveCode, gate.Message)
             : EnglishIssueSummary(gate.Code, effectiveCode, gate.Message);
@@ -501,8 +517,11 @@ public static partial class ObservationUiPresentation
             "PHD2_GUIDE_RATE_UNCONFIRMED" => "无法核对当前赤道仪导星速率与 PHD2 校准时速率；未开始导星或重校准，不能把未知速率当成一致",
             "PHD2_CALIBRATION_REFRESH_MOTION_HISTORY" => "PHD2 校准需要更新，但本轮已有运动账本，不能在恢复途中重新校准；已停止并保留原始记录",
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
-            Phd2PlacementGuideWindowRejectedException.StoppedCode => "入缝微调前导星光学精度未通过，已确认停止；整夜序列核对账本后跳过本目标，不触发目标间关顶",
+            Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode => "入缝微调前导星光学精度未通过，已确认停止；整夜序列核对账本后跳过本目标，不触发目标间关顶",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
+            Phd2FreshTargetWindow.FailureCode => "目标位置连续复核仍失败：已在原时限内补取新帧，未用预测位置或分裂星像代替实测；序列确认停止及旧状态归档后可跳过本目标",
+            "PHD2_LOCK_RETURN_SETTLE_FAILED" => "移锁回程的星点稳定未通过；锁点坐标已读回不等于星点已到位。后续入缝或光谱曝光未获放行",
+            "PHD2_LOCK_RETURN_SETTLE_TIME_UNAVAILABLE" => "移锁回程已没有足够的稳定复核时间；未重置原预算，保留未结回程",
             Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode => "初始导星未稳定，已确认停止且未开始入缝微调；整夜序列复核空闲后跳过本目标，不代表已入缝",
             Phd2StageFailurePolicy.PlacementStarLost => "入缝复核时 PHD2 明确报告丢星，不只是稳定等待超时；未确认目标仍在缝内，新的曝光已阻止",
             "PHD2_GUIDE_OUTPUT_UNAVAILABLE" => "PHD2 连续请求修正但没有导星脉冲输出；连接标志和星点位置不代表赤道仪连接有效",
@@ -537,8 +556,8 @@ public static partial class ObservationUiPresentation
             "G3_CATALOG_WCS_AUTHORITY_INVALID" => "目录/WCS 目标几何证据格式无效，不能据此授权入缝位移",
             "G3_CATALOG_REFERENCE_MISSING" => "目录定位的原始 WCS 参考星场未传递到精调接管；这是参考证据衔接问题，不是星等不合格，未用附近亮峰替代目标",
             "G3_POST_WCS_SHORT_UNCONFIRMED" => "小范围修正后，SEP 短帧未确认一致的近缝目标；已保留目录与狭缝，未重复整套解算，未把预测位置当成实测入缝",
-            G3PostWcsShortHandoffPolicy.OutsideCode => "SEP 短帧位置一致性已通过，但实测位置未全部落入原预测/狭缝交接范围；未授权 PHD2 接管，请查看两种距离与交接半径",
-            G3PostWcsShortHandoffPolicy.RecheckCode => "SEP 两帧一致但跨过交接边界；正在原六帧上限内补一对独立短帧，不移动、不重解算、不扩大交接范围",
+            G3PostWcsShortHandoffPolicy.OutsideCode => "SEP 短帧位置一致性已通过，但目标关联或含散布的剩余精调预算检查未通过；未授权 PHD2 接管，请查看原预测半径与实测交接半径",
+            G3PostWcsShortHandoffPolicy.RecheckCode => "SEP 两帧一致且仅在交接边界附近越界；正在原六帧上限内补一对独立短帧，不移动、不重解算、不扩大交接范围",
             "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID" => "饱和目标的目录身份、实心核质心或光通量不适用标记不一致，不能据此授权入缝位移",
             "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED" => "连续 fresh 导星帧仍无法可靠辨认物理狭缝，有界补拍次数已经用尽",
             "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" => "微调阶段的剩余时间不足以取得完整的新目标/狭缝测量窗口；不是已测整组导星精度不合格",
@@ -770,8 +789,8 @@ public static partial class ObservationUiPresentation
                 : "StarLost cannot be waived as a wind precision warning. Preserve the motion ledger without resetting budgets or claiming a return; inspect stopConfirmed and the native loss evidence.";
         if (code == G3PostWcsShortHandoffPolicy.OutsideCode)
             return chinese
-                ? "保留独立短帧及原交接半径；临界位置只允许在原六帧上限内补一对新帧，未通过时沿原预算停止/回程，不重复开新窗口。是否已回程以本轮运动记录为准。"
-                : "Preserve the independent frames and original handoff radius. A marginal pair permits at most one new pair within six frames; otherwise stop/return under the original ledger. See the run motion record for return completion.";
+                ? "保留独立短帧及原交接半径；已确认位置可在原剩余精调预算内交接。身份或完整预算仍不足时，临界位置最多在原六帧内补一对新帧；不重置运动预算。是否已回程以本轮运动记录为准。"
+                : "Preserve independent frames and the original prediction radius. Measured positions may use the remaining fine envelope including scatter. At either boundary, allow at most one new pair within six frames; never reset motion budgets. See the motion record for return completion.";
         if (code == Phd2GuidingExposurePolicy.MismatchCode)
             return chinese
                 ? "保留原始帧和运动账本；不覆盖运行中改变的 PHD2 曝光设置，不混用不同曝光的质量窗口，不自动重新定位或重启设备。"
@@ -824,8 +843,8 @@ public static partial class ObservationUiPresentation
                 : "Open Live images > Spectrograph guide camera for the current rejected short frame and compare its raw FITS. Hollow rings or lobes call for inspecting C11 main focus and the guide optical path, not substituting UVEX M2 focus. End the run and confirm idle before manual intervention. This is not a PHD2 calibration mismatch; do not bypass blend checks or repeatedly lengthen exposure. Neighbouring sources still need checking. No automatic focus or motion is started.";
         if (code == G3PostWcsShortHandoffPolicy.OutsideCode)
             return chinese
-                ? "对照短帧一致性、目标距预测位置、目标距狭缝中点与原交接半径；位置一致不等于已在交接范围内，更不等于精确入缝。不仅凭本错误归因于云或对焦。"
-                : "Compare pair consistency, target-to-prediction and target-to-slit distances with the original handoff radius. Consistency is not handoff acceptance or exact placement; this code alone does not establish clouds or defocus.";
+                ? "同时核对原预测半径、剩余实测交接半径、含两帧分散的所需半径和实际超出量；不要只看旧的 20 像素值。位置一致不等于精确入缝，也不能仅凭本错误归因于云或对焦。"
+                : "Compare the original prediction radius, remaining measured envelope, required radius including pair scatter and actual excess; do not read only the old 20 px value. Consistency is not exact placement or proof of clouds/defocus.";
         if (code == Phd2GuidingExposurePolicy.MismatchCode)
             return chinese
                 ? "核对质量数值中的本轮期望/实际导星曝光，以及 PHD2 日志中的曝光选择或自动曝光变化。结束本轮并确认空闲后，保持本轮已验证曝光，或显式修改下一轮标定配置；随后从正式前端重新验证导星和入缝。无需因此重连 ATR 或重新校准 PHD2。"

@@ -26,6 +26,8 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("g3-predicted-target", 1180, 850, ObservationDockMockViewModel.PredictedTarget()),
+        new("g3-predicted-target-narrow", 650, 900, ObservationDockMockViewModel.PredictedTarget()),
         new("cancel-stop-unconfirmed", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed()),
         new("cancel-stop-unconfirmed-narrow", 540, 900, ObservationDockMockViewModel.CancelStopUnconfirmed()),
         new("cancel-stop-unconfirmed-en", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
@@ -43,6 +45,12 @@ public static class ScenarioCatalog
         new("native-target-editor-narrow", 540, 760, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A") },
         new("native-target-editor-en", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), Culture=CultureInfo.GetCultureInfo("en-US") },
         new("native-target-pair", 1100, 1000, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=new NativeNightMock(), RenderNativeTargetPair=true },
+        new("native-closeout", 820, 230, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeObservatoryCloseoutPanel", AlternateViewModel=new UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem { CloseAfterTargets = false } },
+        new("native-real-startup", 820, 180, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeRealStartupPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-real-startup-en", 540, 230, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeRealStartupPanel", AlternateViewModel=new NativeNightMock(), Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-safety-startup", 820, 180, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSafetyStartupPanel", AlternateViewModel=new NativeNightMock() },
+        new("native-safety-startup-en", 540, 230, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSafetyStartupPanel", AlternateViewModel=new NativeNightMock(), Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-closeout-en", 540, 320, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeObservatoryCloseoutPanel", AlternateViewModel=new UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem(), Culture=CultureInfo.GetCultureInfo("en-US") },
         new("native-night-inline", 960, 260, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightPanel", AlternateViewModel=new NativeNightMock() },
         new("native-night", 960, 620, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock() },
         new("native-night-narrow", 540, 780, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyNightSettingsPanel", AlternateViewModel=new NativeNightMock() },
@@ -161,6 +169,7 @@ public static class ScenarioCatalog
         new("atr-levels", 1040, 700, ObservationDockMockViewModel.AtrLive()),
         new("atr-narrow", 640, 800, ObservationDockMockViewModel.AtrLive()),
         new("failure", 1180, 800, ObservationDockMockViewModel.Failure()),
+        new("phd2-return-settle-failure", 1180, 800, ObservationDockMockViewModel.ReturnSettleFailure()),
         new("roof-opening-preparation", 1180, 900, ObservationDockMockViewModel.RoofOpeningPreparation()),
         new("roof-opening-preparation-narrow", 760, 900, ObservationDockMockViewModel.RoofOpeningPreparation()),
         new("roof-opening-preparation-en", 1180, 900, ObservationDockMockViewModel.RoofOpeningPreparation(true)),
@@ -181,6 +190,10 @@ public static class ScenarioCatalog
         new("short-handoff-outside", 1180, 800, ObservationDockMockViewModel.ShortHandoffOutside()),
         new("short-handoff-outside-narrow", 760, 800, ObservationDockMockViewModel.ShortHandoffOutside()),
         new("short-handoff-outside-en", 1180, 800, ObservationDockMockViewModel.ShortHandoffOutside(english: true))
+        { Culture = CultureInfo.GetCultureInfo("en-US") },
+        new("fresh-target-retry-exhausted", 1180, 800, ObservationDockMockViewModel.FreshTargetRetryExhausted()),
+        new("fresh-target-retry-exhausted-narrow", 760, 800, ObservationDockMockViewModel.FreshTargetRetryExhausted()),
+        new("fresh-target-retry-exhausted-en", 1180, 800, ObservationDockMockViewModel.FreshTargetRetryExhausted(true))
         { Culture = CultureInfo.GetCultureInfo("en-US") },
         new("post-calibration-pulse", 1180, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
         new("post-calibration-pulse-narrow", 760, 800, ObservationDockMockViewModel.PostCalibrationPulseFailure()),
@@ -297,10 +310,12 @@ public sealed class ObservationDockMockViewModel
     }
 
     public string ModeText { get; init; } = "自动观测：模拟演练";
+    public bool StandaloneCloseRoofOnComplete { get; set; } = true;
+    public bool StandaloneCloseRoofOnFailure { get; set; } = true;
     public bool SynchronizedPhotometryEnabled { get; init; } = true;
     public bool CanEditSynchronizedPhotometry => !IsRunActive;
     public string SupervisedSlitQualityWarningStatusText => ObservationUiPresentation.Text(
-        "入缝策略：警告后试拍 · 已保存", "Slit policy: supervised probing with precision warnings · saved",
+        ScienceQualityPolicy.StatusText(true, false, false), ScienceQualityPolicy.StatusText(true, false, true),
         ObservationStaticTextLocalization.EffectiveCulture);
     public ICommand ArmSlitQualityWarningCommand => DisabledCommand;
     public ICommand DisarmSlitQualityWarningCommand => IsRunActive ? DisabledCommand : EnabledCommand;
@@ -1003,6 +1018,16 @@ public sealed class ObservationDockMockViewModel
         G3PreviewMetadata = "离线合成像素 · 生产叠加渲染器 · 非实拍证据",
     };
 
+    public static ObservationDockMockViewModel PredictedTarget() => new()
+    {
+        SelectedWorkspaceTabIndex = 4, SelectedPreviewTabIndex = 1,
+        ModeText = "离线回放 · 预测与实测", StateText = "未启动",
+        StatusMessage = "黄色虚线是预测位置，不是本帧检测到的星核；尚未确认目标或入缝。",
+        G3PreviewImage = PreviewImageFactory.CreateMeasuredSlitExtent(predictedTarget: true),
+        G3PreviewCaption = "PREDICTED / 未实测：由此前解算与赤道仪位置推算；亮星不自动等于目录目标。",
+        G3PreviewMetadata = "离线合成像素 · 生产叠加渲染器 · 原始图像不改写",
+    };
+
     public static ObservationDockMockViewModel ScienceProgress(string phase = "Exposing", bool english = false)
     {
         var now = DateTimeOffset.Parse("2026-09-15T16:00:00Z");
@@ -1250,9 +1275,11 @@ public sealed class ObservationDockMockViewModel
         var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
         var gate = GateResult.Unknown(G3PostWcsShortHandoffPolicy.OutsideCode,
             "Independent short positions agree, but the pair does not fit the unchanged prediction/slit handoff windows. No PHD2 handoff is authorized.",
-            new Dictionary<string, double> { ["handoffPredictionResidualPixels"] = 20.1936,
-                ["handoffSlitResidualPixels"] = 17.86, ["maximumHandoffResidualPixels"] = 20,
-                ["shortRepeatSeparationPixels"] = 2.8276, ["shortPositionFrames"] = 4,
+            new Dictionary<string, double> { ["handoffPredictionResidualPixels"] = 36.2237,
+                ["handoffSlitResidualPixels"] = 40.5756, ["maximumHandoffResidualPixels"] = 20,
+                ["measuredHandoffRadiusPixels"] = 44, ["measuredHandoffRequiredRadiusPixels"] = 44.7109,
+                ["measuredHandoffBoundaryExcessPixels"] = .7109,
+                ["shortRepeatSeparationPixels"] = 3.3555, ["shortPositionFrames"] = 5,
                 ["shortPairConfirmed"] = 1, ["handoffBoundaryRecheckUsed"] = 1 });
         var issue = ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, gate, culture);
         return new()
@@ -1269,6 +1296,56 @@ public sealed class ObservationDockMockViewModel
             LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
             LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
             OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel FreshTargetRetryExhausted(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown("G3_POST_WCS_TARGET_NOT_MEASURED",
+            "SATURATED_TARGET_SOLID_CORES_AMBIGUOUS; bounded consecutive-window retries exhausted.",
+            new Dictionary<string, double> { ["captureAttempts"] = 7, ["rejectedFrames"] = 3,
+                ["requiredConsecutiveFrames"] = 3 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = english ? "Paused; attention required" : "已暂停，需要处理",
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = ObservationUiPresentation.StageName(ObservationStage.PlaceTargetOnSlit, culture),
+            ProgressPercent = 45,
+            ProgressSummary = english ? "Overall stages 5/11 · 45%" : "总体阶段 5/11 · 45%",
+            LastFailureCode = gate.Code,
+            LastFailureHeadline = issue.Summary, LastFailureMessage = issue.Summary, PauseReason = issue.Summary,
+            LastFailureContext = english ? "Fresh optical window exhausted" : "新帧位置连续复核未通过",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel ReturnSettleFailure()
+    {
+        var culture = CultureInfo.GetCultureInfo("zh-CN");
+        var gate = GateResult.Unknown("PHD2_LOCK_RETURN_SETTLE_FAILED",
+            "回程锁点坐标已读回，但星点稳定尚未通过；不是本轮已成功入缝。原生等待 30s，最后导星偏差 4.85px。",
+            new Dictionary<string, double> { ["returnSettleTimeoutSeconds"] = 30,
+                ["returnSettleTolerancePixels"] = 3, ["returnSettleStableSeconds"] = 5,
+                ["returnGuideResidualPixels"] = 4.85, ["attemptsUsed"] = 2,
+                ["cumulativeCommandedPixels"] = 49.99 });
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = "已停止，保持受保护开顶待机", HasFailure = true,
+            CurrentStageText = "PHD2 移锁回程", ProgressPercent = 45, ProgressSummary = "5/11 · 45%",
+            IsSimulationMode = false, SelectedWorkspaceTabIndex = 5,
+            PauseReason = issue.Summary, LastFailureHeadline = issue.Summary,
+            LastFailureCode = gate.Code, LastFailureMessage = issue.Summary,
+            LastFailureContext = "回程复核未通过，不代表已成功入缝",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
+            OperatorNotice = "离线回放：保留未结回程；没有连接、曝光或操作设备。",
         };
     }
 

@@ -70,19 +70,22 @@ internal sealed partial class RealObservationStageRunner
             if (DateTimeOffset.UtcNow >= deadline || GuideRecovery.Expired(DateTimeOffset.UtcNow)) break;
             var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), token).ConfigureAwait(false);
             if (!identity.IsValid) throw new Phd2IdentityMismatchException(identity);
-            var before = phd2.Snapshot;
             var path = ReserveRunEvidencePath("phd2-recovery-star-check", ".fit");
-            // Native PHD2 loop/save only; no camera SDK owner, search, slew or
-            // guide pulse is used to wait for a field to become visible.
-            var captured = await phd2.CaptureFullFrameAsync(new Phd2SingleFrameRequest(
+            // Same atomic native capture used by G3 acquisition. A preview loop
+            // can reselect a star; it is not an inert star-detection operation.
+            var capture = await Phd2AdaptiveStarCapture.CaptureAsync(phd2, new Phd2SingleFrameRequest(
                 2000, configuration.G3.Binning, configuration.G3.GainPercent, path), token).ConfigureAwait(false);
-            var after = phd2.Snapshot;
-            if (after.ConnectionEpoch != before.ConnectionEpoch || after.LastSingleFrame != captured ||
-                after.LastGuideStep != before.LastGuideStep || after.SelectedStar != before.SelectedStar ||
-                after.CalibrationChangeSequence != before.CalibrationChangeSequence ||
-                after.AppState != Phd2AppState.Stopped || after.AutomationPaused || after.Phd2Paused)
+            var captured = capture.Frame;
+            var after = capture.After;
+            if (capture.Rejection is { } rejection)
+            {
+                evidence = await PublishRunJsonEvidenceAsync("phd2-adaptive-capture-rejected",
+                    "Native star-check ownership readback rejected; original guiding failure retained",
+                    new { sourceCode = original.Gate.Code, rejection, capture.Before, capture.After,
+                        captured, motionIssued = false, budgetReset = false }, path, token).ConfigureAwait(false);
                 return (false, new StageResult(GateResult.Unknown("PHD2_ADAPTIVE_CAPTURE_OWNER_CHANGED",
-                    "星点检测没有保留同一设备的原生取帧和停止证明；未请求导星。"), path));
+                    $"原生星点检测后的停止/设备证明不一致（{rejection}）；原导星问题 {original.Gate.Code}，未请求导星。"), evidence));
+            }
             var sha = await ComputeFileSha256Async(path, token).ConfigureAwait(false);
             var readback = CaptureG3FrameMountReadback();
             var binding = CreateG3FieldMountBinding(context, path, sha, captured.CompletedUtc, readback);
@@ -111,9 +114,8 @@ internal sealed partial class RealObservationStageRunner
                     captured.CompletedUtc, content, sha256 = sha, mountBinding = binding,
                     deadline, GuideRecovery.Reselections, GuideRecovery.CalibrationConsumed,
                     weatherCauseConfirmed = false, motionIssued = false, budgetReset = false }, path, token).ConfigureAwait(false);
-            // This epoch transition is only the locally returned loop/save
-            // operation. It must not adopt an independently restarted guide.
-            automaticRebuildStopProof = new(after.ConnectionEpoch, after.GuideEpoch, evidence);
+            // Atomic capture preserves the stopped epoch. Never manufacture a
+            // new stop receipt for a preview loop or an externally restarted guide.
             if (!automaticRebuildStopProof.IsCurrent(phd2.Snapshot))
                 return (false, new StageResult(GateResult.Unknown("PHD2_ADAPTIVE_OWNER_CHANGED",
                     "星点检测后停止回执已失效；不继续恢复。"), evidence));

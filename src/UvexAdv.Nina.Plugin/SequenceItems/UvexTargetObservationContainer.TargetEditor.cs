@@ -1,4 +1,6 @@
 using System.Windows.Input;
+using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
 using NINA.Astrometry;
 using NINA.Core.Enum;
@@ -24,6 +26,7 @@ public sealed partial class UvexTargetObservationContainer
     private int targetEditorBusy;
     private long targetEditorGeneration;
     private string targetEditorStatus = string.Empty;
+    private readonly Dispatcher? targetEditorDispatcher = Application.Current?.Dispatcher ?? Dispatcher.FromThread(Thread.CurrentThread);
 
     [JsonIgnore] public ICommand DropTargetCommand => dropTargetCommand;
     [JsonIgnore] public ICommand CoordsFromPlanetariumCommand => coordsFromPlanetariumCommand;
@@ -50,6 +53,21 @@ public sealed partial class UvexTargetObservationContainer
 
     private void RefreshTargetEditorCommands()
     {
+        // Native sequence execution runs on a worker. WPF command subscribers
+        // (including CanExecuteChangedEventManager) belong to the UI thread.
+        // Post notifications only; edit authority/generation changes immediately
+        // on the execution thread and must not wait for the UI message pump.
+        var dispatcher = Application.Current?.Dispatcher ?? targetEditorDispatcher;
+        if (dispatcher is not null)
+        {
+            if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) return;
+            if (!dispatcher.CheckAccess())
+            {
+                _ = dispatcher.BeginInvoke(RefreshTargetEditorCommands);
+                return;
+            }
+        }
+        RaisePropertyChanged(nameof(CanEditPlan));
         RaisePropertyChanged(nameof(TargetEditorBusy));
         RaisePropertyChanged(nameof(CanEditTargetIdentity));
         dropTargetCommand?.NotifyCanExecuteChanged();

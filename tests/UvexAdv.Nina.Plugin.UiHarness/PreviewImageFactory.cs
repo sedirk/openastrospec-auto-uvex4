@@ -8,7 +8,7 @@ namespace UvexAdv.Nina.Plugin.UiHarness;
 
 internal static class PreviewImageFactory
 {
-    public static ImageSource CreateMeasuredSlitExtent()
+    public static ImageSource CreateMeasuredSlitExtent(bool predictedTarget = false)
     {
         // Fixture pixels only; the overlay is the actual production renderer.
         var pixels = new byte[1920 * 1080];
@@ -23,7 +23,8 @@ internal static class PreviewImageFactory
         var bitmap = BitmapSource.Create(1920, 1080, 96, 96, PixelFormats.Gray8, null, pixels, 1920);
         var slit = new SlitGeometry("offline-fixture", new(817.5, 426.8), -2, 410, 3.5, .5, "G3", 1, 1)
         { IlluminationExtent = new(-372, 572, 36, false, false) };
-        return ObservationPreviewRenderer.RenderG3Bitmap(bitmap, slit);
+        return ObservationPreviewRenderer.RenderG3Bitmap(bitmap, slit,
+            predictedTarget ? new PixelPoint(819.5, 428.3) : null, targetIsPrediction: predictedTarget);
     }
     private const int Width = 960;
     private const int Height = 420;

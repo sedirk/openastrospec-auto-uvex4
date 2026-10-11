@@ -218,7 +218,9 @@ public sealed record G3AcquisitionMotionState(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     int FailedNeighbourApproaches = 0,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    int NearTargetResponseRetries = 0)
+    int NearTargetResponseRetries = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    int DirectApproachAfterNeighbourFailureAttempts = 0)
 {
     // Schema 2 changes persisted offsets to the versioned TAN projection.
     // Older outstanding ledgers fail closed instead of being geometrically
@@ -291,6 +293,10 @@ public sealed record G3AcquisitionMotionState(
             issues.Add("Failed neighbour approaches must be bounded by already charged correction attempts.");
         if (NearTargetResponseRetries < 0 || NearTargetResponseRetries > 1 || NearTargetResponseRetries > CorrectionAttempts)
             issues.Add("Near-target response retry must be bounded by one already charged correction attempt.");
+        if (DirectApproachAfterNeighbourFailureAttempts < 0 || DirectApproachAfterNeighbourFailureAttempts > 1 ||
+            DirectApproachAfterNeighbourFailureAttempts > CorrectionAttempts ||
+            (DirectApproachAfterNeighbourFailureAttempts > 0 && FailedNeighbourApproaches == 0))
+            issues.Add("Direct approach after a failed neighbour must be bounded by one already charged attempt and a prior neighbour failure.");
         if (Phase != G3AcquisitionMotionPhase.SettledBudgetLedger &&
             (!Positive(CommandMagnitudeArcseconds) || CommandMagnitudeArcseconds > MaximumSingleCorrectionArcseconds + 1e-9))
         {
@@ -342,6 +348,23 @@ public sealed record G3AcquisitionReturnStep(
 public static class G3AcquisitionMotionPlanner
 {
     private const double StableNearOriginToleranceMultiplier = 5d;
+
+    /// <summary>
+    /// A search grid is bounded about its fresh field, not the durable lineage
+    /// origin. Keep an inherited lineage radius unchanged: replacing it with
+    /// the local grid radius can exclude a previously accepted WCS endpoint.
+    /// The caller must still bound the grid locally and project every command
+    /// into the unchanged lineage frame for outbound AND return reservation.
+    /// This selects a ceiling only; it grants no handoff or motion authority.
+    /// </summary>
+    public static double LocalSearchLineageRadiusArcseconds(
+        G3AcquisitionMotionState? inherited,
+        double localSearchRadiusArcseconds)
+    {
+        if (!double.IsFinite(localSearchRadiusArcseconds) || localSearchRadiusArcseconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(localSearchRadiusArcseconds));
+        return inherited?.MaximumRadiusArcseconds ?? localSearchRadiusArcseconds;
+    }
 
     /// <summary>
     /// Returns the wider tolerance that may be used only after a commanded

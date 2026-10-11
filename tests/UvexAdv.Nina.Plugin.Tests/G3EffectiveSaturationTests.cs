@@ -325,6 +325,31 @@ public sealed class G3EffectiveSaturationTests
         Assert.Equal(locked, captured);
     }
 
+    [Fact]
+    public void SharedSolverSnapshotOnlyNormalizesRunOwnedValuesAndStillDetectsProfileChanges()
+    {
+        var downsample = 0;
+        var maximumObjects = 500;
+        var live = CreateProxy<IPlateSolveSettings>((method, _) => method.Name switch
+        {
+            "get_DownSampleFactor" => downsample,
+            "get_MaxObjects" => maximumObjects,
+            _ => Default(method.ReturnType),
+        });
+        var primary = CreateProxy<IPlateSolver>((method, _) => Default(method.ReturnType));
+        var blind = CreateProxy<IPlateSolver>((method, _) => Default(method.ReturnType));
+        var locked = PlateSolverRunConfiguration.Capture(live, primary, blind);
+        Assert.Equal(primary.GetType().AssemblyQualifiedName, locked.PrimarySolverImplementation);
+        Assert.Equal(blind.GetType().AssemblyQualifiedName, locked.BlindSolverImplementation);
+        Assert.Equal(locked, PlateSolverRunConfiguration.CaptureCurrent(live, locked));
+
+        downsample = 2;
+        maximumObjects = 501;
+        Assert.Equal(locked with { MaximumObjects = 501 }, PlateSolverRunConfiguration.CaptureCurrent(live, locked));
+        Assert.Equal(locked with { DownSampleFactor = 2, MaximumObjects = 501 },
+            PlateSolverRunConfiguration.Capture(live, primary, blind));
+    }
+
     [Theory]
     [InlineData("2000,5000,10000,15000,30000", 0)]
     [InlineData("2000,5000,10000,15000", 1)]

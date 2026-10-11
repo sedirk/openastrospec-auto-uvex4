@@ -4,6 +4,7 @@ namespace UvexAdv.Nina.Plugin;
 
 internal static class Phd2SlitSettleTiming
 {
+
     internal static Phd2SettleCriteria ForBoundedWarningPlacement(
         Phd2SettleCriteria configured, double opticalCeiling, double maximumStageSeconds)
     {

@@ -36,12 +36,19 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private double Phd2HandoffResidualPixels(G3FieldState field,
-        Phd2SlitPlacementCommissioningPreset preset)
+        Phd2SlitPlacementCommissioning preset)
     {
-        var initial = preset.HandoffResidualPixels(
+        return RemainingPhd2HandoffRadius(preset,
             field.Gate.Disposition == GateDisposition.Passed &&
-            field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null &&
-            field.TargetIdentification.HasCatalogPositionRefinement);
+            field.TargetIdentification.HasCatalogPositionRefinement &&
+            ((field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null) ||
+             !string.IsNullOrWhiteSpace(field.TargetIdentification.BoundShortPositionEvidencePath)));
+    }
+
+    private double RemainingPhd2HandoffRadius(Phd2SlitPlacementCommissioning preset,
+        bool measuredTargetConfirmed)
+    {
+        var initial = preset.HandoffResidualPixels(measuredTargetConfirmed);
         return phd2SettledHandoffBudget is not { } spent ? initial :
             Phd2CoarseHandoffPolicy.LimitToRemainingLedger(initial, preset.BuildMotionLimits(),
                 preset.CalibrationQualityPolicy.DegradedMaximumLockShiftScale, preset.MaximumResidualGrowthPixels,
@@ -59,7 +66,7 @@ internal sealed partial class RealObservationStageRunner
 
     private async Task<StageResult> HandleDeniedPhd2AcquisitionBudgetAsync(
         ObservationContext context, Phd2SlitPlacementSession session,
-        Phd2SlitPlacementCommissioningPreset preset, Phd2LockShiftAcquisitionBudget budget,
+        Phd2SlitPlacementCommissioning preset, Phd2LockShiftAcquisitionBudget budget,
         int postCalibrationReacquisitionDepth, int lostLockReacquisitionDepth,
         CancellationToken cancellationToken)
     {

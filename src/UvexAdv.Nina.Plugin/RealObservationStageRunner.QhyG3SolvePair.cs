@@ -124,12 +124,23 @@ internal sealed partial class RealObservationStageRunner
             : coordinateRecovery.SyncCommanded
                 ? "FreshQhyPl3WcsAfterUnverifiedMountSync"
                 : "FreshQhyPl3Wcs";
+        var pairHint = !coordinateRecovery.SyncCommanded
+            ? await TryApplyRunLocalPairSearchHintAsync(context, accepted, lastQhySolve, cancellationToken).ConfigureAwait(false)
+            : null;
+        if (pairHint is not null)
+        {
+            selectedHintCoordinates = new Coordinates(pairHint.RightAscensionDegrees,
+                pairHint.DeclinationDegrees, Epoch.J2000, Coordinates.RAType.Degrees);
+            selectedHintAuthority = "FreshQhyWcsWithRunLocalPairedG3SearchHintOnly";
+        }
         context.Set("g3PlateSolveHintAuthority", selectedHintAuthority);
         context.Set("g3PlateSolveHintQhyTargetResidualArcseconds", targetResidual);
         context.Set("qhyMountCoordinateAuthorityOutcome", coordinateRecovery.Outcome);
         Report(
-            $"G3 解算提示改用本轮新鲜 QHY/PL3 天空坐标；其与目标相差 {targetResidual / 3600d:F2}°。" +
-            $"该差值不写成两镜光轴差；赤道仪坐标处理：{coordinateRecovery.Message}");
+            (pairHint is null
+                ? $"G3 解算提示改用本轮新鲜 QHY/PL3 天空坐标；其与目标相差 {targetResidual / 3600d:F2}°。"
+                : "G3 解算提示采用本轮新鲜 QHY WCS + 同次双镜实测光轴差；这是预测天区，不是目标实测或移动权限。") +
+            $"QHY 中心与目录目标的差值不当作双镜偏移；赤道仪坐标处理：{coordinateRecovery.Message}");
         await WriteAuditBestEffortAsync("g3-solve-hint-fresh-qhy-pl3", new
         {
             qhyFrame = accepted.FitsPath,
@@ -147,16 +158,72 @@ internal sealed partial class RealObservationStageRunner
             coordinateRecovery.MountResidualAfterArcseconds,
             mountSyncCommanded = coordinateRecovery.SyncCommanded,
             mountSyncVerified = coordinateRecovery.SyncVerified,
+            pairSearchHint = pairHint,
             mountMotionAuthority = false,
         }).ConfigureAwait(false);
         return new G3PlateSolveHintSelection(
             selectedHintCoordinates,
             selectedHintAuthority,
-            coordinateRecovery.SyncVerified
+            pairHint is not null
+                ? "The fresh QHY WCS plus this run's same-installation local paired offset predicts the G3 solver search center only; no formal G3 WCS, target identity, placement or motion authority is inferred."
+                : coordinateRecovery.SyncVerified
                 ? $"Fresh immutable QHY/PL3 WCS repaired the mount coordinate and the catalogue slew was reissued; G3 now solves around the planned target. The original {targetResidual:F1} arcsec target residual is not optical-axis separation."
                 : coordinateRecovery.SyncCommanded
                     ? $"The one allowed stationary mount Sync was not verified and will not be repeated. Fresh immutable QHY/PL3 WCS remains a read-only G3 solve hint at the unchanged physical pointing; no catalogue slew or motion authority was granted."
                     : $"Fresh immutable QHY/PL3 WCS selected at the unchanged current pointing; target residual {targetResidual:F1} arcsec is not interpreted as optical-axis separation.");
+    }
+
+    private async Task<QhyG3RunLocalSearchHint?> TryApplyRunLocalPairSearchHintAsync(
+        ObservationContext context, QhyFrameRecord accepted, PlateSolveEvidence solve,
+        CancellationToken cancellationToken)
+    {
+        if (latestQhyG3TransferCandidate is not { } candidate ||
+            commissioning?.Value.Phd2SlitPlacement is not { } preset || nightSetup is null ||
+            solve.Result.Coordinates is null || lastQhyAcceptedFrameMountBinding is null)
+            return null;
+        try
+        {
+            // The caller has just validated the current QHY FITS/WCS and its
+            // unchanged-pointing mount bracket. Rehash the original pair too;
+            // never read the machine-global latest-candidate index here.
+            foreach (var source in new[] { candidate.Qhy, candidate.G3 })
+                if (!SameHash(await ComputeFileSha256Async(source.FramePath, cancellationToken).ConfigureAwait(false), source.FrameSha256) ||
+                    !SameHash(await ComputeFileSha256Async(source.SolveEvidencePath, cancellationToken).ConfigureAwait(false), source.SolveEvidenceSha256))
+                    throw new InvalidOperationException("QHY_G3_SEARCH_HINT_SOURCE_HASH_CHANGED");
+            var current = new QhyG3SolvedFrame("QHY/GS350", context.Plan.ExpectedQhyCameraId,
+                accepted.FitsPath, accepted.Sha256, solve.EvidencePath, solve.EvidenceSha256,
+                accepted.ExposureStartedUtc, accepted.ExposureMidpointUtc, accepted.ExposureEndedUtc,
+                solve.CompletedUtc, "Current accepted QHY manifest and verified mount bracket",
+                solve.SourceWidthPixels, solve.SourceHeightPixels, accepted.Settings.BinningX, accepted.Settings.BinningY,
+                accepted.Settings.RoiX, accepted.Settings.RoiY, solve.SourceWidthPixels, solve.SourceHeightPixels,
+                solve.Result.Coordinates.RADegrees, solve.Result.Coordinates.Dec, solve.Result.Pixscale,
+                solve.Result.PositionAngle, solve.Result.Flipped, lastQhyAcceptedFrameMountBinding.BindingSha256);
+            var binding = new QhyG3SearchHintBinding(context.Plan.ObservationRunId,
+                configuration.ActionConfigurationSha256, commissioning!.Sha256,
+                nightSetup.Value.NightSetupId, nightSetup.Sha256, preset.InstallationEpochId,
+                configuration.ExpectedTelescopeId, context.Plan.ExpectedQhyCameraId,
+                configuration.Phd2.CameraStableId, telescopeMediator.GetInfo().SideOfPier.ToString(), configuration.G3.Binning);
+            var hint = QhyG3RunLocalSearchHint.TryProject(candidate, current, binding,
+                configuration.G3.MaximumPlateSolveHintOffsetDegrees, DateTimeOffset.UtcNow, out var reason);
+            await WriteAuditBestEffortAsync("qhy-g3-run-local-search-hint", new
+            {
+                reason, candidate.CalibrationId, candidate.CandidateSha256,
+                hint, currentQhyFrame = accepted.FitsPath, currentQhySolve = solve.EvidencePath,
+                used = hint is not null, motionAuthority = false, formalG3Solve = false,
+                measuredTarget = false, fallbackToOriginalHint = hint is null,
+            }).ConfigureAwait(false);
+            return hint;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            await WriteAuditBestEffortAsync("qhy-g3-run-local-search-hint-skipped", new
+            {
+                reason = ex.Message, fallbackToOriginalHint = true, motionAuthority = false,
+                additionalExposureStarted = false,
+            }).ConfigureAwait(false);
+            return null;
+        }
     }
 
     private async Task<QhyMountCoordinateRecoveryResult> RecoverMountCoordinatesFromQhyWcsIfRequiredAsync(

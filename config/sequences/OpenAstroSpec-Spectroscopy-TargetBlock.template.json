@@ -3,7 +3,7 @@
   "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexNightSequenceContainer, UvexAdv.Nina.Plugin",
   "StopAtDawn": true,
   "DawnSunAltitudeDegrees": -12,
-  "EndAtIso8601": "",
+  "EndAtIso8601": "05:00",
   "Name": "OpenAstroSpec · 三目标光谱块（模拟；请先替换目标）",
   "Strategy": {
     "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
@@ -456,6 +456,15 @@
           "$ref": "6"
         },
         "ErrorBehavior": 0,
+        "Attempts": 1
+      },
+      {
+        "$id": "46",
+        "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem, UvexAdv.Nina.Plugin",
+        "Name": "关顶与整夜收口（可选）",
+        "CloseAfterTargets": true,
+        "Parent": { "$ref": "6" },
+        "ErrorBehavior": 2,
         "Attempts": 1
       }
     ]

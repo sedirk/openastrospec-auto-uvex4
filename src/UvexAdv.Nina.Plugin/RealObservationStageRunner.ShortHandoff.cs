@@ -8,7 +8,7 @@ internal sealed partial class RealObservationStageRunner
 {
     private async Task<G3PlateSolveProbeState?> ConfirmSaturatedG3HandoffWithShortExposureAsync(
         ObservationContext context, G3WcsMotionPrediction prediction, TargetIdentification longTarget,
-        string longFramePath, G3FieldMountBinding longMountBinding, int exposureMilliseconds, Phd2SlitPlacementCommissioningPreset preset,
+        string longFramePath, G3FieldMountBinding longMountBinding, int exposureMilliseconds, Phd2SlitPlacementCommissioning preset,
         SlitGeometry slit, IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, CancellationToken cancellationToken)
     {
         var longProbe = new G3PlateSolveProbeState(GateResult.Unknown("G3_SHORT_CHECK_PENDING", "Not a motion authority"),
@@ -99,7 +99,8 @@ internal sealed partial class RealObservationStageRunner
                 preset.MaximumAcquisitionResidualPixels, shortTarget);
             var decision = G3PostWcsShortHandoffPolicy.Evaluate(longTarget, prediction.PredictedTargetPoint,
                 prediction.MaximumUncertaintyPixels, slit.AcquisitionPoint, frame.Width, frame.Height,
-                preset.MaximumAcquisitionResidualPixels, previous, measurement, confirmation, attempt, boundaryRecheckUsed);
+                preset.MaximumAcquisitionResidualPixels, previous, measurement, confirmation, attempt, boundaryRecheckUsed,
+                RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true), preset.TargetSearchRadiusPixels);
             var accepted = decision.Accepted;
             var next = boundaryRecheckUsed ? policy : policy.AfterMeasurement(measurement.Gate.Code, attempt);
             var receipt = await PublishRunJsonEvidenceAsync("g3-post-wcs-short-target-confirmation",
@@ -119,8 +120,9 @@ internal sealed partial class RealObservationStageRunner
                 {
                     BoundShortPositionEvidencePath = receipt,
                     CatalogPositionSpreadPixels = confirmation.PositionSpreadPixels,
+                    Gate = decision.Gate,
                 } : null };
-            PublishG3Preview(image, accepted ? "SEP 两张独立短帧确认目标靠近狭缝；保留目录身份与狭缝，直接交给 PHD2 新帧精调。" :
+            PublishG3Preview(image, accepted ? "SEP 两张独立短帧已确认目标位置；在原剩余运动预算内交给 PHD2 新帧精调，不代表已经入缝。" :
                 ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, decision.Gate,
                     ObservationStaticTextLocalization.EffectiveCulture).Summary, slit, shortTarget.Target?.Centroid);
             if (accepted) return latest;

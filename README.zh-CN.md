@@ -20,7 +20,7 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-10-10.md) ·
+[最新软件/实机收口](docs/closeout-2026-10-11.md) ·
 [原生光谱整夜序列](docs/native-spectroscopy-night-sequence.md) ·
 [可导入的光谱多目标模板](docs/spectroscopy-multi-target-template.md) ·
 [光谱中天翻转](docs/native-spectroscopy-meridian-flip.md) ·
@@ -33,7 +33,23 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-10-10 收口](docs/closeout-2026-10-10.md)汇总 **0.4.0.241–260**：
+[2026-10-11 收口](docs/closeout-2026-10-11.md)汇总 **0.4.0.261–277**：
+仅按钟点重复使用的整夜窗口、独立序列收口与受保护待机、新帧导星恢复、邻场连续性，
+以及停止核验后的目标级失败跳过。科学质量 warning 试拍同意与完整设备／天气安全链
+分开，不豁免设备所有权、实际停止或运动限额。单次观测和原生高级序列仍共用
+**一条生产路线**。[代码审计](docs/reports/2026-10-11-code-audit-and-deduplication.md)
+删除重复契约与不可达策略；[职责重构](docs/reports/2026-10-11-observation-workflow-boundaries.md)
+明确取场／回程、PHD2 收敛、ATR 试拍和科学计数的状态归属，未宣称庞大 runner 已完全解耦。
+
+**3,214 项 .NET、75 项后处理测试、Ruff 和四份冻结校验通过**。历史测量驱动的只读
+回归保留九份有产出记录的原结果及 26 张历史合格光谱；不是新拍摄，也不是完整 FITS
+重处理。此前 **.277** 安装时已核对 41 个发布文件散列，158 个离线 UI 场景已查看；
+运行加载已确认，但**真实三个面板的可视验收因桌面工具故障尚未完成**。
+上次安装快照为空闲、模拟选中、真实控制未授权、设备断开，AIWeather 监视器未连接。
+本次源码收口不启动观测、不操作设备；最后一处源码空行清理改变了重建 DLL/PDB
+散列，已在收口报告单独记录，没有重新安装。新版实天验收仍待另行进行。
+
+历史[2026-10-10 收口](docs/closeout-2026-10-10.md)汇总 **0.4.0.241–260**：
 原生多目标序列、停止确认后的质量失败跳过、有界导星精度警告、台站屋顶/天气策略，
 以及独立目标卡片编辑。每个目标独立保存曝光计划和默认关闭的一次性 PHD2 强制校准，
 整夜容器只保留夜间设置。ADR-0024 增加逐目标有界导星恢复：弱星场等待、星场恢复后重选，

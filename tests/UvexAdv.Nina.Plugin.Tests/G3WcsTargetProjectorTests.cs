@@ -1,11 +1,56 @@
 using NINA.Astrometry;
 using NINA.PlateSolving;
+using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class G3WcsTargetProjectorTests
 {
+    [Fact]
+    public void RecordedHd18552NeighbourArrivalCanProposeShortFramesWithinExistingEnvelope()
+    {
+        // Immutable run UVEX-20261010T170847Z: formal 00117 WCS scale/angle,
+        // settled arrival hint in 00122/00125, and first 00120 FITS bright-core
+        // centroid. This proves candidate-path reachability, not star identity
+        // or actual short-frame success: those images were never acquired.
+        var target = new Coordinates(45.04952545264, 38.13172151748999,
+            Epoch.J2000, Coordinates.RAType.Degrees);
+        var estimated = new PlateSolveResult
+        {
+            // Projector input only: this is a transported neighbour WCS,
+            // explicitly not a successful target-field plate solve.
+            Success = true,
+            Coordinates = new Coordinates(45.068467793186834, 38.120332819937246,
+                Epoch.J2000, Coordinates.RAType.Degrees),
+            Pixscale = 0.38054519714166873,
+            PositionAngle = 256.423428487602,
+            Flipped = false,
+        };
+        var prediction = G3WcsTargetProjector.Project(target, estimated, 1920, 1080,
+            "NINA.PlateSolving.Solvers.Platesolve3Solver, 3.2.0.9001");
+        var slit = new PixelPoint(817.473, 426.867);
+        var uncertainty = 2 / estimated.Pixscale + .1; // includes maximum inverse residual
+        // Actual v6 preset: 25 px steps, 100 px cumulative, 8 attempts,
+        // 300/30 s total/stage, degraded stage scale .5, growth allowance 2.
+        var limits = new Phd2LockShiftLimits(25, 100, 8, TimeSpan.FromSeconds(300),
+            TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(2),
+            1, 1, 2, 100, 5, 5, 3, 4, 2, 10, 100000);
+        var handoffRadius = Phd2CoarseHandoffPolicy.SelectHandoffRadius(true, 20, 100, limits, .5, 2);
+        Assert.Equal(44, handoffRadius, 6);
+        Assert.True(G3PostWcsPredictionPolicy.Evaluate(prediction, uncertainty, slit, 1920, 1080, 20).Authorized);
+        var candidate = new TargetIdentification(
+            GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Candidate geometry only"),
+            new StarCandidate(new PixelPoint(857.49, 423.39), 1000, 10000, 50, 3, 0, 1, 100),
+            prediction, 40, 2, TargetIdentificationAuthority.BrightWingCentroid);
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(candidate, prediction, uncertainty, slit, 1920, 1080, 20));
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+            candidate, prediction, uncertainty, slit, 1920, 1080, 20, 100, handoffRadius));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+            candidate, prediction, uncertainty, slit, 1920, 1080, 20, 100, 39));
+    }
+
     [Fact]
     public void NeighbourInversionSupportsOnlyItsBoundedExteriorEnvelopeWhileSlitInversionStaysInside()
     {

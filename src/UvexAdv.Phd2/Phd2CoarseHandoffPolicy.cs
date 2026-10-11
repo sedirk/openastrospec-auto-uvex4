@@ -1,11 +1,9 @@
-using UvexAdv.Phd2;
-
-namespace UvexAdv.Nina.Plugin;
+namespace UvexAdv.Phd2;
 
 /// <summary>Coarse-routing advice, not permission to send a lock or mount command.</summary>
-internal static class Phd2CoarseHandoffPolicy
+public static class Phd2CoarseHandoffPolicy
 {
-    internal static double LimitToRemainingLedger(double initialRadius, Phd2LockShiftLimits limits,
+    public static double LimitToRemainingLedger(double initialRadius, Phd2LockShiftLimits limits,
         double minimumStageScale, double residualGrowthAllowance,
         int attemptsUsed, double cumulativePixels, TimeSpan elapsed)
     {

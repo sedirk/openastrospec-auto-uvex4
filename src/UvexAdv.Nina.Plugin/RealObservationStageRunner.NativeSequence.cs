@@ -42,12 +42,14 @@ internal sealed partial class RealObservationStageRunner
         if (!cameraMediator.GetInfo().Connected || cameraMediator.GetInfo().IsExposing ||
             !telescopeMediator.GetInfo().Connected || telescopeMediator.GetInfo().Slewing)
             return new[] { "设备仍忙；本次未发起整夜机械收口。" };
-        if (configuration.Environment.CloseOpticalCoverOnFinalize)
+        // The explicit night closeout is independent of single-run preferences.
+        // The night decides WHEN to call; this interface always checks a full closeout.
+        if (!configuration.Environment.WeakSupervisionEnabled)
         {
             var issue = await CloseOpticalCoverAsync("Native sequence night closeout", token).ConfigureAwait(false);
             if (issue is not null) errors.Add(issue);
         }
-        if (configuration.Environment.CloseDomeOrRoofOnFinalize)
+        if (!configuration.Environment.WeakSupervisionEnabled)
         {
             token.ThrowIfCancellationRequested();
             var issue = await ParkMountAndCloseDomeOrRoofAsync("Native sequence night closeout", token).ConfigureAwait(false);

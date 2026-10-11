@@ -1,5 +1,6 @@
 using System.IO;
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -50,7 +51,7 @@ internal sealed partial class RealObservationStageRunner
     private async Task<CatalogFieldRegistrationResult> RegisterCatalogueFrameAsync(
         ObservationContext context, G3CatalogRegistrationReference reference, MonochromeFrame frame,
         ushort[] pixels, PixelPoint expectedTarget, SlitGeometry slit,
-        Phd2SlitPlacementCommissioningPreset preset, string freshFramePath, CancellationToken token)
+        Phd2SlitPlacementCommissioning preset, string freshFramePath, CancellationToken token)
     {
         if (reference.RunId != context.Plan.ObservationRunId || reference.ConnectionEpoch != phd2.Snapshot.ConnectionEpoch ||
             reference.PierSide != telescopeMediator.GetInfo().SideOfPier.ToString() ||

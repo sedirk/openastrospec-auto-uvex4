@@ -29,7 +29,7 @@ internal sealed class AdaptiveGuidingRecovery
         code is "PHD2_STRUCTURED_GUIDE_SESSION_LOSS" or "PHD2_INITIAL_GUIDE_STAR_LOSS" or "GUIDING_LOST" or
             "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" or
             Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode or
-            Phd2PlacementGuideWindowRejectedException.StoppedCode;
+            Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode;
 
     internal void BeginCheck(DateTimeOffset now)
     {

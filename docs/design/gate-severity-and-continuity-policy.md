@@ -28,6 +28,28 @@ label or colour.
 
 ## 2. Minimal sufficient blockers
 
+### ADR-0031: independent science consent and target scope (0.4.0.275)
+
+The saved precision-warning probe policy is independent of WeakSupervisionEnabled.
+Full environment safety and a measured, honestly labelled degraded probe can coexist.
+No weather, roof, dawn, ownership or physical-action gate is weakened by this choice.
+The runner's same-frame identity/geometry, current guiding output, finite slit,
+acquisition envelope and actual ATR quality remain required.
+
+`GateResult.FailureScope = TargetQuality` rejects the target, not the whole night.
+Only reviewed producers set it; exception strings and unknown failures cannot infer
+it. The native container still requires saved SkipQualityFailure, coordinator join,
+matching terminal code, confirmed idle/retired motion, and no cancellation/unsafe/
+night-end condition. Notifications use that same classification and wait for the
+durable boundary result. Existing reviewed codes remain backward compatible.
+
+New explicit target-local outcomes are fresh optical window deadline, bounded fresh
+slit reacquisition exhaustion, no-motion completion-window exhaustion and pre-ATR
+quality-window exhaustion with unchanged epoch and valid identity. Lost/changed
+owner, invalid output, identity change, unknown exceptions or unconfirmed checked
+stop remain separate non-advancing faults. A rolling optical rejection clears the
+previous FIFO and reacquires a complete window under the unchanged deadline.
+
 A condition may pause the production route only when at least one of the
 following is true:
 
@@ -78,6 +100,41 @@ The following conditions are explicitly non-blocking in the production route:
   while their bounded wait is still in progress.
 
 ## 4. Automatic recovery before an error
+
+### Neighbour-field continuity and target-local failure (ADR-0030 / 0.4.0.270)
+
+A formal neighbouring-field WCS and measured mount arrival may seed fresh target
+pixel confirmation without solving the target field again. Do not block entry to
+that confirmation because the candidate is beyond the old 20-pixel coarse
+circle; use the configured recognition region and remaining fine-motion envelope.
+The proposal itself does not prove identity, slit arrival or authorize exposure.
+Try short-frame measurement before repeating longer full-field solve tiers.
+The purpose at this development stage is useful, honestly flagged experiments,
+not absolute scientific certainty before every attempt.
+
+After checked stop and terminal reconciliation, explicit verified-return
+`G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED` and
+`G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED` are eligible to skip under the
+native target's saved policy. This supersedes the blanket wording below that
+budget exhaustion always pauses the night. It remains the end of that target's
+budget, never a reset or authorization for unlimited movement. Unknown return
+codes, failed stop/cleanup, explicit EndNight, and later Safety Monitor Unsafe
+remain distinct. Test actual next-target execution and adverse cases.
+
+Same-run QHY/G3 pairs may refine a current QHY-based solver search hint; they do
+not become an Active global transfer or an independent pixel-to-mount model.
+
+### Measured post-lock continuation (ADR-0029 / 0.4.0.269)
+
+The historical native post-lock settle requirement below is superseded: a
+verified exact-lock mutation continues with three fresh same-session measured
+frames in either mode, without restarting guide/settle per microstep. The native
+result is not rewritten. Final target/slit position, lost star, failed output,
+owner/epoch, physical safety and original motion budgets remain hard requirements.
+`PHD2_LOCK_RETURN_POSITION_UNCONFIRMED` means fresh frames did not prove physical
+return (or lost continuity/deadline); preserve debt for checked-stop archival.
+It is not a synonym for a native settle timeout. Qualified post-lock continuation
+does not silently enable supervised-only target/slit quality exceptions.
 
 ### Bounded optical guide-precision warning tiers (0.4.0.256)
 

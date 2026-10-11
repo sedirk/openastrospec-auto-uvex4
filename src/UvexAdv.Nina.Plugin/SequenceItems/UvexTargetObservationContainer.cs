@@ -260,7 +260,6 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     internal void RefreshPlanEditability()
     {
         Interlocked.Increment(ref targetEditorGeneration);
-        RaisePropertyChanged(nameof(CanEditPlan));
         RefreshTargetEditorCommands();
     }
 
@@ -566,7 +565,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         }
         var authorization = ObservationAutomationPolicy.AuthorizeExecutionMode(
             UseRealMode,
-            settings.ObservationUseRealMode,
+            settings.ObservationUseRealMode || SequenceStartupScope.HasRealPreparation(this),
             settings.RealModeCommissioned);
         if (authorization.Disposition != GateDisposition.Passed)
         {

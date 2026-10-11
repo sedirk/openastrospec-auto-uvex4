@@ -92,4 +92,43 @@ public sealed class G3PostWcsMeasuredHandoffPolicyTests
 
     [Fact]
     public void ExcessPredictionUncertaintyStillRequiresOriginalRoute() => Assert.False(Accept(Measured(), 21));
+
+    [Fact]
+    public void FortyPixelCoreMayBeConfirmedWithoutBeingAcceptedOrSpendingMotion()
+    {
+        var candidate = Measured(857.49, 423.39) with
+        {
+            Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Recorded long-frame candidate, not accepted identity"),
+            Authority = TargetIdentificationAuthority.BrightWingCentroid,
+        };
+        Assert.False(Accept(candidate));
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+            candidate, Predicted, 5.3, Slit, 1920, 1080, 20, 100, 44));
+        // A proposed image-only check has not supplied either independent short
+        // frame, actual slit arrival, or a new movement allowance.
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(
+            candidate, Predicted, 5.3, Slit, 1920, 1080, 20));
+    }
+
+    [Theory]
+    [InlineData(100, 39, 5)]
+    [InlineData(30, 44, 5)]
+    [InlineData(100, 0, 5)]
+    [InlineData(100, double.NaN, 5)]
+    [InlineData(100, 44, 21)]
+    public void CandidateConfirmationRetainsRecognitionUncertaintyAndRemainingEnvelope(double search, double remaining, double uncertainty) =>
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+            Measured(857.49, 423.39), Predicted, uncertainty, Slit, 1920, 1080, 20, search, remaining));
+
+    [Fact]
+    public void PredictionOrAmbiguousBrightestPeakIsNotAConfirmationCandidate()
+    {
+        foreach (var candidate in new[] {
+            TargetIdentification.FromCatalogWcs(Predicted, 1920, 1080, "Prediction only"),
+            Measured(850, 430) with { Gate = GateResult.Unknown("TARGET_AMBIGUOUS", "Two candidates") },
+            Measured(850, 430) with { Target = Measured().Target! with { SaturatedFraction = .01 } },
+        })
+            Assert.False(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+                candidate, Predicted, 5, Slit, 1920, 1080, 20, 100, 44));
+    }
 }

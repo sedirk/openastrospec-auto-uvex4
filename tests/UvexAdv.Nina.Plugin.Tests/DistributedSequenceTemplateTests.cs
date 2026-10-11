@@ -30,7 +30,7 @@ public sealed class DistributedSequenceTemplateTests
         var original = new TargetCatalogMetadata("old profile target", "old catalog", 17, 32,
             "old source", "star", 4, DateTimeOffset.UtcNow, CoordinateProvenance:
             new("old convention", "old source", 17, 32, 2461322, true, 20, "old epoch"));
-        var prototype = Night(fixture.Load(Block)).Items.Cast<UvexTargetObservationContainer>().First();
+        var prototype = Night(fixture.Load(Block)).Items.OfType<UvexTargetObservationContainer>().First();
         prototype.CatalogMetadata = original;
         var targets = new List<UvexTargetObservationContainer>();
         for (var index = 0; index < 10; index++)
@@ -83,7 +83,7 @@ public sealed class DistributedSequenceTemplateTests
             Assert.Equal(expected, DateTimeOffset.Parse(night.EndAtIso8601,
                 System.Globalization.CultureInfo.InvariantCulture));
             Assert.Matches(@"(Z|[+-]\d{2}:\d{2})$", night.EndAtIso8601);
-            Assert.Equal(3, night.Items.Count);
+            Assert.Equal(4, night.Items.Count);
             Assert.Single(night.Triggers);
         }
         Assert.Equal(0, fixture.TelescopeCalls);
@@ -122,8 +122,37 @@ public sealed class DistributedSequenceTemplateTests
         Assert.Equal(0, fixture.TelescopeCalls);
     }
 
+    [Theory]
+    [InlineData("00:30")]
+    [InlineData("05:00")]
+    [InlineData("23:45:30")]
+    public void ClockOnlyDeadlineRoundTripsClonesAndLocksWithoutDateOrHardware(string clock)
+    {
+        using var fixture = new Fixture();
+        var loaded = fixture.Load(Full);
+        Night(loaded).EndAtIso8601 = clock;
+        Night(loaded).HoldOpenAfterTargets = true;
+        for (var i = 0; i < 3; i++)
+        {
+            loaded = fixture.Converter.Deserialize(fixture.Converter.Serialize(loaded));
+            Assert.Equal(clock, Night(loaded).EndAtIso8601);
+            Assert.True(Night(loaded).Validate(), string.Join("; ", Night(loaded).Issues));
+        }
+        var night = Night(loaded);
+        var clone = Assert.IsType<UvexNightSequenceContainer>(night.Clone());
+        Assert.Equal(clock, clone.EndAtIso8601);
+        Assert.Null(clone.ApplyNight(new(1, 1, 0)).DeadlineUtc);
+        night.LockDeadline(DateTimeOffset.Parse("2026-10-10T19:00:00Z"), TimeZoneInfo.Utc);
+        var locked = night.ApplyNight(new(1, 1, 0)).DeadlineUtc;
+        Assert.NotNull(locked);
+        night.EndAtIso8601 = "";
+        Assert.Equal(locked, night.ApplyNight(new(1, 1, 0)).DeadlineUtc);
+        Assert.Equal(0, fixture.ProfileWritesAfterSetup);
+        Assert.Equal(0, fixture.TelescopeCalls);
+    }
+
     [Fact]
-    public void FullSequenceHasNativeStartTargetEndAreasAndOnlyNonActuatingAnnotationsOutsideNight()
+    public void FullSequenceHasNativeAreasAndExplicitlyDisabledStartupCards()
     {
         using var fixture = new Fixture();
         var root = Assert.IsType<SequenceRootContainer>(fixture.Load(Full));
@@ -132,7 +161,9 @@ public sealed class DistributedSequenceTemplateTests
         var middle = Assert.IsType<TargetAreaContainer>(root.Items[1]);
         var end = Assert.IsType<EndAreaContainer>(root.Items[2]);
         Assert.Empty(root.Triggers);
-        Assert.All(start.Items.Concat(end.Items), item => Assert.IsType<Annotation>(item));
+        Assert.False(Assert.IsType<UvexStartSafetyMonitorItem>(start.Items[0]).StartMonitoring);
+        Assert.False(Assert.IsType<UvexSelectRealModeItem>(start.Items[1]).EnableRealMode);
+        Assert.All(start.Items.Skip(2).Concat(end.Items), item => Assert.IsType<Annotation>(item));
         Assert.IsType<UvexNightSequenceContainer>(Assert.Single(middle.Items));
         Assert.All(root.Items, item => Assert.Same(root, item.Parent));
         Assert.All(start.Items, item => Assert.Same(start, item.Parent));
@@ -148,8 +179,8 @@ public sealed class DistributedSequenceTemplateTests
         Assert.Equal(full.StopAtDawn, block.StopAtDawn);
         Assert.Equal(full.DawnSunAltitudeDegrees, block.DawnSunAltitudeDegrees);
         Assert.Equal(full.EndAtIso8601, block.EndAtIso8601);
-        Assert.Equal(full.Items.Cast<UvexTargetObservationContainer>().Select(Choices),
-            block.Items.Cast<UvexTargetObservationContainer>().Select(Choices));
+        Assert.Equal(full.Items.OfType<UvexTargetObservationContainer>().Select(Choices),
+            block.Items.OfType<UvexTargetObservationContainer>().Select(Choices));
         var clone = Assert.IsType<UvexNightSequenceContainer>(block.Clone());
         AssertTemplate(clone);
         ((UvexTargetObservationContainer)clone.Items[0]).ScienceFrames = 5;
@@ -164,7 +195,7 @@ public sealed class DistributedSequenceTemplateTests
         using var fixture = new Fixture();
         Assert.True(fixture.Settings.ObservationUseRealMode);
         var night = Night(fixture.Load(file));
-        foreach (var target in night.Items.Cast<UvexTargetObservationContainer>())
+        foreach (var target in night.Items.OfType<UvexTargetObservationContainer>())
         {
             Assert.False(target.UseRealMode);
             Assert.Equal("OFFLINE-LOCAL-NIGHT", target.NightSetupId);
@@ -210,6 +241,9 @@ public sealed class DistributedSequenceTemplateTests
             "UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer, UvexAdv.Nina.Plugin",
             "UvexAdv.Nina.Plugin.SequenceItems.ObservationStageMarkerItem, UvexAdv.Nina.Plugin",
             "UvexAdv.Nina.Plugin.SequenceItems.SpectroscopyMeridianFlipTrigger, UvexAdv.Nina.Plugin",
+            "UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem, UvexAdv.Nina.Plugin",
+            "UvexAdv.Nina.Plugin.SequenceItems.UvexStartSafetyMonitorItem, UvexAdv.Nina.Plugin",
+            "UvexAdv.Nina.Plugin.SequenceItems.UvexSelectRealModeItem, UvexAdv.Nina.Plugin",
         };
         Assert.All(properties.Where(p => p.Name == "$type"), p => Assert.Contains(p.Value.Value<string>(), allowedTypes));
     }
@@ -226,9 +260,10 @@ public sealed class DistributedSequenceTemplateTests
         // Only the in-memory test copy gets a zenith target and daytime rehearsal override.
         // The shipped file keeps dawn protection and explicitly labelled placeholders.
         night.StopAtDawn = false;
+        night.EndAtIso8601 = ""; // Daytime execution rehearsal only, not the shipped deadline.
         var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
         var zenithRa = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
-        var targets = night.Items.Cast<UvexTargetObservationContainer>().ToArray();
+        var targets = night.Items.OfType<UvexTargetObservationContainer>().ToArray();
         foreach (var target in targets)
         {
             target.RightAscensionDegrees = zenithRa;
@@ -256,10 +291,11 @@ public sealed class DistributedSequenceTemplateTests
     private static void AssertTemplate(ISequenceContainer loaded)
     {
         var night = Night(loaded);
-        Assert.Equal(3, night.Items.Count);
+        Assert.Equal(4, night.Items.Count);
+        Assert.True(Assert.IsType<UvexObservatoryCloseoutItem>(night.Items.Last()).CloseAfterTargets);
         Assert.True(night.StopAtDawn);
         Assert.Equal(-12, night.DawnSunAltitudeDegrees);
-        Assert.Equal(string.Empty, night.EndAtIso8601);
+        Assert.Equal("05:00", night.EndAtIso8601);
         var flip = Assert.IsType<SpectroscopyMeridianFlipTrigger>(Assert.Single(night.Triggers));
         Assert.Same(night, flip.Parent);
         Assert.Equal(120, flip.BoundaryReserveSeconds);
@@ -268,7 +304,7 @@ public sealed class DistributedSequenceTemplateTests
         Assert.Empty(flip.TriggerRunner.Items);
         Assert.False(flip.ShouldTrigger(null!, null!));
         Assert.Empty(night.Conditions);
-        foreach (var target in night.Items.Cast<UvexTargetObservationContainer>())
+        foreach (var target in night.Items.OfType<UvexTargetObservationContainer>())
         {
             Assert.Same(night, target.Parent);
             Assert.Equal(target.TargetName, target.Target.TargetName);
@@ -368,6 +404,9 @@ public sealed class DistributedSequenceTemplateTests
                 "GetContainer" => Container(m.GetGenericArguments()[0]),
                 "GetItem" when m.GetGenericArguments()[0] == typeof(ObservationStageMarkerItem) => new ObservationStageMarkerItem(),
                 "GetItem" when m.GetGenericArguments()[0] == typeof(Annotation) => new Annotation(),
+                "GetItem" when m.GetGenericArguments()[0] == typeof(UvexObservatoryCloseoutItem) => new UvexObservatoryCloseoutItem(),
+                "GetItem" when m.GetGenericArguments()[0] == typeof(UvexStartSafetyMonitorItem) => new UvexStartSafetyMonitorItem(profiles, Host, null!, Settings),
+                "GetItem" when m.GetGenericArguments()[0] == typeof(UvexSelectRealModeItem) => new UvexSelectRealModeItem(profiles, Host, Settings),
                 "GetTrigger" when m.GetGenericArguments()[0] == typeof(SpectroscopyMeridianFlipTrigger) =>
                     new SpectroscopyMeridianFlipTrigger(profiles, null!, telescope, null!, null!, null!),
                 _ => Default(m.ReturnType),

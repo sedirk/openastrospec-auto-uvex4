@@ -38,6 +38,12 @@ public sealed class QhyCoordinatorTests : IDisposable
     public async Task CumulativeAcceptedCountAndFrameIndexRemainCompleteBeyondRecentFrameWindow()
     {
         await using var coordinator = CreateCoordinator(new ScriptedAdapter());
+        var persistedTerminal = new TaskCompletionSource<QhyJobSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.JobChanged += snapshot =>
+        {
+            if (snapshot.State is QhyJobState.Completed or QhyJobState.Cancelled or QhyJobState.Faulted)
+                persistedTerminal.TrySetResult(snapshot);
+        };
         var started = coordinator.StartPhotometry(new PhotometryJobRequest(
             "run-long-photometry",
             "target",
@@ -49,8 +55,12 @@ public sealed class QhyCoordinatorTests : IDisposable
             PauseOnQualityFailure: false,
             QualityThresholds: PassingThresholds())).Job;
 
-        var completed = await WaitForStateAsync(coordinator, started.Id, QhyJobState.Completed);
-
+        // GetJob exposes in-memory state before PersistManifestAsync completes.
+        // A disk assertion must wait for JobChanged (published after the atomic
+        // replacement); otherwise a Windows reader can deny that replacement.
+        var completed = await persistedTerminal.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(started.Id, completed.Id);
+        Assert.Equal(QhyJobState.Completed, completed.State);
         Assert.Equal(40, completed.TotalFrameCount);
         Assert.Equal(40, completed.TotalAcceptedFrameCount);
         Assert.Equal(32, completed.Frames.Count);

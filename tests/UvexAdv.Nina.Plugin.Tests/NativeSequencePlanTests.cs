@@ -10,6 +10,119 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NativeSequencePlanTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task NativeNightWorkerExecutionWithBoundWpfButtonsDoesNotCrash(bool cancel) => RunOnDispatcherAsync(async () =>
+    {
+        InitializeAstrometry();
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        var settings = Settings();
+        var astrometry = Proxy<IAstrometrySettings>();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? astrometry : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        using var cancellation = new CancellationTokenSource();
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        var runner = new UiBoundRunner(() =>
+        {
+            Assert.False(night.CanEditPlan);
+            Assert.All(night.Items.Cast<UvexTargetObservationContainer>(), t => Assert.False(t.CanEditTargetIdentity));
+            if (cancel) cancellation.Cancel();
+        });
+        var target = new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () => runner)
+        {
+            TargetName = "Synthetic UI regression", NightSetupId = "SIM-NIGHT", UseRealMode = false,
+            SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120, RightAscensionDegrees = 0,
+            DeclinationDegrees = 89, DurationMinutes = 1, HorizonMinimumDegrees = 0,
+            HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+            ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+            ScienceFrames = 1, MaximumScienceAttempts = 2,
+        };
+        night.Add(target);
+        var commands = new[] { target.DropTargetCommand, target.CoordsFromPlanetariumCommand, target.CoordsToFramingCommand };
+        // Actual WPF Buttons subscribe through CanExecuteChangedEventManager:
+        // this is the missing condition in the earlier headless regressions.
+        var buttons = commands.Select(command => new System.Windows.Controls.Button { Command = command }).ToArray();
+        var notifications = 0;
+        var wrongThread = false;
+        foreach (var command in commands)
+            command.CanExecuteChanged += (_, _) => { notifications++; wrongThread |= !dispatcher.CheckAccess(); };
+        var execution = Task.Run(() => night.Execute(new Progress<ApplicationStatus>(), cancellation.Token));
+        try { await execution.WaitAsync(TimeSpan.FromSeconds(20)); }
+        catch (OperationCanceledException) when (cancel) { }
+        await dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        Assert.False(wrongThread);
+        Assert.True(notifications >= 6);
+        Assert.False(night.IsActive);
+        Assert.True(target.CanEditTargetIdentity);
+        Assert.True(runner.Calls > 0);
+        if (!cancel) Assert.Equal("完成", target.LastOutcome);
+        else
+        {
+            Assert.NotEqual("完成", target.LastOutcome);
+            Assert.Contains("取消", night.NightState);
+            Assert.True(cancellation.IsCancellationRequested);
+        }
+        using var next = await host.ReserveNightAsync(new object(), false, CancellationToken.None);
+        GC.KeepAlive(buttons);
+    });
+
+    [Fact]
+    public async Task NativeNightInitializationFailureReleasesLifetimeAndReservation()
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var astrometry = Proxy<IAstrometrySettings>();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? astrometry : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings));
+        var thrown = false;
+        night.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(night.CanEditPlan) && !thrown)
+            { thrown = true; throw new InvalidOperationException("Synthetic initialization failure"); }
+        };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => night.Execute(new Progress<ApplicationStatus>(), CancellationToken.None));
+        Assert.Equal("Synthetic initialization failure", error.Message);
+        Assert.False(night.IsActive);
+        Assert.True(night.CanEditPlan);
+        await night.Interrupt(); // No disposed cancellation source retained.
+        using var next = await host.ReserveNightAsync(new object(), false, CancellationToken.None);
+    }
+
+    private sealed class UiBoundRunner(Action onStage) : ObservationStageRunnerBase
+    {
+        public int Calls { get; private set; }
+        public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
+        {
+            Calls++; onStage(); token.ThrowIfCancellationRequested();
+            return Task.FromResult(new StageResult(GateResult.Pass("SIM_UI", "No hardware.")));
+        }
+    }
+
+    private static Task RunOnDispatcherAsync(Func<Task> action)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            dispatcher.BeginInvoke(async () =>
+            {
+                try { await action(); completion.TrySetResult(); }
+                catch (Exception ex) { completion.TrySetException(ex); }
+                finally { dispatcher.BeginInvokeShutdown(System.Windows.Threading.DispatcherPriority.Background); }
+            });
+            System.Windows.Threading.Dispatcher.Run();
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
     [Fact]
     public void NativeTargetDropChangesOnlyDetachedIdentityAndKeepsPerTargetPlan()
     {
@@ -328,6 +441,98 @@ public sealed class NativeSequencePlanTests
         }
     }
 
+    [Theory]
+    [InlineData("explicit-close", true)]
+    [InlineData("deadline", true)]
+    [InlineData("unsafe", true)]
+    [InlineData("cancel", true)]
+    [InlineData("cancel", false)]
+    public async Task FailedTargetHoldsOpenWithoutProceedingOrForgivingDebt(string exit, bool unsettled)
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings)
+        {
+            StopAtDawn = false, HoldOpenAfterTargets = false,
+            EndAtIso8601 = DateTimeOffset.UtcNow.AddSeconds(exit == "deadline" ? 4 : 30).ToString("O"),
+        };
+        var later = new TerminalGateRunner(null, false);
+        var failed = new UnsettledBoundaryRunner(() =>
+        {
+            if (unsettled) night.RecordUnsettledTargetBoundary("Failed", host.Dashboard.Run.ObservationRunId, new[] { "Unsettled simulated debt" });
+        });
+        for (var i = 0; i < 2; i++)
+        {
+            IObservationStageRunner runner = i == 0 ? failed : later;
+            night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () => runner)
+            {
+                TargetName = i == 0 ? "Failed" : "Never start", CatalogId = $"SIM-{i}", NightSetupId = "SIM-NIGHT",
+                UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+                RightAscensionDegrees = 0, DeclinationDegrees = 89, DurationMinutes = 1,
+                HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+                ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+                ScienceFrames = 1, MaximumScienceAttempts = 2, FailurePolicy = SpectroscopyTargetFailurePolicy.SkipQualityFailure,
+            });
+        }
+        var closeout = new UvexObservatoryCloseoutItem { CloseAfterTargets = false };
+        night.Add(closeout);
+        using var cancel = new CancellationTokenSource();
+        var task = night.Execute(new Progress<ApplicationStatus>(), cancel.Token);
+        for (var i = 0; i < 200 && !night.NightState.Contains("保持开顶待处理", StringComparison.Ordinal); i++) await Task.Delay(25);
+        Assert.Contains("保持开顶待处理", night.NightState);
+        Assert.False(task.IsCompleted); Assert.True(night.IsActive); Assert.Empty(later.Stages);
+        Assert.Throws<InvalidOperationException>(() => closeout.CloseAfterTargets = true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ReserveNightAsync(new object(), false, CancellationToken.None));
+        if (exit == "explicit-close") night.EndNightCommand.Execute(null);
+        if (exit == "unsafe") night.OnNightUnsafe();
+        if (exit == "cancel") cancel.Cancel();
+        var error = await Record.ExceptionAsync(() => task.WaitAsync(TimeSpan.FromSeconds(8)));
+        Assert.IsNotType<TimeoutException>(error);
+        Assert.Empty(later.Stages); Assert.False(night.IsActive);
+        using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
+        var terminal = journal.RootElement.GetProperty("outcomes").EnumerateArray().Last();
+        Assert.Equal(!unsettled, terminal.GetProperty("targetBoundariesSettled").GetBoolean());
+        Assert.Equal(exit == "cancel", terminal.GetProperty("ordinaryCancel").GetBoolean());
+        Assert.Equal(exit == "unsafe", terminal.GetProperty("unsafeTripped").GetBoolean());
+        Assert.False(terminal.GetProperty("physicalCloseoutConfirmed").GetBoolean()); // Simulation is never hardware proof.
+    }
+
+    [Fact]
+    public async Task OptionalCloseoutHasExplicitScopeAndOverridesLegacyChoiceWithoutChangingProfile()
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        settings.CloseDomeOrRoofOnFinalize = false;
+        settings.CloseDomeOrRoofOnFailure = false;
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false, EndAtIso8601 = "05:00", HoldOpenAfterTargets = true };
+        night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings));
+        var closeout = new UvexObservatoryCloseoutItem();
+        Assert.False(closeout.Validate());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => closeout.Execute(new Progress<ApplicationStatus>(), CancellationToken.None));
+        night.Add(closeout);
+        Assert.True(closeout.Validate()); Assert.True(night.Validate());
+        Assert.False(night.EffectiveHoldOpenAfterTargets);
+        closeout.CloseAfterTargets = false;
+        Assert.True(night.EffectiveHoldOpenAfterTargets);
+        var clone = (UvexNightSequenceContainer)night.Clone();
+        Assert.False(Assert.IsType<UvexObservatoryCloseoutItem>(clone.Items.Last()).CloseAfterTargets);
+        Assert.Contains("\"CloseAfterTargets\":false", Newtonsoft.Json.JsonConvert.SerializeObject(clone,
+            new Newtonsoft.Json.JsonSerializerSettings { PreserveReferencesHandling = Newtonsoft.Json.PreserveReferencesHandling.Objects }));
+        night.EndAtIso8601 = "";
+        Assert.False(night.Validate()); // No indefinite unprotected wait.
+        night.EndAtIso8601 = "05:00";
+        night.Add(new UvexObservatoryCloseoutItem());
+        Assert.False(night.Validate()); // No competing terminal owners.
+        Assert.False(closeout.Validate()); // No closeout before another child.
+        Assert.False(settings.CloseDomeOrRoofOnFailure); Assert.False(settings.CloseDomeOrRoofOnFinalize);
+    }
+
     [Fact]
     public void InitialSettleOverrideIsBoundedSavedAndDoesNotChangeProfileOrSlitTolerance()
     {
@@ -392,6 +597,7 @@ public sealed class NativeSequencePlanTests
         Assert.True(night.IsActive);
         var activeTarget = (UvexTargetObservationContainer)night.Items[0];
         Assert.False(night.CanEditPlan); Assert.False(activeTarget.CanEditPlan);
+        Assert.Throws<InvalidOperationException>(() => night.LockDeadline(DateTimeOffset.UtcNow.AddDays(1), TimeZoneInfo.Local));
         Assert.Throws<InvalidOperationException>(() => activeTarget.ForceGuideCalibration = true);
         Assert.Throws<InvalidOperationException>(() => activeTarget.TargetName = "Cannot hot-replace target");
         Assert.Throws<InvalidOperationException>(() => activeTarget.FixedExposureSeconds = 600);
@@ -410,6 +616,7 @@ public sealed class NativeSequencePlanTests
         Assert.Equal(mode == "cancel", terminal.GetProperty("ordinaryCancel").GetBoolean());
         Assert.Equal(mode == "unsafe", terminal.GetProperty("unsafeTripped").GetBoolean());
         Assert.True(journal.RootElement.GetProperty("holdOpenAfterTargets").GetBoolean());
+        Assert.False(string.IsNullOrEmpty(journal.RootElement.GetProperty("deadlineSchedule").GetProperty("RequestedText").GetString()));
         using var released = await host.ReserveNightAsync(new object(), false, CancellationToken.None);
     }
 
@@ -546,12 +753,19 @@ public sealed class NativeSequencePlanTests
 
     [Theory]
     [InlineData("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", true)]
+    [InlineData(G3WcsRecoveryPolicy.ExhaustedReturnedCode, true)]
+    [InlineData(G3WcsRecoveryPolicy.ResponseNotConvergedCode, true)]
+    [InlineData("G3_WCS_CENTERING_RETURN_BLOCKED", false)]
+    [InlineData("G3_MOTION_RETURN_TIME_LIMIT", false)]
+    [InlineData("UNCLASSIFIED_RETURNED", false)]
     [InlineData("G3_POST_WCS_SHORT_UNCONFIRMED", true)]
     [InlineData(G3PostWcsShortHandoffPolicy.OutsideCode, true)]
     [InlineData(G3PostWcsShortHandoffPolicy.RecheckCode, false)]
     [InlineData("G3_MOTION_TERMINAL_HANDOFF_INCONSISTENT", false)]
     [InlineData("G3_MOTION_CRASH_RETURN_BLOCKED", false)]
     [InlineData("PHD2_GUIDING_FRAME_TIMEOUT", false)]
+    [InlineData("PHD2_LOCK_RETURN_POSITION_UNCONFIRMED", true)]
+    [InlineData("PHD2_STOP_UNCONFIRMED", false)]
     [InlineData(HorizonEvaluation.WindowExhaustedCode, true)]
     [InlineData("HORIZON_BLOCKED", false)]
     [InlineData("COMMAND_COORDINATE_HORIZON_BLOCKED", false)]
@@ -588,6 +802,7 @@ public sealed class NativeSequencePlanTests
     [Theory]
     [InlineData("complete")]
     [InlineData("deadline")]
+    [InlineData("clock-deadline")]
     [InlineData("cancel")]
     [InlineData("target-interrupt")]
     [InlineData("noninterfering-roof")]
@@ -672,6 +887,7 @@ public sealed class NativeSequencePlanTests
         Assert.All(night.Items.Cast<UvexTargetObservationContainer>(), x => Assert.Equal(11, x.Items.Count));
         Assert.Equal(2, ((UvexTargetObservationContainer)night.Items[1]).ScienceFrames);
         if (mode == "deadline") night.EndAtIso8601 = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O");
+        if (mode == "clock-deadline") night.EndAtIso8601 = "12:00"; // The current observing night's start is always elapsed.
         using var cancel = new CancellationTokenSource();
         if (mode == "cancel") cancel.CancelAfter(600);
         var execution = night.Execute(new Progress<ApplicationStatus>(), cancel.Token);
@@ -712,12 +928,36 @@ public sealed class NativeSequencePlanTests
 
     [Theory]
     [InlineData("skip", "G3_CATALOG_SHORT_POSITION_UNCONFIRMED")]
+    [InlineData("skip", "G3_SEARCH_DURABLE_RESERVE_INVALID")]
+    [InlineData("cleanup-failure", "G3_SEARCH_DURABLE_RESERVE_INVALID")]
+    [InlineData("end-policy", "G3_SEARCH_DURABLE_RESERVE_INVALID")]
+    [InlineData("skip", "G3_SEARCH_NOT_STARTED_RETURNED")]
+    [InlineData("cleanup-failure", "G3_SEARCH_NOT_STARTED_RETURNED")]
+    [InlineData("end-policy", "G3_SEARCH_NOT_STARTED_RETURNED")]
+    [InlineData("unknown-gate", "G3_SEARCH_RETURN_BLOCKED")]
+    [InlineData("unknown-gate", "G3_MOTION_FAMILY_RADIUS_INCOMPATIBLE")]
+    [InlineData("skip", G3WcsRecoveryPolicy.ExhaustedReturnedCode)]
+    [InlineData("skip", G3WcsRecoveryPolicy.ResponseNotConvergedCode)]
+    [InlineData("cleanup-failure", G3WcsRecoveryPolicy.ExhaustedReturnedCode)]
+    [InlineData("cleanup-failure", G3WcsRecoveryPolicy.ResponseNotConvergedCode)]
+    [InlineData("end-policy", G3WcsRecoveryPolicy.ExhaustedReturnedCode)]
+    [InlineData("end-policy", G3WcsRecoveryPolicy.ResponseNotConvergedCode)]
+    [InlineData("unknown-gate", "G3_WCS_CENTERING_RETURN_BLOCKED")]
+    [InlineData("unknown-gate", "G3_MOTION_RETURN_TIME_LIMIT")]
+    [InlineData("unknown-gate", "UNCLASSIFIED_RETURNED")]
     [InlineData("skip", "G3_POST_WCS_SHORT_UNCONFIRMED")]
+    [InlineData("skip", "G3_POST_WCS_TARGET_NOT_MEASURED")]
+    [InlineData("cleanup-failure", "G3_POST_WCS_TARGET_NOT_MEASURED")]
+    [InlineData("end-policy", "G3_POST_WCS_TARGET_NOT_MEASURED")]
     [InlineData("skip", G3PostWcsShortHandoffPolicy.OutsideCode)]
     [InlineData("skip", "PHD2_INITIAL_SETTLE_NOT_REACHED")]
-    [InlineData("skip", Phd2PlacementGuideWindowRejectedException.StoppedCode)]
-    [InlineData("cleanup-failure", Phd2PlacementGuideWindowRejectedException.StoppedCode)]
-    [InlineData("end-policy", Phd2PlacementGuideWindowRejectedException.StoppedCode)]
+    [InlineData("skip", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
+    [InlineData("cleanup-failure", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
+    [InlineData("end-policy", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
+    [InlineData("unknown-gate", "PHD2_STOP_UNCONFIRMED")]
+    [InlineData("skip", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
+    [InlineData("cleanup-failure", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
+    [InlineData("end-policy", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
     [InlineData("unknown-gate", "PHD2_GUIDE_WINDOW_NOT_STABLE")]
     [InlineData("cleanup-failure", "PHD2_INITIAL_SETTLE_NOT_REACHED")]
     [InlineData("end-policy", "PHD2_INITIAL_SETTLE_NOT_REACHED")]
@@ -731,8 +971,16 @@ public sealed class NativeSequencePlanTests
     [InlineData("cleanup-failure", AdaptiveGuidingRecovery.ExhaustedCode)]
     [InlineData("cleanup-failure", "G3_CATALOG_SHORT_POSITION_UNCONFIRMED")]
     [InlineData("cleanup-failure", "G3_POST_WCS_SHORT_UNCONFIRMED")]
+    [InlineData("typed-skip", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
+    [InlineData("typed-skip", "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED")]
+    [InlineData("typed-skip", "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED")]
+    [InlineData("typed-cleanup-failure", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
+    [InlineData("typed-end-policy", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
+    [InlineData("unknown-gate", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
     public async Task NativeFailedFirstTargetJoinsCoordinatorBeforeDecidingWhetherToSkip(string mode, string failureCode)
     {
+        var typedQuality = mode.StartsWith("typed-", StringComparison.Ordinal);
+        if (typedQuality) mode = mode[6..];
         InitializeAstrometry();
         var settings = Settings();
         var astrometry = Proxy<IAstrometrySettings>();
@@ -740,11 +988,15 @@ public sealed class NativeSequencePlanTests
         var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
         var notifier = new SilentNotifier();
         using var host = new ObservationCoordinatorHost(notifier);
-        // Faulted releases the native marker synchronously, while persistence and
-        // UI notification have not joined. Make that production race repeatable.
-        notifier.OnNotify = _ => { if (host.Dashboard.Run.State == ObservationRunState.Faulted) Thread.Sleep(500); };
+        // Faulted releases the native marker while persistence is still joining.
+        // Quality notifications now wait for the saved native boundary, so make
+        // the original race repeatable from the snapshot event, not the toast.
+        var delayed = 0;
+        host.DashboardChanged += (_, d) => {
+            if (d.Run.State == ObservationRunState.Faulted && Interlocked.Exchange(ref delayed, 1) == 0) Thread.Sleep(500);
+        };
         var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
-        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure");
+        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality);
         var second = new TerminalGateRunner(null, false);
         var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
         var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
@@ -767,6 +1019,11 @@ public sealed class NativeSequencePlanTests
         Assert.Equal(skip ? 2 : 1, outcomes.Length);
         Assert.Equal(skip ? "SkippedQualityFailure" : "Stopped", outcomes[0].GetProperty("outcome").GetString());
         Assert.Equal(failureCode, outcomes[0].GetProperty("gate").GetString());
+        var boundaryNotification = Assert.Single(notifier.Notifications, x => x.Fingerprint.Contains("|NativeBoundary|"));
+        Assert.Equal(skip ? ObservationAttentionSeverity.Warning : ObservationAttentionSeverity.Error, boundaryNotification.Severity);
+        Assert.Contains("Quality boundary 0", boundaryNotification.Body);
+        Assert.Contains(failureCode, boundaryNotification.Body);
+        if (skip) Assert.DoesNotContain(notifier.Notifications, x => x.Severity == ObservationAttentionSeverity.Error);
         Assert.False(outcomes[0].GetProperty("endRequested").GetBoolean());
         Assert.Equal(skip, second.Stages.Contains(ObservationStage.FinalizeObservation));
         Assert.DoesNotContain(ObservationStage.SelectAtrExposure, first.Stages);
@@ -890,14 +1147,15 @@ public sealed class NativeSequencePlanTests
         Assert.DoesNotContain("STAGE_EXCEPTION", body);
     }
 
-    private sealed class TerminalGateRunner(string? failure, bool failCleanup) : ObservationStageRunnerBase
+    private sealed class TerminalGateRunner(string? failure, bool failCleanup, bool typedQuality = false) : ObservationStageRunnerBase
     {
         public List<ObservationStage> Stages { get; } = new();
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
         {
             Stages.Add(stage);
             return Task.FromResult(new StageResult(stage == ObservationStage.AcquireG3SlitField && failure is not null
-                ? GateResult.Unknown(failure, "Synthetic quality failure; no physical hardware.")
+                ? typedQuality ? new TargetQualityEvidenceException(failure, "Synthetic optical failure; no physical hardware.").AfterStop(true).Gate
+                    : GateResult.Unknown(failure, "Synthetic quality failure; no physical hardware.")
                 : GateResult.Pass("SIM_STAGE_PASS", "Synthetic stage; no physical hardware.")));
         }
         public override Task OnCancelledAsync(ObservationContext context, CancellationToken token) =>
@@ -944,6 +1202,113 @@ public sealed class NativeSequencePlanTests
         }
         public void ClearActiveIndicator() { }
         public void Dispose() { }
+    }
+
+    [Theory]
+    [InlineData(false, false)] [InlineData(false, true)]
+    [InlineData(true, false)] [InlineData(true, true)]
+    public void StandaloneAndNativeTargetsKeepIdenticalSciencePolicyWithoutChangingSafety(bool warning, bool weak)
+    {
+        var settings = Settings();
+        settings.AllowSupervisedSlitQualityWarning = warning;
+        settings.WeakSupervisionEnabled = weak;
+        settings.AllowDegradedSupervisedScience = false;
+        settings.RequireSafetyMonitor = true;
+        settings.RequireOpenDomeOrRoof = true;
+        settings.RequireOpenOpticalCover = true;
+        var solver = new PlateSolverRunConfiguration("primary", "blind", "primary-type", "blind-type",
+            10, 10, 2, 500, true, 0.1, 5, 3, "", "", "", "", "", "", "", "");
+        var standalone = RealRunConfiguration.Capture(settings, solver);
+        var native = standalone.WithSequencePlan(new(2, 4, 120, true));
+        Assert.Equal(standalone.ScienceQuality, native.ScienceQuality);
+        Assert.Equal(standalone.Environment, native.Environment);
+        Assert.True(settings.RequireSafetyMonitor && settings.RequireOpenDomeOrRoof && settings.RequireOpenOpticalCover);
+        foreach (var configuration in new[] { standalone, native })
+        {
+            var decision = configuration.ScienceQuality.EvaluateSlitWarning(
+                true, true, [8.185094124366973, 3.280662409091443, .8613895484720325], [], 2, 2, 20);
+            Assert.Equal(warning, decision.CanProbe);
+            Assert.Equal(warning || weak, configuration.ScienceQuality.AllowsMeasuredContinuation);
+        }
+        settings.AllowSupervisedSlitQualityWarning = !warning;
+        Assert.Equal(warning, standalone.ScienceQuality.WarningProbeEnabled);
+        Assert.Equal(warning, native.ScienceQuality.WarningProbeEnabled);
+        Assert.False(native.MatchesCurrentProfile(settings, solver, out _));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task RecordedWarningDecisionReachesProbeThroughHostAndNativeStages(bool weak)
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        settings.WeakSupervisionEnabled = weak;
+        settings.AllowSupervisedSlitQualityWarning = true;
+        settings.AllowDegradedSupervisedScience = false;
+        settings.ObservationTargetName = "Recorded Capella window";
+        settings.ObservationCatalogId = "REPLAY-CAPELLA";
+        settings.ObservationNightSetupId = "SIM-NIGHT";
+        settings.ObservationRightAscensionDegrees = 0;
+        settings.ObservationDeclinationDegrees = 89;
+        settings.ObservatoryLatitudeDegrees = 33;
+        settings.ObservatoryLongitudeDegreesEast = 120;
+        settings.HorizonMinimumDegrees = settings.HorizonStartMarginDegrees = settings.HorizonContinueMarginDegrees = 0;
+        settings.ObservationExpectedAtrCameraId = "SIM-ATR";
+        settings.ObservationExpectedG3ProfileName = "SIM-G3";
+        settings.ObservationExpectedQhyCameraId = "SIM-QHY";
+        var solver = new PlateSolverRunConfiguration("primary", "blind", "primary-type", "blind-type",
+            10, 10, 2, 500, true, 0.1, 5, 3, "", "", "", "", "", "", "", "");
+        var configuration = RealRunConfiguration.Capture(settings, solver);
+        using var standalone = new ObservationCoordinatorHost(new SilentNotifier());
+        var hostRunner = new RecordedPolicyRunner(configuration);
+        await standalone.RunAsync(ObservationPlanFactory.FromSettings(settings, configuration), hostRunner,
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+
+        var astrometry = Proxy<IAstrometrySettings>();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? astrometry : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var native = new ObservationCoordinatorHost(new SilentNotifier());
+        var nativeRunner = new RecordedPolicyRunner(configuration.WithSequencePlan(new(2, 4, 120, true)));
+        var night = new UvexNightSequenceContainer(profiles, native, null!, settings) { StopAtDawn = false };
+        night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), native, null!, settings, () => nativeRunner)
+        {
+            TargetName = settings.ObservationTargetName, CatalogId = settings.ObservationCatalogId,
+            NightSetupId = "SIM-NIGHT", UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+            RightAscensionDegrees = 0, DeclinationDegrees = 89, DurationMinutes = 1,
+            HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+            ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+            ScienceFrames = 2, MaximumScienceAttempts = 4,
+        });
+        await night.Execute(new Progress<ApplicationStatus>(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(ObservationRunCoordinator.Stages, hostRunner.Stages);
+        Assert.Equal(hostRunner.Stages, nativeRunner.Stages);
+        Assert.Equal(1, hostRunner.ProbeDecisions);
+        Assert.Equal(hostRunner.ProbeDecisions, nativeRunner.ProbeDecisions);
+        Assert.Equal(ObservationRunState.Completed, standalone.Dashboard.Run.State);
+        Assert.Equal(standalone.Dashboard.Run.State, native.Dashboard.Run.State);
+        Assert.Equal(GateSeverity.Warning, native.Dashboard.Gates[ObservationStage.PlaceTargetOnSlit].Severity);
+    }
+
+    // Replays policy/route only. Environment and hardware responses are test
+    // doubles, and a probe decision is not an exposure or a science acceptance.
+    private sealed class RecordedPolicyRunner(RealRunConfiguration configuration) : ObservationStageRunnerBase
+    {
+        public List<ObservationStage> Stages { get; } = [];
+        public int ProbeDecisions;
+        public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
+        {
+            Stages.Add(stage);
+            if (stage == ObservationStage.PlaceTargetOnSlit)
+            {
+                var decision = configuration.ScienceQuality.EvaluateSlitWarning(true, true,
+                    [8.185094124366973, 3.280662409091443, .8613895484720325], [], 2, 2, 20);
+                return Task.FromResult(new StageResult(decision.CanProbe
+                    ? GateResult.Warn("REPLAY_MEASURED_WARNING_PROBE", "Recorded optical decision; no hardware.")
+                    : GateResult.TargetQuality("REPLAY_STRICT_REJECTED", "Strict preference not met.")));
+            }
+            if (stage == ObservationStage.SelectAtrExposure) ProbeDecisions++;
+            return Task.FromResult(new StageResult(GateResult.Pass("REPLAY_STAGE", "Synthetic gates; no hardware.")));
+        }
     }
 
     private static UvexPluginSettings Settings()

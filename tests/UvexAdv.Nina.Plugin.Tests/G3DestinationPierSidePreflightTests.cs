@@ -84,13 +84,13 @@ public sealed class G3DestinationPierSidePreflightTests
     [Fact]
     public void ProductionReturnChecksPredictionBeforePrechargeAndAgainBeforeSlew()
     {
-        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        var start = source.IndexOf("private async Task<G3AcquisitionMotionReturnResult> ReturnDurableG3AcquisitionToOriginAsync", StringComparison.Ordinal);
+        var source = WorkflowSource.Return;
+        var start = source.IndexOf("internal async Task<G3AcquisitionMotionReturnResult> ReturnAsync", StringComparison.Ordinal);
         Assert.True(start > 0);
         var first = source.IndexOf("ValidateG3DestinationPierSide(commanded, state.PierSide)", start, StringComparison.Ordinal);
         var intent = source.IndexOf("Phase = G3AcquisitionMotionPhase.ReturnIntent", start, StringComparison.Ordinal);
         var second = source.IndexOf("ValidateG3DestinationPierSide(commanded, state.PierSide)", first + 1, StringComparison.Ordinal);
-        var slew = source.IndexOf("telescopeMediator.SlewToCoordinatesAsync(commanded", start, StringComparison.Ordinal);
+        var slew = source.IndexOf("port.SlewToCoordinatesAsync(commanded", start, StringComparison.Ordinal);
         Assert.True(first > start && intent > first && second > intent && slew > second);
     }
 

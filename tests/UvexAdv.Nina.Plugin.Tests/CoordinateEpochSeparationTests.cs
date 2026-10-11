@@ -17,10 +17,8 @@ public sealed class CoordinateEpochSeparationTests
     [Fact]
     public void QhySyncReadbackNormalizesEpochBeforeComputingResidual()
     {
-        var separation = Slice(
-            MainSource,
-            "private static double AngularSeparationArcseconds(Coordinates a, Coordinates b)",
-            "private static (double RaTangentArcseconds, double DecArcseconds) SignedTangentOffsetArcseconds(");
+        var separation = WorkflowSource.Read("ObservationMotionGeometry");
+        Assert.Contains("ObservationMotionGeometry.AngularSeparationArcseconds(a, b)", MainSource);
 
         Assert.Contains("b.Epoch == a.Epoch ? b : b.Transform(a.Epoch)", separation, StringComparison.Ordinal);
         Assert.Contains("bInAEpoch.RADegrees", separation, StringComparison.Ordinal);

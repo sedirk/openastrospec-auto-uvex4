@@ -17,7 +17,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Equal(2,old.EffectiveGuideLockResidualPixels);
         Assert.NotEmpty((old with { MaximumGuideLockWarningResidualPixels=3.1 }).Validate());
         var json=System.Text.Json.JsonSerializer.Serialize(graded);
-        var tool=System.Text.Json.JsonSerializer.Deserialize<UvexAdv.Commissioning.Tool.Phd2SlitPlacementContract>(json)!;
+        var tool=System.Text.Json.JsonSerializer.Deserialize<UvexAdv.Phd2.Phd2SlitPlacementCommissioning>(json)!;
         Assert.Empty(tool.Validate());
         Assert.Equal(3,tool.MaximumGuideLockWarningResidualPixels);
         Assert.NotEmpty((tool with { MaximumGuideLockWarningResidualPixels=3.1 }).Validate());
@@ -35,22 +35,27 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("SlitIlluminationLedState == UvexOutputState.Off", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DetectDarkSlit", body, StringComparison.Ordinal);
         Assert.DoesNotContain("SlitLocalBackgroundDetector.Detect", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2FreshSlitStackPolicy", RunnerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Phd2FreshSlitTemporalConsensusPolicy", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("var target = ToPhd2Domain(targetLocal, preset)", body, StringComparison.Ordinal);
         Assert.Contains("immutableRunSlitAnchorUsed", body, StringComparison.Ordinal);
     }
 
     [Fact]
     public void SlitCompletionNeedsWholeFreshWindowAndCanReplanWithinOriginalLedger()
     {
-        Assert.Contains("targetCompletionWindow = firstMeasurements", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("targetCompletionWindow = measurements", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("AllWithinTolerance(completionResiduals, completionTolerance)", RunnerSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("completionWindowRetries >= 4", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("boundedByOriginalDeadline = true", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("completionDeadline = ledger.StartedUtc + completionLimits.MaximumElapsed -", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("completionLimits.MaximumStageDuration.Ticks * reservedReturnAttempts", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("nextAction = \"replan-from-last-real-fresh-frame\"", RunnerSource, StringComparison.Ordinal);
-        Assert.True(RunnerSource.IndexOf("targetCompletionWindow.Count < requiredCompletionFrames", StringComparison.Ordinal) <
-            RunnerSource.IndexOf("Target-on-slit completion was proven", StringComparison.Ordinal));
+        var convergence = WorkflowSource.Convergence;
+        Assert.Contains("new(session, ledger, firstMeasurements,", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("targetCompletionWindow = request.InitialWindow", convergence, StringComparison.Ordinal);
+        Assert.Contains("targetCompletionWindow = measurements", convergence, StringComparison.Ordinal);
+        Assert.Contains("AllWithinTolerance(completionResiduals, completionTolerance)", convergence, StringComparison.Ordinal);
+        Assert.DoesNotContain("completionWindowRetries >= 4", convergence, StringComparison.Ordinal);
+        Assert.Contains("boundedByOriginalDeadline = true", convergence, StringComparison.Ordinal);
+        Assert.Contains("completionDeadline = ledger.StartedUtc + completionLimits.MaximumElapsed -", convergence, StringComparison.Ordinal);
+        Assert.Contains("completionLimits.MaximumStageDuration.Ticks * reservedReturnAttempts", convergence, StringComparison.Ordinal);
+        Assert.Contains("nextAction = \"replan-from-last-real-fresh-frame\"", convergence, StringComparison.Ordinal);
+        Assert.True(convergence.IndexOf("targetCompletionWindow.Count < requiredCompletionFrames", StringComparison.Ordinal) <
+            convergence.IndexOf("Target-on-slit completion was proven", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -62,7 +67,11 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("const int maximumWindows = 4", body, StringComparison.Ordinal);
         Assert.Contains("CapturePhd2GuidingMeasurementsAsync", body, StringComparison.Ordinal);
         Assert.Contains("residuals.All(value => double.IsFinite(value) && value <= tolerance)", body, StringComparison.Ordinal);
-        Assert.Contains("!sameEpoch || !identityConfirmed || windowAttempt == maximumWindows", body, StringComparison.Ordinal);
+        Assert.Contains("if (!sameEpoch)", body, StringComparison.Ordinal);
+        Assert.Contains("if (!identityConfirmed)", body, StringComparison.Ordinal);
+        Assert.Contains("if (windowAttempt == maximumWindows)", body, StringComparison.Ordinal);
+        Assert.Contains("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", body, StringComparison.Ordinal);
+        Assert.Contains("throw new TargetQualityEvidenceException(", body, StringComparison.Ordinal);
         Assert.Contains("phd2-supervised-pre-atr-window", body, StringComparison.Ordinal);
         Assert.DoesNotContain("SetLockPosition", body, StringComparison.Ordinal);
         Assert.DoesNotContain("GuideAndSettle", body, StringComparison.Ordinal);
@@ -254,7 +263,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
         var refresh = Section("async Task RefreshNativeSelectionGeometryAsync(string evidenceRole)",
             "var targetIsUltraBright = target.FwhmPixels <= 0");
         Assert.Contains("await phd2.SaveNextLoopingFrameAsync", refresh, StringComparison.Ordinal);
-        Assert.Contains("fresh.VerifiedExposureMilliseconds != preset.ExposureFor(choice.Mode)", refresh, StringComparison.Ordinal);
+        Assert.Contains("fresh.VerifiedExposureMilliseconds != choice.ExposureMilliseconds", refresh, StringComparison.Ordinal);
         Assert.Contains("Phd2NativeGuideSaturatedRegions.Measure(exclusionFrame", refresh, StringComparison.Ordinal);
         Assert.Contains("!insideSaturatedStructure", nativeSelection, StringComparison.Ordinal);
         Assert.Contains("exclusionFramePath, cancellationToken", nativeSelection, StringComparison.Ordinal);
@@ -762,11 +771,12 @@ public sealed class Phd2SlitPlacementCommissioningTests
     [Fact]
     public void UserCancellationPersistsReturnRequiredButNeverStartsAutomaticReturn()
     {
-        Assert.True(Count("catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)") >= 5);
-        Assert.Contains("No automatic lock-return command was sent", RunnerSource, StringComparison.Ordinal);
-        var firstCancellation = RunnerSource.IndexOf("User cancellation occurred after the durable stage intent", StringComparison.Ordinal);
-        var nextGenericCatch = RunnerSource.IndexOf("catch (Exception ex)", firstCancellation, StringComparison.Ordinal);
-        var cancellationBlock = RunnerSource[firstCancellation..nextGenericCatch];
+        var source = RunnerSource + WorkflowSource.Convergence;
+        Assert.True(CountIn(source, "catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)") >= 5);
+        Assert.Contains("No automatic lock-return command was sent", source, StringComparison.Ordinal);
+        var firstCancellation = source.IndexOf("User cancellation occurred after the durable stage intent", StringComparison.Ordinal);
+        var nextGenericCatch = source.IndexOf("catch (Exception ex)", firstCancellation, StringComparison.Ordinal);
+        var cancellationBlock = source[firstCancellation..nextGenericCatch];
         Assert.DoesNotContain("ReturnPhd2LockToOriginAsync", cancellationBlock, StringComparison.Ordinal);
         Assert.Contains("throw;", cancellationBlock, StringComparison.Ordinal);
     }
@@ -774,13 +784,16 @@ public sealed class Phd2SlitPlacementCommissioningTests
     [Fact]
     public void EveryPhd2FailureReturnRetainsTheLiveCancellationToken()
     {
-        const string marker = "return await ReturnPhd2LockToOriginAsync(";
+        const string marker = "ReturnPhd2LockToOriginAsync(";
+        var source = RunnerSource + WorkflowSource.Convergence;
         var count = 0;
-        for (var start = 0; (start = RunnerSource.IndexOf(marker, start, StringComparison.Ordinal)) >= 0;)
+        for (var start = 0; (start = source.IndexOf(marker, start, StringComparison.Ordinal)) >= 0;)
         {
-            var end = RunnerSource.IndexOf(").ConfigureAwait(false);", start, StringComparison.Ordinal);
+            if (!source[..start].TrimEnd().EndsWith("await", StringComparison.Ordinal) &&
+                !source[..start].EndsWith("await port.", StringComparison.Ordinal)) { start += marker.Length; continue; }
+            var end = source.IndexOf(").ConfigureAwait(false);", start, StringComparison.Ordinal);
             Assert.True(end > start, "Could not locate the end of a PHD2 lock-return call.");
-            var call = RunnerSource[start..(end + ").ConfigureAwait(false);".Length)];
+            var call = source[start..(end + ").ConfigureAwait(false);".Length)];
             Assert.Contains("cancellationToken", call, StringComparison.Ordinal);
             Assert.DoesNotContain("CancellationToken.None", call, StringComparison.Ordinal);
             count++;
@@ -814,7 +827,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.True(loop > entryCancellation && loopCancellation > loop);
         Assert.True(preExactCancellation > loopCancellation && preExactCancellation < exactSet);
 
-        var frame = recovery.IndexOf("phd2.SaveCurrentGuidingFrameAsync", exactSet, StringComparison.Ordinal);
+        var frame = recovery.IndexOf("Phd2MeasuredReturnWindow.ObserveAsync", exactSet, StringComparison.Ordinal);
         var cancellationCatch = recovery.IndexOf(
             "catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)",
             frame,
@@ -899,17 +912,18 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
-    public void EveryNewOrResettleGuideRetainsLastMomentCalibrationReadback()
+    public void ReturnMeasurementRetainsLastMomentCalibrationReadbackWithoutResettle()
     {
         var returnPath = Section(
             "private async Task<StageResult> ReturnPhd2LockToOriginCoreAsync(",
             "private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(");
         var returnValidation = returnPath.IndexOf("calibrationBeforeReturnSettle", StringComparison.Ordinal);
-        var returnGuide = returnPath.IndexOf("phd2.GuideAndSettleAsync", returnValidation, StringComparison.Ordinal);
+        var returnGuide = returnPath.IndexOf("Phd2MeasuredReturnWindow.ObserveAsync", returnValidation, StringComparison.Ordinal);
 
         Assert.True(returnValidation >= 0 && returnGuide > returnValidation);
+        Assert.DoesNotContain("phd2.GuideAndSettleAsync", returnPath, StringComparison.Ordinal);
         Assert.Contains("PHD2_LOCK_RECOVERY_LAST_MOMENT_CALIBRATION_INVALID", RunnerSource, StringComparison.Ordinal);
-        Assert.Contains("calibrationBeforeStageSettle", RunnerSource, StringComparison.Ordinal);
+        Assert.Contains("calibrationBeforeStageSettle", WorkflowSource.Convergence, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1085,12 +1099,12 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
-    public void OperatorWeakSupervisionIsTheExplicitSupervisedScienceOptIn()
+    public void ScientificConsentUsesTheIndependentPolicyNotOnlyWeakSupervision()
     {
         Assert.Contains("HasSupervisedScienceOptIn()", RunnerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("!configuration.AllowDegradedSupervisedScience", RunnerSource, StringComparison.Ordinal);
         Assert.Contains(
-            "configuration.AllowDegradedSupervisedScience ||\n        configuration.Environment.WeakSupervisionEnabled",
+            "configuration.ScienceQuality.AllowsMeasuredContinuation",
             LegacyRunnerSource.Replace("\r\n", "\n", StringComparison.Ordinal),
             StringComparison.Ordinal);
     }
@@ -1209,10 +1223,10 @@ public sealed class Phd2SlitPlacementCommissioningTests
             true, true, [offSlit, offSlit, offSlit], 2, 2, 75));
     }
 
-    private static Phd2SlitPlacementCommissioningPreset CreatePreset()
+    internal static Phd2SlitPlacementCommissioning CreatePreset()
     {
         var policy = Phd2CalibrationQualityPolicy.Default;
-        return new Phd2SlitPlacementCommissioningPreset(
+        return new Phd2SlitPlacementCommissioning(
             "install-20260819",
             new string('A', 64),
             Phd2ImageCoordinateDomain.FullSensorCoordinates,
@@ -1265,7 +1279,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
             2.5,
             0.5,
             policy,
-            Phd2SlitPlacementCommissioningPreset.ComputePolicySha256(policy));
+            Phd2SlitPlacementCommissioning.ComputePolicySha256(policy));
     }
 
     internal static Phd2LockShiftPendingState CreateState(string runId, Phd2LockShiftPendingPhase phase)

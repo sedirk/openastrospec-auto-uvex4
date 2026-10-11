@@ -18,7 +18,7 @@ public sealed class OffsetDateTimeTextConverter : JsonConverter<string>
         DateTime date => date.ToString("O", CultureInfo.InvariantCulture),
         string text => text,
         null => string.Empty,
-        _ => throw new JsonSerializationException("Night deadline must be offset-bearing date text."),
+        _ => throw new JsonSerializationException("Night deadline must be HH:mm clock text or offset-bearing date text."),
     };
 
     public override void WriteJson(JsonWriter writer, string? value, JsonSerializer serializer) =>

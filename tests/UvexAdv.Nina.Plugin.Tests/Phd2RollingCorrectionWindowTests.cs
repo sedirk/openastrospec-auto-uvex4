@@ -97,12 +97,16 @@ public sealed class Phd2RollingCorrectionWindowTests
     public void SharedRunnerChecksEpochAndKeepsPostMotionFullWindowAndOriginalBudget()
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
-        Assert.Contains("rollingCorrectionWindow ? 1 : requiredCompletionFrames, completionDeadline", source);
-        Assert.Contains("previousWindowDecision = correctionWindow", source);
-        Assert.Contains("currentWindowFrames = targetCompletionWindow.Select", source);
-        Assert.Contains("snapshot.ConnectionEpoch != session.ConnectionEpoch || snapshot.GuideEpoch != session.GuideEpoch", source);
-        Assert.Contains("targetCompletionWindow = measurements;", source);
-        Assert.Contains("ledger.StartedUtc + completionLimits.MaximumElapsed", source);
-        Assert.Contains("var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(", source);
+        var convergence = WorkflowSource.Convergence;
+        Assert.Contains("requiredCompletionFrames, completionDeadline,", convergence);
+        Assert.Contains("cancellationToken, rollingCorrectionWindow ? previousCompletionWindow : null)", convergence);
+        Assert.Contains("Phd2PlacementGuideWindowPolicy.CaptureConsecutiveWindowAsync(", source);
+        Assert.DoesNotContain("newCompletionMeasurements.Single()", convergence);
+        Assert.Contains("previousWindowDecision = correctionWindow", convergence);
+        Assert.Contains("currentWindowFrames = targetCompletionWindow.Select", convergence);
+        Assert.Contains("snapshot.ConnectionEpoch != session.ConnectionEpoch || snapshot.GuideEpoch != session.GuideEpoch", convergence);
+        Assert.Contains("targetCompletionWindow = measurements;", convergence);
+        Assert.Contains("ledger.StartedUtc + completionLimits.MaximumElapsed", convergence);
+        Assert.Contains("var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(", convergence);
     }
 }

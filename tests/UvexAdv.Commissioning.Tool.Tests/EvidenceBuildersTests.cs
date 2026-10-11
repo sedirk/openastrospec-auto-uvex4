@@ -646,13 +646,13 @@ public sealed class EvidenceBuildersTests : IDisposable
         }).ToArray();
     }
 
-    private static Phd2SlitPlacementContract CreatePhd2SlitPlacement(Phd2ProfileBindingSnapshot phdEvidence)
+    private static Phd2SlitPlacementCommissioning CreatePhd2SlitPlacement(Phd2ProfileBindingSnapshot phdEvidence)
     {
         var policy = Phd2CalibrationQualityPolicy.Default;
-        var placement = new Phd2SlitPlacementContract(
+        var placement = new Phd2SlitPlacementCommissioning(
             "installation-epoch-1",
             new string('0', 64),
-            (int)Phd2ImageCoordinateDomain.FullSensorCoordinates,
+            Phd2ImageCoordinateDomain.FullSensorCoordinates,
             1920,
             1080,
             0,
@@ -660,9 +660,9 @@ public sealed class EvidenceBuildersTests : IDisposable
             1920,
             1080,
             12.5,
-            (int)Phd2SensorRotationAuthority.QualifiedPhd2Calibration,
+            Phd2SensorRotationAuthority.QualifiedPhd2Calibration,
             "East",
-            (int)Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget,
+            Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget,
             2_000,
             25,
             100,
@@ -702,7 +702,7 @@ public sealed class EvidenceBuildersTests : IDisposable
             3,
             2,
             policy,
-            Phd2SlitPlacementContract.ComputePolicySha256(policy),
+            Phd2SlitPlacementCommissioning.ComputePolicySha256(policy),
             2_000,
             250);
         return placement with
@@ -714,7 +714,7 @@ public sealed class EvidenceBuildersTests : IDisposable
         };
     }
 
-    private static GhostAssistanceContract CreateGhostAssistance(CommissioningMeasurementDefinition definition)
+    private static GhostAssistanceCommissioning CreateGhostAssistance(CommissioningMeasurementDefinition definition)
     {
         var extraction = new GhostSourceExtractionPolicy(
             GhostSourceExtractionPolicy.CurrentSchemaVersion,
@@ -774,15 +774,15 @@ public sealed class EvidenceBuildersTests : IDisposable
             2,
             10,
             5);
-        return new GhostAssistanceContract(
-            GhostAssistanceContract.CurrentSchemaVersion,
+        return new GhostAssistanceCommissioning(
+            GhostAssistanceCommissioning.CurrentSchemaVersion,
             "ghost-binding-1",
             calibration,
             policy,
-            GhostAssistanceContract.ComputeContentSha256(policy),
+            GhostAssistanceCommissioning.ComputeContentSha256(policy),
             extraction,
             extractionSha256,
-            new GhostRuntimeFingerprintContract(
+            new GhostRuntimeFingerprint(
                 calibration.InstallationEpochId,
                 calibration.OpticalTopologySha256,
                 calibration.OrientationFingerprintSha256,

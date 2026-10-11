@@ -4,7 +4,7 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2FreshResidualPromotionSafetyTests
 {
-    private static readonly string Source = File.ReadAllText(Path.Combine(
+    private static readonly string Source = WorkflowSource.Convergence + File.ReadAllText(Path.Combine(
         FindRepositoryRoot(),
         "src",
         "UvexAdv.Nina.Plugin",
@@ -15,7 +15,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
     {
         AssertOrdered(Source,
             "Phd2SlitLockShiftPlanner.PlanOutboundStage(",
-            "var measuredSupervisedGeometry = HasSupervisedScienceOptIn() &&",
+            "var measuredSupervisedGeometry = qualityPolicy.AllowsMeasuredContinuation &&",
             "var correctionWindow = Phd2PlacementGuideWindowPolicy.EvaluateCorrectionWindow(",
             "session.GuideMode, measuredSupervisedGeometry, plan.IsAllowed, plan.IsComplete,",
             "var existingLockNotReached = !correctionWindow.CanContinue &&",
@@ -24,9 +24,9 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(",
             "if (!nextAcquisitionBudget.IsAllowed)",
             "var stage = plan.Stage!;",
-            "var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(",
+            "var preIntentFieldBinding = await port.ValidateCurrentFieldBindingAsync(",
             "var chargedLedger = ledger with",
-            "exact = await phd2.SetExactLockPositionAsync(");
+            "exact = await port.SetExactLockPositionAsync(");
         Assert.Contains("preset.EffectiveGuideLockResidualPixels, completionTolerance, requiredCompletionFrames)", Source);
         Assert.Contains("!Phd2PlacementGuideWindowPolicy.AllWithinTolerance(completionResiduals, completionTolerance)", Source);
     }
@@ -42,10 +42,10 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(",
             "session.Qualification, session.GuideMode, session.LastMeasurement.Measurement, ledger,",
             "if (!nextAcquisitionBudget.IsAllowed)",
-            "return await HandleDeniedPhd2AcquisitionBudgetAsync(",
+            "return await port.HandleDeniedPhd2AcquisitionBudgetAsync(",
             "var stage = plan.Stage!;",
             "var chargedLedger = ledger with",
-            "exact = await phd2.SetExactLockPositionAsync(");
+            "exact = await port.SetExactLockPositionAsync(");
         var initialDiagnostic = body[body.IndexOf("var acquisitionBudget =", StringComparison.Ordinal)..
             body.IndexOf("while (true)", body.IndexOf("var acquisitionBudget =", StringComparison.Ordinal), StringComparison.Ordinal)];
         Assert.DoesNotContain("ReacquireG3ForPhd2HandoffAsync", initialDiagnostic, StringComparison.Ordinal);
@@ -81,8 +81,8 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var nativeCorrectionPending = !plan.IsAllowed &&",
             "string.Equals(plan.Code, \"FRESH_G3_RESIDUAL_REQUIRED\", StringComparison.Ordinal)",
             "if (!supervisedSlitPrecisionWarning && (nativeCorrectionPending || completionWindowUnstable ||",
-            "DateTimeOffset.UtcNow + completionLimits.MaximumStageDuration > completionDeadline",
-            "var newCompletionMeasurements = await CapturePhd2PlacementGuideWindowAsync(",
+            "clock.GetUtcNow() + completionLimits.MaximumStageDuration > completionDeadline",
+            "var newCompletionMeasurements = await port.CapturePhd2PlacementGuideWindowAsync(",
             "requiredCompletionFrames, completionDeadline,",
             "session = session with { LastMeasurement = completionMeasurement };",
             "newLockMotion = false",
@@ -116,7 +116,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var reservedReturnAttempts =",
             "var completionDeadline = ledger.StartedUtc + completionLimits.MaximumElapsed -",
             "PHD2_COMPLETION_WINDOW_RETURN_RESERVE:",
-            "var newCompletionMeasurements = await CapturePhd2PlacementGuideWindowAsync(",
+            "var newCompletionMeasurements = await port.CapturePhd2PlacementGuideWindowAsync(",
             "requiredCompletionFrames, completionDeadline,");
     }
 
@@ -128,6 +128,18 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)",
             "G3_POST_WCS_TARGET_NOT_MEASURED:",
             "PixelPoint guideLocal;");
+    }
+
+    [Fact]
+    public void RejectedTargetResetsWindowAndRetainsTheTypedCauseAfterTheExistingCheckedStop()
+    {
+        AssertOrdered(Source, "targetWindow.Observe(measured: false);", "measurements.Clear();",
+            "\"phd2-fresh-target-rejected\"", "if (retry)", "continue;",
+            "throw new Phd2FreshTargetNotMeasuredException", "PixelPoint guideLocal;");
+        AssertOrdered(Source, "var lostFrameFailure = Phd2StageFailurePolicy.FindLostFrame(failure);",
+            "await StopPhdAndWaitAsync(CancellationToken.None)",
+            "if (failure is Phd2FreshTargetNotMeasuredException unmeasuredTarget)",
+            "return unmeasuredTarget.AfterStop(stopConfirmed);");
     }
 
     [Fact]
@@ -151,7 +163,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var first = firstMeasurements[^1];",
             "lastG3Field = UpdateG3FieldFromGuidingResidual(lastG3Field, first, preset);",
             "Phd2SlitLockShiftPlanner.PlanOutboundStage(",
-            "var preIntentFieldBinding = await ValidateG3FieldMountBindingForMotionAsync(");
+            "var preIntentFieldBinding = await port.ValidateCurrentFieldBindingAsync(");
     }
 
     [Fact]
@@ -165,7 +177,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
         AssertOrdered(
             body,
             "var measured = measurements[^1];",
-            "lastG3Field = UpdateG3FieldFromGuidingResidual(lastG3Field, measured, preset);",
+            "port.PromoteMeasurement(measured, preset);",
             "var residual = PointDistance(measured.Measurement.TargetCentroid",
             "LastAcceptedFrameSha256 = measured.Measurement.FrameSha256,");
 
@@ -189,7 +201,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var chargedLedger = ledger with",
             "LastAcceptedFrameSha256 = stage.SourceFrameSha256,",
             "CreatePhd2PendingState(",
-            "exact = await phd2.SetExactLockPositionAsync(",
+            "exact = await port.SetExactLockPositionAsync(",
             "var measured = measurements[^1];");
     }
 
@@ -206,7 +218,8 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "if (plan.IsComplete || supervisedSlitPrecisionWarning)",
             "Phd2LockShiftPendingPhase.SettledBudgetLedger",
             "LastAcceptedFrameSha256 = session.LastMeasurement.Measurement.FrameSha256,",
-            "Phd2LockShiftPendingStore.WriteAtomicAsync(pendingPath, settled");
+            "port.PersistPendingAsync(request.PendingPath, settled");
+        Assert.Contains("Phd2LockShiftPendingStore.WriteAtomicAsync(path, pending, t)", WorkflowSource.Ports);
     }
 
     [Fact]
@@ -256,7 +269,13 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
         Assert.True(startIndex >= 0, $"Start marker not found: {start}");
         var endIndex = source.IndexOf(end, startIndex + start.Length, StringComparison.Ordinal);
         Assert.True(endIndex > startIndex, $"End marker not found after start: {end}");
-        return source[startIndex..endIndex];
+        var body = source[startIndex..endIndex];
+        if (start.Contains("PlaceTargetOnSlitWithPhd2Async", StringComparison.Ordinal))
+        {
+            Assert.Contains("phd2Convergence.ConvergeAsync(", body);
+            return body + WorkflowSource.Convergence;
+        }
+        return body;
     }
 
     private static string FindRepositoryRoot()

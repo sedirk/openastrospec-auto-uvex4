@@ -141,7 +141,7 @@ Random unbounded mount nudging is not an automated strategy.
 
 1. PHD2 remains the only G3 owner.
 2. A full slit-field frame is retained and solved. At an unchanged pointing, the most recent fresh QHY/PL3 WCS is the preferred G3 solver hint and may first repair a grossly incorrect mount coordinate under the one-Sync rule above. A formal, physically plausible fresh G3 WCS remains the authority for a large acquisition correction through the N.I.N.A. telescope mediator; the commanded endpoint is not optical success evidence.
-3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Only the fresh post-move G3 WCS may prove response and arrival. If direct G3 solving fails, the coordinator uses a bounded overlapping neighbouring-field search; an applicable QHY-to-G3 transfer remains optional. It must retain every attempt and confidence score.
+3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Fresh post-move G3 WCS normally proves response and arrival. Under owner-requested [ADR-0030](../adr/0030-exploratory-neighbour-field-continuity.md), a final approach from a formally solved neighbouring field may instead use its measured-arrival prediction followed by fresh, consistent short-frame target measurements before PHD2 fine placement; a new whole-target-field solve is not mandatory. A candidate need not already be within the old 20-pixel coarse circle to enter that confirmation: use the configured recognition area and remaining fine-motion envelope. Predictions remain labelled and are not measured slit arrival. If direct G3 solving fails, use the bounded overlapping neighbouring-field search and retain every attempt and confidence score. A same-run, geometry/pier-compatible QHY/G3 pair may adjust a fresh QHY-derived G3 search hint, without becoming an Active global transfer or granting movement authority.
 4. The expected target is identified using catalogue coordinates, WCS, temporal continuity, and stellar morphology. Brightness alone is insufficient.
 5. The target centroid is moved to the calibrated slit locus using a selected,
    versioned fine-motion authority. Under ADR-0020 the preferred authority is
@@ -151,10 +151,18 @@ Random unbounded mount nudging is not an automated strategy.
 6. Every fine-motion stage requires operation-bound settle evidence and a fresh
    immutable G3 residual before another stage or science exposure. A lock-position
    readback alone does not prove that the star reached the slit.
-7. The software continuously displays the target, slit, predicted location, centroid, residual and confidence. A passing quality gate advances automatically; a failed or indeterminate gate enters `PausedNeedsAttention` without starting another motion or exposure.
+7. The software continuously displays the target, slit, predicted location, centroid, residual and confidence. Prefer warning and bounded alternative measurement for observational-quality uncertainty (ADR-0030). A failed target stops its own next action; after checked stop and terminal reconciliation, the native night applies the saved skip-target policy, including explicitly verified-return coarse-acquisition budget/nonconvergence failures. An observational-quality failure does not by itself terminate the whole night. Unknown physical state, owner changes, cancellation and explicit environmental danger retain their independent handling.
 8. A successful acquisition saves an immutable evidence frame with WCS, overlay coordinates, target/slit residual, setup ID and timestamp.
 
 ### 5.3 Guiding
+
+Owner-approved [ADR-0031](../adr/0031-independent-science-quality-and-target-outcomes.md)
+supersedes the supervision-mode restriction of the quality exception below.
+The explicitly saved warning-probe choice works with the full equipment safety
+chain as well as supervised operation. It never changes weather/roof, ownership,
+physical stop or movement authority. Original measured probe eligibility and ATR
+quality checks remain; warning-authorized spectra are not precise-placement or
+unattended scientific-quality proof. Both frontends use the same locked policy.
 
 1. Exclude the slit and a configurable guard region from ordinary guide-star candidates.
 2. Reject saturated, blended, edge-adjacent, elongated, unstable, or low-SNR stars.
@@ -213,6 +221,14 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 
 ## 7. Required sequence model
 
+Under owner-requested [ADR-0025](../adr/0025-reusable-night-clock-deadlines.md),
+reusable native sequences may save a local clock-only cutoff. At night-container
+entry it is resolved once against the PC time zone and the noon-to-noon observing
+date, then locked as an absolute UTC deadline and journaled. An elapsed cutoff
+does not roll forward during retry, recovery, target changes or standby. Native
+start-time waiting remains N.I.N.A.-owned; legacy offset-bearing deadlines remain
+absolute. This does not change dawn, unsafe, device ownership or checked closeout.
+
 Under [ADR-0019](../adr/0019-native-spectroscopy-night-sequences.md), the explicit
 native spectroscopy night container may sequence multiple canonical target runs.
 Inside that scope only, normal target finalization reconciles acquisition/guiding
@@ -222,6 +238,31 @@ records each target outcome, and performs checked final closure once. Saved targ
 exposure/count settings do not mutate the Profile. Ordinary cancellation still
 authorizes no mechanical closeout; explicit end-night and commissioned unsafe
 shutdown are separate operations. Weak supervision does not gain roof authority.
+
+Under owner-requested [ADR-0026](../adr/0026-protected-standby-after-target-failure.md),
+an optional terminal closeout instruction separates the native night's ordinary
+closure choice from standalone-run preferences. It delegates checked mechanical
+closeout exclusively to the reserved night owner; emergency/deadline/dawn closure
+cannot be disabled by ordinary closure preferences. The instruction supersedes
+the older keep-open field only when explicitly present.
+The explicit native keep-open option also permits protected standby after a
+blocking target failure when acquisition/motion are independently confirmed idle.
+It retains the night reservation, safety monitoring, original deadline and all
+unresolved motion records; it neither resumes nor skips the blocked target.
+Explicit end-night, cutoff, dawn, unsafe or lost safety-monitor/binding proof still
+invokes checked closure. Ordinary cancellation does not authorize mechanical
+closeout, and uncertain physical stop cannot enter standby.
+
+Under owner-requested [ADR-0027](../adr/0027-terminal-target-guide-state-retirement.md),
+a completed/failed/cancelled logical target may retire its G3/PHD2 recovery
+discovery handles after its stack and manifest join and its original device
+owners independently confirm stopped acquisition and motion under the exclusive
+run lease. The byte-identical original envelopes and budgets remain archived;
+this is explicit abandonment, not verified return or scientific acceptance.
+The next target uses fresh acquisition, not old pixel vectors. Same-target
+pause/resume/retry and meridian segments retain their original budgets and debt.
+Unknown stop, identity, nonterminal old runs and other mechanical/flip obligations
+remain blocking. Roof/AIWeather authority is unchanged.
 
 Under [ADR-0021](../adr/0021-station-attested-noninterfering-roof.md), only a
 station with explicit hash-bound owner confirmation of clearance at **all mount
@@ -262,6 +303,14 @@ one job implementation. Unreviewed arbitrary templates/scripts are not implicitl
 authorized by enabling the receiver.
 
 ## 8. Failure and recovery rules
+
+ADR-0031 makes target-local optical/quality exhaustion explicit at the producer,
+retaining its code through recovery wrappers. Native skip and notifications share
+that classification, but still require the saved policy, joined terminal run,
+independent stopped/retired boundary and no safety/cancel/end-night override.
+Unknown failures are not inferred to be quality failures. Rolling optical checks
+append exactly one newly captured sample to an already complete same-session
+window and validate the full window; full captures retain at least three frames.
 
 **Maintenance authorization (2026-09-14, ADR-0017):** an owner-reported observation
 or focus blocker authorizes the assisting maintainer to fix, verify, install and
@@ -385,6 +434,19 @@ Raw acquisition files are immutable. Repairs or calibration produce new files wi
 - Retain persistent pause/resume/cancel/take-over controls and a simulator/shadow fallback.
 
 ## 12. Acceptance criteria for the eventual system
+
+ADR-0029 supersedes the extra native settle gate after locally verified exact
+lock mutation: both operating modes use three fresh same-session measured frames
+within the original deadline. Native results remain unchanged; actual target/slit
+acceptance, output, ownership and movement limits remain mandatory. Return debt
+needs measured physical arrival or truthful checked-stop archival, never lock
+coordinates alone. Initial guide/calibration acquisition is unchanged.
+
+ADR-0028 supersedes optical guide/lock precision gating: a complete valid
+same-frame measured window uses one 3-pixel warning, not a 2/2.5/3 rejection
+staircase. The warning alone cannot block placement or qualified unattended
+operation. Native command completion, measured target/slit acceptance, fresh
+identity, guide output and all motion/return budgets remain independent gates.
 
 - No test or real run opens the same physical camera from two processes.
 - PHD2 never becomes the QHY acquisition/photometry owner.

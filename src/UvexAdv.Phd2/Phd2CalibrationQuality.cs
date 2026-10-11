@@ -118,7 +118,8 @@ public sealed record Phd2CalibrationSettleEvidence(
     int FreshGuidingSampleCount = 0,
     bool ReadOnlyPostLockWindow = false,
     bool ExactLockReadbackVerified = false,
-    DateTimeOffset? FreshGuidingWindowCompletedUtc = null);
+    DateTimeOffset? FreshGuidingWindowCompletedUtc = null,
+    bool MeasuredPostLockContinuation = false);
 
 /// <summary>
 /// A fresh, immutable target/slit measurement taken after the last calibration,
@@ -134,7 +135,8 @@ public sealed record Phd2CalibrationResidualEvidence(
     bool TopologyMatched,
     bool NoUnvalidatedCalibrationOrLockShiftAfterMeasurement,
     DateTimeOffset EvaluatedUtc,
-    bool IsSupervisedGuideLockResidual = false);
+    bool IsSupervisedGuideLockResidual = false,
+    bool IsAdvisoryMeasuredGuideLockResidual = false);
 
 /// <summary>
 /// One selectable calibration candidate and all evidence used to grade it.
@@ -299,7 +301,7 @@ public static partial class Phd2CalibrationQualityEvaluator
             candidate.FreshResidual is not null;
         var lockShiftAuthority = grade != Phd2CalibrationQualityGrade.Rejected && operationalEvidenceComplete;
         var usableSupervised = lockShiftAuthority;
-        var guideTrackingWarning = candidate.FreshResidual is { IsSupervisedGuideLockResidual: true } guideResidual &&
+        var guideTrackingWarning = candidate.FreshResidual is { IsSupervisedGuideLockResidual: true, IsAdvisoryMeasuredGuideLockResidual: false } guideResidual &&
             guideResidual.ResidualPixels > guideResidual.MaximumResidualPixels;
         var unattended = grade is Phd2CalibrationQualityGrade.Excellent or Phd2CalibrationQualityGrade.Qualified &&
             usableSupervised &&
@@ -553,8 +555,12 @@ public static partial class Phd2CalibrationQualityEvaluator
         }
         if (freshGuidingFallback)
         {
-            Cap(ref grade, Phd2CalibrationQualityGrade.DegradedSupervised);
-            reasons.Add(settle.ReadOnlyPostLockWindow
+            var measuredContinuation = settle.MeasuredPostLockContinuation && settle.ReadOnlyPostLockWindow &&
+                settle.ExactLockReadbackVerified && operationBound;
+            Cap(ref grade, measuredContinuation ? Phd2CalibrationQualityGrade.Qualified : Phd2CalibrationQualityGrade.DegradedSupervised);
+            reasons.Add(measuredContinuation
+                ? "ADR-0029: three fresh measured post-lock frames replace the extra native settle gate; original native result retained, target/slit acceptance remains independent"
+                : settle.ReadOnlyPostLockWindow
                 ? $"No new native guide/settle was requested after verified exact lock; {settle.FreshGuidingSampleCount} fresh same-epoch optical frames provide supervised-only continuation evidence"
                 : $"PHD2 did not enter its configured settle circle in wind; {settle.FreshGuidingSampleCount} fresh same-epoch guiding frames replaced settle as supervised-only operational evidence");
             // These fresh accepted frames supersede the old failed settle's
@@ -615,15 +621,15 @@ public static partial class Phd2CalibrationQualityEvaluator
         }
         else if (residual.ResidualPixels > residual.MaximumResidualPixels)
         {
-            if (residual.IsSupervisedGuideLockResidual)
-                reasons.Add($"guide/lock tracking residual {residual.ResidualPixels:F2}px exceeds the {residual.MaximumResidualPixels:F2}px advisory threshold; supervised placement uses the measured same-frame guide position, not the requested lock position; target/slit acceptance is evaluated separately");
+            if (residual.IsSupervisedGuideLockResidual || residual.IsAdvisoryMeasuredGuideLockResidual)
+                reasons.Add($"guide/lock tracking residual {residual.ResidualPixels:F2}px exceeds the {residual.MaximumResidualPixels:F2}px advisory threshold; placement uses the measured same-frame guide position, not the requested lock position; target/slit acceptance is evaluated separately");
             else
                 failures.Add($"fresh target/slit residual {residual.ResidualPixels:F2}px exceeds {residual.MaximumResidualPixels:F2}px");
         }
         else
         {
             var fraction = residual.ResidualPixels / residual.MaximumResidualPixels;
-            if (fraction > 0.8)
+            if (fraction > 0.8 && !residual.IsAdvisoryMeasuredGuideLockResidual)
             {
                 Cap(ref grade, Phd2CalibrationQualityGrade.Qualified);
                 reasons.Add($"fresh target/slit residual {residual.ResidualPixels:F2}px is close to the {residual.MaximumResidualPixels:F2}px limit");

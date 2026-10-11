@@ -1,24 +1,18 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using UvexAdv.Phd2;
+using System.Text.Json.Serialization;
 
-namespace UvexAdv.Nina.Plugin;
-
-internal enum RealSlitPlacementAuthority
-{
-    IndependentMountTransform = 0,
-    Phd2CalibrationLockShift = 1,
-    AutoPreferPhd2ThenIndependent = 2,
-}
+namespace UvexAdv.Phd2;
 
 /// <summary>
 /// Versioned, hash-bound production commissioning values for the PHD2
 /// calibration-guided slit-placement path.  Nothing in this record is inferred
 /// from a current two-telescope boresight offset.
 /// </summary>
-internal sealed record Phd2SlitPlacementCommissioningPreset(
+public sealed record Phd2SlitPlacementCommissioning(
     string InstallationEpochId,
     string LockedTopologyFingerprintSha256,
+    [property: JsonConverter(typeof(JsonNumberEnumConverter<Phd2ImageCoordinateDomain>))]
     Phd2ImageCoordinateDomain CoordinateDomain,
     int SensorWidthPixels,
     int SensorHeightPixels,
@@ -27,8 +21,10 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
     int RoiWidth,
     int RoiHeight,
     double SensorRotationDegrees,
+    [property: JsonConverter(typeof(JsonNumberEnumConverter<Phd2SensorRotationAuthority>))]
     Phd2SensorRotationAuthority RotationAuthority,
     string PierSide,
+    [property: JsonConverter(typeof(JsonNumberEnumConverter<Phd2SlitGuideMode>))]
     Phd2SlitGuideMode GuideMode,
     int ExpectedGuidingExposureMilliseconds,
     double MaximumStagePixels,
@@ -118,7 +114,7 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
         NonNegative(issues, MinimumOffSlitGuideDistancePixels, nameof(MinimumOffSlitGuideDistancePixels));
         NonNegative(issues, MinimumOffSlitGuideTargetSeparationPixels, nameof(MinimumOffSlitGuideTargetSeparationPixels));
         NonNegative(issues, MaximumGuideLockResidualPixels, nameof(MaximumGuideLockResidualPixels));
-        if (!Phd2PlacementGuideWindowPolicy.IsValidWarningCeiling(MaximumGuideLockResidualPixels, MaximumGuideLockWarningResidualPixels))
+        if (!IsValidWarningCeiling(MaximumGuideLockResidualPixels, MaximumGuideLockWarningResidualPixels))
             issues.Add("PHD2 guide warning ceiling must be disabled (0) or between the preferred tolerance and min(1.5 times preferred, 3 pixels).");
         NonNegative(issues, MaximumDegradedDirectTargetGuideLockResidualPixels, nameof(MaximumDegradedDirectTargetGuideLockResidualPixels));
         NonNegative(issues, MaximumDirectTargetCentroidSeparationPixels, nameof(MaximumDirectTargetCentroidSeparationPixels));
@@ -169,14 +165,17 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
 
     // This optical guide-star quality ceiling does not widen the slit, exact
     // lock readback, motion/return limits, or any identity/safety authority.
+    [JsonIgnore]
     public double EffectiveGuideLockResidualPixels => MaximumGuideLockWarningResidualPixels > 0
         ? MaximumGuideLockWarningResidualPixels : MaximumGuideLockResidualPixels;
 
     // The recognition/reacquisition window is not a promise that its entire
     // radius can be traversed while reserving an exact-lock return.
+    [JsonIgnore]
     public double EffectiveAcquisitionResidualPixels =>
         Math.Max(MaximumAcquisitionResidualPixels, MaximumCumulativePixels);
 
+    [JsonIgnore]
     public double CoarseHandoffResidualPixels => Math.Min(MaximumAcquisitionResidualPixels,
         Phd2CoarseHandoffPolicy.MaximumInitialResidual(BuildMotionLimits(),
             CalibrationQualityPolicy.DegradedMaximumLockShiftScale, MaximumResidualGrowthPixels));
@@ -200,6 +199,40 @@ internal sealed record Phd2SlitPlacementCommissioningPreset(
             ExpectedGuidingExposureMilliseconds,
         _ => 0,
     };
+
+    public string ComputeTopologyFingerprintSha256(
+        Phd2ProfileBindingSnapshot profileEvidence,
+        string cameraStableId,
+        int binning)
+    {
+        ArgumentNullException.ThrowIfNull(profileEvidence);
+        if (!Enum.IsDefined(CoordinateDomain) ||
+            !Enum.IsDefined(RotationAuthority))
+        {
+            throw new InvalidDataException("PHD2 topology enum values are invalid.");
+        }
+
+        return new Phd2SensorTopology(
+            InstallationEpochId,
+            profileEvidence.ProfileId,
+            profileEvidence.ProfileName,
+            Phd2RuntimeEquipmentConventions.G3CameraName,
+            cameraStableId,
+            Phd2RuntimeEquipmentConventions.OnStepMountName,
+            profileEvidence.Sha256,
+            SensorWidthPixels,
+            SensorHeightPixels,
+            binning,
+            new Phd2Rectangle(RoiX, RoiY, RoiWidth, RoiHeight),
+            CoordinateDomain,
+            SensorRotationDegrees,
+            RotationAuthority,
+            PierSide).ComputeFingerprintSha256();
+    }
+
+    public static bool IsValidWarningCeiling(double preferred, double ceiling) =>
+        double.IsFinite(preferred) && preferred >= 0 && double.IsFinite(ceiling) &&
+        (ceiling == 0 || (preferred > 0 && ceiling >= preferred && ceiling <= Math.Min(3, preferred * 1.5)));
 
     public static string ComputePolicySha256(Phd2CalibrationQualityPolicy policy)
     {

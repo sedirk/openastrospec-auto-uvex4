@@ -110,13 +110,18 @@ public sealed class QhyLiveFocusPolicyTests
         Assert.Null(QhyLiveFocusPolicy.Degradation([GateResult.Fail(code, "still blocks")]));
 
     [Fact]
-    public void ActualRunnerIsolationKeepsJobHandleAndScienceCounters()
+    public async Task ActualRunnerIsolationKeepsJobHandleAndScienceCounters()
     {
         var runner = (RealObservationStageRunner)RuntimeHelpers.GetUninitializedObject(typeof(RealObservationStageRunner));
         Set("qhyAvailableForRun", true);
         Set("photometryJobId", (Guid?)JobId);
-        Set("savedAtrFrames", 2);
-        Set("attemptedAtrFrames", 3);
+        var f = new AtrWorkflowFixture();
+        await f.Science.SelectExposureAsync(f.Context, default);
+        var captures = 0;
+        f.Port.NextMetrics = m => m with { GuidingStable = ++captures == 1 };
+        await f.Science.RunAsync(f.Context, default);
+        Set("atrProbe", f.Probe);
+        Set("atrScience", f.Science);
         Set("currentQhyFocusMetric", QhyLiveFocusPolicy.FromFrame(Frame(Now.AddMinutes(-37)), "qhy"));
         typeof(RealObservationStageRunner).GetMethod("DisableQhyForRun", BindingFlags.NonPublic | BindingFlags.Instance)!
             .Invoke(runner, ["expired focus metric"]);
@@ -124,8 +129,8 @@ public sealed class QhyLiveFocusPolicyTests
         Assert.Null(Get("currentQhyFocusMetric"));
         Assert.Null(Get("lastQhySolve"));
         Assert.Equal(JobId, (Guid)Get("photometryJobId")!);
-        Assert.Equal(2, Get("savedAtrFrames"));
-        Assert.Equal(3, Get("attemptedAtrFrames"));
+        Assert.Equal(2, f.Science.AcceptedFrames);
+        Assert.Equal(3, f.Science.AttemptedFrames);
         void Set(string name, object? value) => typeof(RealObservationStageRunner).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(runner, value);
         object? Get(string name) => typeof(RealObservationStageRunner).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(runner);
     }
@@ -140,7 +145,7 @@ public sealed class QhyLiveFocusPolicyTests
         var hardReturn = source.IndexOf("if (incompatibleSetup is not null) return incompatibleSetup;", isolate, StringComparison.Ordinal);
         Assert.True(refresh >= 0 && build > refresh && isolate > build && hardReturn > isolate);
         Assert.Contains("!qhy.HasOwnerSession(jobId)", source);
-        Assert.Contains("ValidateAtrScienceMetrics(captured.Metrics)", source);
+        Assert.Contains("ValidateAtrScienceMetrics(captured.Metrics)", WorkflowSource.Science);
     }
 
     private static QhyFrameRecord Frame(DateTimeOffset ended) => new(Guid.NewGuid(), 1, "PHOTOMETRY-R", "fixture.fits", "",

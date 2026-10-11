@@ -46,12 +46,14 @@ internal sealed class ObservationAttentionNotificationTracker
 {
     private string? activeFingerprint;
     private readonly HashSet<string> completedRuns = new(StringComparer.Ordinal);
+    private readonly HashSet<string> nativeBoundaries = new(StringComparer.Ordinal);
 
     public ObservationAttentionNotificationEvaluation Evaluate(
         ObservationSnapshot snapshot,
         GateResult? currentGate,
         CultureInfo? culture = null,
-        ObservationCompletionNotificationContext? completion = null)
+        ObservationCompletionNotificationContext? completion = null,
+        string? nativeTargetRunId = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -121,11 +123,21 @@ internal sealed class ObservationAttentionNotificationTracker
         }
 
         activeFingerprint = fingerprint;
+        var nativeTarget = !string.IsNullOrWhiteSpace(nativeTargetRunId) &&
+            nativeTargetRunId == snapshot.ObservationRunId;
+        // A quality gate is not the night outcome. Let the native container
+        // confirm stop/cleanup and save its skip-or-stop decision first.
+        if (nativeTarget && snapshot.State == ObservationRunState.Faulted &&
+            (gate is not null ? NativeSequencePlan.IsSkippableQualityFailure(gate) :
+                NativeSequencePlan.IsSkippableQualityFailure(code)))
+            return new ObservationAttentionNotificationEvaluation(null, false);
         var severity = snapshot.State == ObservationRunState.Faulted
             ? ObservationAttentionSeverity.Error
             : ObservationAttentionSeverity.Warning;
         var title = severity == ObservationAttentionSeverity.Error
-            ? ObservationUiPresentation.Text("OpenAstroSpec 自动观测发生故障", "OpenAstroSpec automation fault", uiCulture)
+            ? nativeTarget
+                ? ObservationUiPresentation.Text("OpenAstroSpec 本目标观测失败", "OpenAstroSpec target observation failed", uiCulture)
+                : ObservationUiPresentation.Text("OpenAstroSpec 自动观测发生故障", "OpenAstroSpec automation fault", uiCulture)
             : ObservationUiPresentation.Text("OpenAstroSpec 自动观测需要处理", "OpenAstroSpec automation needs attention", uiCulture);
         var diagnosticGate = gate ?? GateResult.Unknown(code, reason);
         var presentation = ObservationUiPresentation.Present(
@@ -139,6 +151,25 @@ internal sealed class ObservationAttentionNotificationTracker
         return new ObservationAttentionNotificationEvaluation(
             new ObservationAttentionNotification(severity, title, body, fingerprint),
             false);
+    }
+
+    public ObservationAttentionNotification? NativeBoundary(string runId, string target, string code,
+        bool skipped, string? boundaryFailure, CultureInfo? culture = null)
+    {
+        if (string.IsNullOrWhiteSpace(runId) || !nativeBoundaries.Add(runId)) return null;
+        var ui = culture ?? CultureInfo.CurrentUICulture;
+        return new(skipped ? ObservationAttentionSeverity.Warning : ObservationAttentionSeverity.Error,
+            skipped
+                ? ObservationUiPresentation.Text("OpenAstroSpec 本目标已跳过", "OpenAstroSpec target skipped", ui)
+                : ObservationUiPresentation.Text("OpenAstroSpec 整夜序列停止后续目标", "OpenAstroSpec night stopped further targets", ui),
+            ObservationUiPresentation.Text(
+                $"目标：{target}\n代码：{code}\n" + (skipped
+                    ? "已确认采集、导星和设备运动停止，并保存跳过记录。整夜序列未因此终止，将按剩余时间和安全条件继续后续目标。"
+                    : $"未满足跳过条件，后续目标已停止。请查看整夜状态与诊断；屋顶状态由独立收口策略决定。\n边界：{boundaryFailure ?? code}"),
+                $"Target: {target}\nCode: {code}\n" + (skipped
+                    ? "Acquisition, guiding and motion are confirmed stopped; the skip is saved. This did not terminate the night. Following targets remain subject to time and safety checks."
+                    : $"Skip conditions were not met; further targets stopped. See night status and diagnostics. Roof state follows the separate closeout policy.\nBoundary: {boundaryFailure ?? code}"), ui),
+            $"{runId}|NativeBoundary|{skipped}");
     }
 
     private static string ResolveCoordinatorCode(ObservationSnapshot snapshot)

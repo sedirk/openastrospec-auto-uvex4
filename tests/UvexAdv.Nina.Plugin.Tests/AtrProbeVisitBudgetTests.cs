@@ -74,15 +74,12 @@ public sealed class AtrProbeVisitBudgetTests
     [Fact]
     public void RunnerStillPrunesBrightTiersAndRequiresFreshCaptureBeforeAcceptance()
     {
-        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        var start = source.IndexOf("private async Task<StageResult> SelectAtrExposureAsync(", StringComparison.Ordinal);
-        var end = source.IndexOf("private static bool IsSafeSignalLimitedAtrProbe(", start, StringComparison.Ordinal);
-        var method = source[start..end];
+        var method = WorkflowSource.Probe;
         Assert.Contains("var visitBudget = new AtrProbeVisitBudget(availableTiers)", method);
         Assert.Contains("visitBudget.AttemptCount < visitBudget.MaximumAttempts", method);
         Assert.Contains("availableTiers.RemoveAll(value => value >= probeExposure);\n                followsSaturationBackoff = true;", method.Replace("\r\n", "\n"));
-        Assert.True(method.IndexOf("TryBeginProbe", StringComparison.Ordinal) < method.IndexOf("await CaptureAtrImageAsync", StringComparison.Ordinal));
-        Assert.True(method.IndexOf("await CaptureAtrImageAsync", StringComparison.Ordinal) < method.IndexOf("selectedTierValidatedByThisFrame = decision.Accepted", StringComparison.Ordinal));
+        Assert.True(method.IndexOf("TryBeginProbe", StringComparison.Ordinal) < method.IndexOf("await port.CaptureAtrImageAsync", StringComparison.Ordinal));
+        Assert.True(method.IndexOf("await port.CaptureAtrImageAsync", StringComparison.Ordinal) < method.IndexOf("selectedTierValidatedByThisFrame = decision.Accepted", StringComparison.Ordinal));
         Assert.Contains("Math.Abs(decision.SelectedExposureSeconds - probeExposure) < 1e-9", method);
     }
 

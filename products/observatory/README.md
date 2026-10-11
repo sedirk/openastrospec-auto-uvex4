@@ -6,7 +6,8 @@ must have exactly one owner:
 
 - the N.I.N.A. plugin owns the operator workflow and requests ATR585M exposures
   through N.I.N.A.;
-- `UvexAdv.Service` exclusively owns UVEX4 COM5;
+- `UvexAdv.Service` exclusively owns the explicitly verified UVEX4 serial binding
+  (ADR-0016); normal connection never scans ports;
 - under ADR-0014, a separate photometry N.I.N.A. exclusively owns the photometry
   camera, filter wheel and focuser; the legacy `UvexAdv.Qhy.Service` must be
   released at an explicitly authorized idle boundary before migration;
@@ -14,11 +15,18 @@ must have exactly one owner:
 - `UvexAdv.Phd2.Watchdog` provides the independent guiding safety lease;
 - `UvexAdv.Admin` is the standalone UVEX manager.
 
-The recent sky tests still used the legacy QHY service, not the native photometry
+The recorded sky tests still used the legacy QHY service, not the native photometry
 worker. Never run both owners against the same physical camera. See the
 [dual-instance implementation](../../docs/dual-nina-implementation.md) and
-[latest software/sky closeout](../../docs/closeout-2026-09-13.md) for deployment
+[latest software/sky closeout](../../docs/closeout-2026-10-11.md) for deployment
 and acceptance boundaries.
+
+Installed **0.4.0.277** keeps standalone and native-sequence observations on one
+production route. Acquisition/return, PHD2 slit convergence, ATR probing and science
+accounting now own distinct decisions/state through finite ports to the existing
+device owners. See the [workflow boundaries and remaining debt](../../docs/reports/2026-10-11-observation-workflow-boundaries.md).
+Software/historical replay checks pass; the three live .277 panels still need visual
+verification, and no new-version real-sky success is claimed.
 
 ## Human entry points
 
@@ -34,6 +42,12 @@ Selecting real mode alone performs no device operation. Physical work begins onl
 after the operator presses the start button and every immutable and live interlock
 passes.
 
+The [native spectroscopy sequence](../../docs/native-spectroscopy-night-sequence.md)
+also provides explicit startup cards for safety monitoring and real mode, independent
+target cards, reusable night-clock windows, and a terminal closeout choice. Saved
+quality-failure skips require a checked stopped boundary. Ordinary keep-open means
+protected standby, not disabled weather/dawn/deadline closure.
+
 The **Observation plan → Acquisition plan (exposure budget)** subtab holds the
 science-frame goal, attempt cap and probe ladder. Save or restore drafts before
 starting; plan editing is locked during active/paused runs. See the
@@ -44,8 +58,9 @@ real-device control authority.
 **Automatic preparation → Main-mirror SEP focus** adds a separate, bounded focus
 operation for irregular reflection-guide star shapes. It reuses N.I.N.A. focuser
 motion/backlash and curve fitting while PHD2 remains the guide-camera owner.
-The visible buttons and backend bridge share the same commands. This .191 entry
-is built/offline-tested, not yet installed or sky-accepted; see the
+The visible buttons and backend bridge share the same commands. This entry is included
+in the current plugin; a repeatable improved main focus still needs separate sky
+acceptance. Do not infer autofocus success from a software installation; see the
 [focus setup and acceptance boundaries](../../docs/sep-main-mirror-focus-commissioning.md).
 
 ## Source boundary

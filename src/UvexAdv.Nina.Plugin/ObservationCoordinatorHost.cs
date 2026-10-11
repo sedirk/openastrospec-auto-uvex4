@@ -65,6 +65,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private bool persistenceFailureLatched;
     private bool disposed;
     private object? nightOwner;
+    private string? nativeTargetRunId;
+    private readonly string nightOwnershipPath;
 
     internal async Task<IDisposable> ReserveNightAsync(object owner, bool real, CancellationToken token)
     {
@@ -74,9 +76,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         {
             if (real)
             {
-                var ownership = RealObservationRunOwnershipLease.TryAcquire(Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "UVEX-ADV", "observations", "control", "real-observation-owner.lock"));
+                var ownership = RealObservationRunOwnershipLease.TryAcquire(nightOwnershipPath);
                 if (!ownership.Acquired) throw new InvalidOperationException(ownership.Failure);
                 realRunOwnershipLease = ownership.Lease;
             }
@@ -105,9 +105,12 @@ public sealed class ObservationCoordinatorHost : IDisposable
     {
     }
 
-    internal ObservationCoordinatorHost(IObservationAttentionNotifier attentionNotifier)
+    internal ObservationCoordinatorHost(IObservationAttentionNotifier attentionNotifier, string? nightOwnershipPath = null)
     {
         this.attentionNotifier = attentionNotifier ?? throw new ArgumentNullException(nameof(attentionNotifier));
+        this.nightOwnershipPath = nightOwnershipPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "UVEX-ADV", "observations", "control", "real-observation-owner.lock");
         coordinator.SnapshotChanged += OnCoordinatorSnapshotChanged;
         previews[ObservationPreviewChannel.QhyWideField] = EmptyPreview(
             ObservationPreviewChannel.QhyWideField,
@@ -197,6 +200,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
             manifestPath = null;
             manifestRunId = null;
             persistenceFailureLatched = false;
+            nativeTargetRunId = belongsToNight ? plan.ObservationRunId : null;
         }
         try
         {
@@ -254,6 +258,14 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 if (runPersistence is not null)
                 {
                     await runPersistence.DisposeAsync().ConfigureAwait(false);
+                    // The stage stack and terminal journal have joined, while
+                    // the same exclusive real owner is still held. Never call
+                    // this from Pause/Resume or release the lease beforehand.
+                    if (runner is IObservationTerminalGuideCleanup terminalCleanup)
+                    {
+                        using var terminalTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
+                        await terminalCleanup.CleanupTerminalGuideStateAsync(plan.ObservationRunId, terminalTimeout.Token).ConfigureAwait(false);
+                    }
                 }
             }
             finally
@@ -561,7 +573,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 ? new ObservationCompletionNotificationContext(dashboardPlan.ObservationRunId,
                     dashboardPlan.Target.Name, currentCounters.AtrAcceptedFrames, dashboardRunAdapter)
                 : null;
-            notificationEvaluation = attentionNotificationTracker.Evaluate(snapshot, currentGate, completion: completion);
+            notificationEvaluation = attentionNotificationTracker.Evaluate(snapshot, currentGate,
+                completion: completion, nativeTargetRunId: nativeTargetRunId);
             dashboard = CreateDashboardLocked(snapshot);
             handler = DashboardChanged;
         }
@@ -574,6 +587,18 @@ public sealed class ObservationCoordinatorHost : IDisposable
         {
             attentionNotifier.Notify(notification);
         }
+    }
+
+    internal void NotifyNativeTargetBoundary(object owner, string? runId, string target,
+        string code, bool skipped, string? boundaryFailure)
+    {
+        ObservationAttentionNotification? notification;
+        lock (sync)
+        {
+            if (!ReferenceEquals(nightOwner, owner) || runId is null || runId != nativeTargetRunId) return;
+            notification = attentionNotificationTracker.NativeBoundary(runId, target, code, skipped, boundaryFailure);
+        }
+        if (notification is not null) attentionNotifier.Notify(notification);
     }
 
     private void OnPersistenceFailure(object reservation, Exception exception)
@@ -700,8 +725,10 @@ internal sealed class DashboardStageRunner(
 /// across Pause/Resume and are retried only after coordinator revalidation.
 /// </summary>
 internal sealed class SequencerStageBridge : IObservationStageRunner, IObservationRunProvenanceSource,
-    IRealObservationRunOwnershipSource, IObservationTerminalGatePolicy, IDisposable
+    IRealObservationRunOwnershipSource, IObservationTerminalGatePolicy, IObservationTerminalGuideCleanup, IDisposable
 {
+    public Task CleanupTerminalGuideStateAsync(string runId, CancellationToken token) =>
+        inner is IObservationTerminalGuideCleanup cleanup ? cleanup.CleanupTerminalGuideStateAsync(runId, token) : Task.CompletedTask;
     private readonly IObservationStageRunner inner;
     private readonly Channel<StageRequest> requests = Channel.CreateUnbounded<StageRequest>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });

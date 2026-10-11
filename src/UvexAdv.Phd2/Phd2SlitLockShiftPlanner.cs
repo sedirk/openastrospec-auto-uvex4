@@ -481,8 +481,7 @@ public static class Phd2SlitLockShiftPlanner
     {
         var common = ValidateCommon(qualification, ledger, safety, topology, limits, now);
         if (common is not null) return common;
-        var measurementFailure = ValidateMeasurement(guideMode, measurement, ledger, topology, limits, now,
-            qualification.RequiresOperatorSupervision);
+        var measurementFailure = ValidateMeasurement(guideMode, measurement, ledger, topology, limits, now);
         if (measurementFailure is not null) return measurementFailure;
 
         var delta = Subtract(measurement.RecognizedSlitAcquisitionPoint, measurement.TargetCentroid);
@@ -767,8 +766,7 @@ public static class Phd2SlitLockShiftPlanner
         Phd2LockShiftLedger ledger,
         Phd2SensorTopology topology,
         Phd2LockShiftLimits limits,
-        DateTimeOffset now,
-        bool supervisedGuideResidualWarning)
+        DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(measurement);
         if (!Sha256Pattern.IsMatch(measurement.FrameSha256 ?? string.Empty))
@@ -821,11 +819,13 @@ public static class Phd2SlitLockShiftPlanner
             if (Distance(measurement.GuideStar, measurement.TargetCentroid) < limits.MinimumOffSlitGuideTargetSeparationPixels)
                 return Denied("OFF_SLIT_GUIDE_NOT_DISTINCT", "The ordinary guide star is not distinct from the science target.");
             // Drift can keep a measured star off its requested lock. Planning
-            // uses measuredGuide + delta, so this is advisory with supervised,
+            // uses measuredGuide + delta, so this is advisory with validated,
             // same-frame detector positions, never stale projections/setpoints.
             if (guideLockResidual > limits.MaximumGuideLockResidualPixels &&
-                !(supervisedGuideResidualWarning && measurement.GuidePositionMeasuredInFrame &&
-                  measurement.TargetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection))
+                !(measurement.GuidePositionMeasuredInFrame &&
+                  measurement.TargetPositionAuthority is Phd2TargetPositionAuthority.DetectedTargetCentroid or
+                      Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid or
+                      Phd2TargetPositionAuthority.CatalogWcsRegisteredField))
                 return Denied("GUIDE_LOCK_RESIDUAL_HIGH", "The ordinary guide star is not sufficiently settled at the fresh runtime lock position.");
         }
         else if (guideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)

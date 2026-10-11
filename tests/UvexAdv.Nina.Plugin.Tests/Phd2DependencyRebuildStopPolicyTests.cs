@@ -5,6 +5,55 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2DependencyRebuildStopPolicyTests
 {
+    [Theory]
+    [InlineData(Phd2AppState.Guiding, 0)]
+    [InlineData(Phd2AppState.Guiding, 3)]
+    [InlineData(Phd2AppState.LostLock, 3)]
+    public void CompletedCalibrationWithFailedSettleRequiresFreshFieldNotGenericFaultOrArrival(
+        Phd2AppState state, int dropped)
+    {
+        // 2026-10-11 02:54:13: calibration completed, 41 settle frames,
+        // three dropped. This combination used to bypass every typed branch.
+        var result = new Phd2SettleResult(false, "timed-out waiting for guider to settle", 41, dropped,
+            DateTimeOffset.Parse("2026-10-10T18:54:13Z")) { NativeCalibrationOccurred = true };
+        var snapshot = CompletedInitialGuide() with { AppState = state,
+            LastSettle = result with { NativeCalibrationOccurred = false } };
+        Assert.True(Phd2DependencyRebuildStopPolicy.CanReacquireAfterCalibrationSettleFailure(snapshot, 1, result, false));
+        Assert.False(snapshot.HasCurrentSuccessfulSettle);
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanClassifyInitialSettleQualityFailure(snapshot, 1, result, false));
+        Assert.Null(Phd2DependencyRebuildStopPolicy.RecordCompletedInitialGuide(snapshot, 1, result, false));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanReacquireAfterCalibrationSettleFailure(snapshot, 1, result, true));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanReacquireAfterCalibrationSettleFailure(snapshot, 2, result, false));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanReacquireAfterCalibrationSettleFailure(snapshot, 1,
+            result with { NativeCalibrationOccurred = false }, false));
+        foreach (var bad in new[] { snapshot with { PendingSettleOperationId = 2 },
+            snapshot with { LastSettleCommandAccepted = false }, snapshot with { LastSettleOperationId = null },
+            snapshot with { LastSettle = null }, snapshot with { LastSettleGuideEpoch = 120 },
+            snapshot with { AppState = Phd2AppState.Calibrating }, snapshot with { AutomationPaused = true },
+            snapshot with { Phd2Paused = true }, snapshot with { IsConnected = false },
+            snapshot with { GuideOutput = new(1, 3, result.CompletedUtc, result.CompletedUtc, true,
+                new(1, 1, 1, 20, 3, 2, 0, "OnStep", 3, 3, 0, 0)) } })
+            Assert.False(Phd2DependencyRebuildStopPolicy.CanReacquireAfterCalibrationSettleFailure(bad, 1, result, false));
+    }
+
+    [Fact]
+    public void CalibrationSettleFailureReachesExistingCheckedStopAndFreshFieldWithoutMaskingItsResult()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var decision = source.IndexOf("var calibrationNeedsFreshField =", StringComparison.Ordinal);
+        var reject = source.IndexOf("if (!settle.Succeeded && !windSampledSettle && !calibrationNeedsFreshField)", decision, StringComparison.Ordinal);
+        var branch = source.IndexOf("if (settle.NativeCalibrationOccurred)", reject, StringComparison.Ordinal);
+        var stop = source.IndexOf("await StopPhdAndWaitAsync", branch, StringComparison.Ordinal);
+        var idle = source.IndexOf("await WaitForPostCalibrationMountIdleAsync", stop, StringComparison.Ordinal);
+        var acquire = source.IndexOf("var reacquired = await AcquireG3SlitFieldAsync", idle, StringComparison.Ordinal);
+        var recurse = source.IndexOf("postCalibrationReacquisitionDepth + 1", acquire, StringComparison.Ordinal);
+        Assert.True(decision >= 0 && reject > decision && branch > reject && stop > branch && idle > stop && acquire > idle && recurse > acquire);
+        Assert.Contains("return reacquired;", source[acquire..recurse]);
+        Assert.DoesNotContain("POST_CALIBRATION_G3_REACQUISITION_BLOCKED", source[acquire..recurse]);
+        Assert.Contains("nativeSettle = settle", source[branch..stop]);
+        Assert.DoesNotContain("Succeeded = true", source[decision..recurse]);
+    }
+
     [Fact]
     public void DroppedInitialFramesPermitOnlyCorrelatedStopAndStarDetectionNotQualityPass()
     {
@@ -215,7 +264,7 @@ public sealed class Phd2DependencyRebuildStopPolicyTests
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
         var completed = source.IndexOf("var guideProof = phd2.Snapshot;", StringComparison.Ordinal);
         var capture = source.IndexOf("CanRecordCompletedGuideOwner(", completed, StringComparison.Ordinal);
-        var failure = source.IndexOf("if (!settle.Succeeded && !windSampledSettle)", completed, StringComparison.Ordinal);
+        var failure = source.IndexOf("if (!settle.Succeeded && !windSampledSettle && !calibrationNeedsFreshField)", completed, StringComparison.Ordinal);
         Assert.True(completed >= 0 && capture > completed && failure > capture);
     }
 

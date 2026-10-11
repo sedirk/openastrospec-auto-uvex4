@@ -5,6 +5,64 @@ namespace UvexAdv.Phd2.Tests;
 
 public sealed class Phd2ClientTests
 {
+    [Theory]
+    [InlineData("Stopped", false)]
+    [InlineData("Looping", true)]
+    [InlineData("Selected", true)]
+    public async Task PreviewRecoveryProducesRealStopReceiptWithoutCaptureOrGuiding(string initial, bool sendsStop)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            Assert.Equal("get_app_state", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, initial, token);
+            if (sendsStop)
+            {
+                request = await session.ReadRequestAsync(token);
+                Assert.Equal("stop_capture", request.GetProperty("method").GetString());
+                await session.ReplyResultAsync(request, 0, token);
+                request = await session.ReadRequestAsync(token);
+                Assert.Equal("get_app_state", request.GetProperty("method").GetString());
+                await session.ReplyResultAsync(request, "Stopped", token);
+            }
+            // Keep the fake owner connected until assertions/fixture disposal.
+            // Returning here closes the socket and races the legitimate live
+            // connection guard; that is not a successful-preview fixture.
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var result = await client.StopPreviewAndConfirmAsync(client.Snapshot.ConnectionEpoch, CancellationToken.None);
+        Assert.True(result.ConfirmedIdle);
+        Assert.Equal(Phd2AppState.Stopped, result.FinalState);
+        Assert.Equal(sendsStop, result.StopCommandSent);
+        Assert.DoesNotContain("guide", server.ReceivedMethods);
+        Assert.DoesNotContain("loop", server.ReceivedMethods);
+        Assert.DoesNotContain("capture_single_frame", server.ReceivedMethods);
+    }
+
+    [Theory]
+    [InlineData("Guiding", false, false)]
+    [InlineData("Calibrating", false, false)]
+    [InlineData("LostLock", false, false)]
+    [InlineData("Paused", false, false)]
+    [InlineData("Stopped", true, false)]
+    [InlineData("Looping", false, true)]
+    public async Task PreviewRecoveryCannotStopActiveChangedOrPausedOwner(string state, bool wrongEpoch, bool paused)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await session.ReplyResultAsync(await session.ReadRequestAsync(token), state, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        if (paused) client.PauseAutomation();
+        var epoch = client.Snapshot.ConnectionEpoch + (wrongEpoch ? 1 : 0);
+        var ex = await Assert.ThrowsAsync<Phd2Exception>(() => client.StopPreviewAndConfirmAsync(epoch, CancellationToken.None));
+        Assert.Contains("PHD2_PREVIEW_STOP_CONTEXT_CHANGED", ex.Message);
+        Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+    }
     [Fact]
     public void DefaultLoopingFrameTimeoutAllowsCommissionedG3ReadoutJitter()
     {
@@ -186,8 +244,15 @@ public sealed class Phd2ClientTests
         Assert.DoesNotContain("capture_single_frame", server.ReceivedMethods);
     }
 
-    [Fact]
-    public async Task NativeSingleFrameAppliesExposureBinningAndGainWithoutProfileMutation()
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("GuidingStopped", true)]
+    [InlineData("LoopingExposuresStopped", true)]
+    [InlineData("double-stop", false)]
+    [InlineData("StarSelected", false)]
+    [InlineData("ConfigurationChange", false)]
+    [InlineData("StartGuiding", false)]
+    public async Task NativeSingleFrameAppliesExposureBinningAndGainWithoutProfileMutation(string? completionStop, bool preserveEpoch)
     {
         using var directory = new TemporaryDirectory();
         var destination = Path.Combine(directory.Path, "native-single.fit");
@@ -206,6 +271,12 @@ public sealed class Phd2ClientTests
             Assert.Equal(destination, parameters.GetProperty("path").GetString());
             Assert.True(parameters.GetProperty("save").GetBoolean());
             await session.ReplyResultAsync(capture, 0, cancellationToken);
+            if (completionStop is not null)
+            {
+                await session.SendEventAsync(new { Event = completionStop == "double-stop" ? "GuidingStopped" : completionStop }, cancellationToken);
+                if (!preserveEpoch)
+                    await session.SendEventAsync(new { Event = "GuidingStopped" }, cancellationToken);
+            }
             await File.WriteAllBytesAsync(destination, [0x47, 0x33], cancellationToken);
             await session.SendEventAsync(
                 new { Event = "SingleFrameComplete", Success = true, Path = destination },
@@ -219,11 +290,18 @@ public sealed class Phd2ClientTests
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
 
+        long captureEpoch = -1;
+        client.SnapshotChanged += (_, state) =>
+        {
+            if (captureEpoch < 0 && state.AppState == Phd2AppState.Stopped) captureEpoch = state.GuideEpoch;
+        };
+
         var result = await client.CaptureSingleFrameWithParametersAsync(
             new Phd2SingleFrameRequest(10, 1, 0, destination),
             CancellationToken.None);
 
         Assert.False(result.UsedLoopSaveFallback);
+        Assert.Equal(preserveEpoch, captureEpoch == client.Snapshot.GuideEpoch);
         Assert.True(result.RequestedParametersApplied);
         Assert.True(result.GainAndBinningApplied);
         Assert.Equal(10, result.VerifiedExposureMilliseconds);
@@ -802,11 +880,15 @@ public sealed class Phd2ClientTests
     }
 
     [Theory]
-    [InlineData(true, false, false)]
-    [InlineData(true, true, false)]
-    [InlineData(false, true, false)]
-    [InlineData(false, true, true)]
-    public async Task OwnerManagedGuideNeverForcesRecalibrationAndKeepsNativeFailure(bool calibrated, bool nativeCalibration, bool nativeFailure)
+    [InlineData(true, false, false, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, true, false, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(true, false, false, true)]
+    public async Task OwnerManagedGuideNeverForcesRecalibrationAndKeepsNativeFailure(
+        bool calibrated, bool nativeCalibration, bool nativeFailure, bool settleFailure)
     {
         await using var server = new FakePhd2Server(async (session, token) =>
         {
@@ -837,7 +919,9 @@ public sealed class Phd2ClientTests
                         {
                             await session.SendEventAsync(new { Event = "StartGuiding" }, token);
                             await session.SendEventAsync(new { Event = "SettleBegin" }, token);
-                            await session.SendEventAsync(new { Event = "SettleDone", Status = 0, TotalFrames = 5, DroppedFrames = 0 }, token);
+                            await session.SendEventAsync(new { Event = "SettleDone", Status = settleFailure ? 1 : 0,
+                                Error = settleFailure ? "timed-out waiting for guider to settle" : null,
+                                TotalFrames = 41, DroppedFrames = settleFailure ? 3 : 0 }, token);
                         }
                         await Task.Delay(Timeout.InfiniteTimeSpan, token);
                         break;
@@ -864,9 +948,11 @@ public sealed class Phd2ClientTests
         else
         {
             var result = await operation;
-            Assert.True(result.Succeeded);
+            Assert.Equal(!settleFailure, result.Succeeded);
             Assert.Equal(nativeCalibration, result.NativeCalibrationOccurred);
-            Assert.True(client.Snapshot.HasCurrentSuccessfulSettle);
+            Assert.Equal(!settleFailure, client.Snapshot.HasCurrentSuccessfulSettle);
+            Assert.Equal(result with { NativeCalibrationOccurred = false }, client.Snapshot.LastSettle);
+            Assert.Null(client.Snapshot.PendingSettleOperationId);
         }
         Assert.Single(server.ReceivedMethods.Where(method => method == "guide"));
         Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);

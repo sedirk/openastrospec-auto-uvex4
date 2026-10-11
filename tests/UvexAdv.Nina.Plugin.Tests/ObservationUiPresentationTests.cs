@@ -156,6 +156,8 @@ public sealed class ObservationUiPresentationTests
     [InlineData("ATR_SAVED_FRAME_TEMPERATURE_INVALID", "未计入合格帧")]
     [InlineData("PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED", "实际次数、位移、已用时间")]
     [InlineData("PHD2_LOCK_MANIFEST_UNREADABLE", "运行记录无法读取或校验")]
+    [InlineData("PHD2_LOCK_RETURN_SETTLE_FAILED", "锁点坐标已读回不等于星点已到位")]
+    [InlineData("PHD2_LOCK_RETURN_SETTLE_TIME_UNAVAILABLE", "没有足够的稳定复核时间")]
     [InlineData("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", "导星会话或狭缝证据已失效")]
     [InlineData("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED", "同时确认目标身份")]
     [InlineData("PHD2_SCIENCE_IN_PLACE_CHECK_FAILED", "没有因此重建定位")]

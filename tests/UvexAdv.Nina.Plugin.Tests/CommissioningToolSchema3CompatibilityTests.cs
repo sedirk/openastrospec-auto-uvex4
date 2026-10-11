@@ -9,6 +9,29 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class CommissioningToolSchema4CompatibilityTests
 {
     [Fact]
+    public void LegacyWireFingerprintRemainsStable()
+    {
+        var placement = CreatePlacement(CreateProfileEvidence(), Phd2CalibrationQualityPolicy.Default) with
+        {
+            LockedTopologyFingerprintSha256 = new string('A', 64),
+        };
+        var ghost = CreateGhostAssistance();
+        ghost = ghost with
+        {
+            Calibration = (ghost.Calibration! with
+            {
+                CreatedUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                ValidUntilUtc = DateTimeOffset.Parse("2026-01-03T00:00:00Z"),
+            }).WithComputedSha256(),
+        };
+        static string Hash<T>(T value) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            JsonSerializer.SerializeToUtf8Bytes(value, ArtifactIO.CommissioningPresetJsonOptions)));
+        // Captured from the two legacy DTOs before sharing their definitions.
+        Assert.Equal("230AB8BDAE3CEFB12DEA24399ACE77A36BF711F79FD901F7BB6DFC31A90D5E8C", Hash(placement));
+        Assert.Equal("77F8A67A8D8FABFC6BA65775A1DCE9A4780876D5936778DEB97225297F3E1DB6", Hash(ghost));
+    }
+
+    [Fact]
     public void ToolJsonBytesDeserializeWithProductionPresetContractAndValidator()
     {
         var profile = CreateProfileEvidence();
@@ -83,12 +106,12 @@ public sealed class CommissioningToolSchema4CompatibilityTests
             CalibrationQualityPolicySha256 = new string('0', 64),
         };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(toolPlacement, ArtifactIO.JsonOptions);
-        var productionPlacement = JsonSerializer.Deserialize<Phd2SlitPlacementCommissioningPreset>(
+        var productionPlacement = JsonSerializer.Deserialize<Phd2SlitPlacementCommissioning>(
             bytes,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
         var toolIssues = toolPlacement.Validate();
-        var productionIssues = Assert.IsType<Phd2SlitPlacementCommissioningPreset>(productionPlacement).Validate();
+        var productionIssues = Assert.IsType<Phd2SlitPlacementCommissioning>(productionPlacement).Validate();
 
         Assert.Contains(toolIssues, issue => issue.Contains("policy SHA-256", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(toolIssues, productionIssues);
@@ -128,12 +151,12 @@ public sealed class CommissioningToolSchema4CompatibilityTests
     {
         var toolGhost = CreateGhostAssistance() with { MatchPolicySha256 = string.Empty };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(toolGhost, ArtifactIO.CommissioningPresetJsonOptions);
-        var productionGhost = JsonSerializer.Deserialize<GhostAssistanceCommissioningPreset>(
+        var productionGhost = JsonSerializer.Deserialize<GhostAssistanceCommissioning>(
             bytes,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
         var toolIssues = toolGhost.Validate();
-        var productionIssues = Assert.IsType<GhostAssistanceCommissioningPreset>(productionGhost).Validate();
+        var productionIssues = Assert.IsType<GhostAssistanceCommissioning>(productionGhost).Validate();
 
         Assert.Contains(toolIssues, issue => issue.Contains("match-policy SHA-256", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(toolIssues, productionIssues);
@@ -159,8 +182,8 @@ public sealed class CommissioningToolSchema4CompatibilityTests
 
     private static CommissioningPresetContract CreateToolPreset(
         Phd2ProfileBindingSnapshot profile,
-        Phd2SlitPlacementContract placement,
-        GhostAssistanceContract? ghost) => new(
+        Phd2SlitPlacementCommissioning placement,
+        GhostAssistanceCommissioning? ghost) => new(
         CommissioningPresetContract.CurrentSchemaVersion,
         "preset-compatibility-test",
         DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -225,14 +248,14 @@ public sealed class CommissioningToolSchema4CompatibilityTests
             string.Empty).WithComputedSha256();
     }
 
-    private static Phd2SlitPlacementContract CreatePlacement(
+    private static Phd2SlitPlacementCommissioning CreatePlacement(
         Phd2ProfileBindingSnapshot profile,
         Phd2CalibrationQualityPolicy policy)
     {
-        var placement = new Phd2SlitPlacementContract(
+        var placement = new Phd2SlitPlacementCommissioning(
             "installation-epoch-1",
             new string('0', 64),
-            (int)Phd2ImageCoordinateDomain.FullSensorCoordinates,
+            Phd2ImageCoordinateDomain.FullSensorCoordinates,
             1920,
             1080,
             0,
@@ -240,9 +263,9 @@ public sealed class CommissioningToolSchema4CompatibilityTests
             1920,
             1080,
             12.5,
-            (int)Phd2SensorRotationAuthority.QualifiedPhd2Calibration,
+            Phd2SensorRotationAuthority.QualifiedPhd2Calibration,
             "East",
-            (int)Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget,
+            Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget,
             2_000,
             25,
             100,
@@ -282,7 +305,7 @@ public sealed class CommissioningToolSchema4CompatibilityTests
             3,
             2,
             policy,
-            Phd2SlitPlacementContract.ComputePolicySha256(policy),
+            Phd2SlitPlacementCommissioning.ComputePolicySha256(policy),
             2_000,
             250);
         return placement with
@@ -294,7 +317,7 @@ public sealed class CommissioningToolSchema4CompatibilityTests
         };
     }
 
-    private static GhostAssistanceContract CreateGhostAssistance()
+    private static GhostAssistanceCommissioning CreateGhostAssistance()
     {
         var extraction = new GhostSourceExtractionPolicy(
             GhostSourceExtractionPolicy.CurrentSchemaVersion,
@@ -351,15 +374,15 @@ public sealed class CommissioningToolSchema4CompatibilityTests
             2,
             10,
             5);
-        return new GhostAssistanceContract(
-            GhostAssistanceContract.CurrentSchemaVersion,
+        return new GhostAssistanceCommissioning(
+            GhostAssistanceCommissioning.CurrentSchemaVersion,
             "ghost-binding-1",
             calibration,
             match,
-            GhostAssistanceContract.ComputeContentSha256(match),
+            GhostAssistanceCommissioning.ComputeContentSha256(match),
             extraction,
             extractionSha,
-            new GhostRuntimeFingerprintContract(
+            new GhostRuntimeFingerprint(
                 calibration.InstallationEpochId,
                 calibration.OpticalTopologySha256,
                 calibration.OrientationFingerprintSha256,

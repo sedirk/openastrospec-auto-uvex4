@@ -114,6 +114,9 @@ public sealed class Phd2GuidingFrameLostException : Phd2Exception
 
     public Phd2StateSnapshot Snapshot { get; }
     public Phd2GuideStep? LostFrame { get; }
+    // Present only for the locally scoped, read-only pre-guide SNR sampler.
+    // Lets its caller distinguish an optional candidate trial from guide loss.
+    public Phd2StateSnapshot? SelectedStarSnrBaseline { get; init; }
 }
 
 /// <summary>

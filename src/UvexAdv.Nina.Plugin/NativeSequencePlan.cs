@@ -52,17 +52,34 @@ internal sealed record NativeSequencePlan(
         return errors;
     }
 
+    // New operations declare their scope. The code list remains for legacy
+    // producers and old recorded runs, not as the sole next-target contract.
+    internal static bool IsSkippableQualityFailure(GateResult? gate) =>
+        gate is { Disposition: not GateDisposition.Passed } &&
+        (gate.FailureScope == GateFailureScope.TargetQuality || IsSkippableQualityFailure(gate.Code));
+
     // An explicit allow-list, never an exception-text or 'not safety' heuristic.
     // Post-WCS image confirmation failures reject this target, not the whole
-    // night. The caller must still independently prove idle and settled motion.
+    // night. Confirmed coarse-return exhaustion/non-convergence is likewise a
+    // target outcome, not a night failure. The caller must still independently
+    // prove idle and settled motion; a RETURNED suffix alone grants nothing.
     internal static bool IsSkippableQualityFailure(string? code) => code is
         "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" or "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" or
+        // No search command fits, or none was sent before an attested return.
+        // Independent target-boundary idle/ledger retirement is still required.
+        "G3_SEARCH_DURABLE_RESERVE_INVALID" or "G3_SEARCH_NOT_STARTED_RETURNED" or
+        G3WcsRecoveryPolicy.ExhaustedReturnedCode or G3WcsRecoveryPolicy.ResponseNotConvergedCode or
         "G3_POST_WCS_SHORT_UNCONFIRMED" or G3PostWcsShortHandoffPolicy.OutsideCode or
         "G3_POST_WCS_TARGET_NOT_MEASURED" or "ATR_ATTEMPT_LIMIT" or
         "ATR_PROBE_ATTEMPT_LIMIT" or HorizonEvaluation.WindowExhaustedCode or
         Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode or
-        Phd2PlacementGuideWindowRejectedException.StoppedCode or
+        Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode or
         AdaptiveGuidingRecovery.ExhaustedCode or AdaptiveGuidingRecovery.StarsTimeoutCode or
+        "PHD2_LOCK_RETURN_EPOCH_CHANGED" or "PHD2_LOCK_RETURN_SETTLE_FAILED" or
+        // Arrival may remain unproven after ADR-0027 checked-stop retirement.
+        // This classifies the failed target, not permission to skip idle/ledger checks.
+        "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED" or
+        "PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED_RETURNED" or "PHD2_PLACEMENT_GUIDE_STAR_LOST" or
         "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" or "G3_MOTION_TIME_LIMIT";
 
     // Scheduling rejection before a runner, coordinator, or device action exists.

@@ -150,12 +150,12 @@ public sealed class ProductionRouteParitySourceTests
     [Fact]
     public void LowSignalAndLocalMorphologyDoNotPreemptBoundedRecovery()
     {
-        Assert.Contains("ATR_SIGNAL_LIMITED_LONGEST_SAFE_TIER", RealRunnerSource, StringComparison.Ordinal);
+        Assert.Contains("ATR_SIGNAL_LIMITED_LONGEST_SAFE_TIER", WorkflowSource.Probe, StringComparison.Ordinal);
         // The extracted quality policy has runtime coverage for accepted
         // low-contrast/low-SNR warnings; assert the production call boundary
         // here instead of requiring those classifications to stay in this file.
-        Assert.Contains("var quality = ValidateAtrScienceMetrics(captured.Metrics);", RealRunnerSource, StringComparison.Ordinal);
-        Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration.Atr)", RealRunnerSource, StringComparison.Ordinal);
+        Assert.Contains("var quality = ValidateAtrScienceMetrics(captured.Metrics);", WorkflowSource.Science, StringComparison.Ordinal);
+        Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration)", WorkflowSource.Science, StringComparison.Ordinal);
         Assert.Contains("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", RealRunnerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", RealRunnerSource, StringComparison.Ordinal);
         Assert.Contains("configuration.Environment.WeakSupervisionEnabled", RealRunnerSource, StringComparison.Ordinal);

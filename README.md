@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-10.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-11.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +38,31 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 10 closeout](docs/closeout-2026-10-10.md) consolidates **0.4.0.241–260**:
+The [October 11 closeout](docs/closeout-2026-10-11.md) consolidates **0.4.0.261–277**:
+reusable clock-only night windows, explicit sequence closeout and protected standby,
+fresh-frame guiding recovery, neighbouring-field continuity, and checked target-local
+failure skips. Scientific-quality warning consent now works independently of the full
+equipment/weather safety chain; it does not waive ownership, physical-stop or motion
+limits. Standalone and native-sequence entry points still use **one production route**.
+The [audit](docs/reports/2026-10-11-code-audit-and-deduplication.md) removes duplicated
+contracts and unreachable policies; the
+[workflow refactor](docs/reports/2026-10-11-observation-workflow-boundaries.md) gives
+acquisition/return, slit convergence, ATR probing and science accounting explicit
+responsibilities and state ownership. The shared runner still has substantial debt.
+
+**3,214 .NET tests, 75 reduction tests, Ruff and four frozen-design checks passed**.
+Read-only, historical-measurement-driven regressions preserve nine productive runs'
+original outcomes and 26 accepted spectra; these are not new exposures or full FITS
+reprocessing. The prior **.277** installation verified all 41 package files; 158 offline
+UI scenes were reviewed. Runtime loading was verified, but **.277's three live-panel visual
+checks remain incomplete** because desktop automation failed. The last installation
+snapshot is idle, simulation selected, real control disarmed and equipment disconnected;
+AIWeather monitoring is not connected in that snapshot. This source closeout neither
+starts observing nor operates equipment. A final source-whitespace cleanup changes the
+rebuilt DLL/PDB hashes, recorded separately in the closeout; it is not a reinstall.
+New-version real-sky acceptance remains open.
+
+The historical [October 10 closeout](docs/closeout-2026-10-10.md) consolidates **0.4.0.241–260**:
 native multi-target sequencing, checked quality-failure skips, bounded guide-quality
 warnings, station-attested roof/weather policies, and independent target-card editing.
 Each target owns its exposure plan and default-off, one-shot PHD2 calibration switch;

@@ -11,52 +11,56 @@ internal sealed record Phd2CorrectionWindowDecision(
     bool CanContinue, string Code, double? LatestGuideResidualPixels = null,
     double? MaximumEndpointSpreadPixels = null);
 
-// Structured measurement rejection, not an exception-message allow-list.
-// Only the initial pre-motion caller may turn this into a checked quality skip.
-internal sealed class Phd2PlacementGuideWindowRejectedException(
-    int completedWindows, IReadOnlyList<double> residuals, double tolerance,
-    long connectionEpoch, long guideEpoch, Phd2Point expectedLock) : InvalidOperationException(
-        "PHD2_GUIDE_WINDOW_NOT_STABLE: The bounded same-lock fresh-frame windows did not all meet the commissioned guide residual; no extra lock movement or budget reset was allowed.")
-{
-    internal const string StoppedCode = "PHD2_PRE_MOTION_GUIDE_WINDOW_REJECTED";
-    internal int CompletedWindows { get; } = completedWindows;
-    internal IReadOnlyList<double> Residuals { get; } = residuals.ToArray();
-    internal double Tolerance { get; } = tolerance;
-    internal long ConnectionEpoch { get; } = connectionEpoch;
-    internal long GuideEpoch { get; } = guideEpoch;
-    internal Phd2Point ExpectedLock { get; } = expectedLock;
+internal sealed class Phd2RollingWindowInterruptedException : Exception;
 
-    internal bool CanClassifyBeforeMotion(Phd2StateSnapshot current, bool hasExactLockHistory) =>
-        !hasExactLockHistory && CompletedWindows > 0 && Residuals.Count >= 3 &&
-        double.IsFinite(Tolerance) && Tolerance > 0 &&
-        Residuals.All(value => double.IsFinite(value) && value >= 0) &&
-        !Phd2PlacementGuideWindowPolicy.AllWithinTolerance(Residuals, Tolerance) &&
-        current.IsConnected && !current.AutomationPaused && !current.Phd2Paused &&
-        current.AppState == Phd2AppState.Guiding && !current.PendingSettleOperationId.HasValue &&
-        current.ConnectionEpoch == ConnectionEpoch && current.GuideEpoch == GuideEpoch &&
-        current.GuideOutput is { Failed: false, ConsecutiveMissingOutputs: 0 };
-}
 
 internal static class Phd2PlacementGuideWindowPolicy
 {
-    internal static bool IsValidWarningCeiling(double preferred, double ceiling) =>
-        double.IsFinite(preferred) && preferred >= 0 && double.IsFinite(ceiling) &&
-        (ceiling == 0 || (preferred > 0 && ceiling >= preferred && ceiling <= Math.Min(3, preferred * 1.5)));
+    // Historical logs/sequence outcomes still recognize this code. ADR-0028
+    // removed its producer: guide precision is advisory, not a stop condition.
+    internal const string LegacyPreMotionRejectedCode = "PHD2_PRE_MOTION_GUIDE_WINDOW_REJECTED";
 
-    // Each index is an entirely new, complete window, never a re-interpretation
-    // of a rejected frame set. The caller retains its original time budget.
-    internal static double ToleranceForFreshWindow(double preferred, double ceiling, int window)
+    // One request contract shared by production and replay. A rolling capture
+    // returns the COMPLETE FIFO window, not an undersized science window.
+    internal static async Task<IReadOnlyList<T>> CaptureConsecutiveWindowAsync<T>(
+        int requiredFrames, IReadOnlyList<T>? previous,
+        Func<int, Task<IReadOnlyList<T>>> capture,
+        Func<T, Phd2SlitFieldMeasurement> measurement)
     {
-        if (!IsValidWarningCeiling(preferred, ceiling) || window < 1)
-            throw new ArgumentOutOfRangeException(nameof(ceiling));
-        return ceiling == 0 ? preferred : preferred + (ceiling - preferred) * Math.Min(2, window - 1) / 2;
+        var fullCount = Math.Max(3, requiredFrames);
+        if (previous is not null && previous.Count < fullCount)
+            throw new InvalidOperationException("PHD2_ROLLING_WINDOW_INCOMPLETE: A full preceding window is required before capture.");
+        var requested = previous is null ? fullCount : 1;
+        IReadOnlyList<T> acquired;
+        try { acquired = await capture(requested).ConfigureAwait(false); }
+        catch (Phd2RollingWindowInterruptedException) when (previous is not null)
+        {
+            // A rejected intervening frame breaks consecutiveness. Reacquire
+            // a whole window under the SAME caller deadline, never append across it.
+            previous = null;
+            requested = fullCount;
+            acquired = await capture(requested).ConfigureAwait(false);
+        }
+        if (acquired.Count != requested)
+            throw new InvalidOperationException("PHD2_WINDOW_CAPTURE_COUNT_MISMATCH: The capture result does not match the explicit full/rolling request.");
+        return previous is null ? acquired : AppendConsecutiveSample(previous, acquired[0], fullCount, measurement);
     }
 
-    internal static bool CanAcceptWarningWindow(IReadOnlyList<Phd2SlitFieldMeasurement> samples,
-        IReadOnlyList<double> residuals, double tolerance, bool sameEpochAndLock, bool liveOutputConfirmed) =>
+    // ADR-0028: diagnostic only; not a second native-settle or slit-placement gate.
+    internal const double GuideResidualWarningPixels = 3;
+    internal static bool IsValidWarningCeiling(double preferred, double ceiling) =>
+        Phd2SlitPlacementCommissioning.IsValidWarningCeiling(preferred, ceiling);
+
+    internal static bool HasUsableMeasuredWindow(IReadOnlyList<Phd2SlitFieldMeasurement> samples,
+        IReadOnlyList<double> residuals, bool sameEpochAndLock, bool liveOutputConfirmed) =>
         sameEpochAndLock && liveOutputConfirmed && samples.Count >= 3 && samples.Count == residuals.Count &&
         samples.All(item => item.GuidePositionMeasuredInFrame && item.TargetIdentityConfirmed &&
-            HasMeasuredPositionAuthority(item.TargetPositionAuthority)) && AllWithinTolerance(residuals, tolerance);
+            HasMeasuredPositionAuthority(item.TargetPositionAuthority) && Finite(item.GuideStar) &&
+            Finite(item.TargetCentroid) && Finite(item.RecognizedSlitAcquisitionPoint)) &&
+        residuals.All(value => double.IsFinite(value) && value >= 0);
+
+    internal static bool HasPrecisionWarning(IReadOnlyList<double> residuals) =>
+        residuals.Any(value => double.IsFinite(value) && value > GuideResidualWarningPixels);
 
     internal static bool CanRollCorrectionWindow(bool supervised, Phd2SlitGuideMode guideMode,
         bool planAllowed, bool planComplete, bool waitingForLock, int availableFrames, int requiredFrames) =>
@@ -142,9 +146,6 @@ internal static class Phd2PlacementGuideWindowPolicy
         bool sameFrameMeasuredGeometry, bool planAllowed, string planCode) =>
         sameFrameMeasuredGeometry && CanWaitWithoutNewMotion(planAllowed, planCode) &&
         !AllWithinTolerance(guideResiduals, guideTolerance);
-
-    internal static string FailureCode(bool deadlineExpired, int completedWindows) =>
-        deadlineExpired && completedWindows == 0 ? "PHD2_FRESH_GUIDE_WINDOW_DEADLINE" : "PHD2_GUIDE_WINDOW_NOT_STABLE";
 
     internal static bool HasMeasuredPositionAuthority(Phd2TargetPositionAuthority authority) => authority is
         Phd2TargetPositionAuthority.DetectedTargetCentroid or Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid or

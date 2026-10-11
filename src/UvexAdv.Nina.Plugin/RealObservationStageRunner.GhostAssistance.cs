@@ -502,7 +502,7 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private GhostFocusResolution ValidateGhostIndependentFocus(
-        GhostAssistanceCommissioningPreset ghost,
+        GhostAssistanceCommissioning ghost,
         C11MainFocusOwnerSnapshot ownerBefore,
         C11MainFocusOwnerSnapshot ownerAfter,
         DateTimeOffset evaluatedUtc)
@@ -544,7 +544,7 @@ internal sealed partial class RealObservationStageRunner
         ObservationContext context,
         G3LoadedIlluminationFrame reference,
         PlateSolveEvidence? g3Solve,
-        GhostAssistanceCommissioningPreset ghost,
+        GhostAssistanceCommissioning ghost,
         DateTimeOffset evaluatedUtc,
         CancellationToken cancellationToken)
     {
@@ -675,7 +675,7 @@ internal sealed partial class RealObservationStageRunner
         Coordinates target,
         G3LoadedIlluminationFrame reference,
         PlateSolveEvidence solve,
-        GhostAssistanceCommissioningPreset ghost,
+        GhostAssistanceCommissioning ghost,
         DateTimeOffset evaluatedUtc,
         CancellationToken cancellationToken)
     {
@@ -728,7 +728,7 @@ internal sealed partial class RealObservationStageRunner
         Coordinates target,
         QhyFrameRecord? accepted,
         PlateSolveEvidence solve,
-        GhostAssistanceCommissioningPreset ghost,
+        GhostAssistanceCommissioning ghost,
         DateTimeOffset evaluatedUtc,
         CancellationToken cancellationToken)
     {

@@ -115,8 +115,7 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
     public void ProductionGatesReturnBeforeCaptureAndPersistsAccountingBeforeNativeMotion()
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        var start = source.IndexOf("private async Task<StageResult> AcquireG3SlitFieldAsync(", StringComparison.Ordinal);
-        var entry = source[start..source.IndexOf("private StageResult G3FieldPassed(", start, StringComparison.Ordinal)];
+        var entry = WorkflowSource.Acquisition;
         Assert.True(entry.IndexOf("ReturnAfterOwnedGuidingBeforeReacquisitionAsync", StringComparison.Ordinal) <
             entry.IndexOf("CaptureAndAnalyzeG3WithSolveLadderAsync", StringComparison.Ordinal));
         Assert.Contains("if (guidingReturn.Disposition != GateDisposition.Passed)", entry, StringComparison.Ordinal);
@@ -134,7 +133,7 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
         Assert.Contains("Math.Max(correctionAttempts, returned.State.CorrectionAttempts)", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("SlewToCoordinatesAsync", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("CaptureFullFrame", helper, StringComparison.Ordinal);
-        Assert.Contains("G3_GUIDING_RECOVERY_STOP_CHANGED: PHD2 changed before return dispatch", source, StringComparison.Ordinal);
+        Assert.Contains("G3_GUIDING_RECOVERY_STOP_CHANGED: PHD2 changed before return dispatch", WorkflowSource.Return, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -160,7 +159,10 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
         var adaptiveStop = source.IndexOf("var recoveryStop = await EnsurePhdStoppedForAutomaticRebuildAsync(", adaptiveStart, StringComparison.Ordinal);
         var adaptiveReturn = source.IndexOf("return Attention(ObservationStage.PlaceTargetOnSlit, \"PHD2_STRUCTURED_GUIDE_SESSION_LOSS\"", adaptiveStop, StringComparison.Ordinal);
         Assert.True(adaptiveStart >= 0 && adaptiveStop > adaptiveStart && adaptiveReturn > adaptiveStop);
-        Assert.Contains("if (recoveryStop.Disposition != GateDisposition.Passed) return new StageResult(recoveryStop)", source[adaptiveStop..adaptiveReturn]);
+        Assert.Contains("if (recoveryStop.Disposition != GateDisposition.Passed)", source[adaptiveStop..adaptiveReturn]);
+        Assert.Contains("return new StageResult(recoveryStop with", source[adaptiveStop..adaptiveReturn]);
+        Assert.Contains("Original failure: {ex.Message}", source[adaptiveStop..adaptiveReturn]);
+        Assert.Contains("triggerEvidence", source[adaptiveStop..adaptiveReturn]);
         var start = source.IndexOf("if (!AdaptiveGuideRecoveryEnabled && IsStructuredPhd2GuideSessionLoss(ex)", StringComparison.Ordinal);
         Assert.True(start >= 0);
         var end = source.IndexOf("return await PlaceTargetOnSlitWithPhd2Async(", start, StringComparison.Ordinal);

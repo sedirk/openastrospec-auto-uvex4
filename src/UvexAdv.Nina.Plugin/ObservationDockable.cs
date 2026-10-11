@@ -566,12 +566,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         }
     }
     public string SupervisedSlitQualityWarningStatusText => ObservationUiPresentation.Text(
-        SupervisedSlitQualityWarningAuthorized
-            ? "入缝策略：警告后试拍 · 已保存"
-            : "入缝策略：严格验收 · 未启用警告后试拍",
-        SupervisedSlitQualityWarningAuthorized
-            ? "Slit policy: supervised probing with precision warnings · saved"
-            : "Slit policy: strict acceptance · warning-based probing disabled", UiCulture);
+        ScienceQualityPolicy.StatusText(SupervisedSlitQualityWarningAuthorized, settings.WeakSupervisionEnabled, false),
+        ScienceQualityPolicy.StatusText(SupervisedSlitQualityWarningAuthorized, settings.WeakSupervisionEnabled, true), UiCulture);
     public ICommand ClearG3RecoveryStateCommand => clearG3RecoveryStateCommand;
     public ICommand RestartWithCurrentConfigurationCommand => restartWithCurrentConfigurationCommand;
     public ICommand OpenQhyPreviewCommand => openQhyPreviewCommand;
@@ -667,6 +663,18 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public IReadOnlyList<PreparationOptionChoice> PreparationSpectralRegionChoices => SpectralRegionChoices;
     public IReadOnlyList<PreparationOptionChoice> PreparationCalibrationReferenceChoices => CalibrationReferenceChoices;
     public IReadOnlyList<PreparationOptionChoice> PreparationSafetyCapabilityChoices => SafetyCapabilityChoices;
+
+    // These are the existing single-run preferences, not the native night's policy.
+    public bool StandaloneCloseRoofOnComplete
+    {
+        get => settings.CloseDomeOrRoofOnFinalize;
+        set { if (!CanEditTargetPlan()) return; settings.CloseDomeOrRoofOnFinalize = value; RaisePropertyChanged(); }
+    }
+    public bool StandaloneCloseRoofOnFailure
+    {
+        get => settings.CloseDomeOrRoofOnFailure;
+        set { if (!CanEditTargetPlan()) return; settings.CloseDomeOrRoofOnFailure = value; RaisePropertyChanged(); }
+    }
 
     public string SelectedPreparationSpectralRegion
     {
@@ -3797,6 +3805,13 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
 
     private void ApplyDashboard(ObservationDashboardSnapshot dashboard, bool notifyBridge = true)
     {
+        // A native startup card may select REAL before the target begins.
+        // Reflect the shared Profile selection without granting bridge control.
+        RaisePropertyChanged(nameof(UseRealMode));
+        RaisePropertyChanged(nameof(IsRealMode));
+        RaisePropertyChanged(nameof(IsSimulationMode));
+        RaisePropertyChanged(nameof(ModeText));
+        RaisePropertyChanged(nameof(ModeDescription));
         // Cached owner telemetry only: a frame/status update must not leave the
         // inspector displaying the disconnected snapshot captured at startup.
         // This does not connect, expose or create another camera owner.

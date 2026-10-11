@@ -150,6 +150,10 @@ public sealed record ObservationPlan(
     }
 }
 
+// Scope is authored by the failing operation, never inferred from exception text.
+// TargetQuality rejects this target; it grants no device or next-target authority.
+public enum GateFailureScope { Run, TargetQuality }
+
 public sealed record GateResult(
     string Code,
     GateDisposition Disposition,
@@ -157,6 +161,11 @@ public sealed record GateResult(
     IReadOnlyDictionary<string, double>? Metrics = null,
     GateSeverity Severity = GateSeverity.Info)
 {
+    public GateFailureScope FailureScope { get; init; } = GateFailureScope.Run;
+
+    public static GateResult TargetQuality(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
+        Unknown(code, message, metrics) with { FailureScope = GateFailureScope.TargetQuality };
+
     public static GateResult Pass(string code, string message, IReadOnlyDictionary<string, double>? metrics = null) =>
         new(code, GateDisposition.Passed, message, metrics, GateSeverity.Info);
 

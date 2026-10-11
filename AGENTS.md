@@ -28,6 +28,38 @@ Do not edit a frozen design record or its hash manifest unless the user explicit
 
 ## Hardware authorization
 
+### Exploration-first development (owner, 2026-10-11)
+
+The current goal is to explore equipment capability and try useful observing
+strategies, not to guarantee perfect spectra or absolute astrometric certainty
+before every experiment. Prefer obtaining and honestly labelling imperfect data
+over abandoning a target because a preferred quality metric was missed.
+
+- Do not add a blocker merely because confidence, centering, morphology, SNR or
+  a heuristic is below its preferred value. Prefer a visible warning, a bounded
+  alternative and retained quality/provenance flags. Review existing blockers
+  for the same distinction when touching that workflow.
+- When the target field cannot solve, use available neighbouring-field WCS,
+  measured mount displacement, fresh pixel measurements and applicable local
+  wide-field/slit-camera pairs before repeating a full solve ladder. Keep
+  inferred positions distinct from measurements; do not demand another whole-
+  frame solve solely to rediscover a position already supported by continuity.
+- A target acquisition/quality budget failure with a confirmed stopped boundary
+  should follow the saved skip-target policy, not terminate the entire night.
+  Test that the next native target actually executes, not just that a classifier
+  returns true. Do not silently reset the failed target's movement budget.
+- Every new hard stop needs a specific adverse next action and a tested recovery
+  or skip route. An uncertain scientific result is not by itself a hardware
+  hazard. It must not be disguised as a perfect/verified result either.
+- This preference does not waive actual weather danger, electronic/mechanical
+  limits, exclusive device ownership, operator cancellation or an unconfirmed
+  physical stop. Equipment and weather still have real risks; preserve these
+  independently rather than using them to justify unrelated quality blockers.
+
+Architectural relaxations still require an explicit superseding ADR and the
+deliberate frozen-baseline update described above. This section records that the
+owner has requested the neighbour-inference/continuity change in ADR-0030.
+
 ### Standing authorization: reported observation blockers (owner, 2026-09-14)
 
 When the owner reports another blocker in this project's N.I.N.A. observation or
@@ -76,6 +108,10 @@ Real-hardware work must preserve the per-device ownership table and follow stage
 - `output/`, `reduction/output/`, `artifacts/`, `tmp/`, `.dotnet/`, and virtual environments: local/generated and ignored.
 
 Keep commits narrowly scoped. Add or update tests with behavior changes. Do not combine generated observing products with source changes.
+
+## Prefer non-UI tools
+
+- Avoid `computer-use` whenever a reliable alternative exists: prefer repository scripts, purpose-built APIs, CLIs, structured status/evidence and logs for inspection, changes and verification. Use `computer-use` only for operations without a suitable supported non-UI interface or for required visual/UI acceptance checks; keep those interactions and screenshots minimal. This preference reduces latency and token usage and does not relax hardware authorization, device ownership, normal safe shutdown or release-verification requirements.
 
 ## Checks
 

@@ -43,6 +43,8 @@ internal sealed record RealRunConfiguration(
 {
     public NativeSequencePlan? SequencePlan { get; init; }
 
+    public ScienceQualityPolicy ScienceQuality => ScienceQualityPolicy.From(this);
+
     public RealRunConfiguration WithSequencePlan(NativeSequencePlan plan)
     {
         var issues = plan.Validate();
@@ -516,37 +518,18 @@ internal sealed record PlateSolverRunConfiguration(
     public static PlateSolverRunConfiguration Capture(
         IPlateSolveSettings settings,
         IPlateSolver primary,
-        IPlateSolver blind) => new(
-            settings.PlateSolverType.ToString(),
-            settings.BlindSolverType.ToString(),
+        IPlateSolver blind) => CaptureCore(
+            settings,
             primary.GetType().AssemblyQualifiedName ?? primary.GetType().FullName ?? primary.GetType().Name,
             blind.GetType().AssemblyQualifiedName ?? blind.GetType().FullName ?? blind.GetType().Name,
-            settings.SearchRadius,
-            settings.Regions,
-            settings.DownSampleFactor,
-            settings.MaxObjects,
-            settings.BlindFailoverEnabled,
-            settings.Threshold,
-            settings.RotationTolerance,
-            settings.NumberOfAttempts,
-            NormalizePath(settings.PS2Location),
-            NormalizePath(settings.PS3Location),
-            NormalizePath(settings.ASTAPLocation),
-            NormalizePath(settings.AspsLocation),
-            settings.AstrometryURL?.Trim() ?? string.Empty,
-            SecretHash(settings.AstrometryAPIKey),
-            settings.PinPointAllSkyApiHost?.Trim() ?? string.Empty,
-            SecretHash(settings.PinPointAllSkyApiKey));
+            settings.DownSampleFactor);
 
     public static PlateSolverRunConfiguration CaptureCurrent(
         IPlateSolveSettings settings,
-        PlateSolverRunConfiguration locked) => new(
-            settings.PlateSolverType.ToString(),
-            settings.BlindSolverType.ToString(),
+        PlateSolverRunConfiguration locked) => CaptureCore(
+            settings,
             locked.PrimarySolverImplementation,
             locked.BlindSolverImplementation,
-            settings.SearchRadius,
-            settings.Regions,
             // N.I.N.A.'s ImageSolver/PlateSolve3 path can transiently reflect
             // the per-call PlateSolveParameter downsample back into the live
             // profile object. The production runner never consumes that live
@@ -555,7 +538,18 @@ internal sealed record PlateSolverRunConfiguration(
             // here prevents our own G3 solve from being misclassified as an
             // operator profile edit. A deliberate UI change applies to the
             // next run and cannot change this run's already locked actions.
-            locked.DownSampleFactor,
+            locked.DownSampleFactor);
+
+    private static PlateSolverRunConfiguration CaptureCore(
+        IPlateSolveSettings settings, string primaryImplementation,
+        string blindImplementation, int downSampleFactor) => new(
+            settings.PlateSolverType.ToString(),
+            settings.BlindSolverType.ToString(),
+            primaryImplementation,
+            blindImplementation,
+            settings.SearchRadius,
+            settings.Regions,
+            downSampleFactor,
             settings.MaxObjects,
             settings.BlindFailoverEnabled,
             settings.Threshold,

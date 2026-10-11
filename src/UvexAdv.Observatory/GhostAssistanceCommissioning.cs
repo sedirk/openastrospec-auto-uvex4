@@ -1,22 +1,21 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using UvexAdv.Observatory;
 
-namespace UvexAdv.Nina.Plugin;
+namespace UvexAdv.Observatory;
 
 /// <summary>
 /// Current installation values are kept separate from the calibration payload
 /// so a changed installation/orientation can make a still-readable template
 /// inapplicable. The enclosing commissioning file SHA-256 binds both records.
 /// </summary>
-internal sealed record GhostRuntimeFingerprintPreset(
+public sealed record GhostRuntimeFingerprint(
     string InstallationEpochId,
     string OpticalTopologySha256,
     string OrientationFingerprintSha256,
     double OrientationDegrees);
 
-internal sealed record GhostAssistanceCommissioningPreset(
+public sealed record GhostAssistanceCommissioning(
     int SchemaVersion,
     string BindingId,
     GhostTemplateCalibration Calibration,
@@ -24,7 +23,7 @@ internal sealed record GhostAssistanceCommissioningPreset(
     string MatchPolicySha256,
     GhostSourceExtractionPolicy ExtractionPolicy,
     string ExtractionPolicySha256,
-    GhostRuntimeFingerprintPreset RuntimeFingerprint,
+    GhostRuntimeFingerprint RuntimeFingerprint,
     TimeSpan MaximumExternalIdentityAge,
     double MaximumCatalogCoordinateMismatchArcseconds,
     double MaximumQhyTargetResidualArcseconds,

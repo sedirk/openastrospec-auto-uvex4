@@ -35,6 +35,8 @@ public sealed partial class Phd2Client : IPhd2Client
     private long nextEventSequence;
     private long nextSettleOperationId;
     private bool disposed;
+    private Phd2StateSnapshot? nativeSingleFrameOwner;
+    private bool nativeSingleFrameStopObserved;
 
     public Phd2Client(Phd2ClientOptions? options = null)
     {
@@ -610,6 +612,12 @@ public sealed partial class Phd2Client : IPhd2Client
                 message.Name == "SingleFrameComplete" &&
                 message.Sequence > baseline.EventSequence);
 
+            lock (stateGate)
+            {
+                nativeSingleFrameOwner = baseline;
+                nativeSingleFrameStopObserved = false;
+            }
+
             try
             {
                 await InvokeAsync(
@@ -681,8 +689,30 @@ public sealed partial class Phd2Client : IPhd2Client
         }
         finally
         {
+            lock (stateGate) nativeSingleFrameOwner = null;
             operationGate.Release();
         }
+    }
+
+    private bool IsOwnedNativeSingleFrameStop(Phd2StateSnapshot current)
+    {
+        // Some PHD2 builds emit a stop notification at the end of an atomic
+        // single exposure even though no guide/loop was started. Only this one
+        // locally awaited completion may preserve the already-stopped epoch.
+        // Any intervening selection, guide, pause, calibration, material config
+        // or connection transition still invalidates the original receipt.
+        var owner = nativeSingleFrameOwner;
+        if (owner is null || nativeSingleFrameStopObserved ||
+            current.AppState != Phd2AppState.Stopped || !current.IsConnected ||
+            current.AutomationPaused || current.Phd2Paused || current.PendingSettleOperationId.HasValue ||
+            current.ConnectionEpoch != owner.ConnectionEpoch || current.GuideEpoch != owner.GuideEpoch ||
+            current.Profile != owner.Profile || current.Equipment != owner.Equipment ||
+            current.SelectedStar != owner.SelectedStar || current.LockPosition != owner.LockPosition ||
+            current.LastGuideStep != owner.LastGuideStep ||
+            current.CalibrationChangeSequence != owner.CalibrationChangeSequence || current.GuideOutput?.Failed == true)
+            return false;
+        nativeSingleFrameStopObserved = true;
+        return true;
     }
 
     public async Task<Phd2SingleFrameResult> SaveNextLoopingFrameAsync(
@@ -1626,10 +1656,29 @@ public sealed partial class Phd2Client : IPhd2Client
 
     public async Task<Phd2StopCaptureResult> StopCaptureAndConfirmAsync(
         CancellationToken cancellationToken)
+        => await StopCaptureAndConfirmCoreAsync(cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Read back Stopped or stop an ordinary preview, never adopt an active guide/calibration/pause.</summary>
+    public async Task<Phd2StopCaptureResult> StopPreviewAndConfirmAsync(
+        long expectedConnectionEpoch, CancellationToken cancellationToken)
+        => await StopCaptureAndConfirmCoreAsync(cancellationToken, expectedConnectionEpoch).ConfigureAwait(false);
+
+    private async Task<Phd2StopCaptureResult> StopCaptureAndConfirmCoreAsync(
+        CancellationToken cancellationToken, long? previewConnectionEpoch = null)
     {
         ThrowIfDisposed();
-        UpdateSnapshot(InvalidateSettle);
+        if (previewConnectionEpoch is null) UpdateSnapshot(InvalidateSettle);
         var initial = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+        if (previewConnectionEpoch is { } epoch)
+        {
+            var s = Snapshot;
+            if (!s.IsConnected || s.ConnectionEpoch != epoch || s.AutomationPaused || s.Phd2Paused ||
+                s.PendingSettleOperationId is not null || s.GuideOutput?.Failed == true ||
+                initial is not (Phd2AppState.Stopped or Phd2AppState.Selected or Phd2AppState.Looping) ||
+                s.AppState != initial)
+                throw new Phd2Exception("PHD2_PREVIEW_STOP_CONTEXT_CHANGED: The idle/preview owner changed before checked stop; no stop command sent.");
+        }
+        if (previewConnectionEpoch is not null) UpdateSnapshot(InvalidateSettle);
         if (IsIdle(initial))
         {
             return new Phd2StopCaptureResult(
@@ -2201,6 +2250,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 SelectedStar = ParsePointObject(message.Payload),
             }),
             "StartGuiding" => BeginGuideEpoch(next),
+            "GuidingStopped" when IsOwnedNativeSingleFrameStop(next) => next,
             "GuidingStopped" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.Stopped,
@@ -2247,6 +2297,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 {
                     PendingTakeoverLoopStopAllowed = false,
                 },
+            "LoopingExposuresStopped" when IsOwnedNativeSingleFrameStop(next) => next,
             "LoopingExposuresStopped" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.Stopped,

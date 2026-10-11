@@ -74,9 +74,9 @@ public sealed class Phd2CoarseHandoffPolicyTests
         Assert.Contains("field.TargetIdentification.HasCatalogPositionRefinement", handoff);
         var placement = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
         Assert.Contains("Phd2HandoffResidualPixels(guideChoice.Field, preset)", placement);
-        Assert.Contains("var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(", placement);
-        Assert.Contains("if (!nextAcquisitionBudget.IsAllowed)", placement);
-        Assert.Contains("HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,", placement);
+        Assert.Contains("var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(", WorkflowSource.Convergence);
+        Assert.Contains("if (!nextAcquisitionBudget.IsAllowed)", WorkflowSource.Convergence);
+        Assert.Contains("HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,", WorkflowSource.Convergence);
     }
 
     [Fact]

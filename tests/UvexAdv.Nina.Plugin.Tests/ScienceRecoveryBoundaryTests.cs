@@ -31,7 +31,7 @@ public sealed class ScienceRecoveryBoundaryTests
     [Theory]
     [InlineData(ObservationStage.SelectAtrExposure)]
     [InlineData(ObservationStage.RunScienceBlock)]
-    public void ActualRunnerAtrInvalidationKeepsPhotometryOwnershipAndFrameCounters(ObservationStage stage)
+    public async Task ActualRunnerAtrInvalidationKeepsPhotometryOwnershipAndFrameCounters(ObservationStage stage)
     {
         // Exercise the production invalidator, without invoking the constructor
         // (which creates real owner clients). This path only invalidates fields;
@@ -40,37 +40,37 @@ public sealed class ScienceRecoveryBoundaryTests
         var job = Guid.NewGuid();
         Set(runner, "photometryJobId", (Guid?)job);
         Set(runner, "qhyPhotometryAttempt", 3);
-        Set(runner, "selectedAtrExposureSeconds", (double?)120d);
-        Set(runner, "atrReprobeRequired", false);
-        Set(runner, "savedAtrFrames", 2);
-        Set(runner, "attemptedAtrFrames", 4);
-        Set(runner, "retainedAtrScienceFrames", 3);
+        var f = new AtrWorkflowFixture();
+        await f.Science.SelectExposureAsync(f.Context, default);
+        f.Port.NextMetrics = m => m with { GuidingStable = false };
+        await f.Science.RunAsync(f.Context, default);
+        Set(runner, "atrProbe", f.Probe);
+        Set(runner, "atrScience", f.Science);
 
         typeof(RealObservationStageRunner).GetMethod("InvalidateStageState", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(runner, new object[] { stage });
 
         Assert.Equal(job, Get<Guid?>(runner, "photometryJobId"));
         Assert.Equal(3, Get<int>(runner, "qhyPhotometryAttempt"));
-        Assert.Null(Get<double?>(runner, "selectedAtrExposureSeconds"));
-        Assert.True(Get<bool>(runner, "atrReprobeRequired"));
-        Assert.Equal(2, Get<int>(runner, "savedAtrFrames"));
-        Assert.Equal(4, Get<int>(runner, "attemptedAtrFrames"));
-        Assert.Equal(3, Get<int>(runner, "retainedAtrScienceFrames"));
+        Assert.Null(f.Probe.SelectedExposureSeconds);
+        Assert.True(f.Probe.RequiresReprobe);
+        Assert.Equal(1, f.Science.AcceptedFrames);
+        Assert.Equal(2, f.Science.AttemptedFrames);
+        Assert.Equal(1, f.Science.RetainedFrames);
     }
 
     [Fact]
     public void RejectedGuideFrameIsSavedBeforeBoundedRecoveryAndNeverAccepted()
     {
-        var science = Slice("private async Task<StageResult> RunScienceBlockAsync(",
-            "private async Task<StageResult> FinalizeObservationAsync(");
-        var save = science.IndexOf("await SaveAtrImageAsync(", StringComparison.Ordinal);
+        var science = WorkflowSource.Science;
+        var save = science.IndexOf("await port.SaveAtrImageAsync(", StringComparison.Ordinal);
         var retained = science.IndexOf("retainedAtrScienceFrames++;", StringComparison.Ordinal);
         var rejection = science.IndexOf("if (quality.Code == \"GUIDING_UNSTABLE\")", StringComparison.Ordinal);
         var recovery = science.IndexOf("return new StageResult(quality);", rejection, StringComparison.Ordinal);
         var accepted = science.IndexOf("savedAtrFrames++;", StringComparison.Ordinal);
         Assert.True(save >= 0 && retained > save && rejection > retained && recovery > rejection && accepted > recovery);
         Assert.Contains("quality.Disposition == GateDisposition.Passed", science, StringComparison.Ordinal);
-        Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration.Atr)", Source, StringComparison.Ordinal);
+        Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration)", WorkflowSource.Science, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -90,13 +90,12 @@ public sealed class ScienceRecoveryBoundaryTests
     [Fact]
     public void ScienceBudgetIsCheckedBeforeReprobeAndAfterRejectionBeforeRecovery()
     {
-        var science = Slice("private async Task<StageResult> RunScienceBlockAsync(",
-            "private async Task<StageResult> FinalizeObservationAsync(");
+        var science = WorkflowSource.Science;
         var entry = science.IndexOf("RemainingAttemptGate(", StringComparison.Ordinal);
-        var probe = science.IndexOf("if (atrReprobeRequired)", StringComparison.Ordinal);
+        var probe = science.IndexOf("if (probe.RequiresReprobe)", StringComparison.Ordinal);
         var loop = science.IndexOf("while (savedAtrFrames", StringComparison.Ordinal);
         var loopGate = science.IndexOf("RemainingAttemptGate(", loop, StringComparison.Ordinal);
-        var loopProbe = science.IndexOf("if (atrReprobeRequired)", loop, StringComparison.Ordinal);
+        var loopProbe = science.IndexOf("if (probe.RequiresReprobe)", loop, StringComparison.Ordinal);
         var exhausted = science.IndexOf("var exhaustedAttempts", StringComparison.Ordinal);
         var guideRecovery = science.IndexOf("if (quality.Code == \"GUIDING_UNSTABLE\")", StringComparison.Ordinal);
         Assert.True(entry >= 0 && entry < probe && loopGate > loop && loopGate < loopProbe);

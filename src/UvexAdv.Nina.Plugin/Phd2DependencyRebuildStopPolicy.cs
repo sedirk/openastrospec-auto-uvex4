@@ -65,6 +65,17 @@ internal static class Phd2DependencyRebuildStopPolicy
         result.DroppedFrames > 0 && snapshot.GuideOutput?.Failed != true &&
         CanRecordCompletedGuideOwner(snapshot, selectionConnectionEpoch, result);
 
+    // NativeCalibrationOccurred is set by Phd2Client only for this operation's
+    // CalibrationComplete event. Its later SettleDone can fail independently.
+    // That does not undo calibration or make pre-calibration geometry usable:
+    // allow the existing checked-stop / fresh-field path, NOT slit or science
+    // authority. Drops during the initial return are retained as evidence.
+    internal static bool CanReacquireAfterCalibrationSettleFailure(Phd2StateSnapshot snapshot,
+        long selectionConnectionEpoch, Phd2SettleResult result, bool hasExactLockHistory) =>
+        !hasExactLockHistory && !result.Succeeded && result.NativeCalibrationOccurred &&
+        snapshot.GuideOutput?.Failed != true &&
+        CanRecordCompletedGuideOwner(snapshot, selectionConnectionEpoch, result);
+
     // The native guide RPC may snap the selected lock to its first new-frame
     // centroid before SettleBegin. Accept that lock only from the returned,
     // locally correlated terminal operation, even when settling failed.

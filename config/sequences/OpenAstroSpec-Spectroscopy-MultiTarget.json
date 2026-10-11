@@ -25,6 +25,22 @@
         "Items": {
           "$values": [
             {
+              "$id": "startup-safety",
+              "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexStartSafetyMonitorItem, UvexAdv.Nina.Plugin",
+              "StartMonitoring": false,
+              "Parent": { "$ref": "2" },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            },
+            {
+              "$id": "startup-real",
+              "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexSelectRealModeItem, UvexAdv.Nina.Plugin",
+              "EnableRealMode": false,
+              "Parent": { "$ref": "2" },
+              "ErrorBehavior": 2,
+              "Attempts": 1
+            },
+            {
               "$id": "3",
               "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
               "Text": "默认所有目标为模拟：不会连接、曝光或运动。先填写 A/B/C 的真实目标名和 J2000 坐标（当前 0°/0° 仅占位）；每目标默认 3 张 × 300 秒，最多 6 次科学尝试。未使用的目标请删除；要增加目标请复制整个 UVEX4 目标块。",
@@ -73,7 +89,7 @@
               "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexNightSequenceContainer, UvexAdv.Nina.Plugin",
               "StopAtDawn": true,
               "DawnSunAltitudeDegrees": -12,
-              "EndAtIso8601": "",
+              "EndAtIso8601": "05:00",
               "Name": "光谱多目标 · 目标间保持，最后统一收口",
               "Strategy": {
                 "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
@@ -526,6 +542,15 @@
                       "$ref": "6"
                     },
                     "ErrorBehavior": 0,
+                    "Attempts": 1
+                  },
+                  {
+                    "$id": "46",
+                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem, UvexAdv.Nina.Plugin",
+                    "Name": "关顶与整夜收口（可选）",
+                    "CloseAfterTargets": true,
+                    "Parent": { "$ref": "6" },
+                    "ErrorBehavior": 2,
                     "Attempts": 1
                   }
                 ]

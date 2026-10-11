@@ -7,6 +7,16 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class ScreenshotRendererTests
 {
+    [Theory]
+    [InlineData("g3-predicted-target")]
+    [InlineData("g3-predicted-target-narrow")]
+    public void PredictedTargetCaptionDoesNotClaimMeasuredCentroid(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, text => text.Contains("未实测", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, text => text.Contains("亮星不自动等于目录目标", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void StaticLocalizationCannotRestoreIdleHeaderOverLiveWorkflow()
     {
@@ -90,7 +100,8 @@ public sealed class ScreenshotRendererTests
         var result = RenderPhotometry(name);
         Assert.Contains(result.VisibleTexts, x => x.Contains("关顶与整夜收口", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("测试结束保持开顶", StringComparison.Ordinal));
-        Assert.Contains(result.VisibleTexts, x => x.Contains("继续监视 AIWeather", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("监视 AIWeather", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("目标失败且已确认停止", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("初始导星", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("普通取消", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("目标 2/3", StringComparison.Ordinal));

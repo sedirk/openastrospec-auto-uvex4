@@ -6,6 +6,48 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class ObservationAttentionNotificationTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void NativeQualityFaultWaitsForSavedBoundaryThenReportsActualSkipOrStop(bool skipped)
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var code = G3PostWcsShortHandoffPolicy.OutsideCode;
+        var snapshot = Snapshot(ObservationRunState.Faulted, ObservationStage.AcquireG3SlitField, "quality", code);
+        var culture = CultureInfo.GetCultureInfo("zh-CN");
+        Assert.Null(tracker.Evaluate(snapshot, GateResult.Unknown(code, "quality"), culture,
+            nativeTargetRunId: snapshot.ObservationRunId).Notification);
+        var notice = tracker.NativeBoundary(snapshot.ObservationRunId!, "HD 18552", code, skipped,
+            skipped ? null : "停止尚未确认", culture);
+        Assert.NotNull(notice);
+        Assert.Equal(skipped ? ObservationAttentionSeverity.Warning : ObservationAttentionSeverity.Error, notice.Severity);
+        Assert.Contains(skipped ? "已跳过" : "停止后续目标", notice.Title);
+        Assert.Contains("HD 18552", notice.Body);
+        Assert.Contains(code, notice.Body);
+        Assert.Null(tracker.NativeBoundary(snapshot.ObservationRunId!, "HD 18552", code, skipped, null, culture));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("older-run")]
+    public void StandaloneOrMismatchedNightContextDoesNotSuppressFault(string? nativeRun)
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var code = G3PostWcsShortHandoffPolicy.OutsideCode;
+        Assert.Equal(ObservationAttentionSeverity.Error, tracker.Evaluate(
+            Snapshot(ObservationRunState.Faulted, ObservationStage.AcquireG3SlitField, "quality", code),
+            GateResult.Unknown(code, "quality"), nativeTargetRunId: nativeRun).Notification!.Severity);
+    }
+
+    [Fact]
+    public void UnknownHardwareFaultInNativeTargetRemainsImmediateError()
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var s = Snapshot(ObservationRunState.Faulted, ObservationStage.AcquireG3SlitField, "stop unknown", "PHD2_STOP_UNCONFIRMED");
+        Assert.Equal(ObservationAttentionSeverity.Error, tracker.Evaluate(s,
+            GateResult.Unknown("PHD2_STOP_UNCONFIRMED", "stop unknown"), nativeTargetRunId: s.ObservationRunId).Notification!.Severity);
+    }
+
     [Fact]
     public void NeedsAttentionProducesOneWarningWithStageCodeAndReason()
     {

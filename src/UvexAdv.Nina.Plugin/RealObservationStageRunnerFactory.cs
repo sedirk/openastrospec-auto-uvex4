@@ -133,6 +133,14 @@ public sealed class RealObservationStageRunnerFactory
         public void Dispose() => unsubscribe();
     }
 
+    internal bool IsNightSafetyCurrent(RealRunConfiguration configuration)
+    {
+        var info = safetyMonitorMediator.GetInfo();
+        return info.Connected && info.IsSafe &&
+            string.Equals(info.DeviceId, configuration.Environment.Devices.SafetyMonitorId, StringComparison.Ordinal) &&
+            CaptureEnvironmentDeviceSelection() == configuration.Environment.Devices;
+    }
+
     private NinaEnvironmentDeviceSelection CaptureEnvironmentDeviceSelection()
     {
         var profile = profileService.ActiveProfile;

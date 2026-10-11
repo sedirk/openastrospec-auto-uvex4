@@ -28,6 +28,8 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("G3ShortPositionMeasurementPolicy.EvaluateConfirmation",source);
         Assert.Contains("attempt <= maximumFrames",source);
         Assert.Contains("G3PostWcsShortHandoffPolicy.Evaluate",source);
+        Assert.Contains("RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true)", source);
+        Assert.Contains("Gate = decision.Gate", source);
         Assert.Contains("Gate = accepted ? probe.Gate : decision.Gate",source);
         Assert.Contains("maximumFrames = attempt + 2",source);
         Assert.Contains("previousHash = previousPath = null",source);

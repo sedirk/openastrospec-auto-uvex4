@@ -1,4 +1,5 @@
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 
 namespace UvexAdv.Commissioning.Tool;
 
@@ -25,8 +26,8 @@ public sealed record CommissioningPresetContract(
     HardwareFingerprintContract? HardwareFingerprint,
     int G3SaturationAdu,
     int FineMotionAuthority,
-    Phd2SlitPlacementContract? Phd2SlitPlacement,
-    GhostAssistanceContract? GhostAssistance = null,
+    Phd2SlitPlacementCommissioning? Phd2SlitPlacement,
+    GhostAssistanceCommissioning? GhostAssistance = null,
     SlitWheelIdentityCalibration? SlitWheelIdentity = null)
 {
     public const int CurrentSchemaVersion = 5;
@@ -103,9 +104,9 @@ public sealed record CommissioningMeasurementDefinition(
     EnvironmentContract Environment,
     int G3SaturationAdu,
     int FineMotionAuthority,
-    Phd2SlitPlacementContract? Phd2SlitPlacement,
+    Phd2SlitPlacementCommissioning? Phd2SlitPlacement,
     int GhostAssistanceMode,
-    GhostAssistanceContract? GhostAssistance,
+    GhostAssistanceCommissioning? GhostAssistance,
     SlitWheelIdentityMeasurementDefinition? SlitWheelIdentity = null)
 {
     public const int CurrentSchemaVersion = 4;

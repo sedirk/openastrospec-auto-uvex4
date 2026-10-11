@@ -331,7 +331,12 @@ public sealed class XamlBindingSafetyTests
         }
         foreach (Match checkBox in Regex.Matches(dock, "<CheckBox(?=\\s|>)(?<attributes>[^>]*)>", RegexOptions.CultureInvariant))
         {
-            Assert.Contains("Content=", checkBox.Groups["attributes"].Value, StringComparison.Ordinal);
+            var attributes = checkBox.Groups["attributes"].Value;
+            if (!attributes.Contains("Content=", StringComparison.Ordinal))
+            {
+                Assert.Contains("AutomationProperties.LabeledBy=", attributes, StringComparison.Ordinal);
+                Assert.Contains("ToolTip=", attributes, StringComparison.Ordinal);
+            }
         }
     }
 

@@ -74,7 +74,7 @@ public sealed class CatalogShortPositionSourceSafetyTests
         Assert.Contains("RefineClippedCatalogPositionAsync(context, solvedField",runner);
         Assert.Contains("currentField.TargetIdentification.HasCatalogPositionRefinement",runner);
         Assert.Contains("currentResidual + currentField.TargetIdentification.CatalogPositionSpreadPixels <= Phd2HandoffResidualPixels(currentField, placementPreset)",runner);
-        Assert.Contains("coarseResidualPixels + lastG3Field.TargetIdentification.CatalogPositionSpreadPixels",runner);
+        Assert.Contains("coarseResidualPixels + field.TargetIdentification.CatalogPositionSpreadPixels",WorkflowSource.Acquisition);
         var handoff=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.Handoff.cs"));
         Assert.Contains("field.TargetIdentification.CatalogPositionSpreadPixels, Phd2HandoffResidualPixels(field, preset)",handoff);
         Assert.Contains("attempts.Count == 0 ? \"G3_SEARCH_NOT_STARTED_RETURNED\"",runner);

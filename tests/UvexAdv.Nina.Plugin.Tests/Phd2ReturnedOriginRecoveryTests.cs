@@ -11,6 +11,23 @@ public sealed class Phd2ReturnedOriginRecoveryTests
         "RealObservationStageRunner.Phd2SlitPlacement.cs"));
 
     [Fact]
+    public void ReturnRequiresFreshMeasuredArrivalWithinOriginalBudgetWithoutNativeRestart()
+    {
+        var body = Slice(Source, "var recoveryDeadline = activeRecoveryStartedUtc.AddSeconds(state.MaximumElapsedSeconds);", "measuredReturnLock = verified;");
+        Assert.Contains("Phd2MeasuredReturnWindow.ObserveAsync(", body);
+        Assert.Contains("stage.ReservedRecoveryAttempts * preset.MaximumStageSeconds", body);
+        Assert.Contains("preset.FreshGuidingFrameTimeoutSeconds", body);
+        Assert.Contains("Math.Min(preset.MaximumStageSeconds, availableReturnSeconds)", body);
+        Assert.Contains("phd2-lock-return-measured-window", body);
+        Assert.Contains("PHD2_LOCK_RETURN_POSITION_UNCONFIRMED", body);
+        Assert.DoesNotContain("GuideAndSettleAsync", body);
+        Assert.Contains("pendingPhd2LockShift = state;", body);
+        Assert.DoesNotContain("SettledBudgetLedger", body);
+        Assert.DoesNotContain("AttemptsUsed = 0", body);
+        Assert.DoesNotContain("SetExactLockPositionAsync", body);
+    }
+
+    [Fact]
     public void ReturnedOriginRetriesOnlyCheckedStopAndNeverMovement()
     {
         var body = Slice(

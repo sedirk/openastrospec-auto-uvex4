@@ -3,6 +3,15 @@
 OpenAstroSpec — UVEX4 is licensed `GPL-3.0-only` as one repository containing two products. Adding
 `LICENSE` is necessary but not sufficient for a safe public release.
 
+Latest source closeout: [2026-10-11 / 0.4.0.277](closeout-2026-10-11.md).
+The Windows build, 3,214 .NET tests, pinned Ruff/75 reduction tests, frozen hashes
+and current-source privacy audit pass. The prior installed package was verified against
+all 41 maintenance-time artifact files; the final whitespace-normalized source rebuild
+is recorded separately and not reinstalled. This does **not** complete this release checklist: .277's
+three live-panel visual checks, new-version sky acceptance, reachable-history review
+and binary licensing/release work remain separate. This closeout publishes a source
+commit to the existing main branch, not a signed tag, binary release or safety certification.
+
 ## 1. Source and privacy audit
 
 - [ ] `git status --short` is clean and the intended tag is signed or otherwise recorded.

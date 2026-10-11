@@ -340,13 +340,20 @@ public sealed class G3AcquisitionRecoveryTests
                 CorrectionAttempts = 1,
                 CumulativeMotionArcseconds = 30,
             };
-            var retained = original with { FailedNeighbourApproaches = 1, NearTargetResponseRetries = 1 };
+            var retained = original with { FailedNeighbourApproaches = 1, NearTargetResponseRetries = 1,
+                DirectApproachAfterNeighbourFailureAttempts = 1 };
             Assert.Empty(retained.Validate());
             await G3AcquisitionMotionStore.WriteAtomicAsync(path, retained);
             var loaded = await G3AcquisitionMotionStore.LoadAsync(path);
             Assert.Null(loaded.Error);
             Assert.Equal(retained, loaded.State);
-            Assert.Equal(original, loaded.State! with { FailedNeighbourApproaches = 0, NearTargetResponseRetries = 0 });
+            Assert.Equal(original, loaded.State! with { FailedNeighbourApproaches = 0, NearTargetResponseRetries = 0,
+                DirectApproachAfterNeighbourFailureAttempts = 0 });
+            Assert.Contains("directApproachAfterNeighbourFailureAttempts", await File.ReadAllTextAsync(path));
+            Assert.DoesNotContain("directApproachAfterNeighbourFailureAttempts", JsonSerializer.Serialize(original));
+            Assert.NotEmpty((retained with { DirectApproachAfterNeighbourFailureAttempts = 2 }).Validate());
+            Assert.NotEmpty((retained with { DirectApproachAfterNeighbourFailureAttempts = -1 }).Validate());
+            Assert.NotEmpty((retained with { FailedNeighbourApproaches = 0 }).Validate());
             Assert.Contains("failedNeighbourApproaches", await File.ReadAllTextAsync(path));
             Assert.Contains("nearTargetResponseRetries", await File.ReadAllTextAsync(path));
             Assert.DoesNotContain("nearTargetResponseRetries", JsonSerializer.Serialize(original));
@@ -661,6 +668,82 @@ public sealed class G3AcquisitionRecoveryTests
         Assert.Equal(18_000, prior.MaximumRadiusArcseconds);
         Assert.Equal(10_046, prior.CumulativeMotionArcseconds);
         Assert.Equal(started, prior.StartedUtc);
+    }
+
+    [Fact]
+    public void NewSearchUsesItsOwnRadiusAndInheritedSearchNeverEnlargesItsCeiling()
+    {
+        Assert.Equal(900, G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(null, 900));
+        var prior = State(DateTimeOffset.UtcNow) with { MaximumRadiusArcseconds = 600 };
+        Assert.Equal(600, G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(prior, 900));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(prior, double.NaN));
+    }
+
+    [Theory]
+    [InlineData(2, 211, true)]
+    [InlineData(11, 211, false)]
+    [InlineData(2, 1000, false)]
+    public void WcsEndpointCanStartLocalSearchWithoutRebasingOrReissuingBudget(
+        int consumedActions, int elapsedSeconds, bool outboundFits)
+    {
+        // 03:21 incident geometry: the accepted WCS endpoint is 1392 arcsec
+        // from the lineage origin, while the new local search radius is 900.
+        var started = DateTimeOffset.Parse("2026-10-10T19:17:42Z");
+        var prior = State(started) with
+        {
+            Kind = G3AcquisitionMotionKind.WcsCentering,
+            OriginRaDegrees = 45.48361375,
+            OriginDeclinationDegrees = 38.23925111111111,
+            CurrentRaTangentOffsetArcseconds = 1167.8152261120613,
+            CurrentDeclinationOffsetArcseconds = -758.0129824139577,
+            MaximumSingleCorrectionArcseconds = 5400,
+            MaximumRadiusArcseconds = 18000,
+            MaximumCumulativeMotionArcseconds = 21600,
+            MaximumCorrectionAttempts = 12,
+            MaximumElapsedSeconds = 1200,
+            WorstCaseActionSeconds = 90,
+            ArrivalToleranceArcseconds = 2,
+            CumulativeMotionArcseconds = 1396.8338841165619,
+            CorrectionAttempts = consumedActions,
+        };
+        var now = started.AddSeconds(elapsedSeconds);
+        var continued = G3AcquisitionMotionPlanner.ContinueSettledLedger(
+            prior, "run-b", G3AcquisitionMotionKind.LocalSearch, "evidence/search.json", now,
+            familyMaximumSingleCorrectionArcseconds: 310,
+            familyMaximumRadiusArcseconds: G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(prior, 900),
+            familyAdditionalCumulativeMotionArcseconds: 3600,
+            familyAdditionalCorrectionAttempts: 12,
+            familyAdditionalElapsedTime: TimeSpan.FromSeconds(1200));
+
+        Assert.Empty(continued.Validate());
+        Assert.Equal(prior.MaximumRadiusArcseconds, continued.MaximumRadiusArcseconds);
+        Assert.Equal(310, continued.MaximumSingleCorrectionArcseconds);
+        Assert.Equal(prior.CumulativeMotionArcseconds + 3600, continued.MaximumCumulativeMotionArcseconds);
+        Assert.Equal(prior.CumulativeMotionArcseconds, continued.CumulativeMotionArcseconds);
+        Assert.Equal(prior.CorrectionAttempts, continued.CorrectionAttempts);
+        Assert.Equal(prior.MaximumCorrectionAttempts, continued.MaximumCorrectionAttempts);
+        Assert.Equal(prior.MaximumElapsedSeconds, continued.MaximumElapsedSeconds);
+        Assert.Equal(prior.StartedUtc, continued.StartedUtc);
+        Assert.Equal(prior.BudgetLineageId, continued.BudgetLineageId);
+        Assert.Equal(prior.OriginRaDegrees, continued.OriginRaDegrees);
+        Assert.Equal(prior.OriginDeclinationDegrees, continued.OriginDeclinationDegrees);
+
+        var localOrigin = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            prior.OriginRaDegrees, prior.OriginDeclinationDegrees,
+            prior.CurrentRaTangentOffsetArcseconds, prior.CurrentDeclinationOffsetArcseconds);
+        var firstWaypoint = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            localOrigin.RaDegrees, localOrigin.DecDegrees, 300, 0);
+        var durableOffset = G3AcquisitionMotionPlanner.SignedTangentOffsetArcseconds(
+            prior.OriginRaDegrees, prior.OriginDeclinationDegrees,
+            firstWaypoint.RaDegrees, firstWaypoint.DecDegrees);
+        var reserve = G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(
+            continued, durableOffset.RaArcseconds, durableOffset.DecArcseconds, now);
+        Assert.Equal(outboundFits, reserve.Gate.Disposition == GateDisposition.Passed);
+        // Even a tiny step cannot cross the inherited global radius.
+        var atEdge = continued with { CurrentRaTangentOffsetArcseconds = 17950, CurrentDeclinationOffsetArcseconds = 0 };
+        var outside = G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(atEdge, 18050, 0, now);
+        Assert.NotEqual(GateDisposition.Passed, outside.Gate.Disposition);
     }
 
     [Theory]

@@ -13,7 +13,7 @@ public sealed class Phd2StageFailurePolicyTests
     [InlineData("Fresh post-stage G3 residual failed:")]
     public void InnerReturnHandlersCannotSwallowTypedGuideLoss(string returnReason)
     {
-        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        var source = WorkflowSource.Convergence;
         var reasonIndex = source.IndexOf(returnReason, StringComparison.Ordinal);
         Assert.True(reasonIndex >= 0);
         var catchIndex = source.LastIndexOf("catch (Exception ex)", reasonIndex, StringComparison.Ordinal);

@@ -239,6 +239,7 @@ public sealed class ScenarioCatalogTests
         expected = expected.Concat(new[] { "photometry-legacy-master", "photometry-legacy-master-en", "photometry-legacy-master-narrow" }).ToArray();
         expected = expected.Concat(new[] { "guide-exposure-mismatch", "guide-exposure-mismatch-en", "guide-exposure-mismatch-narrow" }).ToArray();
         expected = expected.Concat(new[] { "short-handoff-outside", "short-handoff-outside-en", "short-handoff-outside-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "fresh-target-retry-exhausted", "fresh-target-retry-exhausted-en", "fresh-target-retry-exhausted-narrow" }).ToArray();
         expected = expected.Concat(new[] { "guide-output-unavailable", "guide-output-unavailable-en", "guide-output-unavailable-narrow" }).ToArray();
         expected = expected.Concat(new[] { "lock-recovery-calibration", "lock-recovery-calibration-narrow", "lock-recovery-calibration-en" }).ToArray();
         expected = expected.Concat(new[] { "g3-split-morphology", "g3-split-morphology-narrow", "g3-split-morphology-en" }).ToArray();
@@ -246,6 +247,10 @@ public sealed class ScenarioCatalogTests
         expected = expected.Concat(new[] { "roof-opening-preparation", "roof-opening-preparation-narrow", "roof-opening-preparation-en" }).ToArray();
         expected = expected.Concat(new[] { "target-visibility-window", "target-visibility-window-narrow", "target-visibility-window-en" }).ToArray();
         expected = expected.Concat(new[] { "native-target-editor", "native-target-editor-narrow", "native-target-editor-en", "native-target-pair", "native-night-inline" }).ToArray();
+        expected = expected.Concat(new[] { "native-closeout", "native-closeout-en" }).ToArray();
+        expected = expected.Concat(new[] { "phd2-return-settle-failure" }).ToArray();
+        expected = expected.Concat(new[] { "native-real-startup", "native-real-startup-en", "native-safety-startup", "native-safety-startup-en" }).ToArray();
+        expected = expected.Concat(new[] { "g3-predicted-target", "g3-predicted-target-narrow" }).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());

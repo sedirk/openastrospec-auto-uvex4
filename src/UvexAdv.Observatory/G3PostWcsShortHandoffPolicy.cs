@@ -2,7 +2,7 @@ namespace UvexAdv.Observatory;
 
 public sealed record G3PostWcsShortHandoffDecision(GateResult Gate, bool Accepted, bool RecheckPair);
 
-/// <summary>One image-only recheck for a confirmed pair straddling the unchanged handoff boundary.</summary>
+/// <summary>One image-only recheck for a confirmed pair near the unchanged handoff boundary.</summary>
 public static class G3PostWcsShortHandoffPolicy
 {
     public const string OutsideCode = "G3_POST_WCS_SHORT_HANDOFF_OUTSIDE";
@@ -12,7 +12,8 @@ public static class G3PostWcsShortHandoffPolicy
         TargetIdentification longTarget, PixelPoint prediction, double uncertainty,
         PixelPoint slit, int width, int height, double radius,
         G3ShortPositionMeasurement? previous, G3ShortPositionMeasurement current,
-        G3ShortPositionConfirmationDecision confirmation, int attempt, bool recheckUsed)
+        G3ShortPositionConfirmationDecision confirmation, int attempt, bool recheckUsed,
+        double measuredHandoffRadius = 0, double candidateSearchRadius = 0)
     {
         var metrics = new Dictionary<string, double>();
         if (confirmation.Gate.Metrics is { } input)
@@ -55,17 +56,57 @@ public static class G3PostWcsShortHandoffPolicy
             longTarget.Target is { } core && Distance(core.Centroid, t.Target!.Centroid) <= radius;
         var spread = confirmation.PositionSpreadPixels;
         var worst = Math.Max(Math.Max(priorPrediction, priorSlit), Math.Max(currentPrediction, currentSlit));
-        var recheck = !recheckUsed && attempt >= 2 && attempt <= G3PostWcsShortExposurePolicy.MaximumFrames - 2 &&
+        Metric("handoffBoundaryExcessPixels", Math.Max(0, worst - radius));
+        Metric("handoffBoundaryMeasuredSpreadPixels", spread);
+        // The narrow prediction window is not the available fine-motion budget.
+        // Keep its predicted destination/uncertainty fence; an explicitly supplied
+        // recognition radius may admit a farther measured long-frame candidate
+        // to two independent short confirmations in the EXISTING round-trip envelope.
+        // The caller deducts spent motion/time and the live planner must still
+        // preflight the complete correction before issuing any lock movement.
+        Metric("measuredHandoffRadiusPixels", measuredHandoffRadius);
+        var recognitionRadius = candidateSearchRadius > 0 ? candidateSearchRadius : radius;
+        var confirmedSearchRadius = candidateSearchRadius > 0 ? candidateSearchRadius : measuredHandoffRadius;
+        Metric("candidateSearchRadiusPixels", recognitionRadius);
+        var validMeasuredPair = double.IsFinite(measuredHandoffRadius) && measuredHandoffRadius > radius &&
+            double.IsFinite(candidateSearchRadius) && candidateSearchRadius >= 0 &&
+            confirmation.RepeatGate?.Disposition == GateDisposition.Passed &&
+            previous?.Gate.Disposition == GateDisposition.Passed && current.Gate.Disposition == GateDisposition.Passed &&
+            G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(longTarget,
+                prediction, uncertainty, slit, width, height, radius, recognitionRadius, measuredHandoffRadius) &&
+            ValidIdentity(prior) && ValidIdentity(actual) &&
+            double.IsFinite(spread) && spread >= 0 && spread <= G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels &&
+            priorPrediction + spread <= confirmedSearchRadius && currentPrediction + spread <= confirmedSearchRadius &&
+            double.IsFinite(worst);
+        Metric("measuredHandoffRequiredRadiusPixels", worst + spread);
+        Metric("measuredHandoffBoundaryExcessPixels", Math.Max(0, worst + spread - measuredHandoffRadius));
+        if (validMeasuredPair && worst + spread <= measuredHandoffRadius)
+            return new(GateResult.Warn("G3_POST_WCS_MEASURED_FINE_HANDOFF",
+                "Independent measured positions exceed the prediction window but fit the remaining bounded fine-correction envelope, including repeat scatter. Continue to fresh PHD2 measurements and full correction/return preflight; slit arrival and science are not yet authorized.", metrics), true, false);
+        // A pair can lie just outside on BOTH frames (WR 137: 21.19/20.13 px,
+        // 20 px radius, 2.07 px repeat scatter). Requiring one inside before
+        // permitting an image-only recheck discarded this valid boundary case.
+        // The excess must still fit the measured scatter; the new pair must
+        // satisfy the unchanged CanHandOff tests above, never radius + spread.
+        // HD 18552: centroids fit the remaining 44 px envelope, but including
+        // 3.355 px repeat scatter needed 44.711 px. Recheck the actual remaining
+        // envelope, not just the old 20 px routing window. Never enlarge it.
+        var measuredBoundary = validMeasuredPair && spread > 0 && worst <= measuredHandoffRadius &&
+            worst + spread > measuredHandoffRadius;
+        var originalBoundary =
             confirmation.RepeatGate?.Disposition == GateDisposition.Passed &&
             G3PostWcsMeasuredHandoffPolicy.NeedsShortExposureConfirmation(longTarget) &&
             G3PostWcsMeasuredHandoffPolicy.CanProposeHandoff(longTarget, prediction, uncertainty, slit, width, height, radius) &&
             previous?.Gate.Disposition == GateDisposition.Passed && current.Gate.Disposition == GateDisposition.Passed &&
-            ValidIdentity(prior) && ValidIdentity(actual) && (priorGeometry || currentGeometry) &&
+            ValidIdentity(prior) && ValidIdentity(actual) &&
             double.IsFinite(spread) && spread > 0 && spread <= G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels &&
             double.IsFinite(worst) && worst > radius && worst - radius <= spread;
+        var recheck = !recheckUsed && attempt >= 2 && attempt <= G3PostWcsShortExposurePolicy.MaximumFrames - 2 &&
+            (measuredBoundary || originalBoundary);
+        metrics["measuredHandoffBoundaryRecheck"] = recheck && measuredBoundary ? 1 : 0;
         return new(GateResult.Unknown(recheck ? RecheckCode : OutsideCode,
             recheck
-                ? "The independent pair agrees but straddles the original handoff boundary. Reserve exactly one new pair inside the original six-frame limit; no move, solve, tolerance or budget reset."
+                ? "The independent pair agrees and lies at the prediction or remaining measured fine-envelope boundary. Reserve exactly one new pair inside the original six-frame limit; no move, solve, tolerance or budget reset."
                 : "Independent short positions agree, but the pair does not fit the unchanged prediction/slit handoff windows. No PHD2 handoff is authorized.", metrics), false, recheck);
     }
 }

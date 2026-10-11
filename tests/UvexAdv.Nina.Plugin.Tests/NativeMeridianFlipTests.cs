@@ -146,12 +146,7 @@ public sealed class NativeMeridianFlipTests
     [Fact]
     public void ScienceFlipCheckPrecedesNextAttemptAndCannotFollowFinalAcceptedFrame()
     {
-        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
-        var start = source.IndexOf("private async Task<StageResult> RunScience", StringComparison.Ordinal);
-        Assert.True(start > 0);
-        var end = source.IndexOf("private async Task<StageResult> Finalize", start, StringComparison.Ordinal);
-        Assert.True(end > start);
-        var science = source[start..end];
+        var science = WorkflowSource.Science;
         var boundary = science.IndexOf("RequestNativeMeridianBoundary", StringComparison.Ordinal);
         var attempt = science.IndexOf("attemptedAtrFrames++", StringComparison.Ordinal);
         var accepted = science.IndexOf("savedAtrFrames++", StringComparison.Ordinal);

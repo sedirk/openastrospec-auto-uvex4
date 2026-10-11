@@ -8,6 +8,19 @@ public static class G3WcsRecoveryPolicy
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
     public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
 
+    // A failed exterior staging field is not proof that the target field is
+    // unusable. After returning and obtaining a fresh formal WCS, try the
+    // actual destination once if it fits ONE existing step. This chooses a
+    // route only: the runner still preflights and charges outbound + return.
+    public static bool CanTryDirectAfterFailedNeighbour(int failedNeighbours, int directAttempts,
+        bool hasFreshFormalSolve, double requiredArcseconds, double maximumSingleArcseconds,
+        double arrivalToleranceArcseconds) =>
+        failedNeighbours > 0 && directAttempts == 0 && hasFreshFormalSolve &&
+        double.IsFinite(requiredArcseconds) && requiredArcseconds > 0 &&
+        double.IsFinite(maximumSingleArcseconds) && maximumSingleArcseconds > 0 &&
+        double.IsFinite(arrivalToleranceArcseconds) && arrivalToleranceArcseconds > 0 &&
+        requiredArcseconds + arrivalToleranceArcseconds <= maximumSingleArcseconds;
+
     // One additional fresh-WCS correction may absorb a small, uncertain optical
     // response. This is NOT backlash calibration, a gain multiplier, handoff
     // authority or a new motion allowance. The normal outbound/return gates run

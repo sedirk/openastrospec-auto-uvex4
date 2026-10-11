@@ -14,13 +14,14 @@ internal static class ObservationPreviewRenderer
         IImageData image,
         SlitGeometry? slit = null,
         PixelPoint? target = null,
-        PixelPoint? guideStar = null)
+        PixelPoint? guideStar = null,
+        bool targetIsPrediction = false)
     {
-        return RenderG3Bitmap(image.RenderBitmapSource(), slit, target, guideStar);
+        return RenderG3Bitmap(image.RenderBitmapSource(), slit, target, guideStar, targetIsPrediction);
     }
 
     internal static BitmapSource RenderG3Bitmap(BitmapSource bitmap, SlitGeometry? slit = null,
-        PixelPoint? target = null, PixelPoint? guideStar = null)
+        PixelPoint? target = null, PixelPoint? guideStar = null, bool targetIsPrediction = false)
     {
         var source = bitmap.Clone();
         var overlay = new DrawingGroup
@@ -62,8 +63,10 @@ internal static class ObservationPreviewRenderer
             if (target is not null)
             {
                 var point = new Point(target.X, target.Y);
-                drawing.DrawEllipse(null, new Pen(Brushes.OrangeRed, 4), point, 18, 18);
-                DrawLabel(drawing, "TARGET", point + new Vector(22, -22), Brushes.OrangeRed);
+                var brush = targetIsPrediction ? Brushes.Gold : Brushes.OrangeRed;
+                var pen = new Pen(brush, 4) { DashStyle = targetIsPrediction ? DashStyles.Dash : DashStyles.Solid };
+                drawing.DrawEllipse(null, pen, point, 18, 18);
+                DrawLabel(drawing, targetIsPrediction ? "PREDICTED / 未实测" : "TARGET", point + new Vector(22, -22), brush);
             }
             if (guideStar is not null)
             {

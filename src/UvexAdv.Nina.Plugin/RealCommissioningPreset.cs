@@ -29,8 +29,8 @@ internal sealed record RealCommissioningPreset(
     HardwareFingerprintPreset? HardwareFingerprint = null,
     int G3SaturationAdu = UvexPluginSettings.G3M2210mDefaultSaturationAdu,
     RealSlitPlacementAuthority FineMotionAuthority = RealSlitPlacementAuthority.IndependentMountTransform,
-    Phd2SlitPlacementCommissioningPreset? Phd2SlitPlacement = null,
-    GhostAssistanceCommissioningPreset? GhostAssistance = null,
+    UvexAdv.Phd2.Phd2SlitPlacementCommissioning? Phd2SlitPlacement = null,
+    GhostAssistanceCommissioning? GhostAssistance = null,
     SlitWheelIdentityCalibration? SlitWheelIdentity = null);
 
 internal sealed record HardwareFingerprintPreset(
