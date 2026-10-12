@@ -4,6 +4,20 @@ namespace UvexAdv.Nina.Plugin;
 
 public enum SpectroscopyTargetFailurePolicy { EndNight, SkipQualityFailure }
 
+public enum SpectroscopyExposureMode { Automatic, Fixed }
+
+public sealed record SpectroscopyExposureModeChoice(SpectroscopyExposureMode Value, string ChineseLabel)
+{
+    public string Label => ObservationStaticTextLocalization.Translate(ChineseLabel,
+        ObservationStaticTextLocalization.EffectiveCulture);
+
+    public static IReadOnlyList<SpectroscopyExposureModeChoice> Choices { get; } =
+    [
+        new(SpectroscopyExposureMode.Automatic, "自动曝光"),
+        new(SpectroscopyExposureMode.Fixed, "固定曝光"),
+    ];
+}
+
 public sealed record SpectroscopyFailurePolicyChoice(SpectroscopyTargetFailurePolicy Value, string ChineseLabel)
 {
     public string Label => ObservationStaticTextLocalization.Translate(ChineseLabel,
@@ -25,7 +39,8 @@ internal sealed record NativeSequencePlan(
     bool HomeBeforeParkOnFinalize = false, int MountHomeTimeoutSeconds = 180,
     double InitialGuideSettlePixels = 0, int InitialGuideStableSeconds = 5,
     int InitialGuideTimeoutSeconds = 180, bool ForceGuideCalibration = false,
-    bool AutomaticGuideRecovery = true, int GuideStarWaitSeconds = 300)
+    bool AutomaticGuideRecovery = true, int GuideStarWaitSeconds = 300,
+    DateTimeOffset? TargetDeadlineUtc = null)
 {
     internal UvexAdv.Phd2.Phd2SettleCriteria InitialGuideCriteria(UvexAdv.Phd2.Phd2SettleCriteria configured) =>
         InitialGuideSettlePixels > 0
@@ -98,6 +113,8 @@ internal sealed record NativeSequencePlan(
             return GateResult.Unknown("NIGHT_DEADLINE_REACHED", "本夜截止时间已到；保留已保存帧，结束本夜并执行已配置收口。");
         if (StopAtDawn && sunAltitude(now) >= DawnSunAltitudeDegrees)
             return GateResult.Unknown("NIGHT_DAWN_REACHED", "太阳已达到本夜晨光停止高度；保留已保存帧，结束本夜并执行已配置收口。");
+        if (TargetDeadlineUtc is { } targetEnd && now >= targetEnd)
+            return GateResult.TargetQuality("TARGET_CONTINUATION_TIME_LIMIT", "本目标原时间预算已耗尽；保留已保存帧，停止确认后跳过。");
         return null;
     }
 

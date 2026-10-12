@@ -7,6 +7,7 @@
              Foreground="#E5E7EB"
              Focusable="True"
              SnapsToDevicePixels="True"
+             SizeChanged="OnViewerSizeChanged"
              local:ObservationStaticTextLocalization.IsEnabled="True">
   <UserControl.Resources>
     <Style x:Key="ViewerToolbarButton" TargetType="Button">
@@ -294,7 +295,7 @@
             <TextBlock x:Name="SpectrumTitle" Foreground="#7DD3FC" TextWrapping="Wrap"
                        ToolTip="只读诊断预览：沿谱带提取并扣除天空；可用时复用后期引擎清理及提取。灰线为未清理孔径对照。缺测处断线；无波长/响应标定，不参与曝光验收。图像拉伸不改变曲线。" />
           </DockPanel>
-          <Image x:Name="SpectrumImageElement" Height="90" Margin="0,4,0,0" Stretch="Fill" />
+          <local:SpectrumPreviewPlot x:Name="SpectrumPlotElement" Height="90" Margin="0,6,0,0" />
         </StackPanel>
       </Border>
 

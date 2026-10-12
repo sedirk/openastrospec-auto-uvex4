@@ -1322,7 +1322,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("if (!UsesCatalogWcsTargetAuthority(context) &&", ladder);
         var shortSource = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.ShortHandoff.cs"));
         Assert.Contains("preset.TargetSearchRadiusPixels", shortSource);
-        Assert.Contains("if (confirmed is not null) return confirmed;", ladder);
+        Assert.Contains("if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;", ladder);
+        Assert.Contains("outsideShortHandoff = confirmed;", ladder);
         // A failed short confirmation returns its evidence rather than buying
         // another full PL3 ladder or claiming a prediction as measurement.
         Assert.Contains("return latest with { MeasuredPostWcsTarget = null };", shortSource);

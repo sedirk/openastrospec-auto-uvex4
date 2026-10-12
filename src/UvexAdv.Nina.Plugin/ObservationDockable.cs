@@ -342,6 +342,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             if (mainFocus?.IsBusy == true) mainFocus.CancelCommand.Execute(null);
             else host.Cancel();
         }, () => IsControllable || mainFocus?.IsBusy == true);
+        CloseSafetyStandbyCommand = new SimpleCommand(() => host.RequestSafetyStandbyCloseout(),
+            () => host.Dashboard.SafetyStandby?.Phase == "Waiting");
         takeoverCommand = new SimpleCommand(
             () => host.RequestTakeover("操作员从实时面板请求人工接管。"),
             () => IsControllable && RunState is not ObservationRunState.ManualTakeover);
@@ -537,6 +539,9 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public ICommand PauseCommand => pauseCommand;
     public ICommand ResumeCommand => resumeCommand;
     public ICommand CancelCommand => cancelCommand;
+    public ICommand CloseSafetyStandbyCommand { get; private set; } = null!;
+    public bool HasSafetyStandby => host.Dashboard.SafetyStandby is not null;
+    public string SafetyStandbyStatus => host.Dashboard.SafetyStandby?.Message ?? string.Empty;
     public ICommand TakeoverCommand => takeoverCommand;
     public ICommand EnableModelAutomationBridgeCommand => enableModelAutomationBridgeCommand;
     public ICommand ArmModelAutomationRealControlCommand => armModelAutomationRealControlCommand;
@@ -2004,6 +2009,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public bool HasCurrentOperationText => !string.IsNullOrWhiteSpace(CurrentOperationText);
     public bool HasFailureTechnicalDetails => !string.IsNullOrWhiteSpace(LastFailureTechnicalDetails);
     public bool IsTargetPlanEditable => !IsTargetImportBusy && CanEditTargetPlan();
+    public string PlanDraftNotice => ObservationUiPresentation.PlanDraftNotice(host.Dashboard, UiCulture);
     public bool ImportFramingCenter
     {
         get => importFramingCenter;
@@ -3805,6 +3811,10 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
 
     private void ApplyDashboard(ObservationDashboardSnapshot dashboard, bool notifyBridge = true)
     {
+        RaisePropertyChanged(nameof(PlanDraftNotice));
+        RaisePropertyChanged(nameof(HasSafetyStandby));
+        RaisePropertyChanged(nameof(SafetyStandbyStatus));
+        (CloseSafetyStandbyCommand as SimpleCommand)?.RaiseCanExecuteChanged();
         // A native startup card may select REAL before the target begins.
         // Reflect the shared Profile selection without granting bridge control.
         RaisePropertyChanged(nameof(UseRealMode));
@@ -4141,7 +4151,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             observationPanelAnchorable is { IsSelected: true, IsVisible: true },
             Workflow, MainFocus.OptionsSnapshot, dashboard.AcquisitionProgress,
             ObservationAcquisitionPresentation.Build(dashboard.AcquisitionProgress, dashboard.Run.ObservationRunId,
-                dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture));
+                dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture), dashboard.SafetyStandby);
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(

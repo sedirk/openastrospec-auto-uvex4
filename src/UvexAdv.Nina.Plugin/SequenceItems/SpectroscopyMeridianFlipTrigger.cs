@@ -13,7 +13,7 @@ using Newtonsoft.Json;
 namespace UvexAdv.Nina.Plugin.SequenceItems;
 
 [ExportMetadata("Name", "OpenAstroSpec · 光谱中天翻转")]
-[ExportMetadata("Description", "逐帧使用 N.I.N.A. 翻转时机；保存并停止两路采集后翻转，重新定位/入缝/导星，仅续拍剩余帧。")]
+[ExportMetadata("Description", "取场、入缝与曝光边界使用 N.I.N.A. 翻转时机；保存并停止两路采集后交接，重新定位同一目标，仅续拍剩余帧。")]
 [ExportMetadata("Category", "OpenAstroSpec Auto")]
 [Export(typeof(ISequenceTrigger))]
 [JsonObject(MemberSerialization.OptIn)]
@@ -30,7 +30,7 @@ public sealed class SpectroscopyMeridianFlipTrigger : MeridianFlipTrigger
     // Time for read/save/guide-window and the worker's frame boundary. The
     // mount's own limit remains authoritative; this is not a limit override.
     [JsonProperty] public double BoundaryReserveSeconds { get; set; } = 120;
-    [JsonIgnore] public string FlipStatus { get; private set; } = "等待光谱逐帧边界；模拟不会翻转设备。";
+    [JsonIgnore] public string FlipStatus { get; private set; } = "等待取场 / 入缝 / 曝光边界；模拟不会翻转设备。";
 
     public override object Clone() => new SpectroscopyMeridianFlipTrigger(this);
 
@@ -38,7 +38,7 @@ public sealed class SpectroscopyMeridianFlipTrigger : MeridianFlipTrigger
     // Only the owned runner below may dispatch a flip, after both owners join.
     public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => false;
     public override Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) =>
-        throw new InvalidOperationException("光谱翻转只由 UVEX4 目标的逐帧边界调用，不能当作独立机械动作运行。");
+        throw new InvalidOperationException("光谱翻转只由 UVEX4 目标的受控边界调用，不能当作独立机械动作运行。");
 
     public override bool Validate()
     {

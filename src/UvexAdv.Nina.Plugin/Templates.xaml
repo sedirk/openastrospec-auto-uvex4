@@ -790,8 +790,12 @@
             <Button Content="清除导星相机旧状态" Command="{Binding ClearG3RecoveryStateCommand}"
                     Background="#92400E" BorderBrush="#FBBF24" FontWeight="Bold"
                     ToolTip="人工接管旧定位/入缝记录。存在未结 PHD2 入缝时，先结束曝光、停止导星并取消旧自动运行，再确认接管；保留原位置与预算，归档为未完成。不回程、不校准、不自动开始新观测。" />
-            <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="取消当前运行并执行安全收尾。" />
+            <Button Content="取消并收尾" Command="{Binding CancelCommand}" Background="#7F1D1D" BorderBrush="#FB7185" ToolTip="停止当前观测；序列开顶安全待机不会被此按钮关闭。" />
           </WrapPanel>
+          <DockPanel Margin="0,4,0,0" Visibility="{Binding HasSafetyStandby, Converter={StaticResource ObservationBoolToVisibility}}">
+            <Button DockPanel.Dock="Right" Content="安全待机关顶收口" Command="{Binding CloseSafetyStandbyCommand}" Margin="8,0,0,0"/>
+            <TextBlock Text="{Binding SafetyStandbyStatus}" Foreground="#7DD3FC" TextWrapping="Wrap" VerticalAlignment="Center"/>
+          </DockPanel>
           <WrapPanel Margin="0,4,0,0">
             <TextBlock Text="LLM 后台：" FontWeight="Bold" Foreground="#7DD3FC" />
             <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#94A3B8" TextWrapping="Wrap" />
@@ -939,7 +943,11 @@
         </TabItem>
 
         <TabItem Header="观测计划">
-          <TabControl x:Name="ObservationPlanTabs" SelectedIndex="{Binding SelectedPlanTabIndex, Mode=TwoWay}" Margin="5">
+          <Grid>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <TextBlock x:Name="PlanDraftNoticeText" Text="{Binding PlanDraftNotice}" Foreground="#FDE68A"
+                     TextWrapping="Wrap" Margin="10,6,10,3" />
+          <TabControl x:Name="ObservationPlanTabs" Grid.Row="1" SelectedIndex="{Binding SelectedPlanTabIndex, Mode=TwoWay}" Margin="5">
           <TabItem Header="目标与导入">
           <ScrollViewer x:Name="ObservationTargetPlanScrollViewer"
                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
@@ -1102,6 +1110,7 @@
             </ScrollViewer>
           </TabItem>
           </TabControl>
+          </Grid>
         </TabItem>
 
         <TabItem Header="自动准备">
@@ -2308,7 +2317,7 @@
             <CheckBox ToolTip="测试结束保持开顶，关顶收口单独操作" AutomationProperties.LabeledBy="{Binding ElementName=NativeHoldOpenLabel}" IsChecked="{Binding HoldOpenAfterTargets}" Margin="0,0,6,0"/>
             <TextBlock x:Name="NativeHoldOpenLabel" Text="测试结束保持开顶，关顶收口单独操作" VerticalAlignment="Center"/>
           </WrapPanel>
-          <TextBlock Text="目标失败且已确认停止时也保持开顶待处理，不继续目标、不清除未结账本。待机仍监视 AIWeather；截止、晨光、不安全或安全监视器失联时自动收口。更改仅对下一次启动生效。" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <TextBlock Text="目标结束或取消后序列退出；开顶保护转为独立安全待机，仍监视 AIWeather、原截止和晨光。失败及未结账本保留。更改仅对下一次启动生效；退出 N.I.N.A. 会停止软件保护。" TextWrapping="Wrap" Margin="0,2,0,6"/>
           <TextBlock Text="可把“关顶与整夜收口（可选）”拖入本容器最后；有该指令时以指令开关为准，上方保持开顶仅兼容旧序列。单次运行的关顶设置不影响本序列。" TextWrapping="Wrap" Margin="0,2,0,6"/>
           <Button Content="关顶与整夜收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
           <TextBlock Text="{Binding NightState}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,6"/>
@@ -2371,10 +2380,12 @@
           <TextBlock Text="光谱采集" FontWeight="Bold" Margin="0,10,0,3"/>
           <WrapPanel Margin="0,3">
             <StackPanel Margin="0,0,12,4"><TextBlock Text="合格科学帧"/><TextBox x:Name="NativeTargetFrames" Text="{Binding ScienceFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="90"/></StackPanel>
-            <StackPanel Margin="0,0,12,4"><TextBlock Text="固定曝光 / 秒（0 = 自动选档）"/><TextBox x:Name="NativeTargetExposure" Text="{Binding FixedExposureSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="190"/></StackPanel>
+            <StackPanel Margin="0,0,12,4"><TextBlock Text="曝光模式"/><ComboBox x:Name="NativeTargetExposureMode" Width="150" ItemsSource="{Binding AvailableExposureModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding ExposureMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+            <StackPanel Margin="0,0,12,4"><StackPanel.Style><Style TargetType="StackPanel"><Style.Triggers><DataTrigger Binding="{Binding IsFixedExposure}" Value="False"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style><TextBlock Text="曝光时间 / 秒"/><TextBox x:Name="NativeTargetExposure" Text="{Binding FixedExposureSeconds, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" Width="100"/></StackPanel>
             <StackPanel Margin="0,0,12,4"><TextBlock Text="最多尝试"/><TextBox Text="{Binding MaximumScienceAttempts, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="90"/></StackPanel>
             <StackPanel Margin="0,0,0,4"><TextBlock Text="可见窗口预算 / 分钟"/><TextBox Text="{Binding DurationMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Width="140"/></StackPanel>
           </WrapPanel>
+          <TextBlock x:Name="NativeTargetExposureDescription" Text="{Binding ExposureModeDescription}" TextWrapping="Wrap" Opacity="0.85"/>
           <WrapPanel Margin="0,5">
             <CheckBox x:Name="NativeForceCalibration" IsChecked="{Binding ForceGuideCalibration, Mode=TwoWay}" ToolTip="本目标开始时强制 PHD2 校准一次" AutomationProperties.LabeledBy="{Binding ElementName=NativeForceCalibrationLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
             <TextBlock x:Name="NativeForceCalibrationLabel" Text="本目标开始时强制 PHD2 校准一次" VerticalAlignment="Center" TextWrapping="Wrap"/>
@@ -2455,7 +2466,7 @@
 
   <DataTemplate x:Key="NativeSpectroscopyMeridianPanel">
     <StackPanel Margin="5" MaxWidth="650" local:ObservationStaticTextLocalization.IsEnabled="True">
-      <TextBlock Text="逐帧翻转 · 保存 → 停止采集 → N.I.N.A. 翻转 → 重新定位 / 入缝 / 导星 → 续拍剩余帧" TextWrapping="Wrap" FontWeight="SemiBold"/>
+      <TextBlock Text="中天交接 · 取场 / 入缝 / 曝光 → 停止采集 → 核验换侧 → 重新定位同一目标 → 续拍剩余帧" TextWrapping="Wrap" FontWeight="SemiBold"/>
       <TextBlock Text="使用 N.I.N.A. 的翻转时机与镜筒侧设置；不调用 ATR 主相机居中或普通自动对焦。此触发器仅用于光谱整夜序列，模拟不移动设备。" TextWrapping="Wrap" Margin="0,5"/>
       <WrapPanel><TextBlock Text="保存与测光边界余量 / 秒" VerticalAlignment="Center"/><TextBox Width="70" Margin="8,0" Text="{Binding BoundaryReserveSeconds, UpdateSourceTrigger=PropertyChanged}"/></WrapPanel>
       <TextBlock Text="{Binding FlipStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>

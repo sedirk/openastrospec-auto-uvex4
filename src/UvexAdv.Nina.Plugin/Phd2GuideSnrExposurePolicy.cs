@@ -15,13 +15,18 @@ internal static class Phd2GuideSnrExposurePolicy
     internal static bool CanRestoreAfterCandidateLoss(Phd2StateSnapshot baseline,
         Phd2StateSnapshot lost, Phd2StateSnapshot current, Phd2Point selected,
         bool hasPreviousTier, bool motionFree, bool guidingEverStarted) =>
-        hasPreviousTier && motionFree && !guidingEverStarted &&
+        hasPreviousTier && CanRecoverCandidateLoss(baseline, lost, current, selected, motionFree, guidingEverStarted);
+
+    internal static bool CanRecoverCandidateLoss(Phd2StateSnapshot baseline,
+        Phd2StateSnapshot lost, Phd2StateSnapshot current, Phd2Point selected,
+        bool motionFree, bool guidingEverStarted) =>
+        motionFree && !guidingEverStarted &&
         baseline.AppState is Phd2AppState.Selected or Phd2AppState.Looping &&
-        lost.AppState == Phd2AppState.LostLock && current.AppState == Phd2AppState.LostLock &&
+        lost.AppState is Phd2AppState.LostLock or Phd2AppState.Looping && current.AppState == lost.AppState &&
         baseline.IsConnected && current.IsConnected && !current.AutomationPaused && !current.Phd2Paused &&
         current.ConnectionEpoch == baseline.ConnectionEpoch && lost.ConnectionEpoch == baseline.ConnectionEpoch &&
         current.GuideEpoch == lost.GuideEpoch && lost.GuideEpoch > baseline.GuideEpoch &&
-        lost.GuideEpoch - baseline.GuideEpoch <= 2 &&
+        lost.GuideEpoch - baseline.GuideEpoch <= (lost.AppState == Phd2AppState.Looping ? 3 : 2) &&
         lost.EventSequence > baseline.EventSequence &&
         current.SelectedStar == selected && baseline.SelectedStar == selected &&
         current.CalibrationChangeSequence == baseline.CalibrationChangeSequence &&

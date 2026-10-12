@@ -12,6 +12,25 @@ internal sealed record NativeMeridianMountReadback(bool Connected, bool Slewing,
 /// <summary>Single-dispatch mount operation. Injectable owner ports support hardware-free failure tests.</summary>
 internal static class NativeMeridianMountOperation
 {
+    internal static async Task<PierSide> VerifyObservedChangeAsync(PierSide before, PierSide expectedAfter,
+        Func<NativeMeridianMountReadback> read, Action checkpoint,
+        Func<CancellationToken, Task> settle, CancellationToken token)
+    {
+        void Verify()
+        {
+            token.ThrowIfCancellationRequested();
+            checkpoint();
+            var state = read();
+            if (before is not (PierSide.pierEast or PierSide.pierWest) || expectedAfter == before ||
+                !state.IdleTracking || state.Side != expectedAfter)
+                throw new InvalidOperationException("转向后新侧别/停止/跟踪读回不稳定；不重发翻转或恢复旧向量。");
+        }
+        Verify();
+        await settle(token).ConfigureAwait(false);
+        Verify();
+        return expectedAfter; // Orientation boundary, NOT proof of optical arrival.
+    }
+
     internal static async Task<PierSide> ExecuteAsync(PierSide before,
         Func<NativeMeridianMountReadback> read,
         Func<CancellationToken, Task<bool>> flip,

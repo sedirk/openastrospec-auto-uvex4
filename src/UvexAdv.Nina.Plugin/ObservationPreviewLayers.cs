@@ -10,17 +10,16 @@ namespace UvexAdv.Nina.Plugin;
 /// The shared embedded/popout viewer stretches only the bitmap, never these
 /// annotations or the separately laid-out diagnostic spectrum.
 /// </summary>
-internal sealed record ObservationPreviewLayers(ImageSource? Overlay, ImageSource? Spectrum, Rect? FocusRegion = null,
+internal sealed record ObservationPreviewLayers(ImageSource? Overlay, SpectrumPreviewData? Spectrum, Rect? FocusRegion = null,
     string? SpectrumDescription = null, string? EnglishSpectrumDescription = null)
 {
     private static readonly ConditionalWeakTable<ImageSource, ObservationPreviewLayers> Layers = new();
 
-    internal static BitmapSource Attach(BitmapSource image, ImageSource? overlay = null, ImageSource? spectrum = null,
+    internal static BitmapSource Attach(BitmapSource image, ImageSource? overlay = null, SpectrumPreviewData? spectrum = null,
         Rect? focusRegion = null, string? spectrumDescription = null, string? englishSpectrumDescription = null)
     {
         if (image.CanFreeze && !image.IsFrozen) image.Freeze();
         if (overlay is { CanFreeze: true, IsFrozen: false }) overlay.Freeze();
-        if (spectrum is { CanFreeze: true, IsFrozen: false }) spectrum.Freeze();
         if (focusRegion is { } region &&
             (region.IsEmpty || !double.IsFinite(region.X + region.Y + region.Width + region.Height) ||
              region.Width <= 0 || region.Height <= 0 || region.Left < 0 || region.Top < 0 ||

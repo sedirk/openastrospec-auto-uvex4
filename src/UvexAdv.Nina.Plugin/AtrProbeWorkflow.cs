@@ -18,6 +18,7 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
     internal int RetainedFrames => Volatile.Read(ref retainedAtrProbeFrames);
     internal int AcceptedFrames => Volatile.Read(ref acceptedAtrProbeFrames);
     internal bool RequiresReprobe { get; private set; }
+    internal int InheritedAttempts { get; set; }
 
     internal void Invalidate()
     {
@@ -63,6 +64,9 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
         var followsSaturationBackoff = false;
         while (visitBudget.AttemptCount < visitBudget.MaximumAttempts)
         {
+            if (InheritedAttempts > 0 && InheritedAttempts + attemptedAtrProbeFrames >= visitBudget.MaximumAttempts)
+                return new StageResult(GateResult.TargetQuality("ATR_PROBE_ATTEMPT_LIMIT",
+                    "校时续拍沿用原试拍次数，剩余试拍预算已耗尽；保留原帧，不重发预算。"));
             if (port.SequenceStopGate() is { } sequenceStop) return new StageResult(sequenceStop);
             if (port.RequestNativeMeridianBoundary(context, probeExposure)) return port.MeridianSegmentBoundary();
             var backoffReprobesBefore = visitBudget.BackoffReprobes;

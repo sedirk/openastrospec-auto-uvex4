@@ -73,7 +73,7 @@ public sealed class UvexSelectRealModeItem : SequenceItem, IValidatable
         using var reservation = await host.ReserveNightAsync(this, true, token);
         token.ThrowIfCancellationRequested();
         settings.ObservationUseRealMode = true;
-        progress.Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "已选择真实模式；由后续目标执行原有安全与设备检查，未启动观测或授权后台控制。" });
+        ObservationStatusProgress.Wrap(progress).Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "真实模式已选择 · 待安全检查" });
     }
     public override object Clone()
     {
@@ -133,7 +133,7 @@ public sealed class UvexStartSafetyMonitorItem : SequenceItem, IValidatable
         if (!ReferenceEquals(profile, profiles.ActiveProfile) || profiles.ActiveProfile.SafetyMonitorSettings.Id != AiWeatherId ||
             !after.Connected || after.DeviceId != AiWeatherId)
             throw new InvalidOperationException("AIWeather 连接或 Profile 身份读回不一致；不能继续。");
-        progress.Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "AIWeather 已连接；仍须执行后面的等待安全，连接成功不等于天气安全。" });
+        ObservationStatusProgress.Wrap(progress).Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "AIWeather 已连接 · 待安全判定" });
     }
     public override object Clone()
     {

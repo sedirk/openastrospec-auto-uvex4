@@ -228,6 +228,7 @@ public sealed class ScenarioCatalogTests
             "preparation-en", "preparation-night-en", "preparation-narrow", "preparation-narrow-bottom", "preparation-night-narrow", "preparation-night-narrow-bottom"];
         string[] science = ["science-progress", "science-progress-narrow", "science-progress-short", "science-progress-en", "science-progress-saving", "science-progress-paused", "science-progress-probe", "science-progress-complete"];
         var expected = existing.Concat(added).Concat(preparation).Concat(science)
+            .Concat(new[] { "independent-safety-standby", "independent-safety-standby-narrow" })
             .Concat(new[] { "atr-cooling-wait", "atr-cooling-wait-narrow" })
             .Concat(new[] { "post-calibration-pulse", "post-calibration-pulse-narrow" })
             .Concat(new[] { "post-calibration-blend", "post-calibration-blend-narrow" })
@@ -247,10 +248,12 @@ public sealed class ScenarioCatalogTests
         expected = expected.Concat(new[] { "roof-opening-preparation", "roof-opening-preparation-narrow", "roof-opening-preparation-en" }).ToArray();
         expected = expected.Concat(new[] { "target-visibility-window", "target-visibility-window-narrow", "target-visibility-window-en" }).ToArray();
         expected = expected.Concat(new[] { "native-target-editor", "native-target-editor-narrow", "native-target-editor-en", "native-target-pair", "native-night-inline" }).ToArray();
+        expected = expected.Concat(new[] { "native-target-auto", "native-target-auto-narrow", "native-target-auto-en" }).ToArray();
         expected = expected.Concat(new[] { "native-closeout", "native-closeout-en" }).ToArray();
         expected = expected.Concat(new[] { "phd2-return-settle-failure" }).ToArray();
         expected = expected.Concat(new[] { "native-real-startup", "native-real-startup-en", "native-safety-startup", "native-safety-startup-en" }).ToArray();
         expected = expected.Concat(new[] { "g3-predicted-target", "g3-predicted-target-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "plan-sequence-draft", "plan-sequence-draft-narrow", "plan-sequence-budget" }).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());

@@ -27,6 +27,8 @@ internal sealed partial class RealObservationStageRunner
         guideSnrPreparationConsumed = true;
         var supported = await phd2.GetExposureDurationsAsync(token).ConfigureAwait(false);
         int? previousExposureMilliseconds = null;
+        var selectionAttemptsAtTier = selection.Attempts;
+        var candidateReselectionConsumed = false;
         for (var increases = 0; increases <= Phd2GuideSnrExposurePolicy.MaximumIncreases; increases++)
         {
             await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
@@ -39,14 +41,23 @@ internal sealed partial class RealObservationStageRunner
                     token).ConfigureAwait(false);
             }
             catch (Phd2GuidingFrameLostException lost) when (lost.SelectedStarSnrBaseline is { } sampleOwner &&
-                Phd2GuideSnrExposurePolicy.CanRestoreAfterCandidateLoss(
-                sampleOwner, lost.Snapshot, phd2.Snapshot, selection.Selected, previousExposureMilliseconds.HasValue,
+                Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(
+                sampleOwner, lost.Snapshot, phd2.Snapshot, selection.Selected,
                 pendingPhd2LockShift is null && (pendingSlitPlacement is null or { Phase: SlitPlacementPendingPhase.SettledBudgetLedger }),
                 Volatile.Read(ref phd2GuidingEverStarted) != 0))
             {
                 candidateLoss = lost;
             }
-            var next = candidateLoss is not null ? previousExposureMilliseconds :
+            // Loss of a PRE-GUIDE preview candidate is not a failed guide or
+            // evidence of bad calibration. Spend the remaining native selection
+            // allowance locally; do not re-enter WCS/LED/mount acquisition.
+            var localReselection = candidateLoss is not null && previousExposureMilliseconds is null;
+            if (localReselection && (candidateReselectionConsumed || selectionAttemptsAtTier >= 4))
+                throw new Phd2NativeGuideSelectionExhaustedException(selectionAttemptsAtTier,
+                    ["Pre-guide candidate disappeared during SNR sampling; local selection allowance exhausted, no guide/mount command issued."]);
+            var excludedCandidate = localReselection ? ToFrameLocal(selection.Selected, preset) : (PixelPoint?)null;
+            if (localReselection) candidateReselectionConsumed = true;
+            var next = candidateLoss is not null ? previousExposureMilliseconds ?? choice.ExposureMilliseconds :
                 Phd2GuideSnrExposurePolicy.NextExposure(observation!, supported, increases, motionFree, true);
             var median = observation is null ? null : Phd2GuideSnrExposurePolicy.MedianSnr(observation);
             await PublishRunJsonEvidenceAsync("phd2-guide-snr-preflight",
@@ -55,7 +66,8 @@ internal sealed partial class RealObservationStageRunner
                     nextExposureMilliseconds = next, increases, maximumIncreases = Phd2GuideSnrExposurePolicy.MaximumIncreases,
                     maximumExposureMilliseconds = Phd2GuideSnrExposurePolicy.MaximumExposureMilliseconds,
                     candidateLost = candidateLoss is not null, lostFrame = candidateLoss?.LostFrame,
-                    restoringPreviousTier = candidateLoss is not null,
+                    restoringPreviousTier = candidateLoss is not null && !localReselection,
+                    localReselection, selectionAttemptsAtTier,
                     candidateRankingByCoordinator = false, automaticExposureMode = false, qualityGate = false },
                 choice.Field.FramePath, token).ConfigureAwait(false);
             if (next is null)
@@ -65,7 +77,9 @@ internal sealed partial class RealObservationStageRunner
                     : $"warning：PHD2 选星 SNR {(median?.ToString("F1") ?? "未提供完整读回")}；保留 {choice.ExposureMilliseconds} ms，不因 SNR 偏好值阻断。后续仍检查真实导星及入缝。");
                 break;
             }
-            Report(candidateLoss is not null
+            Report(localReselection
+                ? "warning：导星前候选星在预览中丢失；确认停止后保持曝光，用新帧排除该候选并原地重选，不重跑解算/LED，不重置选星次数。"
+                : candidateLoss is not null
                 ? $"warning：延长曝光后的候选星丢失，停止本轮预览后用新帧恢复 {next} ms、由 PHD2 重选一次；不消耗整目标重校准恢复机会。"
                 : $"PHD2 选星 SNR {median:F1} 偏低：导星前将曝光从 {choice.ExposureMilliseconds} ms 调至 {next} ms，再由 PHD2 原生重选；不修改校准或运动预算。");
             // This selection loop is locally owned; stop it before any exposure
@@ -74,10 +88,11 @@ internal sealed partial class RealObservationStageRunner
             await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
             var brighter = await CaptureAndSelectPhd2GuideAtExposureAsync(context, choice.Field, preset,
                 choice.Mode, token, next).ConfigureAwait(false);
-            var restored = candidateLoss is not null;
+            var restored = candidateLoss is not null && !localReselection;
             if (brighter.Selection.Gate.Disposition != GateDisposition.Passed)
             {
                 if (restored) throw new PhysicalActionGateException(brighter.Selection.Gate);
+                if (localReselection) throw new PhysicalActionGateException(brighter.Selection.Gate);
                 // Longer exposure can clip the target even if it helps the
                 // off-slit star. Do not turn this optional optimization into a
                 // new veto; once, restore the previous fixed tier with a FRESH
@@ -92,7 +107,7 @@ internal sealed partial class RealObservationStageRunner
                     throw new PhysicalActionGateException(brighter.Selection.Gate);
                 restored = true;
             }
-            previousExposureMilliseconds = choice.ExposureMilliseconds;
+            if (!localReselection) previousExposureMilliseconds = choice.ExposureMilliseconds;
             selectedOffSlitExposureMilliseconds = brighter.ExposureMilliseconds;
             choice = brighter;
             var binding = await ValidateG3FieldMountBindingForMotionAsync(context, choice.Field, token).ConfigureAwait(false);
@@ -101,7 +116,15 @@ internal sealed partial class RealObservationStageRunner
                 new(TimeSpan.FromSeconds(preset.FreshLoopFrameTimeoutSeconds)), token).ConfigureAwait(false);
             if (!loop.LeavesLoopingForGuideTakeover || loop.StopCommandSent || loop.ExposureChanged)
                 throw new InvalidOperationException("PHD2 SNR selection loop did not preserve the fixed-exposure takeover contract.");
-            selection = await SelectFreshPhd2GuideAsync(choice, preset, token).ConfigureAwait(false);
+            selection = await SelectFreshPhd2GuideAsync(choice, preset, token,
+                excludedCandidate is { } excluded ? [excluded] : null,
+                localReselection ? 4 - selectionAttemptsAtTier : 4).ConfigureAwait(false);
+            selectionAttemptsAtTier = localReselection ? selectionAttemptsAtTier + selection.Attempts : selection.Attempts;
+            if (localReselection)
+            {
+                increases--; // local selection consumes attempts, not an exposure increase
+                continue;
+            }
             if (restored)
             {
                 Report($"warning：长曝光候选未保留，已用新帧恢复 {choice.ExposureMilliseconds} ms 并由 PHD2 重选；不再延长，后续仍须实测导星和入缝。");

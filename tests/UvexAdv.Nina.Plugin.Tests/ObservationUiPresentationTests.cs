@@ -8,6 +8,31 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationUiPresentationTests
 {
     [Theory]
+    [InlineData(ObservationRunState.RunningAuto, false)]
+    [InlineData(ObservationRunState.PausedNeedsAttention, false)]
+    [InlineData(ObservationRunState.Cancelling, false)]
+    [InlineData(ObservationRunState.Completed, true)]
+    [InlineData(ObservationRunState.Cancelled, true)]
+    [InlineData(ObservationRunState.Faulted, true)]
+    public void PlanDraftAnnotationUsesMatchingExecutedTargetNotSavedDraft(ObservationRunState state, bool ended)
+    {
+        var plan = new ObservationPlan("run", "night", new("HD 18552", "HD 18552", 45, 38), new(30, 120, 0),
+            DateTimeOffset.UtcNow, TimeSpan.FromMinutes(25), new(), new(), "atr", "g3", "qhy");
+        var snapshot = new ObservationDashboardSnapshot(ObservationSnapshot.Idle with { ObservationRunId = "run", State = state },
+            new Dictionary<ObservationStage, GateResult>(), new Dictionary<ObservationPreviewChannel, ObservationPreview>(), [], null, plan);
+        foreach (var language in new[] { "zh-CN", "en-US" })
+        {
+            var text = ObservationUiPresentation.PlanDraftNotice(snapshot, CultureInfo.GetCultureInfo(language));
+            Assert.Contains("HD 18552", text);
+            Assert.Contains(language == "zh-CN" ? "单目标草稿" : "single-target draft", text);
+            Assert.Contains(language == "zh-CN" ? "序列器" : "Sequencer", text);
+            Assert.Equal(ended, text.Contains(language == "zh-CN" ? "已结束" : "ended", StringComparison.Ordinal));
+            Assert.DoesNotContain("HD 18552", ObservationUiPresentation.PlanDraftNotice(snapshot with
+                { LockedPlan = plan with { ObservationRunId = "previous-run" } }, CultureInfo.GetCultureInfo(language)));
+        }
+    }
+
+    [Theory]
     [InlineData("zh-CN")]
     [InlineData("en-US")]
     public void UnconfirmedCancellationNeverClaimsTheGuideChainStopped(string language)
@@ -165,6 +190,7 @@ public sealed class ObservationUiPresentationTests
     [InlineData("G3_FRAME_REUSED", "拒绝复用旧光谱仪导星相机")]
     [InlineData("G3_SEARCH_NOT_STARTED_RETURNED", "邻场搜索尚未执行")]
     [InlineData("G3_WCS_CENTERING_RETURN_BLOCKED", "回程未取得安全到位确认")]
+    [InlineData("G3_WCS_CENTERING_PIER_CHANGED", "不跨侧执行旧位移")]
     [InlineData("G3_MOTION_CRASH_RETURN_BLOCKED", "上轮回程尚未取得到位确认")]
     [InlineData("G3_MOTION_CROSS_PIER_ORIGIN_UNCONFIRMED", "只读坐标核验未确认稳定到位")]
     [InlineData("G3_DESTINATION_PIER_SIDE_CHANGE", "未发送跨侧转向")]

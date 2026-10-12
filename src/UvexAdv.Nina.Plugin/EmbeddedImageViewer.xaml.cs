@@ -244,7 +244,7 @@ public partial class EmbeddedImageViewer : UserControl
 
     internal ImageSource? DisplayedImage => PreviewImageElement.Source;
     internal ImageSource? DisplayedOverlay => AnnotationImageElement.Source;
-    internal ImageSource? DisplayedSpectrum => SpectrumImageElement.Source;
+    internal SpectrumPreviewData? DisplayedSpectrum => SpectrumPlotElement.Spectrum;
 
     public void SetDisplayStretch(bool automatic, double blackPoint, double whitePoint, double gamma)
     {
@@ -334,7 +334,7 @@ public partial class EmbeddedImageViewer : UserControl
         var layers = ObservationPreviewLayers.For(PreviewImage);
         SpectralRegionToggle.Visibility = layers?.FocusRegion is null ? Visibility.Collapsed : Visibility.Visible;
         AnnotationImageElement.Source = layers?.Overlay;
-        SpectrumImageElement.Source = layers?.Spectrum;
+        SpectrumPlotElement.Spectrum = layers?.Spectrum;
         SpectrumTitle.Text = SpectrumDescription(layers);
         SpectrumPanel.Visibility = layers?.Spectrum is null ? Visibility.Collapsed : Visibility.Visible;
 
@@ -722,6 +722,13 @@ public partial class EmbeddedImageViewer : UserControl
         {
             ViewportScrollViewer.ReleaseMouseCapture();
         }
+    }
+
+    private void OnViewerSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        // Preserve a usable 2D camera viewport in a short dock; grow the plot
+        // in tall/popout views. Text is drawn at native size in either layout.
+        SpectrumPlotElement.Height = Math.Clamp((args.NewSize.Height - 350) * .6, 90, 180);
     }
 
     private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args)

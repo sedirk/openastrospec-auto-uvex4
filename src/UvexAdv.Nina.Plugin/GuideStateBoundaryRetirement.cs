@@ -18,7 +18,8 @@ internal sealed record GuideBoundaryWitness(bool OwnersIdle, bool ExclusiveRunOw
 /// <summary>
 /// ADR-0027: retire a FINISHED target's discovery handles, never settle a return.
 /// The original control envelope and counters are preserved byte for byte. This
-/// route is not available to pause/resume, stage recovery or meridian segments.
+/// route is not available to pause/resume or stage recovery. ADR-0032 adds a
+/// separately journal-bound, stopped meridian segment retirement entry point.
 /// </summary>
 internal static class GuideStateBoundaryRetirement
 {
@@ -46,6 +47,29 @@ internal static class GuideStateBoundaryRetirement
 
     internal static async Task<IReadOnlyList<string>> RetireAsync(string root, string runId,
         Func<CancellationToken, Task<GuideBoundaryWitness>> readWitness, CancellationToken token)
+        => await RetireCoreAsync(root, runId, readWitness, token, null).ConfigureAwait(false);
+
+    internal static async Task<IReadOnlyList<string>> RetireMeridianSegmentAsync(string root, string runId,
+        string targetRoot, string meridianJournalPath,
+        Func<CancellationToken, Task<GuideBoundaryWitness>> readWitness, CancellationToken token)
+    {
+        void Authorize(ObservationRunManifest manifest)
+        {
+            var entry = JsonSerializer.Deserialize<NativeMeridianJournal>(File.ReadAllText(meridianJournalPath));
+            if (manifest.TerminalState != ObservationRunState.Completed ||
+                string.IsNullOrWhiteSpace(targetRoot) ||
+                manifest.LockedMetadata.Labels?.GetValueOrDefault("nativeTargetRootRunId") != targetRoot ||
+                entry is not { Phase: "OwnersIdle", BeforeSide: "pierEast" or "pierWest",
+                    Reason: "Scheduled" or "ObservedSideChange" } || entry.RunId != runId ||
+                entry.Segments is not { Count: 1 } || entry.Segments[0] != runId || targetRoot != runId)
+                throw new InvalidOperationException("没有本目标唯一翻转交接的已停止分段凭据；旧运动记录保留。");
+        }
+        return await RetireCoreAsync(root, runId, readWitness, token, Authorize).ConfigureAwait(false);
+    }
+
+    private static async Task<IReadOnlyList<string>> RetireCoreAsync(string root, string runId,
+        Func<CancellationToken, Task<GuideBoundaryWitness>> readWitness, CancellationToken token,
+        Action<ObservationRunManifest>? authorizeMeridian)
     {
         if (string.IsNullOrWhiteSpace(runId) || Path.GetFileName(runId) != runId || runId is "." or "..")
             throw new InvalidOperationException("无效运行路径。");
@@ -54,6 +78,7 @@ internal static class GuideStateBoundaryRetirement
         var store = new ObservationRunJournalStore(manifestPath);
         var manifest = await store.ReadAsync(token) ?? throw new InvalidOperationException("原运行清单缺失。");
         if (manifest.ObservationRunId != runId) throw new InvalidOperationException("原运行身份不一致。");
+        authorizeMeridian?.Invoke(manifest);
         var files = new List<(string Path, byte[] Bytes)>();
         foreach (var name in new[] { "phd2-lock-shift-pending.json", "g3-acquisition-motion.json" })
         {
@@ -91,12 +116,15 @@ internal static class GuideStateBoundaryRetirement
             if (fresh?.Revision != manifest.Revision || fresh.TerminalState != manifest.TerminalState ||
                 !file.Bytes.SequenceEqual(await File.ReadAllBytesAsync(file.Path, token)))
                 throw new InvalidOperationException("归档期间原运行记录改变；保留未处理记录。");
-            var archive = file.Path + $".terminal-{Guid.NewGuid():N}.archive";
+            authorizeMeridian?.Invoke(fresh);
+            var purpose = authorizeMeridian is null ? "terminal" : "meridian";
+            var archive = file.Path + $".{purpose}-{Guid.NewGuid():N}.archive";
             await using (var stream = new FileStream(archive + ".audit.json", FileMode.CreateNew, FileAccess.Write, FileShare.Read))
             {
                 await JsonSerializer.SerializeAsync(stream, new
                 {
-                    action = "TerminalTargetGuideStateRetired", runId, manifest.TerminalState,
+                    action = authorizeMeridian is null ? "TerminalTargetGuideStateRetired" : "StoppedMeridianSegmentGuideStateRetired",
+                    runId, manifest.TerminalState,
                     originalPath = file.Path, archivePath = archive,
                     originalSha256 = Convert.ToHexString(SHA256.HashData(file.Bytes)), proof,
                     returnVerified = false, targetOnSlitVerified = false, motionSent = false,

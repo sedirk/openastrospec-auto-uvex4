@@ -12,9 +12,10 @@ public sealed class AtrPreCoolingRunnerSafetyTests
         Assert.Contains("ReferenceEquals(expectedProfile, profileService.ActiveProfile)", recovery);
         Assert.Contains("ReferenceEquals(owner, cameraMediator.GetDevice())", recovery);
         Assert.Contains("info.IsExposing || info.CameraState", recovery);
-        Assert.Contains("!cameraMediator.IsFreeToCapture(captureBlock)", recovery);
-        Assert.Contains("cameraMediator.RegisterCaptureBlock(captureBlock)", recovery);
-        Assert.Contains("cameraMediator.ReleaseCaptureBlock(captureBlock)", recovery);
+        Assert.Contains("!captureLease.IsCurrent(SequenceOwner())", recovery);
+        Assert.Contains("NativeCameraCaptureLease.TryAcquire(cameraMediator, SequenceOwner())", recovery);
+        Assert.Contains("NativeTarget is not null ? nativeSequenceCaptureOwner?.Invoke() : null", recovery);
+        Assert.Contains("captureLease?.Dispose()", recovery);
         var wait = recovery.IndexOf("await oldTask.WaitAsync", StringComparison.Ordinal);
         var disconnect = recovery.IndexOf("await cameraMediator.Disconnect()", StringComparison.Ordinal);
         var connect = recovery.IndexOf("await cameraMediator.Connect()", StringComparison.Ordinal);

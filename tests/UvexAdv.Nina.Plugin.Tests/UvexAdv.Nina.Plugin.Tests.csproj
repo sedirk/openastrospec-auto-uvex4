@@ -43,6 +43,8 @@
           Link="Sources\RealObservationStageRunner.ScienceContinuation.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.AtrCoolingRecovery.cs"
           Link="Sources\RealObservationStageRunner.AtrCoolingRecovery.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.NativeMeridianFlip.cs"
+          Link="Sources\RealObservationStageRunner.NativeMeridianFlip.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\Templates.xaml"
           Link="Templates.xaml"
           CopyToOutputDirectory="PreserveNewest" />

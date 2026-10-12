@@ -69,7 +69,11 @@ public sealed partial class Phd2Client
             using var waiter = RegisterEventWaiter(message =>
             {
                 if (message.Sequence <= baseline.EventSequence) return false;
-                if (message.Name == "StarLost")
+                // During preview, PHD2 clears the selected lock immediately
+                // before StarLost. Surface one candidate loss, not an unrelated
+                // owner failure that would restart the complete WCS chain.
+                if (message.Name == "StarLost" || message.Name == "LockPositionLost" &&
+                    Snapshot.AppState == Phd2AppState.Looping)
                     throw new Phd2GuidingFrameLostException(Snapshot, ParseGuideStep(message.Payload))
                         { SelectedStarSnrBaseline = baseline };
                 RequireSameSelection();

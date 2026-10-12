@@ -10,6 +10,56 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NativeSequencePlanTests
 {
+    [Fact]
+    public void ExposureSelectorUsesLegacySecondsContractAndSurvivesCloneAndNativeSave()
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var savedLadder = settings.AtrExposureLadderSecondsCsv;
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var target = new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings);
+        Assert.Equal(SpectroscopyExposureMode.Automatic, target.ExposureMode);
+        target.FixedExposureSeconds = 240;
+        Assert.Equal(SpectroscopyExposureMode.Fixed, target.ExposureMode);
+        var changes = new List<string?>();
+        target.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+        target.ExposureMode = SpectroscopyExposureMode.Automatic;
+        Assert.Equal(0, target.FixedExposureSeconds);
+        Assert.False(target.IsFixedExposure);
+        Assert.Contains("AUTO", target.TargetSummary);
+        Assert.Contains(nameof(target.ExposureMode), changes);
+        Assert.Contains(nameof(target.IsFixedExposure), changes);
+        var clone = (UvexTargetObservationContainer)target.Clone();
+        clone.ExposureMode = SpectroscopyExposureMode.Fixed;
+        Assert.Equal(240, clone.FixedExposureSeconds);
+        Assert.Equal(0, target.FixedExposureSeconds);
+        var factory = Proxy<NINA.Sequencer.ISequencerFactory>((m, _) => m.Name switch
+        {
+            "GetContainer" => (UvexTargetObservationContainer)clone.Clone(),
+            "GetItem" => new ObservationStageMarkerItem(), _ => Default(m.ReturnType)
+        });
+        var converter = new NINA.Sequencer.Serialization.SequenceJsonConverter(factory);
+        foreach (var source in new[] { target, clone })
+        {
+            var json = converter.Serialize(source);
+            Assert.DoesNotContain("\"ExposureMode\"", json);
+            var restored = Assert.IsType<UvexTargetObservationContainer>(converter.Deserialize(json));
+            Assert.Equal(source.ExposureMode, restored.ExposureMode);
+            Assert.Equal(source.FixedExposureSeconds, restored.FixedExposureSeconds);
+        }
+        var legacy = Newtonsoft.Json.Linq.JObject.Parse(converter.Serialize(clone));
+        legacy.Remove(nameof(clone.FixedExposureSeconds));
+        Assert.Equal(SpectroscopyExposureMode.Automatic,
+            Assert.IsType<UvexTargetObservationContainer>(converter.Deserialize(legacy.ToString())).ExposureMode);
+        Assert.Equal(savedLadder, settings.AtrExposureLadderSecondsCsv);
+        using var busy = new CancellationTokenSource();
+        typeof(UvexTargetObservationContainer).GetField("targetLifetime", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, busy);
+        Assert.Throws<InvalidOperationException>(() => target.ExposureMode = SpectroscopyExposureMode.Fixed);
+        Assert.Equal(0, target.FixedExposureSeconds);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -101,6 +151,51 @@ public sealed class NativeSequencePlanTests
             Calls++; onStage(); token.ThrowIfCancellationRequested();
             return Task.FromResult(new StageResult(GateResult.Pass("SIM_UI", "No hardware.")));
         }
+    }
+
+    [Fact]
+    public async Task ReusedNightAfterCancellationResetsRunningJournalAndHandsOverProtection()
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings)
+        { StopAtDawn = false, HoldOpenAfterTargets = true, EndAtIso8601 = DateTimeOffset.UtcNow.AddMinutes(5).ToString("O") };
+        UvexTargetObservationContainer Target(Action onStage) => new(profiles, Proxy<INighttimeCalculator>(), host, null!, settings,
+            () => new UiBoundRunner(onStage))
+        {
+            TargetName = "Synthetic reuse", CatalogId = "SIM", NightSetupId = "SIM-NIGHT", UseRealMode = false,
+            SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120, RightAscensionDegrees = 0, DeclinationDegrees = 89,
+            DurationMinutes = 1, HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+            ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY", ScienceFrames = 1, MaximumScienceAttempts = 2,
+        };
+        night.Add(Target(() => night.Interrupt().GetAwaiter().GetResult()));
+        var cancelled = await Record.ExceptionAsync(() => night.Execute(new Progress<ApplicationStatus>(), default));
+        if (cancelled is not null) Assert.IsAssignableFrom<OperationCanceledException>(cancelled);
+        Assert.Equal(ObservationRunState.Cancelled, host.Dashboard.Run.State);
+        Assert.Contains("已取消", night.NightState);
+        var oldJournal = night.JournalPath;
+        var oldBytes = await File.ReadAllBytesAsync(oldJournal);
+        var oldGuard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
+        night.Items.Clear();
+        var checkedRunning = false;
+        night.Add(Target(() =>
+        {
+            using var j = System.Text.Json.JsonDocument.Parse(File.ReadAllText(night.JournalPath));
+            Assert.Equal("Running", j.RootElement.GetProperty("phase").GetString());
+            Assert.DoesNotContain("取消", j.RootElement.GetProperty("state").GetString()!);
+            Assert.Empty(j.RootElement.GetProperty("outcomes").EnumerateArray());
+            checkedRunning = true;
+        }));
+        await night.Execute(new Progress<ApplicationStatus>(), default).WaitAsync(TimeSpan.FromSeconds(10));
+        await oldGuard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(checkedRunning); Assert.Equal("Transferred", oldGuard.Snapshot.Phase);
+        Assert.NotEqual(oldJournal, night.JournalPath); Assert.Equal(oldBytes, await File.ReadAllBytesAsync(oldJournal));
+        var nextGuard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
+        Assert.NotSame(oldGuard, nextGuard);
+        night.EndNightCommand.Execute(null); await nextGuard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
     }
 
     private static Task RunOnDispatcherAsync(Func<Task> action)
@@ -426,6 +521,13 @@ public sealed class NativeSequencePlanTests
         Assert.Equal(unresolved, Assert.Single(boundary.GetProperty("Errors").EnumerateArray()).GetString());
         Assert.Single(journal.RootElement.GetProperty("targetBoundaryFailures").EnumerateArray());
         Assert.False(night.IsActive);
+        if (mode == "cancel")
+        {
+            var guard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => host.ReserveNightAsync(new object(), false, CancellationToken.None));
+            night.EndNightCommand.Execute(null);
+            await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        }
         using var reservation = await host.ReserveNightAsync(new object(), false, CancellationToken.None);
     }
 
@@ -481,22 +583,29 @@ public sealed class NativeSequencePlanTests
         night.Add(closeout);
         using var cancel = new CancellationTokenSource();
         var task = night.Execute(new Progress<ApplicationStatus>(), cancel.Token);
-        for (var i = 0; i < 200 && !night.NightState.Contains("保持开顶待处理", StringComparison.Ordinal); i++) await Task.Delay(25);
-        Assert.Contains("保持开顶待处理", night.NightState);
-        Assert.False(task.IsCompleted); Assert.True(night.IsActive); Assert.Empty(later.Stages);
-        Assert.Throws<InvalidOperationException>(() => closeout.CloseAfterTargets = true);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ReserveNightAsync(new object(), false, CancellationToken.None));
-        if (exit == "explicit-close") night.EndNightCommand.Execute(null);
-        if (exit == "unsafe") night.OnNightUnsafe();
-        if (exit == "cancel") cancel.Cancel();
         var error = await Record.ExceptionAsync(() => task.WaitAsync(TimeSpan.FromSeconds(8)));
         Assert.IsNotType<TimeoutException>(error);
+        Assert.Contains("独立安全待机已接管", night.NightState);
+        Assert.True(task.IsCompleted); Assert.False(night.IsActive); Assert.Empty(later.Stages);
+        closeout.CloseAfterTargets = true; // Edits apply to the NEXT native execution only.
+        var guard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.RunFocusPreparationAsync(() => Task.FromResult(0), CancellationToken.None));
+        if (exit == "explicit-close") night.EndNightCommand.Execute(null);
+        if (exit == "unsafe") guard.RequestCloseout("NIGHT_UNSAFE");
+        if (exit == "cancel")
+        {
+            cancel.Cancel(); await night.Interrupt();
+            Assert.Equal("Waiting", guard.Snapshot.Phase); // A native cancel cannot disarm roof protection.
+            night.EndNightCommand.Execute(null);
+        }
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(8));
         Assert.Empty(later.Stages); Assert.False(night.IsActive);
         using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
         var terminal = journal.RootElement.GetProperty("outcomes").EnumerateArray().Last();
         Assert.Equal(!unsettled, terminal.GetProperty("targetBoundariesSettled").GetBoolean());
-        Assert.Equal(exit == "cancel", terminal.GetProperty("ordinaryCancel").GetBoolean());
-        Assert.Equal(exit == "unsafe", terminal.GetProperty("unsafeTripped").GetBoolean());
+        Assert.False(terminal.GetProperty("ordinaryCancel").GetBoolean());
+        Assert.False(terminal.GetProperty("unsafeTripped").GetBoolean()); // Later events belong to the independent journal.
+        Assert.True(terminal.GetProperty("handedToStandby").GetBoolean());
         Assert.False(terminal.GetProperty("physicalCloseoutConfirmed").GetBoolean()); // Simulation is never hardware proof.
     }
 
@@ -590,31 +699,36 @@ public sealed class NativeSequencePlanTests
         Assert.Contains("\"HoldOpenAfterTargets\":true", json);
         using var cancel = new CancellationTokenSource();
         var execution = night.Execute(new Progress<ApplicationStatus>(), cancel.Token);
-        for (var i = 0; i < 200 && !night.NightState.Contains("测试目标已结束", StringComparison.Ordinal); i++)
-            await Task.Delay(25);
-        Assert.Contains("测试目标已结束", night.NightState);
-        Assert.False(execution.IsCompleted);
-        Assert.True(night.IsActive);
+        await execution.WaitAsync(TimeSpan.FromSeconds(8));
+        Assert.Contains("观测序列已结束", night.NightState);
+        Assert.True(execution.IsCompleted);
+        Assert.False(night.IsActive);
         var activeTarget = (UvexTargetObservationContainer)night.Items[0];
-        Assert.False(night.CanEditPlan); Assert.False(activeTarget.CanEditPlan);
-        Assert.Throws<InvalidOperationException>(() => night.LockDeadline(DateTimeOffset.UtcNow.AddDays(1), TimeZoneInfo.Local));
-        Assert.Throws<InvalidOperationException>(() => activeTarget.ForceGuideCalibration = true);
-        Assert.Throws<InvalidOperationException>(() => activeTarget.TargetName = "Cannot hot-replace target");
-        Assert.Throws<InvalidOperationException>(() => activeTarget.FixedExposureSeconds = 600);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ReserveNightAsync(new object(), false, CancellationToken.None));
-        // Edits to the form cannot change this active night's locked choices.
+        Assert.True(night.CanEditPlan); Assert.True(activeTarget.CanEditPlan);
+        var guard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
+        var originalDeadline = guard.Snapshot.DeadlineUtc;
+        activeTarget.ForceGuideCalibration = true;
+        activeTarget.TargetName = "Next run's target";
+        activeTarget.FixedExposureSeconds = 600;
+        // Edits to the now-idle form cannot change the detached safety request.
         night.HoldOpenAfterTargets = false; night.InitialGuideSettlePixels = 5; night.EndAtIso8601 = "";
+        Assert.Equal(originalDeadline, guard.Snapshot.DeadlineUtc);
         Assert.Equal(3, night.ApplyNight(new(1, 1, 0)).InitialGuideSettlePixels);
         if (mode == "explicit-close") night.EndNightCommand.Execute(null);
-        if (mode == "unsafe") night.OnNightUnsafe();
-        if (mode == "cancel") cancel.Cancel();
-        try { await execution.WaitAsync(TimeSpan.FromSeconds(8)); }
-        catch (OperationCanceledException) when (mode is "unsafe" or "cancel") { }
+        if (mode == "unsafe") guard.RequestCloseout("NIGHT_UNSAFE");
+        if (mode == "cancel")
+        {
+            cancel.Cancel(); await night.Interrupt();
+            Assert.Equal("Waiting", guard.Snapshot.Phase);
+            night.EndNightCommand.Execute(null);
+        }
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(8));
         Assert.False(night.IsActive);
         using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
         var terminal = journal.RootElement.GetProperty("outcomes").EnumerateArray().Last();
-        Assert.Equal(mode == "cancel", terminal.GetProperty("ordinaryCancel").GetBoolean());
-        Assert.Equal(mode == "unsafe", terminal.GetProperty("unsafeTripped").GetBoolean());
+        Assert.False(terminal.GetProperty("ordinaryCancel").GetBoolean());
+        Assert.False(terminal.GetProperty("unsafeTripped").GetBoolean());
+        Assert.True(terminal.GetProperty("handedToStandby").GetBoolean());
         Assert.True(journal.RootElement.GetProperty("holdOpenAfterTargets").GetBoolean());
         Assert.False(string.IsNullOrEmpty(journal.RootElement.GetProperty("deadlineSchedule").GetProperty("RequestedText").GetString()));
         using var released = await host.ReserveNightAsync(new object(), false, CancellationToken.None);
@@ -734,6 +848,11 @@ public sealed class NativeSequencePlanTests
         var original = RealRunConfiguration.Capture(settings, solver);
         var first = original.WithSequencePlan(new(3, 6, 600, true));
         var second = original.WithSequencePlan(new(8, 12, 120, true));
+        var automatic = original.WithSequencePlan(new(2, 4, 0, true));
+        Assert.Equal(original.Atr.ExposureLadderSeconds, automatic.Atr.ExposureLadderSeconds);
+        Assert.Equal(original.Atr.ProbeExposureSeconds, automatic.Atr.ProbeExposureSeconds);
+        Assert.NotEqual(first.ActionConfigurationSha256, automatic.ActionConfigurationSha256);
+        Assert.True(automatic.MatchesCurrentProfile(settings, solver, out _));
         Assert.Equal(3, first.Atr.ScienceFrameCount);
         Assert.Equal(8, second.Atr.ScienceFrameCount);
         Assert.Equal(new[] { 600d }, first.Atr.ExposureLadderSeconds);
@@ -949,12 +1068,16 @@ public sealed class NativeSequencePlanTests
     [InlineData("skip", "G3_POST_WCS_TARGET_NOT_MEASURED")]
     [InlineData("cleanup-failure", "G3_POST_WCS_TARGET_NOT_MEASURED")]
     [InlineData("end-policy", "G3_POST_WCS_TARGET_NOT_MEASURED")]
+    [InlineData("fresh-window-skip", "G3_POST_WCS_TARGET_NOT_MEASURED")]
+    [InlineData("fresh-window-cleanup-failure", "G3_POST_WCS_TARGET_NOT_MEASURED")]
+    [InlineData("fresh-window-end-policy", "G3_POST_WCS_TARGET_NOT_MEASURED")]
     [InlineData("skip", G3PostWcsShortHandoffPolicy.OutsideCode)]
     [InlineData("skip", "PHD2_INITIAL_SETTLE_NOT_REACHED")]
     [InlineData("skip", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
     [InlineData("cleanup-failure", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
     [InlineData("end-policy", "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED")]
     [InlineData("unknown-gate", "PHD2_STOP_UNCONFIRMED")]
+    [InlineData("unknown-gate", "MOUNT_CLOCK_RECHECK_REQUIRED")]
     [InlineData("skip", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
     [InlineData("cleanup-failure", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
     [InlineData("end-policy", Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode)]
@@ -972,6 +1095,14 @@ public sealed class NativeSequencePlanTests
     [InlineData("cleanup-failure", "G3_CATALOG_SHORT_POSITION_UNCONFIRMED")]
     [InlineData("cleanup-failure", "G3_POST_WCS_SHORT_UNCONFIRMED")]
     [InlineData("typed-skip", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
+    [InlineData("typed-skip", "PHD2_PRE_GUIDE_SELECTION_UNAVAILABLE")]
+    [InlineData("typed-cleanup-failure", "PHD2_PRE_GUIDE_SELECTION_UNAVAILABLE")]
+    [InlineData("typed-end-policy", "PHD2_PRE_GUIDE_SELECTION_UNAVAILABLE")]
+    [InlineData("unknown-gate", "PHD2_PRE_GUIDE_OWNER_CHANGED")]
+    [InlineData("typed-skip", G3WcsRecoveryPolicy.PierChangedCode)]
+    [InlineData("typed-cleanup-failure", G3WcsRecoveryPolicy.PierChangedCode)]
+    [InlineData("typed-end-policy", G3WcsRecoveryPolicy.PierChangedCode)]
+    [InlineData("unknown-gate", G3WcsRecoveryPolicy.PierChangedCode)]
     [InlineData("typed-skip", "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED")]
     [InlineData("typed-skip", "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED")]
     [InlineData("typed-cleanup-failure", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
@@ -981,6 +1112,8 @@ public sealed class NativeSequencePlanTests
     {
         var typedQuality = mode.StartsWith("typed-", StringComparison.Ordinal);
         if (typedQuality) mode = mode[6..];
+        var freshWindow = mode.StartsWith("fresh-window-", StringComparison.Ordinal);
+        if (freshWindow) mode = mode[13..];
         InitializeAstrometry();
         var settings = Settings();
         var astrometry = Proxy<IAstrometrySettings>();
@@ -996,7 +1129,7 @@ public sealed class NativeSequencePlanTests
             if (d.Run.State == ObservationRunState.Faulted && Interlocked.Exchange(ref delayed, 1) == 0) Thread.Sleep(500);
         };
         var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
-        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality);
+        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality, freshWindow);
         var second = new TerminalGateRunner(null, false);
         var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
         var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
@@ -1147,13 +1280,25 @@ public sealed class NativeSequencePlanTests
         Assert.DoesNotContain("STAGE_EXCEPTION", body);
     }
 
-    private sealed class TerminalGateRunner(string? failure, bool failCleanup, bool typedQuality = false) : ObservationStageRunnerBase
+    private sealed class TerminalGateRunner(string? failure, bool failCleanup, bool typedQuality = false,
+        bool freshWindow = false) : ObservationStageRunnerBase
     {
         public List<ObservationStage> Stages { get; } = new();
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
         {
             Stages.Add(stage);
-            return Task.FromResult(new StageResult(stage == ObservationStage.AcquireG3SlitField && failure is not null
+            if (freshWindow && stage == ObservationStage.PlaceTargetOnSlit)
+            {
+                var window = new Phd2FreshTargetWindow(3);
+                while (!window.Exhausted) window.Observe(measured: false);
+                Assert.Equal(3, window.Captures);
+                Assert.False(window.Complete);
+                return Task.FromResult(new Phd2FreshTargetNotMeasuredException(
+                    GateResult.TargetQuality(Phd2FreshTargetWindow.FailureCode,
+                        "Formal WCS identity retained, but three fresh frames remain ambiguous; no hardware."),
+                    "synthetic-optical-window.json").AfterStop(stopConfirmed: true));
+            }
+            return Task.FromResult(new StageResult(!freshWindow && stage == ObservationStage.AcquireG3SlitField && failure is not null
                 ? typedQuality ? new TargetQualityEvidenceException(failure, "Synthetic optical failure; no physical hardware.").AfterStop(true).Gate
                     : GateResult.Unknown(failure, "Synthetic quality failure; no physical hardware.")
                 : GateResult.Pass("SIM_STAGE_PASS", "Synthetic stage; no physical hardware.")));
@@ -1308,6 +1453,115 @@ public sealed class NativeSequencePlanTests
             }
             if (stage == ObservationStage.SelectAtrExposure) ProbeDecisions++;
             return Task.FromResult(new StageResult(GateResult.Pass("REPLAY_STAGE", "Synthetic gates; no hardware.")));
+        }
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("optical-fail")]
+    [InlineData("budget-empty")]
+    [InlineData("repair-failed")]
+    [InlineData("stop-unconfirmed")]
+    [InlineData("unsafe")]
+    [InlineData("cancel")]
+    public async Task NativeClockRepairReacquiresSameCardBeforeNextTargetWithoutDoubleCounting(string mode)
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        var calls = new List<string>();
+        var runners = new List<ClockBoundaryRunner>();
+        var next = new TerminalGateRunner(null, false);
+        for (var i = 0; i < 2; i++)
+        {
+            var isFirst = i == 0;
+            night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () =>
+            {
+                if (!isFirst) { calls.Add("next-target"); return next; }
+                var runner = new ClockBoundaryRunner(mode, runners.Count, calls, night);
+                runners.Add(runner); return runner;
+            })
+            {
+                TargetName = isFirst ? "Clock target" : "Next target", CatalogId = $"SIM-{i}", NightSetupId = "SIM-NIGHT",
+                UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+                RightAscensionDegrees = 0, DeclinationDegrees = 89, DurationMinutes = 5,
+                HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+                ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+                ScienceFrames = 2, MaximumScienceAttempts = 4, ForceGuideCalibration = true,
+                FailurePolicy = SpectroscopyTargetFailurePolicy.SkipQualityFailure,
+            });
+        }
+        var error = await Record.ExceptionAsync(() => night.Execute(new Progress<ApplicationStatus>(), default).WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.IsNotType<TimeoutException>(error);
+        var continued = mode is "success" or "optical-fail";
+        Assert.Equal(continued ? 2 : 1, runners.Count);
+        Assert.Equal(mode == "stop-unconfirmed" ? 0 : 1, calls.Count(x => x == "repair"));
+        Assert.Equal(mode is "success" or "optical-fail" or "budget-empty", next.Stages.Count > 0);
+        if (continued)
+        {
+            Assert.Equal(1, runners[1].Remaining!.ScienceFrames);
+            Assert.Equal(2, runners[1].Remaining!.MaximumAttempts);
+            Assert.False(runners[1].Remaining!.ForceGuideCalibration);
+            Assert.Equal(runners[0].Session!.TargetPlan!.PlannedStartUtc + TimeSpan.FromMinutes(5), runners[1].Remaining!.TargetDeadlineUtc);
+            Assert.Equal(2, runners[1].Session!.ClockBudget!.Phd2!.Attempts);
+            Assert.Equal(30, runners[1].Session!.ClockBudget!.Phd2!.Distance);
+            Assert.Equal(runners[0].Started, runners[1].Session!.ClockBudget!.Phd2!.StartedUtc);
+            Assert.True(calls.IndexOf("repair") < calls.IndexOf("segment-1-ValidateNightSetup"));
+            Assert.True(calls.IndexOf("segment-1-AcquireG3SlitField") < calls.IndexOf("next-target"));
+            if (mode == "success")
+            {
+                Assert.Contains("segment-1-PlaceTargetOnSlit", calls);
+                Assert.Contains("segment-1-RunScienceBlock", calls);
+                Assert.Equal(2, runners[1].Session!.Accepted);
+                Assert.Equal(3, runners[1].Session!.Attempts);
+                Assert.Equal(240, runners[1].Session!.AcceptedSeconds);
+            }
+            else Assert.Equal(1, runners[1].Session!.Accepted);
+        }
+        using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
+        Assert.Equal(continued ? 1 : 0, journal.RootElement.GetProperty("clockContinuations").GetArrayLength());
+        var targetOutcomes = journal.RootElement.GetProperty("outcomes").EnumerateArray().Where(x => x.TryGetProperty("target", out _)).ToArray();
+        Assert.Equal(next.Stages.Count > 0 ? 2 : 1, targetOutcomes.Length);
+        Assert.Equal("Clock target", targetOutcomes[0].GetProperty("target").GetString());
+        Assert.Equal(mode == "success" ? "Completed" : mode == "optical-fail" ? "SkippedQualityFailure" :
+            mode == "budget-empty" ? "SkippedClockContinuationBudgetExhausted" : "Stopped", targetOutcomes[0].GetProperty("outcome").GetString());
+        if (host.SafetyStandby is { } guard) { night.EndNightCommand.Execute(null); await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3)); }
+    }
+
+    private sealed class ClockBoundaryRunner(string mode, int segment, List<string> calls, UvexNightSequenceContainer night)
+        : ObservationStageRunnerBase, INativeTargetBoundary
+    {
+        public NativeTargetSession? Session;
+        public NativeSequencePlan? Remaining;
+        public DateTimeOffset Started = DateTimeOffset.UtcNow.AddSeconds(-10);
+        public void AttachNativeTarget(NativeTargetSession? session) { Session = session; Remaining = session!.RemainingPlan(); }
+        public void RecordMeridianSegment(NativeTargetSession session, string runId) =>
+            session.RecordSegment(runId, segment == 0 || mode == "success" ? 1 : 0,
+                segment == 0 ? 2 : mode == "success" ? 1 : 0, 0, segment == 0 || mode == "success" ? 120 : 0);
+        public ClockContinuationBudget CaptureClockContinuationBudget() => new(null,
+            new(2, 30, Started, 8, 100, mode == "budget-empty" ? 1 : 600), 0, 0, null, 1200, 0, 0, 1, 8, 0, 0);
+        public Task<IReadOnlyList<string>> ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion = true)
+        { calls.Add("stopped"); return Task.FromResult<IReadOnlyList<string>>(mode == "stop-unconfirmed" ? new[] { "Synthetic unknown stop" } : Array.Empty<string>()); }
+        public async Task<GateResult> RecoverMountClockAtIdleBoundaryAsync(ObservationPlan failedPlan, CancellationToken token)
+        {
+            Assert.Contains("stopped", calls);
+            Assert.Contains("ClockRecoveryIntent", await File.ReadAllTextAsync(night.JournalPath, token));
+            calls.Add("repair");
+            if (mode == "unsafe") night.OnNightUnsafe();
+            if (mode == "cancel") await night.Interrupt();
+            return mode == "repair-failed" ? GateResult.Fail("MOUNT_CLOCK_RECOVERY_POSTCHECK_FAILED", "synthetic") : GateResult.Pass("MOUNT_CLOCK_VALID", "synthetic");
+        }
+        public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
+        {
+            calls.Add($"segment-{segment}-{stage}");
+            return Task.FromResult(new StageResult(segment == 0 && stage == ObservationStage.RunScienceBlock
+                ? GateResult.Unknown("MOUNT_CLOCK_RECHECK_REQUIRED", "Recorded two-day offset; no hardware")
+                : segment == 1 && mode == "optical-fail" && stage == ObservationStage.AcquireG3SlitField
+                    ? GateResult.TargetQuality("G3_POST_WCS_SHORT_UNCONFIRMED", "Synthetic reacquisition failure")
+                    : GateResult.Pass("SIM_STAGE", "No physical acquisition")));
         }
     }
 

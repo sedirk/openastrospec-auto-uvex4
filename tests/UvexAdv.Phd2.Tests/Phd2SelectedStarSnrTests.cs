@@ -21,6 +21,7 @@ public sealed class Phd2SelectedStarSnrTests
     [InlineData("selected-loop")]
     [InlineData("selected-reselected-same")]
     [InlineData("star-lost")]
+    [InlineData("preview-lock-lost")]
     [InlineData("stopped")]
     [InlineData("calibration")]
     [InlineData("lock-changed")]
@@ -45,6 +46,12 @@ public sealed class Phd2SelectedStarSnrTests
                 await session.SendEventAsync(new { Event = "StarSelected", X = Star.X, Y = Star.Y }, token);
             else if (mode == "star-lost")
                 await session.SendEventAsync(new { Event = "StarLost", Frame = 2, SNR = 2.9, ErrorCode = 3 }, token);
+            else if (mode == "preview-lock-lost")
+            {
+                await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 2, SNR = 0, ErrorCode = 2 }, token);
+                await session.SendEventAsync(new { Event = "LockPositionLost" }, token);
+                await session.SendEventAsync(new { Event = "StarLost", Frame = 2, SNR = 0, ErrorCode = 2 }, token);
+            }
             else if (mode == "stopped")
                 await session.SendEventAsync(new { Event = "LoopingExposuresStopped" }, token);
             else if (mode == "calibration")
@@ -64,7 +71,7 @@ public sealed class Phd2SelectedStarSnrTests
                     else await session.SendEventAsync(new { Event = "LoopingExposures", Frame = frame, SNR = 20 + frame, ErrorCode = 0 }, token);
                 }
             }
-            if (mode is not ("reselected" or "guiding" or "selected-reselected-same" or "star-lost" or "stopped" or "calibration" or "lock-changed"))
+            if (mode is not ("reselected" or "guiding" or "selected-reselected-same" or "star-lost" or "preview-lock-lost" or "stopped" or "calibration" or "lock-changed"))
             {
                 request = await session.ReadRequestAsync(token);
                 Assert.Equal("get_exposure", request.GetProperty("method").GetString());
@@ -77,7 +84,7 @@ public sealed class Phd2SelectedStarSnrTests
         var selected = await client.FindGuideStarAsync(CancellationToken.None);
         var task = client.ObserveSelectedStarSnrAsync(selected, 2000,
             TimeSpan.FromMilliseconds(mode == "timeout" ? 120 : 2000), CancellationToken.None);
-        if (mode == "star-lost")
+        if (mode is "star-lost" or "preview-lock-lost")
         {
             var lost = await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() => task);
             Assert.NotNull(lost.SelectedStarSnrBaseline);

@@ -8,7 +8,8 @@ internal sealed record Phd2SlitConvergenceRequest(
     IReadOnlyList<Phd2GuidingResidualState> InitialWindow,
     Phd2SlitPlacementCommissioning Preset, Phd2IdentityValidation Identity,
     string PendingPath, IReadOnlyDictionary<string, string> CommissioningMetadata,
-    int PostCalibrationReacquisitionDepth, int LostLockReacquisitionDepth);
+    int PostCalibrationReacquisitionDepth, int LostLockReacquisitionDepth,
+    bool AllowCoarseReacquisition = true);
 
 // Fine placement has no ATR, roof, raw camera or mount slew surface. Recovery
 // remains with the run supervisor; returning a denied plan never creates a new

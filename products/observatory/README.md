@@ -18,15 +18,19 @@ must have exactly one owner:
 The recorded sky tests still used the legacy QHY service, not the native photometry
 worker. Never run both owners against the same physical camera. See the
 [dual-instance implementation](../../docs/dual-nina-implementation.md) and
-[latest software/sky closeout](../../docs/closeout-2026-10-11.md) for deployment
+[latest software/sky closeout](../../docs/closeout-2026-10-12.md) for deployment
 and acceptance boundaries.
 
-Installed **0.4.0.277** keeps standalone and native-sequence observations on one
+Installed **0.4.0.285** keeps standalone and native-sequence observations on one
 production route. Acquisition/return, PHD2 slit convergence, ATR probing and science
 accounting now own distinct decisions/state through finite ports to the existing
 device owners. See the [workflow boundaries and remaining debt](../../docs/reports/2026-10-11-observation-workflow-boundaries.md).
-Software/historical replay checks pass; the three live .277 panels still need visual
-verification, and no new-version real-sky success is claimed.
+Native target cards support fixed/automatic exposure. Meridian handoff and verified
+clock repair reacquire fresh optical state with shared target accounting. Independent
+safety standby lets the observing sequence finish while retaining weather/dawn/cutoff
+protection inside the same N.I.N.A. process; application exit ends that protection.
+Software/historical replay and exact-package/runtime checks pass; live .285 panel
+visibility and new-version real-sky recovery remain unverified.
 
 ## Human entry points
 

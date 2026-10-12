@@ -7,7 +7,7 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed partial class RealObservationStageRunner
 {
     private readonly AdaptiveGuidingRecovery localGuidingRecovery = new();
-    private AdaptiveGuidingRecovery GuideRecovery => NativeMeridian?.GuidingRecovery ?? localGuidingRecovery;
+    private AdaptiveGuidingRecovery GuideRecovery => NativeTarget?.GuidingRecovery ?? localGuidingRecovery;
     private bool adaptiveCalibrationPending;
     private bool AdaptiveGuideRecoveryEnabled => configuration.SequencePlan?.AutomaticGuideRecovery ?? true;
     private bool HasNoOutstandingGuideRecoveryMotion => pendingG3SearchReturn is null &&

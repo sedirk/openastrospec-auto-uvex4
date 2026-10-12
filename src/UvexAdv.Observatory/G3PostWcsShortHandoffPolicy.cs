@@ -8,6 +8,13 @@ public static class G3PostWcsShortHandoffPolicy
     public const string OutsideCode = "G3_POST_WCS_SHORT_HANDOFF_OUTSIDE";
     public const string RecheckCode = "G3_POST_WCS_SHORT_BOUNDARY_RECHECK";
 
+    // Routing only. A repeat-confirmed star outside the remaining fine-motion
+    // envelope is not an invalid field. Try a single formal solve of the ALREADY
+    // captured field before the existing charged coarse loop decides any move.
+    public static bool NeedsSameFrameCoarseSolve(GateResult gate) =>
+        gate.Code == OutsideCode && gate.Disposition != GateDisposition.Passed &&
+        gate.Metrics?.GetValueOrDefault("confirmedPairCoarseSolveEligible") == 1;
+
     public static G3PostWcsShortHandoffDecision Evaluate(
         TargetIdentification longTarget, PixelPoint prediction, double uncertainty,
         PixelPoint slit, int width, int height, double radius,
@@ -78,6 +85,8 @@ public static class G3PostWcsShortHandoffPolicy
             double.IsFinite(spread) && spread >= 0 && spread <= G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels &&
             priorPrediction + spread <= confirmedSearchRadius && currentPrediction + spread <= confirmedSearchRadius &&
             double.IsFinite(worst);
+        metrics["confirmedPairCoarseSolveEligible"] = validMeasuredPair &&
+            worst + spread > measuredHandoffRadius ? 1 : 0;
         Metric("measuredHandoffRequiredRadiusPixels", worst + spread);
         Metric("measuredHandoffBoundaryExcessPixels", Math.Max(0, worst + spread - measuredHandoffRadius));
         if (validMeasuredPair && worst + spread <= measuredHandoffRadius)

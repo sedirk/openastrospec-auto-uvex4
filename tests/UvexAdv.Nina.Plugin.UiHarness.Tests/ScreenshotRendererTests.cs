@@ -8,6 +8,18 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 public sealed class ScreenshotRendererTests
 {
     [Theory]
+    [InlineData("plan-sequence-draft")]
+    [InlineData("plan-sequence-draft-narrow")]
+    [InlineData("plan-sequence-budget")]
+    public void SequenceDraftAnnotationClarifiesBothPlanTabsWithoutReplacingDraft(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, text => text.Contains("本次执行目标：HD 18552", StringComparison.Ordinal) &&
+            text.Contains("单目标草稿", StringComparison.Ordinal) && text.Contains("序列器", StringComparison.Ordinal));
+        Assert.Equal("78 Psc", ScenarioCatalog.Select(name).Single().ViewModel.TargetName);
+    }
+
+    [Theory]
     [InlineData("g3-predicted-target")]
     [InlineData("g3-predicted-target-narrow")]
     public void PredictedTargetCaptionDoesNotClaimMeasuredCentroid(string name)
@@ -93,6 +105,16 @@ public sealed class ScreenshotRendererTests
         });
     }
     [Theory]
+    [InlineData("independent-safety-standby")]
+    [InlineData("independent-safety-standby-narrow")]
+    public void IndependentSafetyStateAndCloseoutRemainVisibleAfterSequenceExit(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains("安全待机关顶收口", result.VisibleTexts);
+        Assert.Contains(result.VisibleTexts, x => x.Contains("独立安全待机", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("未自动续跑", StringComparison.Ordinal));
+    }
+    [Theory]
     [InlineData("native-night")]
     [InlineData("native-night-narrow")]
     public void NativeNightEditorShowsDeadlineCloseoutAndRuntimeWithoutExpanders(string name)
@@ -101,7 +123,8 @@ public sealed class ScreenshotRendererTests
         Assert.Contains(result.VisibleTexts, x => x.Contains("关顶与整夜收口", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("测试结束保持开顶", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("监视 AIWeather", StringComparison.Ordinal));
-        Assert.Contains(result.VisibleTexts, x => x.Contains("目标失败且已确认停止", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("目标结束或取消后序列退出", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("退出 N.I.N.A. 会停止软件保护", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("初始导星", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("普通取消", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("目标 2/3", StringComparison.Ordinal));
@@ -117,11 +140,14 @@ public sealed class ScreenshotRendererTests
     [InlineData("native-target-editor-narrow")]
     [InlineData("native-target-editor-en")]
     [InlineData("native-target-pair")]
+    [InlineData("native-target-auto")]
+    [InlineData("native-target-auto-narrow")]
+    [InlineData("native-target-auto-en")]
     public void NativeTargetEditorActuallyEditsIndependentProductionTargets(string name)
     {
         var result = RenderPhotometry(name);
         Assert.True(result.NativeTargetEditsRoundTrip, result.NativeTargetDiagnostics);
-        Assert.Contains(result.VisibleTexts, x => x.Contains("3 × 300 s", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains(name.StartsWith("native-target-auto", StringComparison.Ordinal) ? "3 × AUTO" : "3 × 300 s", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("PHD2", StringComparison.Ordinal));
         Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("translation unavailable", StringComparison.OrdinalIgnoreCase));
         var layout = Assert.IsType<NativeTargetLayoutDiagnostics>(result.NativeTargetLayout);

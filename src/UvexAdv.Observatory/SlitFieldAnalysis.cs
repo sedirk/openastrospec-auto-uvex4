@@ -340,8 +340,25 @@ public static class SlitTargetIdentifier
             frame,
             predictedPoint,
             maximumPredictionResidualPixels);
+        var excludedFeatures = topology.Ghosts.Concat(topology.Candidates.Where(candidate =>
+            candidate.Gate.Code is "SATURATED_SOURCE_HALO_FRAGMENT" or "SATURATED_SOURCE_OVERSIZED")).ToArray();
+        var ghostFiltered = excludedFeatures.Length == 0
+            ? candidates
+            : candidates.Where(candidate => excludedFeatures.All(ghost =>
+                Distance(candidate.Centroid, ghost.Centroid) > ghost.ExclusionRadiusPixels)).ToArray();
+        var measured = Identify(ghostFiltered, predictedPoint, maximumPredictionResidualPixels,
+            minimumSignalToNoise, minimumUniquenessRatio);
         if (topology.Gate.Disposition == GateDisposition.Passed && topology.Target is { } saturatedTarget)
         {
+            // A saturated primary anywhere in the search window must not
+            // pre-empt a separately resolved faint component at the catalogue
+            // prediction. Require the prediction inside its measured core;
+            // nearby halo fragments/rings remain excluded above.
+            if (measured.Gate.Disposition == GateDisposition.Passed &&
+                measured.Target is { SaturatedFraction: 0, FwhmPixels: >= 1 and <= 20 } resolved &&
+                measured.PredictionResidualPixels <= Math.Max(2, resolved.FwhmPixels / 2) &&
+                saturatedTarget.DistanceToPredictionPixels > Math.Max(2, resolved.FwhmPixels) * minimumUniquenessRatio)
+                return measured;
             return new TargetIdentification(
                 GateResult.Pass(
                     "TARGET_IDENTIFIED_SATURATED_TOPOLOGY",
@@ -354,20 +371,7 @@ public static class SlitTargetIdentifier
                 TargetIdentificationAuthority.BrightWingCentroid);
         }
 
-        var excludedFeatures = topology.Ghosts.Concat(topology.Candidates.Where(candidate =>
-            candidate.Gate.Code is "SATURATED_SOURCE_HALO_FRAGMENT" or "SATURATED_SOURCE_OVERSIZED")).ToArray();
-        var ghostFiltered = excludedFeatures.Length == 0
-            ? candidates
-            : candidates
-                .Where(candidate => excludedFeatures.All(ghost =>
-                    Distance(candidate.Centroid, ghost.Centroid) > ghost.ExclusionRadiusPixels))
-                .ToArray();
-        return Identify(
-            ghostFiltered,
-            predictedPoint,
-            maximumPredictionResidualPixels,
-            minimumSignalToNoise,
-            minimumUniquenessRatio);
+        return measured;
     }
 
     public static TargetIdentification Identify(

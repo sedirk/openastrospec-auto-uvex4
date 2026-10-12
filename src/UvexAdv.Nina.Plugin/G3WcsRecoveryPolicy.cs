@@ -7,6 +7,17 @@ public static class G3WcsRecoveryPolicy
 {
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
     public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
+    public const string PierChangedCode = "G3_WCS_CENTERING_PIER_CHANGED";
+
+    // A typed, known-side change invalidates this target's old coordinate frame;
+    // it is not permission to return across the pier or to flip again. ADR-0027
+    // still requires terminal owner-stop proof and authenticated ledger retirement
+    // before the night may skip. Unknown/unsafe/ownership failures remain hard.
+    internal static GateResult UnreturnedCenteringGate(GateResult? returnFailure, string message,
+        IReadOnlyDictionary<string, double> metrics) => returnFailure is
+            { Code: "G3_SEARCH_PIER_SIDE_CHANGED", Disposition: GateDisposition.Failed }
+        ? GateResult.TargetQuality(PierChangedCode, message, metrics)
+        : GateResult.Unknown("G3_WCS_CENTERING_RETURN_BLOCKED", message, metrics);
 
     // A failed exterior staging field is not proof that the target field is
     // unusable. After returning and obtaining a fresh formal WCS, try the
@@ -45,8 +56,15 @@ public static class G3WcsRecoveryPolicy
 
     public static bool CompletedSolvedNeighbourApproach(bool isNeighbourApproach,
         double commandScale, bool hasFreshFormalSolve, double priorRemainingArcseconds,
-        double freshRemainingArcseconds, double arrivalToleranceArcseconds) =>
-        isNeighbourApproach && commandScale == 1d && hasFreshFormalSolve &&
+        double freshRemainingArcseconds, double arrivalToleranceArcseconds,
+        double maximumSingleArcseconds = double.NaN) =>
+        // A capped first step need not reach the exterior staging point. If its
+        // NEW formal WCS proves progress and the real target now fits one step,
+        // finish toward the target instead of spending a second move on another
+        // exterior field. The caller still charges the exact outbound + return.
+        isNeighbourApproach && double.IsFinite(commandScale) && commandScale > 0 && commandScale <= 1 &&
+        (commandScale == 1d || (double.IsFinite(maximumSingleArcseconds) && maximumSingleArcseconds > 0 &&
+            freshRemainingArcseconds + arrivalToleranceArcseconds <= maximumSingleArcseconds)) && hasFreshFormalSolve &&
         HasMeasuredApproachProgress(priorRemainingArcseconds, freshRemainingArcseconds, arrivalToleranceArcseconds);
 
     public static bool NeedsCoarseCentering(GateResult fieldGate, bool hasFreshFormalSolve,

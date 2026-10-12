@@ -112,6 +112,37 @@ public sealed class G3WcsRecoveryPolicyTests
             arrivalTolerancePixels: 2 / .38, completedSolvedNeighbourApproach: completed));
     }
 
+    [Fact]
+    public void RecordedHd21455CappedStepFinishesTowardSlitWhenFreshRemainingTravelFitsOneStep()
+    {
+        // 2026-10-12: new formal WCS after a capped 5306 arcsec move.
+        // Another exterior staging field failed and consumed the return budget.
+        var slit = new PixelPoint(817.473, 426.867);
+        var target = new PixelPoint(8415.245, 12175.212);
+        var completed = G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(
+            true, .5, true, 10770.19038, 5336.51546, 2, 5400);
+        Assert.True(completed);
+        Assert.Equal(slit, G3WcsApproachPolicy.ChooseTargetPixel(target, slit, 1920, 1080,
+            arrivalTolerancePixels: 2 / .380921849, completedSolvedNeighbourApproach: completed));
+        Assert.NotEqual(slit, G3WcsApproachPolicy.ChooseTargetPixel(target, slit, 1920, 1080,
+            arrivalTolerancePixels: 2 / .380921849));
+    }
+
+    [Theory]
+    [InlineData(.5, true, 5398, 5400, true)]
+    [InlineData(.5, true, 5398.01, 5400, false)]
+    [InlineData(.5, false, 5336, 5400, false)]
+    [InlineData(.5, true, 10770, 18000, false)]
+    [InlineData(.5, true, 5336, double.NaN, false)]
+    [InlineData(.5, true, 5336, double.PositiveInfinity, false)]
+    [InlineData(.5, true, double.NaN, 5400, false)]
+    [InlineData(0, true, 5336, 5400, false)]
+    [InlineData(1.1, true, 5336, 5400, false)]
+    public void CappedStagingRequiresNewSolveProgressAndUnchangedSingleStepRoom(
+        double scale, bool solved, double fresh, double maximum, bool expected) =>
+        Assert.Equal(expected, G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(
+            true, scale, solved, 10770.19038, fresh, 2, maximum));
+
     [Theory]
     [InlineData(false, 1, true, 642)]
     [InlineData(true, .5, true, 642)]

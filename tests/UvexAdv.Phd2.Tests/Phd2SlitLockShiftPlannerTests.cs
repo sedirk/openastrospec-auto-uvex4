@@ -846,6 +846,57 @@ public sealed class Phd2SlitLockShiftPlannerTests
         Assert.False(tooFar.IsAllowed);
     }
 
+    [Fact]
+    public void V460CygRemainderCanBeShortenedWithoutChangingTheOriginalReturnBudget()
+    {
+        // 2026-10-11 V460 Cyg, last measured frame before the unnecessary return.
+        var f = CreateFixture(currentLock: new(451.4, 819.88), originLock: new(475.77, 825.45), attempts: 1, cumulative: 25);
+        var limits = f.MotionLimits with { MaximumStagePixels = 25, MaximumAttempts = 8,
+            MaximumStageDuration = TimeSpan.FromSeconds(30), LockVerificationTolerancePixels = 1,
+            TargetOnSlitTolerancePixels = 2, MaximumGuideLockResidualPixels = 3 };
+        var measured = Measurement(new(454.07, 820.549), new(843.6133333333333, 432.52444444444444),
+            new(817.5824596064429, 430.00151301434863)) with { GuidePositionMeasuredInFrame = true };
+        var original = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            measured, f.Ledger, f.Safety, f.Topology, limits, Now);
+        Assert.Equal("SLIT_LOCK_RETURN_CUMULATIVE_RESERVE", original.Code);
+        var partial = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            measured, f.Ledger, f.Safety, f.Topology, limits, Now, allowBudgetLimitedStage: true);
+        Assert.True(partial.IsAllowed, partial.Message);
+        Assert.False(partial.IsComplete);
+        Assert.Equal("SLIT_LOCK_STAGE_BUDGET_LIMITED", partial.Code);
+        var stage = Assert.IsType<Phd2LockShiftStagePlan>(partial.Stage);
+        Assert.InRange(stage.StagePixels, 22.12, 22.13);
+        Assert.Equal(2, stage.ReservedRecoveryAttempts);
+        Assert.InRange(stage.CumulativeAfterStageUpperPixels, 99.12, 99.13);
+        Assert.True(stage.RequiresFreshG3ResidualAfter);
+        Assert.Equal(f.Ledger.CurrentLockPosition, stage.ExpectedCurrentLockPosition);
+        Assert.Equal(measured.FrameSha256, stage.SourceFrameSha256);
+        Assert.Equal(25, f.Ledger.CumulativeCommandedPixels);
+        // Initial / exact-midpoint preflight remains strict, independent of the opt-in candidate.
+        Assert.False(Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(f.Qualification,
+            Phd2SlitGuideMode.OffSlitGuideStar, measured, f.Ledger, f.Safety, f.Topology, limits, Now).IsAllowed);
+    }
+
+    [Theory]
+    [InlineData("weather")] [InlineData("identity")] [InlineData("stale")]
+    [InlineData("attempts")] [InlineData("time")] [InlineData("no-room")]
+    public void BudgetLimitedCandidateNeverOverridesIndependentLimits(string failure)
+    {
+        var f = CreateFixture(currentLock: new(125, 100), attempts: 1, cumulative: 25);
+        var limits = f.MotionLimits with { MaximumStagePixels = 25, LockVerificationTolerancePixels = 1 };
+        var m = Measurement(new(125, 100), new(200, 200), new(225, 200));
+        if (failure == "weather") f = f with { Safety = f.Safety with { SafetyGatePassed = false } };
+        if (failure == "identity") m = m with { TargetIdentityConfirmed = false };
+        if (failure == "stale") m = m with { CapturedUtc = Now.AddMinutes(-5) };
+        if (failure == "attempts") limits = limits with { MaximumAttempts = 2 };
+        if (failure == "time") limits = limits with { MaximumElapsed = TimeSpan.FromSeconds(20) };
+        if (failure == "no-room") limits = limits with { MaximumCumulativePixels = 51 };
+        var plan = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            m, f.Ledger, f.Safety, f.Topology, limits, Now, allowBudgetLimitedStage: true);
+        Assert.False(plan.IsAllowed, plan.Message);
+        Assert.Null(plan.Stage);
+    }
+
     private static Fixture CreateFixture(
         SlitPlacementMappingAuthority authority = SlitPlacementMappingAuthority.GradedPhd2CalibrationLockShift,
         Phd2SensorRotationAuthority rotationAuthority = Phd2SensorRotationAuthority.QualifiedPhd2Calibration,

@@ -91,7 +91,8 @@ internal sealed record ObservationAutomationSnapshot(
     ObservationWorkflowGraph? Workflow = null,
     UvexAdv.Observatory.SepMainFocusOptions? MainFocusOptions = null,
     ObservationAcquisitionProgress? AcquisitionProgress = null,
-    ObservationAcquisitionPresentation? Acquisition = null);
+    ObservationAcquisitionPresentation? Acquisition = null,
+    NightSafetyStandbySnapshot? SafetyStandby = null);
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,

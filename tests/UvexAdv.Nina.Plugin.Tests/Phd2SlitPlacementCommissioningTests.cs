@@ -59,7 +59,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
-    public void PreAtrWindRecoveryUsesBoundedNewWindowsWithoutMovingOrRelaxingTolerance()
+    public void PreAtrWindRecoveryWaitsThenDelegatesToOriginalBoundedConvergence()
     {
         var start = RunnerSource.IndexOf("private async Task VerifyWindSampledGuidingBeforeAtrAsync(", StringComparison.Ordinal);
         var end = RunnerSource.IndexOf("private static Dictionary<string, double> Phd2QualityMetrics(", start, StringComparison.Ordinal);
@@ -73,6 +73,13 @@ public sealed class Phd2SlitPlacementCommissioningTests
         Assert.Contains("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", body, StringComparison.Ordinal);
         Assert.Contains("throw new TargetQualityEvidenceException(", body, StringComparison.Ordinal);
         Assert.Contains("phd2-supervised-pre-atr-window", body, StringComparison.Ordinal);
+        Assert.Contains("TryResumePreAtrPlacementAsync", body, StringComparison.Ordinal);
+        Assert.Contains("ValidateCurrentPhd2LockLedgerBinding", body, StringComparison.Ordinal);
+        Assert.Contains("CanObserveAtSettledLock", body, StringComparison.Ordinal);
+        Assert.Contains("ResumeMotionLedger(state", body, StringComparison.Ordinal);
+        Assert.Contains("AllowCoarseReacquisition: false", body, StringComparison.Ordinal);
+        Assert.Contains("RequireImmediatePhysicalActionGatesAsync", body, StringComparison.Ordinal);
+        Assert.Contains("budgetReset = false", body, StringComparison.Ordinal);
         Assert.DoesNotContain("SetLockPosition", body, StringComparison.Ordinal);
         Assert.DoesNotContain("GuideAndSettle", body, StringComparison.Ordinal);
         Assert.DoesNotContain("StopPhd", body, StringComparison.Ordinal);
@@ -224,7 +231,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
     public void NativeOffSlitExhaustionNeverUsesCoordinatorRankedSubstituteAndDegradesExplicitly()
     {
         var nativeSelection = Section(
-            "private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected)> SelectFreshPhd2GuideAsync(",
+            "private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected, int Attempts)> SelectFreshPhd2GuideAsync(",
             "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(");
         Assert.Contains("throw new Phd2NativeGuideSelectionExhaustedException", nativeSelection, StringComparison.Ordinal);
         Assert.DoesNotContain("requestedAlternate", nativeSelection, StringComparison.Ordinal);
@@ -243,7 +250,7 @@ public sealed class Phd2SlitPlacementCommissioningTests
     public void NativeNoCandidateUsesOnlyTheBoundedFreshFrameReselectionPath()
     {
         var nativeSelection = Section(
-            "const int maximumNativeSelectionAttempts = 4;",
+            "int maximumNativeSelectionAttempts = 4)",
             "private async Task<Phd2PreparedGuideSelection> PrepareDirectTargetFallbackAfterNativeExhaustionAsync(");
         var find = nativeSelection.IndexOf("phd2.FindGuideStarAsync", StringComparison.Ordinal);
         var exactCatch = nativeSelection.IndexOf("catch (Phd2NoGuideStarException noGuideStar)", StringComparison.Ordinal);

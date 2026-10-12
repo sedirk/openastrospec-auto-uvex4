@@ -42,3 +42,7 @@ Current accepted decisions:
 - [ADR-0029: Measured post-lock continuation](0029-measured-post-lock-continuation.md)
 - [ADR-0030: Exploratory neighbour-field continuity](0030-exploratory-neighbour-field-continuity.md)
 - [ADR-0031: Independent science quality and target-local outcomes](0031-independent-science-quality-and-target-outcomes.md)
+- [ADR-0032: Meridian boundaries through acquisition](0032-meridian-boundaries-through-acquisition.md)
+- [ADR-0033: Independent observatory safety standby](0033-independent-observatory-safety-standby.md)
+- [ADR-0034: Idle-boundary mount clock recovery](0034-idle-boundary-mount-clock-recovery.md)
+- [ADR-0035: Clock-repair same-target continuation](0035-clock-repair-same-target-continuation.md)

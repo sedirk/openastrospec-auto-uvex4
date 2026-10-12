@@ -111,7 +111,7 @@ Keep commits narrowly scoped. Add or update tests with behavior changes. Do not 
 
 ## Prefer non-UI tools
 
-- Avoid `computer-use` whenever a reliable alternative exists: prefer repository scripts, purpose-built APIs, CLIs, structured status/evidence and logs for inspection, changes and verification. Use `computer-use` only for operations without a suitable supported non-UI interface or for required visual/UI acceptance checks; keep those interactions and screenshots minimal. This preference reduces latency and token usage and does not relax hardware authorization, device ownership, normal safe shutdown or release-verification requirements.
+- Avoid `computer-use` whenever a reliable alternative exists: prefer repository scripts, purpose-built APIs, CLIs, structured status/evidence and logs for inspection, changes and verification. Plugin installation and panel acceptance do not require `computer-use`: use the supported frontend bridge, exact artifact/version checks, runtime panel state, startup/binding logs and offline UI regressions first. Use `computer-use` or operator visual review only when a specific visual issue cannot be verified that way, and keep it minimal. Report unverified visual coverage honestly; this does not relax hardware authorization, device ownership or normal safe shutdown.
 
 ## Checks
 

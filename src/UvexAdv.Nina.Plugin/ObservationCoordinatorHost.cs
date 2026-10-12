@@ -37,7 +37,8 @@ public sealed record ObservationDashboardSnapshot(
     string LockedRunAdapter = "unknown",
     IReadOnlyList<ObservationDashboardEvidence>? WorkflowEvidence = null,
     bool WorkflowHistoryTruncated = false,
-    ObservationAcquisitionProgress? AcquisitionProgress = null);
+    ObservationAcquisitionProgress? AcquisitionProgress = null,
+    NightSafetyStandbySnapshot? SafetyStandby = null);
 
 [Export(typeof(ObservationCoordinatorHost))]
 [PartCreationPolicy(CreationPolicy.Shared)]
@@ -67,11 +68,27 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private object? nightOwner;
     private string? nativeTargetRunId;
     private readonly string nightOwnershipPath;
+    private NightSafetyStandby? safetyStandby;
+    private NightSafetyStandbySnapshot? standbySnapshot;
+    internal NightSafetyStandby? SafetyStandby { get { lock (sync) return safetyStandby; } }
 
-    internal async Task<IDisposable> ReserveNightAsync(object owner, bool real, CancellationToken token)
+    internal async Task<IDisposable> ReserveNightAsync(object owner, bool real, CancellationToken token,
+        Func<IDisposable?>? watchSafety = null, string? configurationKey = null)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        token.ThrowIfCancellationRequested();
+        lock (sync)
+        {
+            NightReservation? transferred = null;
+            if ((!real || watchSafety is not null) && safetyStandby?.TryHandOver(real, configurationKey, () =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    transferred = new NightReservation(this, owner, watchSafety?.Invoke());
+                    nightOwner = owner; safetyStandby = null; standbySnapshot = null;
+                }) == true) return transferred!;
+        }
         if (!await runGate.WaitAsync(0, token).ConfigureAwait(false))
-            throw new InvalidOperationException("观测或对焦仍占用设备，不能开始整夜序列。");
+            throw new InvalidOperationException("观测、对焦或安全收口仍占用设备；待机须安全、同配置且无未结责任才能交接新序列。");
         try
         {
             if (real)
@@ -80,24 +97,77 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 if (!ownership.Acquired) throw new InvalidOperationException(ownership.Failure);
                 realRunOwnershipLease = ownership.Lease;
             }
-            nightOwner = owner;
-            return new NightReservation(this);
+            var reservation = new NightReservation(this, owner, watchSafety?.Invoke());
+            lock (sync) { nightOwner = owner; standbySnapshot = null; }
+            return reservation;
         }
-        catch { runGate.Release(); throw; }
+        catch { realRunOwnershipLease?.Dispose(); realRunOwnershipLease = null; runGate.Release(); throw; }
     }
 
-    private sealed class NightReservation(ObservationCoordinatorHost host) : IDisposable
+    private sealed class NightReservation(ObservationCoordinatorHost host, object owner, IDisposable? safety = null) : IDisposable
     {
         private bool released;
         public void Dispose()
         {
             if (released) return;
             released = true;
-            host.realRunOwnershipLease?.Dispose();
-            host.realRunOwnershipLease = null;
-            host.nightOwner = null;
-            host.runGate.Release();
+            safety?.Dispose();
+            lock (host.sync)
+            {
+                if (!ReferenceEquals(host.nightOwner, owner)) return;
+                host.realRunOwnershipLease?.Dispose();
+                host.realRunOwnershipLease = null;
+                host.nightOwner = null;
+                if (ReferenceEquals(host.safetyStandby, owner)) host.safetyStandby = null;
+                host.runGate.Release();
+            }
         }
+    }
+
+    internal async Task<NightSafetyStandby> BeginSafetyStandbyAsync(object owner, NightSafetyStandbyRequest request)
+    {
+        NightSafetyStandby? guard = null;
+        // The callback may fire while arming; it only latches a reason until Start.
+        guard = new NightSafetyStandby(request, new DeferredNightRelease(() => new NightReservation(this, guard!).Dispose()),
+            next => PublishSafetyStandby(guard!, next));
+        await guard.ArmAsync().ConfigureAwait(false);
+        lock (sync)
+        {
+            if (!ReferenceEquals(nightOwner, owner) || activeRunReservation is not null)
+            {
+                guard.StopForApplicationExit(); guard.Start();
+                throw new InvalidOperationException("目标所有者尚未退出，不能转交独立安全待机。");
+            }
+            nightOwner = guard; safetyStandby = guard; standbySnapshot = guard.Snapshot;
+            guard.Start();
+        }
+        return guard;
+    }
+
+    private sealed class DeferredNightRelease(Action release) : IDisposable { public void Dispose() => release(); }
+
+    public bool RequestSafetyStandbyCloseout()
+    {
+        lock (sync)
+        {
+            if (safetyStandby is null) return false;
+            safetyStandby.RequestCloseout(); return true;
+        }
+    }
+
+    private void PublishSafetyStandby(NightSafetyStandby owner, NightSafetyStandbySnapshot next)
+    {
+        ObservationDashboardSnapshot dashboard;
+        lock (sync)
+        {
+            if (!ReferenceEquals(safetyStandby, owner)) return;
+            standbySnapshot = next; dashboard = CreateDashboardLocked();
+        }
+        try { DashboardChanged?.Invoke(this, dashboard); }
+        catch (Exception ex) { NINA.Core.Utility.Logger.Error(ex); }
+        if (next.Phase == "CloseoutFailed") attentionNotifier.Notify(new(
+            ObservationAttentionSeverity.Error, "OpenAstroSpec 独立安全收口需要处理", next.Message,
+            next.Id + ":" + next.Phase));
     }
 
     public ObservationCoordinatorHost()
@@ -437,6 +507,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        safetyStandby?.StopForApplicationExit();
         coordinator.SnapshotChanged -= OnCoordinatorSnapshotChanged;
         coordinator.Dispose();
         attentionNotifier.Dispose();
@@ -628,7 +699,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
         planMatchesRun ? dashboardPlan : null,
         planMatchesRun ? dashboardRunAdapter : "unknown",
         workflowEvidence.ToArray(), workflowHistoryTruncated,
-        acquisitionProgress?.ObservationRunId == snapshot.ObservationRunId ? acquisitionProgress : null);
+        acquisitionProgress?.ObservationRunId == snapshot.ObservationRunId ? acquisitionProgress : null,
+        standbySnapshot);
     }
 
     private static ObservationPreview EmptyPreview(ObservationPreviewChannel channel, string caption) =>

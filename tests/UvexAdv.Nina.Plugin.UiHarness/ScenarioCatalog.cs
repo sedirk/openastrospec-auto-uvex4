@@ -19,6 +19,7 @@ public sealed record ScreenshotScenario(
     public bool ExercisePlanScrolling { get; init; }
     public bool ExercisePreparationScrolling { get; init; }
     public bool RenderNativeTargetPair { get; init; }
+    public bool ShowAutomaticExposure { get; init; }
 }
 
 public static class ScenarioCatalog
@@ -26,6 +27,10 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("independent-safety-standby", 1180, 850, new ObservationDockMockViewModel
+        { HasSafetyStandby = true, SafetyStandbyStatus = "观测序列已结束；独立安全待机：AIWeather、晨光及 00:30 截止仍有效。未自动续跑。" }),
+        new("independent-safety-standby-narrow", 540, 900, new ObservationDockMockViewModel
+        { HasSafetyStandby = true, SafetyStandbyStatus = "观测序列已取消；独立安全待机：AIWeather、晨光及 00:30 截止仍有效。未自动续跑。" }),
         new("g3-predicted-target", 1180, 850, ObservationDockMockViewModel.PredictedTarget()),
         new("g3-predicted-target-narrow", 650, 900, ObservationDockMockViewModel.PredictedTarget()),
         new("cancel-stop-unconfirmed", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed()),
@@ -44,6 +49,9 @@ public static class ScenarioCatalog
         new("native-target-editor", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A") },
         new("native-target-editor-narrow", 540, 760, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A") },
         new("native-target-editor-en", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-target-auto", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true },
+        new("native-target-auto-narrow", 540, 760, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true },
+        new("native-target-auto-en", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true, Culture=CultureInfo.GetCultureInfo("en-US") },
         new("native-target-pair", 1100, 1000, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=new NativeNightMock(), RenderNativeTargetPair=true },
         new("native-closeout", 820, 230, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeObservatoryCloseoutPanel", AlternateViewModel=new UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem { CloseAfterTargets = false } },
         new("native-real-startup", 820, 180, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeRealStartupPanel", AlternateViewModel=new NativeNightMock() },
@@ -89,6 +97,9 @@ public static class ScenarioCatalog
         new("main-focus-native", 760, 680, ObservationDockMockViewModel.Idle()) { TemplateKey="UvexAdv.Nina.Plugin.SepMainFocusViewModel_Dockable", AlternateViewModel=new MainFocusMock { SelectedTabIndex=1 } },
         new("main-focus-embedded", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex=1, SelectedManualTabIndex=1 }),
         new("plan-target", 1040, 800, new ObservationDockMockViewModel { SelectedWorkspaceTabIndex = 2 }),
+        new("plan-sequence-draft", 1040, 800, ObservationDockMockViewModel.SequenceDraftNotice()),
+        new("plan-sequence-draft-narrow", 540, 800, ObservationDockMockViewModel.SequenceDraftNotice()),
+        new("plan-sequence-budget", 760, 700, ObservationDockMockViewModel.SequenceDraftNotice(budget: true)),
         new("target-strategy-auto", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("auto")),
         new("target-strategy-unknown", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("unknown")),
         new("target-strategy-catalogue", 1040, 1080, ObservationDockMockViewModel.TargetStrategy("catalogue")),
@@ -297,6 +308,9 @@ public static class ScenarioCatalog
 
 public sealed class ObservationDockMockViewModel
 {
+    public bool HasSafetyStandby { get; init; }
+    public string SafetyStandbyStatus { get; init; } = string.Empty;
+    public ICommand CloseSafetyStandbyCommand => new NoOpCommand(true);
     private static readonly ICommand EnabledCommand = new NoOpCommand(true);
     private static readonly ICommand DisabledCommand = new NoOpCommand(false);
 
@@ -464,6 +478,22 @@ public sealed class ObservationDockMockViewModel
     public bool ManualAtrInspectionExpanded { get; set; }
 
     public string TargetName { get; init; } = "Vega";
+    public ObservationDashboardSnapshot PlanContext { get; init; } = new(ObservationSnapshot.Idle, new Dictionary<ObservationStage, GateResult>(),
+        new Dictionary<ObservationPreviewChannel, ObservationPreview>(), [], null);
+    public string PlanDraftNotice => ObservationUiPresentation.PlanDraftNotice(PlanContext, ObservationStaticTextLocalization.EffectiveCulture);
+    public static ObservationDockMockViewModel SequenceDraftNotice(bool budget = false)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = new ObservationSnapshot("sequence-target", ObservationRunState.RunningAuto, ObservationStage.RunScienceBlock,
+            null, "正在观测", null, 8, 11, now, []);
+        var plan = new ObservationPlan(run.ObservationRunId!, "night", new("HD 18552", "HD 18552", 45.0495, 38.1317),
+            new(30, 120, 0), now, TimeSpan.FromMinutes(25), new(), new(), "spectral", "guide", "photometry");
+        return new() { SelectedWorkspaceTabIndex = 2, SelectedPlanTabIndex = budget ? 1 : 0,
+            TargetName = "78 Psc", IsRunActive = true, AcquisitionPlan = BudgetEditor(true),
+            StateText = "运行中", CurrentStageText = "光谱相机科学曝光与健康监测",
+            PlanContext = new(run, new Dictionary<ObservationStage, GateResult>(),
+                new Dictionary<ObservationPreviewChannel, ObservationPreview>(), [], null, plan) };
+    }
     public IReadOnlyList<TargetObservabilityChoice> AvailableTargetObservabilityClasses { get; } =
     [
         new(TargetObservabilityClass.DirectStellar, "恒星 · 优先实测星像", "优先本帧星像，必要时 SEP 短曝光，再检查正式 WCS 后备。"),

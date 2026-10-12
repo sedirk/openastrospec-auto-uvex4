@@ -13,6 +13,9 @@ internal static partial class ObservationStaticTextCatalog
     private static readonly IReadOnlyDictionary<string, string> English =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["安全待机关顶收口"] = "Close out safety standby",
+            ["停止当前观测；序列开顶安全待机不会被此按钮关闭。"] = "Stop observing. This button does not disable open-roof safety standby.",
+            ["目标结束或取消后序列退出；开顶保护转为独立安全待机，仍监视 AIWeather、原截止和晨光。失败及未结账本保留。更改仅对下一次启动生效；退出 N.I.N.A. 会停止软件保护。"] = "The sequence exits after targets finish or cancellation. Independent standby retains AIWeather, the original cutoff and dawn protection. Failures and unresolved ledgers remain. Edits apply to the next run; exiting N.I.N.A. stops software protection.",
             ["序列开始时选择真实模式"] = "Select real mode at sequence start",
             ["仅选择模式，不启动目标、不授权后台控制；每张目标卡仍须明确设为 REAL，并通过原有设备与安全检查。放在开始区域，默认关闭。"] = "Selects mode only; does not start a target or arm backend control. Each target must explicitly request REAL and pass existing equipment and safety checks. Place in the start area. Off by default.",
             ["序列开始时启动 AIWeather 安全检测"] = "Start AIWeather monitoring at sequence start",
@@ -88,6 +91,7 @@ internal static partial class ObservationStaticTextCatalog
             ["标定包静态校验已通过（由文件校验得出，不能手工勾选）"] = "Commissioning files validated (read-only result, not a manual override)",
             ["光谱单目标完整流程（11 阶段）。翻转请将目标放入光谱整夜序列，添加 OpenAstroSpec · 光谱中天翻转；不要混用普通翻转触发器。"] = "Complete single-target spectroscopy workflow (11 stages). For flips, put the target inside a spectroscopy night and add OpenAstroSpec · Spectroscopy Meridian Flip; do not mix with ordinary flip triggers.",
             ["逐帧翻转 · 保存 → 停止采集 → N.I.N.A. 翻转 → 重新定位 / 入缝 / 导星 → 续拍剩余帧"] = "Frame-boundary flip · Save → Stop acquisition → N.I.N.A. flip → Reacquire / slit / guide → Remaining frames",
+            ["中天交接 · 取场 / 入缝 / 曝光 → 停止采集 → 核验换侧 → 重新定位同一目标 → 续拍剩余帧"] = "Meridian handoff · Acquisition / slit / exposure → Stop → Verify side → Reacquire same target → Remaining frames",
             ["使用 N.I.N.A. 的翻转时机与镜筒侧设置；不调用 ATR 主相机居中或普通自动对焦。此触发器仅用于光谱整夜序列，模拟不移动设备。"] = "Uses N.I.N.A. flip timing and pier-side settings, without ATR main-camera recentering or ordinary autofocus. For spectroscopy nights only; simulation never moves equipment.",
             ["保存与测光边界余量 / 秒"] = "Save / photometry boundary margin (s)",
             ["光谱单目标完整流程（11 阶段）；本版未接入中天翻转后重新入缝，不能直接套用全局翻转触发器。"] = "Complete single-target spectroscopy workflow (11 stages). Post-flip slit reacquisition is not integrated yet; do not apply a global meridian-flip trigger directly.",
@@ -109,6 +113,12 @@ internal static partial class ObservationStaticTextCatalog
             ["合格科学帧"] = "Accepted science frames",
             ["最多尝试"] = "Maximum attempts",
             ["固定曝光 / 秒（0 = 自动选档）"] = "Fixed exposure / s (0 = auto)",
+            ["曝光模式"] = "Exposure mode",
+            ["自动曝光"] = "Automatic exposure",
+            ["固定曝光"] = "Fixed exposure",
+            ["曝光时间 / 秒"] = "Exposure / s",
+            ["固定：按指定秒数试拍与采集；仍保留饱和、信号及安全检查。"] = "Fixed: probe and acquire at the specified duration. Saturation, signal and safety checks still apply.",
+            ["自动：先试拍，沿用观测计划中的曝光阶梯选档；不修改其他目标或全局设置。"] = "Automatic: probe first, then select from the observation plan's exposure ladder. Other targets and global settings are unchanged.",
             ["整夜失败策略"] = "Night failure policy",
             ["质量失败且停止确认后跳过"] = "Skip quality failure after confirmed stop",
             ["选择不会立即转动狭缝轮。期望槽位须与导入的本夜配置一致；改变光学配置后，请导入对应的新配置。实际切缝在设备手控中执行。"] = "Selection does not move the slit wheel. The expected slot must match the imported Night Setup; import a corresponding new setup after changing the optics. Physical slit changes belong in Device controls.",

@@ -11,6 +11,7 @@ internal sealed partial class RealObservationStageRunner : IObservationTerminalG
         // A meridian segment is NOT the end of its logical target. It must keep
         // the original motion budget and fresh re-entry obligations.
         if (NativeMeridian?.Requested == true) return;
+        retiredClockBudget ??= CaptureClockContinuationBudget();
         // A preflight failure may never have connected a camera or produced any
         // guide authority. Do not turn that into a spurious cleanup failure.
         if (!File.Exists(Phd2LockShiftPendingPath(runId)) && !File.Exists(G3AcquisitionMotionPath(runId)) &&

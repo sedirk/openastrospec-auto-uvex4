@@ -13,6 +13,10 @@ internal sealed partial class RealObservationStageRunner
         // hour-angle guess, side setter, flip command or direct serial access.
         var gate = G3DestinationPierSidePreflight.Check(expectedSide,
             () => telescopeMediator.DestinationSideOfPier(destination));
+        if (gate.Code == "G3_DESTINATION_PIER_SIDE_CHANGE" &&
+            nativeMeridianOperationContext is { } context &&
+            Enum.TryParse<NINA.Core.Enum.PierSide>(expectedSide, out var savedSide))
+            CheckNativeMeridianOperationBoundary(context, destinationWouldChangeSide: true, savedSide: savedSide);
         if (gate.Code == "G3_DESTINATION_PIER_SIDE_UNAVAILABLE" && !reportedDestinationSideUnavailable)
         {
             reportedDestinationSideUnavailable = true;

@@ -363,13 +363,21 @@ public static class ScreenshotRenderer
         Edit(firstRoot, "NativeTargetDecDegrees", "-0");
         Edit(firstRoot, "NativeTargetFrames", "3");
         Edit(firstRoot, "NativeTargetExposure", "300");
+        var exposureMode = Descendants<ComboBox>(firstRoot).Single(x => x.Name == "NativeTargetExposureMode");
+        exposureMode.SelectedValue = SpectroscopyExposureMode.Automatic;
+        PumpLoadedAndRender(host.Dispatcher);
+        var autoWorks = first.FixedExposureSeconds == 0 && !Box(firstRoot, "NativeTargetExposure").IsVisible &&
+            first.TargetSummary.Contains("AUTO", StringComparison.Ordinal);
+        exposureMode.SelectedValue = SpectroscopyExposureMode.Fixed;
+        PumpLoadedAndRender(host.Dispatcher);
+        var fixedWorks = first.FixedExposureSeconds == 300 && Box(firstRoot, "NativeTargetExposure").IsVisible;
         Descendants<CheckBox>(firstRoot).Single(x => x.Name == "NativeForceCalibration").IsChecked = true;
         Descendants<CheckBox>(firstRoot).Single(x => x.Name == "NativeAutomaticGuideRecovery").IsChecked = false;
         Edit(firstRoot, "NativeGuideStarWait", "180");
         PumpLoadedAndRender(host.Dispatcher);
         var negativeZero = Math.Abs(first.DeclinationDegrees - (-0.5 - 15d / 3600)) < 1e-9 &&
             Box(firstRoot, "NativeTargetDecDegrees").Text.StartsWith("-", StringComparison.Ordinal);
-        var edits = first.TargetName == "Edited target" && Math.Abs(first.RightAscensionDegrees - 105.5125) < 1e-9 &&
+        var edits = autoWorks && fixedWorks && first.TargetName == "Edited target" && Math.Abs(first.RightAscensionDegrees - 105.5125) < 1e-9 &&
             first.ScienceFrames == 3 && first.FixedExposureSeconds == 300 && first.ForceGuideCalibration &&
             !first.AutomaticGuideRecovery && first.GuideStarWaitSeconds == 180 &&
             Descendants<TextBlock>(firstRoot).Single(x => x.Name == "NativeTargetSummary").Text == first.TargetSummary;
@@ -424,6 +432,12 @@ public static class ScreenshotRenderer
             commandsBound, visible, readable, noSelector);
         var passed = edits && negativeZero && independent && nativeCoordinates && commandsBound && visible && readable && noSelector &&
             roots.Length == (scenario.RenderNativeTargetPair ? 2 : 1);
+        if (scenario.ShowAutomaticExposure)
+        {
+            exposureMode.SelectedValue = SpectroscopyExposureMode.Automatic;
+            PumpLoadedAndRender(host.Dispatcher);
+            passed &= first.FixedExposureSeconds == 0 && !Box(firstRoot, "NativeTargetExposure").IsVisible;
+        }
         return (passed, layout, $"Edits={edits}; layout={layout}; RA={first.RightAscensionDegrees}; Dec={first.DeclinationDegrees}; target={first.TargetSummary}");
     }
 

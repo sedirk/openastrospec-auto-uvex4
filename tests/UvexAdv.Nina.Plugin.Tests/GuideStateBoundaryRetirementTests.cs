@@ -12,6 +12,64 @@ public sealed class GuideStateBoundaryRetirementTests
         "mount", "guide-camera", Phd2AppState.Stopped, true, DateTimeOffset.UtcNow);
 
     [Fact]
+    public async Task OnlyExplicitStoppedFirstMeridianSegmentMayRetireWithoutClaimingReturn()
+    {
+        await WithState(ObservationRunState.Completed, async (root, path, store) =>
+        {
+            var journal = Path.Combine(root, "control", "native-meridian-flip.json");
+            await NativeMeridianJournalStore.SaveAsync(journal,
+                new("old-run", "OwnersIdle", "pierWest", "", DateTimeOffset.UtcNow, ["old-run"], "ObservedSideChange"), default);
+            var before = await File.ReadAllBytesAsync(path);
+            var manifest = await File.ReadAllBytesAsync(store.ManifestPath);
+            var archives = await GuideStateBoundaryRetirement.RetireMeridianSegmentAsync(root, "old-run", "old-run",
+                journal, _ => Task.FromResult(Witness()), default);
+            var archive = Assert.Single(archives);
+            Assert.Contains(".meridian-", archive);
+            Assert.Equal(before, await File.ReadAllBytesAsync(archive));
+            Assert.Equal(manifest, await File.ReadAllBytesAsync(store.ManifestPath));
+            Assert.Empty(await Phd2LockShiftPendingStore.DiscoverAsync(root, default));
+            using var audit = JsonDocument.Parse(await File.ReadAllTextAsync(archive + ".audit.json"));
+            Assert.Equal("StoppedMeridianSegmentGuideStateRetired", audit.RootElement.GetProperty("action").GetString());
+            Assert.False(audit.RootElement.GetProperty("returnVerified").GetBoolean());
+            Assert.False(audit.RootElement.GetProperty("countersReset").GetBoolean());
+            Assert.Empty(await GuideStateBoundaryRetirement.RetireMeridianSegmentAsync(root, "old-run", "old-run",
+                journal, _ => Task.FromResult(Witness()), default));
+        }, meridian: true);
+    }
+
+    [Theory]
+    [InlineData("active")] [InlineData("cancelled")] [InlineData("wrong-root")]
+    [InlineData("second-segment")] [InlineData("old-journal")] [InlineData("unknown-side")]
+    [InlineData("busy-owner")] [InlineData("changed-journal")] [InlineData("cancel-token")]
+    public async Task OrdinaryRecoveryOrUnconfirmedOwnerCannotUseMeridianRetirement(string failure)
+    {
+        var state = failure == "active" ? ObservationRunState.RunningAuto :
+            failure == "cancelled" ? ObservationRunState.Cancelled : ObservationRunState.Completed;
+        await WithState(state, async (root, path, store) =>
+        {
+            var journal = Path.Combine(root, "control", "native-meridian-flip.json");
+            var entry = new NativeMeridianJournal("old-run", failure == "old-journal" ? "MountVerified" : "OwnersIdle",
+                failure == "unknown-side" ? "pierUnknown" : "pierEast", "", DateTimeOffset.UtcNow,
+                failure == "second-segment" ? ["other", "old-run"] : ["old-run"]);
+            await NativeMeridianJournalStore.SaveAsync(journal, entry, default);
+            var bytes = await File.ReadAllBytesAsync(path);
+            var reads = 0;
+            using var cancel = new CancellationTokenSource();
+            if (failure == "cancel-token") cancel.Cancel();
+            var exception = await Record.ExceptionAsync(() => GuideStateBoundaryRetirement.RetireMeridianSegmentAsync(
+                root, "old-run", failure == "wrong-root" ? "other" : "old-run", journal, async _ =>
+                {
+                    if (++reads == 2 && failure == "changed-journal")
+                        await NativeMeridianJournalStore.SaveAsync(journal, entry with { RunId = "other" }, default);
+                    return Witness() with { OwnersIdle = failure != "busy-owner" };
+                }, cancel.Token));
+            Assert.NotNull(exception);
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
+            Assert.Empty(Directory.GetFiles(root, "*.archive", SearchOption.AllDirectories));
+        }, meridian: true);
+    }
+
+    [Fact]
     public async Task SameRunOrMeridianContinuationCannotRetirePriorBudget()
     {
         await WithState(ObservationRunState.Completed, async (root, path, store) =>
@@ -173,7 +231,7 @@ public sealed class GuideStateBoundaryRetirementTests
     }
 
     private static async Task WithState(ObservationRunState terminal,
-        Func<string, string, ObservationRunJournalStore, Task> test)
+        Func<string, string, ObservationRunJournalStore, Task> test, bool meridian = false)
     {
         var root = Path.Combine(Path.GetTempPath(), "uvex-terminal-guide-tests", Guid.NewGuid().ToString("N"));
         try
@@ -183,9 +241,11 @@ public sealed class GuideStateBoundaryRetirementTests
             var store = new ObservationRunJournalStore(Path.Combine(root, "old-run", "manifest.json"));
             var plan = new ObservationPlan("old-run", "night", new("target", "catalog", 89, 46),
                 new(31, 121, 20), DateTimeOffset.UtcNow, TimeSpan.FromHours(2), new(), new(), "ATR", "G3", "QHY");
+            var labels = new Dictionary<string, string> { ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera" };
+            if (meridian) labels["nativeTargetRootRunId"] = "old-run";
             var manifest = await store.InitializeAsync(plan, new(CommissioningPresetSha256: state.CommissioningPresetSha256,
                 AdditionalHashes: new Dictionary<string,string> { ["actionConfigurationSha256"] = state.ActionConfigurationSha256 },
-                Labels: new Dictionary<string,string> { ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera" }));
+                Labels: labels));
             await store.PublishSnapshotAsync(manifest.Snapshot with { State = terminal, UpdatedUtc = DateTimeOffset.UtcNow }, manifest.Counters, manifest.Revision);
             await Phd2LockShiftPendingStore.WriteAtomicAsync(path, state, default);
             await test(root, path, store);

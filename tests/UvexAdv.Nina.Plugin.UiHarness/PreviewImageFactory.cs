@@ -73,28 +73,11 @@ internal static class PreviewImageFactory
             context.DrawRectangle(bandBrush, null, new Rect(32, Height * 0.48, Width - 64, Height * 0.04));
         }
 
-        var spectrum = new StreamGeometry();
-        using (var geometry = spectrum.Open())
-        {
-            geometry.BeginFigure(new Point(32, 150), false, false);
-            for (var x = 33; x < Width - 32; x += 3)
-            {
-                const double baseline = 150;
-                var peak1 = 115 * Math.Exp(-Math.Pow((x - 265) / 14d, 2));
-                var peak2 = 82 * Math.Exp(-Math.Pow((x - 530) / 21d, 2));
-                var peak3 = 135 * Math.Exp(-Math.Pow((x - 744) / 10d, 2));
-                geometry.LineTo(new Point(x, baseline - peak1 - peak2 - peak3), true, false);
-            }
-        }
-
-        spectrum.Freeze();
-        var plot = new DrawingGroup();
-        using (var context = plot.Open())
-        {
-            context.DrawRectangle(new SolidColorBrush(Color.FromRgb(8, 19, 34)), null, new Rect(0, 0, Width, 160));
-            context.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(56, 189, 248)), 2), spectrum);
-        }
-        return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new DrawingImage(plot),
+        var spectrum = Enumerable.Range(0, Width).Select(x => 150d +
+            115 * Math.Exp(-Math.Pow((x - 265) / 14d, 2)) +
+            82 * Math.Exp(-Math.Pow((x - 530) / 21d, 2)) +
+            135 * Math.Exp(-Math.Pow((x - 744) / 10d, 2))).ToArray();
+        return ObservationPreviewLayers.Attach((BitmapSource)Render(visual), spectrum: new SpectrumPreviewData(spectrum),
             focusRegion: new Rect(0, Height * 0.35, Width, Height * 0.3));
     }
 
@@ -107,8 +90,8 @@ internal static class PreviewImageFactory
         raw[340] += 7000;
         for (var i = 740; i < 750; i++) raw[i] = cleaned[i] = null;
         if (missing)
-            return ObservationPreviewLayers.Attach(original.Clone(), spectrum: ObservationPreviewRenderer.RenderSpectrum(
-                Enumerable.Repeat(double.NaN, 960).ToArray(), null, "未检测到可靠谱带 · 无伪造曲线"));
+            return ObservationPreviewLayers.Attach(original.Clone(), spectrum: new SpectrumPreviewData(
+                Enumerable.Repeat(double.NaN, 960).ToArray()));
         return ObservationPreviewRenderer.WithReducedSpectrum(original, new ReductionPreviewResult(
             1, "reduction-live-preview-v1", true, false, false, "aspired-tophat", cleaned, raw,
             Enumerable.Repeat<double?>(20, 960).ToArray(), 1, 10, "test", []));

@@ -25,20 +25,30 @@ public sealed class Phd2RollingCaptureContractTests
         Assert.False(Phd2PlacementGuideWindowPolicy.HasUsableMeasuredWindow(rolling, [1, 2, 3], true, false));
     }
 
-    [Fact]
-    public async Task OpticalRejectionBreaksRollingWindowAndReacquiresWholeWindow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OpticalRejectionBreaksRollingWindowAndReacquiresWholeWindow(bool hasFormalWcs)
     {
         List<int> requests = [];
+        var ambiguous = Sample(4) with { TargetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsProjection,
+            TargetIdentityConfirmed = hasFormalWcs };
+        Assert.False(Phd2PlacementGuideWindowPolicy.HasUsableMeasuredWindow(
+            [Sample(2), Sample(3), ambiguous], [13.44955, 4.25307, 3.197235], true, true));
         Task<IReadOnlyList<Phd2SlitFieldMeasurement>> Capture(int count)
         {
             requests.Add(count);
-            return count == 1 ? Task.FromException<IReadOnlyList<Phd2SlitFieldMeasurement>>(new Phd2RollingWindowInterruptedException())
+            // Same branch for a formal catalogue identity and neighbour forecast:
+            // neither turns an ambiguous fresh frame into a measured position.
+            return count == 1 && ambiguous.TargetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection
+                ? Task.FromException<IReadOnlyList<Phd2SlitFieldMeasurement>>(new Phd2RollingWindowInterruptedException())
                 : Task.FromResult<IReadOnlyList<Phd2SlitFieldMeasurement>>([Sample(5), Sample(6), Sample(7)]);
         }
         var window = await Phd2PlacementGuideWindowPolicy.CaptureConsecutiveWindowAsync(3,
             new[] { Sample(1), Sample(2), Sample(3) }, Capture, x => x);
         Assert.Equal(new[] { 1, 3 }, requests);
         Assert.Equal(new[] { "5", "6", "7" }, window.Select(x => x.FrameSha256));
+        Assert.True(Phd2PlacementGuideWindowPolicy.HasUsableMeasuredWindow(window, [1, 2, 3], true, true));
     }
 
     [Theory]

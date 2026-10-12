@@ -477,7 +477,8 @@ public static class Phd2SlitLockShiftPlanner
         Phd2LockShiftSafetySnapshot safety,
         Phd2SensorTopology topology,
         Phd2LockShiftLimits limits,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool allowBudgetLimitedStage = false)
     {
         var common = ValidateCommon(qualification, ledger, safety, topology, limits, now);
         if (common is not null) return common;
@@ -516,9 +517,7 @@ public static class Phd2SlitLockShiftPlanner
         }
 
         var stagePixels = Math.Min(limits.MaximumStagePixels * qualification.MaximumLockShiftScale, remaining);
-        var fraction = stagePixels / remaining;
-        var requested = Add(ledger.CurrentLockPosition, Scale(remainingVector, fraction));
-        return BuildStage(
+        Phd2LockShiftPlanResult BuildCandidate(double pixels) => BuildStage(
             Phd2LockShiftStageKind.Outbound,
             qualification,
             guideMode,
@@ -526,12 +525,38 @@ public static class Phd2SlitLockShiftPlanner
             ledger,
             limits,
             now,
-            requested,
+            Add(ledger.CurrentLockPosition, Scale(remainingVector, pixels / remaining)),
             fullDesired,
             delta,
-            stagePixels,
+            pixels,
             residual,
             requiresFreshG3: true);
+        var full = BuildCandidate(stagePixels);
+        if (full.IsAllowed || !allowBudgetLimitedStage || full.Code != "SLIT_LOCK_RETURN_CUMULATIVE_RESERVE")
+            return full;
+
+        // A shorter outbound step may still fit the ORIGINAL cumulative and
+        // complete return reserve. This is only a candidate: the coordinator
+        // must prove that its predicted endpoint is useful for the explicitly
+        // enabled warning-probe route, then measure arrival after dispatch.
+        // Never alter an origin, deadline, limit, debit or recovery planner.
+        var low = Math.Max(limits.LockVerificationTolerancePixels * 2, .01);
+        if (low >= stagePixels) return full;
+        var best = BuildCandidate(low);
+        if (!best.IsAllowed) return full;
+        var high = stagePixels;
+        for (var iteration = 0; iteration < 32; iteration++)
+        {
+            var middle = (low + high) / 2;
+            var candidate = BuildCandidate(middle);
+            if (candidate.IsAllowed) { low = middle; best = candidate; }
+            else high = middle;
+        }
+        return best with
+        {
+            Code = "SLIT_LOCK_STAGE_BUDGET_LIMITED",
+            Message = $"The {stagePixels:F3}-pixel stage exceeds its cumulative return reserve; a shorter {best.Stage!.StagePixels:F3}-pixel candidate preserves every original motion/return limit. Fresh measured arrival is still required.",
+        };
     }
 
     /// <summary>

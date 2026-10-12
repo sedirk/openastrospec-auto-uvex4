@@ -6,6 +6,32 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3PostWcsShortHandoffPolicyTests
 {
     [Theory]
+    // 2026-10-11 EW Lac / KY And. Original measured coordinates, not synthetic success.
+    [InlineData(817.6258530793547, 421.36764123128467, 857.056768558952, 421.3467248908297,
+        864.8535963793845, 421.00099087201284, 863.4796954393337, 418.8067845713103)]
+    [InlineData(818.0176201486491, 421.64812084917145, 852.864312267658, 438.20631970260223,
+        862.7510444697126, 437.0161240564056, 862.0911678166735, 438.0329312762361)]
+    public void ConfirmedPairOutsideFineBudgetRequestsExistingImageSolveNotBlindFineMotion(
+        double px, double py, double lx, double ly, double ax, double ay, double bx, double by)
+    {
+        var prediction = new PixelPoint(px, py);
+        var a = Measured(ax, ay); var b = Measured(bx, by);
+        var core = Long with { Target = Long.Target! with { Centroid = new(lx, ly) } };
+        var decision = G3PostWcsShortHandoffPolicy.Evaluate(core, prediction, 5, prediction,
+            1920, 1080, 20, a, b, Confirm(a, b), 2, false, 44, 100);
+        Assert.False(decision.Accepted);
+        Assert.False(decision.RecheckPair);
+        Assert.True(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(decision.Gate));
+        Assert.Equal(44, decision.Gate.Metrics!["measuredHandoffRadiusPixels"]);
+        Assert.False(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(
+            G3PostWcsShortHandoffPolicy.Evaluate(core, prediction, 5, prediction, 1920, 1080,
+                20, a, b, Confirm(a, b, duplicate: true), 2, false, 44, 100).Gate));
+        Assert.False(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(
+            G3PostWcsShortHandoffPolicy.Evaluate(core, prediction, 100, prediction, 1920, 1080,
+                20, a, b, Confirm(a, b), 2, false, 44, 100).Gate));
+    }
+
+    [Theory]
     [InlineData(3, false, true)]
     [InlineData(4, false, true)]
     [InlineData(5, false, false)]

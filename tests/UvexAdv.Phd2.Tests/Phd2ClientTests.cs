@@ -515,6 +515,53 @@ public sealed class Phd2ClientTests
         Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
     }
 
+    [Theory]
+    [InlineData("candidate-lost")]
+    [InlineData("StartGuiding")]
+    [InlineData("StartCalibration")]
+    [InlineData("LoopingExposuresStopped")]
+    [InlineData("Paused")]
+    public async Task LoopFrameCandidateLossDoesNotPretendGuidingStartedOrChangeLoopOwner(string transition)
+    {
+        using var directory = new TemporaryDirectory();
+        var source = Path.Combine(directory.Path, "preview.fit");
+        var destination = Path.Combine(directory.Path, "evidence.fit");
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(request, "Looping", token);
+            request = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(request, 2000, token);
+            await Task.Delay(50, token);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 4 }, token);
+            request = await session.ReadRequestAsync(token);
+            Assert.Equal("save_image", request.GetProperty("method").GetString());
+            // Real PHD2 STATE_SELECTED failure: still capturing full frames,
+            // no guide or calibration has been requested.
+            await session.SendEventAsync(new { Event = "LockPositionLost" }, token);
+            await session.SendEventAsync(new { Event = "StarLost", Frame = 4, SNR = 0, ErrorCode = 2 }, token);
+            if (transition != "candidate-lost")
+                await session.SendEventAsync(new { Event = transition }, token);
+            await File.WriteAllBytesAsync(source, [1, 2, 3], token);
+            await session.ReplyResultAsync(request, new { filename = source }, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var capture = client.SaveNextLoopingFrameAsync(new(2000, 1, 70, destination), CancellationToken.None);
+        if (transition == "candidate-lost")
+        {
+            var saved = await capture;
+            Assert.Equal(destination, saved.Path);
+            Assert.Equal(Phd2AppState.Looping, client.Snapshot.AppState);
+            Assert.Null(client.Snapshot.LockPosition);
+            Assert.False(client.Snapshot.HasCurrentSuccessfulSettle);
+            Assert.Equal(2, client.Snapshot.LastGuideStep?.ErrorCode);
+        }
+        else await Assert.ThrowsAsync<Phd2CaptureException>(() => capture);
+        Assert.Equal(["get_app_state", "get_exposure", "save_image"], server.ReceivedMethods.ToArray());
+    }
+
     [Fact]
     public async Task SaveNextLoopingFrameRejectsIdleStateWithoutMutatingCapture()
     {
@@ -673,18 +720,25 @@ public sealed class Phd2ClientTests
     {
         await using var server = new FakePhd2Server(async (session, cancellationToken) =>
         {
+            var state = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", state.GetProperty("method").GetString());
+            await session.ReplyResultAsync(state, "Selected", cancellationToken);
             var select = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("set_lock_position", select.GetProperty("method").GetString());
             var parameters = select.GetProperty("params");
             Assert.False(parameters.GetProperty("exact").GetBoolean());
             Assert.Equal(321.25, parameters.GetProperty("x").GetDouble());
             Assert.Equal(654.5, parameters.GetProperty("y").GetDouble());
-            await session.SendEventAsync(new { Event = "StarSelected", X = 322.0, Y = 655.0 }, cancellationToken);
+            await session.SendEventAsync(new { Event = "LockPositionSet", X = 322.0, Y = 655.0 }, cancellationToken);
             await session.ReplyResultAsync(select, 0, cancellationToken);
 
+            var finalState = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", finalState.GetProperty("method").GetString());
+            await session.ReplyResultAsync(finalState, "Selected", cancellationToken);
             var lockPosition = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_lock_position", lockPosition.GetProperty("method").GetString());
             await session.ReplyResultAsync(lockPosition, new[] { 322.0, 655.0 }, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
@@ -997,11 +1051,17 @@ public sealed class Phd2ClientTests
             await ReplyForMethodAsync(session, identityFirst, cancellationToken);
             await ReplyForMethodAsync(session, identitySecond, cancellationToken);
 
+            var selectionState = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", selectionState.GetProperty("method").GetString());
+            await session.ReplyResultAsync(selectionState, "Selected", cancellationToken);
             var select = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("set_lock_position", select.GetProperty("method").GetString());
             Assert.False(select.GetProperty("params").GetProperty("exact").GetBoolean());
             await session.ReplyResultAsync(select, 0, cancellationToken);
 
+            var finalState = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", finalState.GetProperty("method").GetString());
+            await session.ReplyResultAsync(finalState, "Selected", cancellationToken);
             var selectedLock = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_lock_position", selectedLock.GetProperty("method").GetString());
             await session.ReplyResultAsync(

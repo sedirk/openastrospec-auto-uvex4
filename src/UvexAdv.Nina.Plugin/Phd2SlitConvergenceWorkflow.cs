@@ -43,6 +43,20 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             var completionTolerance = preset.BuildMotionLimits().TargetOnSlitTolerancePixels *
                 session.Quality.RequiredResidualToleranceScale;
             var requiredCompletionFrames = Math.Max(3, session.Quality.RequiredFreshResidualsPerLockShiftStage);
+            var budgetLimitedApproach = false;
+            if (qualityPolicy.WarningProbeEnabled && ledger.AttemptsUsed > 0 &&
+                plan.Code == "SLIT_LOCK_RETURN_CUMULATIVE_RESERVE")
+            {
+                var candidate = Phd2SlitLockShiftPlanner.PlanOutboundStage(session.Qualification,
+                    session.GuideMode, session.LastMeasurement.Measurement, ledger, safety, topology,
+                    preset.BuildMotionLimits(), clock.GetUtcNow(), allowBudgetLimitedStage: true);
+                if (candidate.Stage is { } limited && IsUsefulBudgetLimitedApproach(
+                    targetCompletionWindow, limited, preset, completionTolerance, requiredCompletionFrames))
+                {
+                    plan = candidate;
+                    budgetLimitedApproach = true;
+                }
+            }
             var completionResiduals = targetCompletionWindow.Select(item => PointDistance(
                 item.Measurement.TargetCentroid, item.Measurement.RecognizedSlitAcquisitionPoint)).ToArray();
             // A same-frame guide error can already explain the target error:
@@ -89,8 +103,15 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 preset.MaximumAcquisitionResidualPixels);
             var alongSlitPrecisionWarning = warningProbe.AlongSlitWarning;
             var supervisedSlitPrecisionWarning = warningProbe.CanProbe;
+            // A rejected additional movement is not a rejected observation at
+            // the current verified lock. Use the remaining read-only window,
+            // even after the guide has caught up, before invoking the return.
+            // The existing completion deadline still reserves the full return.
+            var budgetLimitedReadOnlyWait = measuredSupervisedGeometry && ledger.AttemptsUsed > 0 &&
+                !plan.IsAllowed && canWaitWithoutNewMotion;
             if (!supervisedSlitPrecisionWarning && (nativeCorrectionPending || completionWindowUnstable ||
-                nearSlitTrackingWarning || existingLockNotReached || (transientResidualGrowthWarning && canWaitWithoutNewMotion)))
+                nearSlitTrackingWarning || existingLockNotReached || budgetLimitedReadOnlyWait ||
+                (transientResidualGrowthWarning && canWaitWithoutNewMotion)))
             {
                 var completionLimits = preset.BuildMotionLimits();
                 var recoveryDistanceUpper = PointDistance(ledger.OriginLockPosition, ledger.CurrentLockPosition) +
@@ -127,7 +148,9 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 // the full return. Four windows are not a physical safety
                 // boundary and must not force an early wind-induced return.
                 completionWindowRetries++;
-                port.Report(existingLockNotReached
+                port.Report(budgetLimitedReadOnlyWait && !existingLockNotReached
+                    ? "追加精调预算不足：保持当前锁点等待新帧，原试拍质量策略及回程预留不变；不立即放弃目标。"
+                    : existingLockNotReached
                     ? "PHD2 尚未跟上当前锁点：保持原生导星等待新帧，不追加精调、不重置预算；原回程时间继续保留。"
                     : transientResidualGrowthWarning || nearSlitTrackingWarning
                     ? "导星扰动警告：保持当前锁点和原生导星，先补取整组新帧；不因短时残差增长立即回程，也不追加追逐扰动的移锁。"
@@ -166,7 +189,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     new
                     {
                         completionWindowRetries, boundedByOriginalDeadline = true, nativeCorrectionPending,
-                        nearSlitTrackingWarning, transientResidualGrowthWarning, existingLockNotReached,
+                        nearSlitTrackingWarning, transientResidualGrowthWarning, existingLockNotReached, budgetLimitedReadOnlyWait,
                         previousWindowDecision = correctionWindow,
                         previousWindowFrames = previousCompletionWindow.Select(item => item.Measurement.FrameSha256).ToArray(),
                         rollingCorrectionWindow,
@@ -187,6 +210,9 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             }
             if (!plan.IsAllowed && !supervisedSlitPrecisionWarning)
             {
+                if (!request.AllowCoarseReacquisition && port.PendingMotion is null)
+                    return new StageResult(GateResult.TargetQuality("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED",
+                        $"Same-lineage pre-exposure placement cannot continue: {plan.Code}: {plan.Message}"));
                 return await port.HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
                     new Phd2LockShiftAcquisitionBudget(false, plan.Code, plan.Message, 0, 0, 0, 0,
                         ledger.CumulativeCommandedPixels, ledger.AttemptsUsed,
@@ -269,21 +295,31 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             }
 
             // A complete read-only/explicit-warning endpoint was handled
-            // above. Only a NEW lock command needs the whole remaining
-            // trip to fit. Re-evaluate from this iteration's fresh frame
-            // and inherited ledger; the initial diagnostic must not become
-            // stale, nor may a denied whole trip fall through to one
-            // individually affordable but unfinishable first segment.
+            // above. Recheck the whole exact-midpoint trip. A deliberately
+            // shorter, fully return-reserved warning-probe approach is useful
+            // only when the complete measured window predicts the EXISTING
+            // probe envelope. Prediction authorizes no exposure or completion.
             var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(
                 session.Qualification, session.GuideMode, session.LastMeasurement.Measurement, ledger,
                 port.BuildPhd2LockShiftSafetySnapshot(context, preset, topology.PierSide), topology,
                 preset.BuildMotionLimits(), clock.GetUtcNow());
             if (!nextAcquisitionBudget.IsAllowed)
-                return await port.HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
-                    nextAcquisitionBudget, request.PostCalibrationReacquisitionDepth, request.LostLockReacquisitionDepth,
-                    cancellationToken).ConfigureAwait(false);
+            {
+                if (!budgetLimitedApproach || nextAcquisitionBudget.Code is not
+                    ("SLIT_LOCK_RETURN_CUMULATIVE_RESERVE" or "SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE"))
+                {
+                    if (!request.AllowCoarseReacquisition && port.PendingMotion is null)
+                        return new StageResult(GateResult.TargetQuality("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED",
+                            $"Same-lineage pre-exposure placement cannot continue: {nextAcquisitionBudget.Code}: {nextAcquisitionBudget.Message}"));
+                    return await port.HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
+                        nextAcquisitionBudget, request.PostCalibrationReacquisitionDepth, request.LostLockReacquisitionDepth,
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
 
             var stage = plan.Stage!;
+            if (budgetLimitedApproach)
+                port.Report($"精调预算接近上限：本步缩短为 {stage.StagePixels:F2}px，保留原回程预留；移锁后重新实测，不把预测当作入缝或试拍许可。");
             if (correctionWindow.CanContinue)
                 port.Report($"PHD2 当前帧已回到现锁点附近（{correctionWindow.LatestGuideResidualPixels:F2}px）；整组新帧修正终点分散 {correctionWindow.MaximumEndpointSpreadPixels:F2}px，在原剩余预算内继续小步入缝。尚未确认入缝完成。");
             var preIntentFieldBinding = await port.ValidateCurrentFieldBindingAsync(context, cancellationToken).ConfigureAwait(false);
@@ -328,6 +364,12 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     stage.AppliedLockShiftScale,
                     stage.AppliedResidualToleranceScale,
                     stage.RequiredFreshResiduals,
+                    planningCode = plan.Code,
+                    budgetLimitedApproach,
+                    predictedProbeEnvelopeOnly = budgetLimitedApproach,
+                    stage.CumulativeAfterStageUpperPixels,
+                    ledger.CumulativeCommandedPixels,
+                    preset.MaximumCumulativePixels,
                     correctionWindow,
                     sourceFrameSha256 = stage.SourceFrameSha256,
                     topologyFingerprintSha256 = stage.TopologyFingerprintSha256,
@@ -625,6 +667,31 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             await port.PersistPendingAsync(request.PendingPath, pending, CancellationToken.None).ConfigureAwait(false);
             port.RecordPendingMotion(pending);
         }
+    }
+
+    private bool IsUsefulBudgetLimitedApproach(IReadOnlyList<Phd2GuidingResidualState> window,
+        Phd2LockShiftStagePlan stage, Phd2SlitPlacementCommissioning preset, double tolerance, int requiredFrames)
+    {
+        if (!qualityPolicy.WarningProbeEnabled || stage.GuideMode != Phd2SlitGuideMode.OffSlitGuideStar ||
+            window.Count < requiredFrames || window.Any(item => !item.Measurement.GuidePositionMeasuredInFrame ||
+                !item.Measurement.TargetIdentityConfirmed || !Phd2PlacementGuideWindowPolicy.HasMeasuredPositionAuthority(
+                    item.Measurement.TargetPositionAuthority))) return false;
+        if (!Phd2PlacementGuideWindowPolicy.EvaluateCorrectionWindow(
+            window.Select(item => item.Measurement).ToArray(), stage.ExpectedCurrentLockPosition,
+            stage.GuideMode, true, true, false, preset.EffectiveGuideLockResidualPixels,
+            tolerance, requiredFrames).CanContinue) return false;
+        // Same-frame guide + slit - target cancels the guide error. Evaluate
+        // every frame; no favourable subset and no prediction-as-arrival.
+        var predicted = window.Select(item => new Phd2Point(
+            item.Measurement.TargetCentroid.X + stage.RequestedLockPosition.X - item.Measurement.GuideStar.X,
+            item.Measurement.TargetCentroid.Y + stage.RequestedLockPosition.Y - item.Measurement.GuideStar.Y)).ToArray();
+        var residuals = window.Select((item, i) => PointDistance(predicted[i],
+            item.Measurement.RecognizedSlitAcquisitionPoint)).ToArray();
+        var apertures = window.Select((item, i) => Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(
+            ToFrameLocal(predicted[i], preset), item.RuntimeSlitLocal)).ToArray();
+        return Phd2PlacementGuideWindowPolicy.AllWithinTolerance(residuals, tolerance) ||
+            qualityPolicy.EvaluateSlitWarning(true, true, residuals, apertures, tolerance,
+                preset.MaximumResidualGrowthPixels, preset.MaximumAcquisitionResidualPixels).CanProbe;
     }
 
     private void RequireSameCorrectionWindowEpoch(Phd2SlitPlacementSession session,

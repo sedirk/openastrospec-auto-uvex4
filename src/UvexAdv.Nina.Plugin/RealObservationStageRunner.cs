@@ -90,6 +90,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private readonly IDomeFollower domeFollower;
     private readonly IPlateSolverFactory plateSolverFactory;
     private readonly IProgress<ApplicationStatus> progress;
+    private readonly Func<object?>? nativeSequenceCaptureOwner;
     private readonly WindowsFocusDomainEvidence focusDomainEvidence = new();
     private readonly QhyServiceClient qhy;
     private readonly Lazy<QhyServiceHealth?> lockedQhyServiceHealth;
@@ -215,7 +216,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         IFlatDeviceMediator flatDeviceMediator,
         IFilterWheelMediator filterWheelMediator,
         IDomeFollower domeFollower,
-        IProgress<ApplicationStatus> progress)
+        IProgress<ApplicationStatus> progress,
+        Func<object?>? nativeSequenceCaptureOwner = null)
     {
         this.host = host;
         this.settings = settings;
@@ -235,6 +237,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         this.domeFollower = domeFollower;
         this.plateSolverFactory = plateSolverFactory;
         this.progress = progress;
+        this.nativeSequenceCaptureOwner = nativeSequenceCaptureOwner;
         var plateSettings = profileService.ActiveProfile.PlateSolveSettings;
         var primarySolver = plateSolverFactory.GetPlateSolver(plateSettings);
         var blindSolver = plateSolverFactory.GetBlindSolver(plateSettings);
@@ -380,7 +383,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             AddIfPresent(labels, "telescopeId", configuration.ExpectedTelescopeId);
             if (configuration.SequencePlan is { } nativePlan)
                 labels["nativeSequencePlan"] = JsonSerializer.Serialize(nativePlan);
-            if (NativeMeridian is { } meridian)
+            if (NativeTarget is { } meridian)
             {
                 labels["nativeTargetRootRunId"] = meridian.TargetPlan?.ObservationRunId ?? string.Empty;
                 labels["nativeTargetOriginalPlan"] = JsonSerializer.Serialize(meridian.Original);
@@ -403,6 +406,32 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationContext context,
         CancellationToken cancellationToken)
     {
+        // A meridian boundary is a normal end of this segment, not permission
+        // for subsequent markers to run on old-side optical evidence.
+        if (NativeMeridian?.Requested == true && stage != ObservationStage.FinalizeObservation)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SequenceStopGate() is { } stop) return new(stop);
+            return MeridianSegmentBoundary();
+        }
+        using var boundary = new NativeMeridianStageBoundary(cancellationToken);
+        nativeMeridianStageBoundary = boundary;
+        nativeMeridianOperationContext = context;
+        try
+        {
+            return await boundary.ExecuteAsync(
+                token => ExecuteStageCoreAsync(stage, context, token), MeridianSegmentBoundary).ConfigureAwait(false);
+        }
+        finally
+        {
+            nativeMeridianStageBoundary = null;
+            nativeMeridianOperationContext = null;
+        }
+    }
+
+    private async Task<StageResult> ExecuteStageCoreAsync(
+        ObservationStage stage, ObservationContext context, CancellationToken cancellationToken)
+    {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (stage != ObservationStage.FinalizeObservation && SequenceStopGate() is { } sequenceStop)
             return new StageResult(sequenceStop);
@@ -422,6 +451,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             try
             {
                 Volatile.Write(ref executingStage, (int)stage);
+                CheckNativeMeridianOperationBoundary(context);
+                if (NativeMeridian?.Requested == true && stage == ObservationStage.FinalizeObservation)
+                {
+                    // Join the original owners before any retirement/flip. Do
+                    // not run ordinary durable RETURN recovery on the old side.
+                    return await CompleteStageResultAsync(stage,
+                        await FinalizeObservationAsync(context, cancellationToken).ConfigureAwait(false),
+                        cancellationToken).ConfigureAwait(false);
+                }
                 // This invocation is already the fresh outer stage stack. Consume
                 // the preceding pause epoch before durable recovery so recovery
                 // checkpoints do not reject themselves forever. A new pause sets
@@ -493,6 +531,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     ObservationStage.FinalizeObservation => await FinalizeObservationAsync(context, cancellationToken).ConfigureAwait(false),
                     _ => Attention(stage, "STAGE_UNSUPPORTED", $"No real adapter exists for {stage}.")
                 };
+                // Some owner adapters report a pier/topology failure before the
+                // next checkpoint. An observed side transition can still end this
+                // segment; an ordinary failure cannot manufacture a timed flip.
+                CheckNativeMeridianOperationBoundary(context, allowScheduled: result.CanAdvance);
                 var automaticRecovery = await PrepareAutomaticStageRecoveryAsync(
                     stage,
                     result,
@@ -531,6 +573,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             catch (PhysicalActionGateException ex)
             {
+                CheckNativeMeridianOperationBoundary(context, allowScheduled: false);
                 await WriteAuditBestEffortAsync("physical-action-withheld", new
                 {
                     stage = stage.ToString(),
@@ -2798,11 +2841,31 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
     private async Task<GateResult> EnsureMountClockSynchronizedAsync(
         ObservationContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool verifiedIdleBoundary = false)
     {
+        async Task CheckBoundaryAsync()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!verifiedIdleBoundary)
+                await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            else
+            {
+                if (SequenceStopGate() is { } stop) throw new PhysicalActionGateException(stop);
+                var safety = ValidateCurrentActionPrerequisites(context, allowInvalidClockForIdleRecovery: true);
+                if (safety.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(safety);
+                var cover = ValidateOpticalCoverOpen();
+                if (cover.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(cover);
+                if (!cameraMediator.GetInfo().Connected || cameraMediator.GetInfo().IsExposing ||
+                    focuserMediator.GetInfo().IsMoving || focuserMediator.GetInfo().IsSettling ||
+                    phd2.Snapshot.AppState != Phd2AppState.Stopped ||
+                    activeQhyJobs.Count != 0 || pendingQhyRequests.Count != 0 ||
+                    telescopeMediator.GetInfo().Slewing || telescopeMediator.GetInfo().IsPulseGuiding)
+                    throw new InvalidOperationException("Clock recovery owner boundary became busy.");
+            }
+        }
         var initial = ValidateMountClock();
-        if (initial.Disposition == GateDisposition.Passed ||
-            !string.Equals(initial.Code, "MOUNT_CLOCK_OFFSET_EXCEEDED", StringComparison.Ordinal))
+        if ((!verifiedIdleBoundary && initial.Disposition == GateDisposition.Passed) ||
+            (initial.Disposition != GateDisposition.Passed && !NightMountClockRecovery.IsClockFailure(initial)))
         {
             return initial;
         }
@@ -2812,27 +2875,29 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         // guide and reconnect the telescope in the middle of science.
         var confirmation = new MountClockReadbackConfirmation();
         var lastClock = initial;
-        Report("赤道仪时钟读数异常，先等待连续有效读回；保持现有导星，不重连设备。");
+        Report(verifiedIdleBoundary ? "目标已停止：复核赤道仪时钟，必要时执行一次 N.I.N.A. 重连校时。"
+            : "赤道仪时钟读数异常，先等待连续有效读回；保持现有导星，不重连设备。");
         for (var sample = 0; sample < MountClockReadbackConfirmation.MaximumSamples; sample++)
         {
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
-            await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            await CheckBoundaryAsync().ConfigureAwait(false);
             lastClock = ValidateMountClock();
             if (confirmation.Observe(lastClock))
             {
                 await WriteAuditBestEffortAsync("mount-clock-readback-confirmed-without-reconnect",
-                    new { initial, confirmed = lastClock, samples = sample + 1, guidingStopped = false,
+                    new { initial, confirmed = lastClock, samples = sample + 1, guidingStopped = verifiedIdleBoundary,
                         telescopeReconnected = false, motionIssued = false }).ConfigureAwait(false);
                 return lastClock;
             }
         }
-        if (!MountClockReadbackConfirmation.MayReconnect((ObservationStage)Volatile.Read(ref executingStage),
+        if (!verifiedIdleBoundary && !MountClockReadbackConfirmation.MayReconnect((ObservationStage)Volatile.Read(ref executingStage),
             phd2SlitPlacementSession is not null))
             return GateResult.Unknown("MOUNT_CLOCK_RECHECK_REQUIRED",
                 $"赤道仪时钟异常在 8 秒只读复核后仍未取得连续有效读回；未重连赤道仪或主动停止导星，未开新曝光。请在空闲边界校时后重新定位。原始原因：{initial.Message} 最新读回：{lastClock.Message}",
                 lastClock.Metrics);
 
-        // Reconnection is a Night Setup operation, never an exposure prerequisite.
+        // Reconnection is a Night Setup or joined target-boundary operation,
+        // never an in-place exposure prerequisite. ADR-0034 keeps the old target failed.
         // OnStep receives workstation UTC from N.I.N.A. when its ASCOM
         // connection is established. A long-lived N.I.N.A. session can
         // therefore retain a mount UTCDate that is days old even though the
@@ -2849,7 +2914,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
         try
         {
-            await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            await CheckBoundaryAsync().ConfigureAwait(false);
             var environment = ValidateEnvironment(context.Plan with
             {
                 PlannedStartUtc = DateTimeOffset.UtcNow,
@@ -2922,7 +2987,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 slewIssued = false,
             }).ConfigureAwait(false);
 
-            await telescopeMediator.Disconnect().ConfigureAwait(false);
+            await CheckBoundaryAsync().ConfigureAwait(false);
+            await telescopeMediator.Disconnect().WaitAsync(TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
             var disconnectDeadline = DateTimeOffset.UtcNow.AddSeconds(20);
             while (telescopeMediator.GetInfo().Connected && DateTimeOffset.UtcNow < disconnectDeadline)
             {
@@ -2945,7 +3011,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "N.I.N.A. telescope TimeSync changed while the telescope was disconnected; reconnect was not attempted.",
                     initial.Metrics);
             }
-            if (!await telescopeMediator.Connect().ConfigureAwait(false))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SequenceStopGate() is { } sequenceStop) return sequenceStop;
+            if (verifiedIdleBoundary) await CheckBoundaryAsync().ConfigureAwait(false);
+            if (!await telescopeMediator.Connect().WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false))
             {
                 return GateResult.Unknown(
                     "MOUNT_CLOCK_RECOVERY_RECONNECT_REJECTED",
@@ -2959,9 +3028,18 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
 
-            var after = telescopeMediator.GetInfo();
+            var postConfirmation = new MountClockReadbackConfirmation();
             var afterClock = ValidateMountClock();
-            if (afterClock.Disposition != GateDisposition.Passed ||
+            var clockConfirmed = postConfirmation.Observe(afterClock);
+            for (var sample = 0; !clockConfirmed && sample < MountClockReadbackConfirmation.MaximumSamples; sample++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                await CheckBoundaryAsync().ConfigureAwait(false);
+                afterClock = ValidateMountClock();
+                clockConfirmed = postConfirmation.Observe(afterClock);
+            }
+            var after = telescopeMediator.GetInfo();
+            if (!clockConfirmed || afterClock.Disposition != GateDisposition.Passed ||
                 !after.Connected ||
                 !string.Equals(after.DeviceId, configuration.ExpectedTelescopeId, StringComparison.Ordinal) ||
                 after.Slewing ||
@@ -2992,7 +3070,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }).ConfigureAwait(false);
             return GateResult.Pass(
                 "MOUNT_CLOCK_RECOVERED_BY_NINA_RECONNECT",
-                $"N.I.N.A. refreshed stale OnStep UTC with one telescope-only reconnect; reported position shift {reportedPositionShiftArcseconds:F1} arcsec. Fresh QHY WCS remains mandatory before coarse centering.",
+                $"N.I.N.A. refreshed stale OnStep UTC with one telescope-only reconnect; reported position shift {reportedPositionShiftArcseconds:F1} arcsec. Fresh canonical target acquisition remains mandatory; no old target state may be resumed.",
                 (afterClock.Metrics ?? new Dictionary<string, double>()).Concat(new Dictionary<string, double>
                 {
                     ["mountClockRecoveryReportedPositionShiftArcseconds"] = reportedPositionShiftArcseconds,
@@ -3042,6 +3120,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             throw new ResumeStageRestartException();
         }
+        CheckNativeMeridianOperationBoundary(context);
     }
 
     private GateResult ValidateImmediatePhysicalActionGates(ObservationContext context)
@@ -3052,7 +3131,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         return ObservationAutomationPolicy.CombineImmediateActionGates(prerequisites, cover);
     }
 
-    private GateResult ValidateCurrentActionPrerequisites(ObservationContext context)
+    private GateResult ValidateCurrentActionPrerequisites(ObservationContext context, bool allowInvalidClockForIdleRecovery = false)
     {
         var authorization = ObservationAutomationPolicy.AuthorizeExecutionMode(
             true,
@@ -3088,6 +3167,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var environment = ValidateEnvironment(protectedPlan);
         if (environment.Disposition != GateDisposition.Passed) return environment;
         var clock = ValidateMountClock();
+        if (allowInvalidClockForIdleRecovery && NightMountClockRecovery.IsClockFailure(clock))
+            return GateResult.Warn("MOUNT_CLOCK_IDLE_RECOVERY_PREREQUISITES_VALID",
+                "Only sole-owner clock repair at a confirmed terminal target boundary is permitted; no motion or exposure authority.", clock.Metrics);
         if (clock.Disposition != GateDisposition.Passed) return clock;
         if (environment.Severity == GateSeverity.Warning)
         {
@@ -4747,6 +4829,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         if (!string.Equals(currentPierSide, expectedPierSide, StringComparison.Ordinal))
         {
+            // Cancel/join the old stage before its failure-return branch can
+            // reuse a pre-flip vector. No extra flip is sent for this readback.
+            if (nativeMeridianOperationContext is { } meridianContext &&
+                Enum.TryParse<NINA.Core.Enum.PierSide>(expectedPierSide, out var savedSide))
+                CheckNativeMeridianOperationBoundary(meridianContext, savedSide: savedSide);
             return GateResult.Fail(
                 "QHY_COARSE_PIER_SIDE_CHANGED",
                 $"The mount pier side changed from '{expectedPierSide}' to '{currentPierSide}' during QHY coarse centering.");
@@ -5687,6 +5774,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     $"{content.Gate.Message} 仍将本帧交给 PL3；只有 PL3 也失败时才禁止邻场移动。");
             }
 
+            G3PlateSolveProbeState? outsideShortHandoff = null;
             // A final short return from a formally solved neighbour already
             // has a bounded catalogue position. If this immutable first frame
             // identifies a candidate inside the remaining fine-motion envelope,
@@ -5734,7 +5822,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     var confirmed = await ConfirmSaturatedG3HandoffWithShortExposureAsync(
                         context, motionPrediction, measuredTarget, captured.Path, probeMountBinding, shortExposure.Value,
                         handoffPreset, handoffSlit.SlitDetection.Geometry, attempts.AsReadOnly(), cancellationToken).ConfigureAwait(false);
-                    if (confirmed is not null) return confirmed;
+                    if (confirmed is not null)
+                    {
+                        if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;
+                        outsideShortHandoff = confirmed;
+                        Report("短帧已确认目标，但超出剩余精调范围：仅解算已有当前场图像一次，成功后按原预算继续粗定位；不扩大精调门限。");
+                    }
                 }
                 if (G3PostWcsMeasuredHandoffPolicy.CanHandOff(measuredTarget,
                     motionPrediction.PredictedTargetPoint, motionPrediction.MaximumUncertaintyPixels,
@@ -5810,6 +5903,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     content,
                     frameSha256: sha256,
                     cancellationToken).ConfigureAwait(false);
+                if (outsideShortHandoff is not null) return outsideShortHandoff;
                 if (!contentIsOverexposed && content.HasCoherentSource)
                 {
                     earliestNonOverexposedStructuredProbe ??= latest;
@@ -5935,6 +6029,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // impossible alias in a sparse/oversized-star field. Do not let
             // that formal success terminate the ladder or authorize a slew.
             if (solve.Result.Success && resultGate.Code != "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED") return latest;
+            // A confirmed target outside the fine envelope needs coarse WCS,
+            // not another exposure ladder. Preserve the original target-quality
+            // outcome if this one read-only solve cannot supply it.
+            if (outsideShortHandoff is not null) return outsideShortHandoff;
             // Exposure tiers are ordered shortest to longest. Once widespread
             // clipping is explicit, every longer tier is strictly less useful;
             // preserve this frame and stop without consuming more wall time.
@@ -6285,6 +6383,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         : $"A fresh immutable G3 mount binding continued the settled lineage at its already charged current position {inheritedOriginRadius:F2} arcsec from the original field; no budget, origin or clock was reset.",
                 };
             }
+            continued = NativeTarget?.ClockBudget?.Charge(continued) ?? continued;
             await PersistG3AcquisitionMotionAsync(continued, cancellationToken).ConfigureAwait(false);
             return continued;
         }
@@ -6323,6 +6422,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             now,
             declaredEvidencePath,
             "Motion envelope declared at a reported mount origin; no command is outstanding.");
+        state = NativeTarget?.ClockBudget?.Charge(state) ?? state;
         await PersistG3AcquisitionMotionAsync(state, cancellationToken).ConfigureAwait(false);
         return state;
     }
@@ -7576,7 +7676,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 completedSolvedNeighbourApproach = G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(
                     isSolvedNeighbourApproach, scale, currentField.Solve?.Result.Success == true,
-                    priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, state.ArrivalToleranceArcseconds);
+                    priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, state.ArrivalToleranceArcseconds,
+                    state.MaximumSingleCorrectionArcseconds);
                 state = ReanchorG3AcquisitionMotionFromReportedPosition(state, telescopeMediator.GetCurrentPosition()) with
                 {
                     Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve,
@@ -7649,6 +7750,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 stopReason,
                 returned.ReturnedToOrigin,
                 returned.Message,
+                returnFailureGate = returned.FailureGate,
                 returned.State.CumulativeMotionArcseconds,
                 returned.State.CorrectionAttempts,
                 returned.State.MaximumCumulativeMotionArcseconds,
@@ -7668,8 +7770,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (!returned.ReturnedToOrigin)
         {
             return new StageResult(
-                GateResult.Unknown(
-                    "G3_WCS_CENTERING_RETURN_BLOCKED",
+                G3WcsRecoveryPolicy.UnreturnedCenteringGate(
+                    returned.FailureGate,
                     $"{stopReason} Safe return is blocked: {returned.Message}",
                     new Dictionary<string, double>
                     {
@@ -16000,7 +16102,8 @@ internal sealed record G3AcquisitionMotionReturnResult(
     bool ReturnedToOrigin,
     G3AcquisitionMotionState State,
     string Path,
-    string Message);
+    string Message,
+    GateResult? FailureGate = null);
 
 internal sealed record G3PostSlewStabilityResult(
     GateResult Gate,

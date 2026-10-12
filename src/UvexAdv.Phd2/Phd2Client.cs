@@ -832,6 +832,68 @@ public sealed partial class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
+            var initialState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+            var baseline = Snapshot;
+            void RequireSelectionContext()
+            {
+                var now = Snapshot;
+                if (!now.IsConnected || now.AutomationPaused || now.Phd2Paused ||
+                    now.ConnectionEpoch != baseline.ConnectionEpoch ||
+                    now.CalibrationChangeSequence != baseline.CalibrationChangeSequence ||
+                    now.Profile != baseline.Profile || now.Equipment != baseline.Equipment ||
+                    now.PendingSettleOperationId.HasValue ||
+                    now.AppState is not (Phd2AppState.Looping or Phd2AppState.Selected or Phd2AppState.Stopped) ||
+                    now.AppState == Phd2AppState.Stopped && initialState != Phd2AppState.Stopped)
+                    throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: local selection no longer owns this preview; no guide sent.");
+            }
+            RequireSelectionContext();
+            var nativeSelection = new TaskCompletionSource<Phd2Point>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Native PHD2 suppresses LockPositionSet when coordinates are unchanged.
+            Phd2Point? announcedLock = baseline.LockPosition;
+            var lockAnnouncements = 0;
+            // Non-exact selection in SELECTING updates the current image first.
+            // PHD2 completes it on a loop frame with LockPositionSet + StarSelected
+            // (Guider::UpdateGuideState). The immediate RPC lock is provisional.
+            // Watch only this local command; later ownership comparisons stay strict.
+            using var guard = RegisterEventWaiter(message =>
+            {
+                if (message.Sequence <= baseline.EventSequence) return false;
+                if (message.Name is "StarLost" or "LockPositionLost")
+                {
+                    var now = Snapshot;
+                    if (now.IsConnected && now.ConnectionEpoch == baseline.ConnectionEpoch &&
+                        !now.AutomationPaused && !now.Phd2Paused &&
+                        now.CalibrationChangeSequence == baseline.CalibrationChangeSequence &&
+                        now.Profile == baseline.Profile && now.Equipment == baseline.Equipment &&
+                        now.AppState is Phd2AppState.Looping or Phd2AppState.Selected or Phd2AppState.LostLock)
+                        throw new Phd2GuideSelectionUnavailableException("Native preview lost its candidate before guiding started.");
+                }
+                RequireSelectionContext();
+                if (message.Name is "LockPositionSet" or "StarSelected")
+                {
+                    var point = ParsePointObject(message.Payload);
+                    if (point is null || !double.IsFinite(point.X) || !double.IsFinite(point.Y) ||
+                        Distance(point, approximatePosition) > options.GuideStarSelectionTolerancePixels ||
+                        nativeSelection.Task.IsCompleted)
+                        throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: unexpected selection/lock event.");
+                    if (message.Name == "LockPositionSet")
+                    {
+                        if (++lockAnnouncements > (initialState == Phd2AppState.Looping ? 2 : 1))
+                            throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: repeated lock mutation.");
+                        announcedLock = point;
+                    }
+                    else
+                    {
+                        if (initialState != Phd2AppState.Looping || announcedLock is null || Distance(announcedLock, point) > 0.25)
+                            throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: unpaired native selection.");
+                        nativeSelection.TrySetResult(point);
+                    }
+                }
+                else if (message.Name is "StartGuiding" or "StartCalibration" or "GuidingDithered" or
+                    "GuidingStopped" or "LoopingExposuresStopped" or "Paused" or "Resumed" or "ConfigurationChange")
+                    throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: competing lifecycle event.");
+                return false; // Keep observing even after the native selection completes.
+            });
             await InvokeAsync(
                     "set_lock_position",
                     new
@@ -843,9 +905,35 @@ public sealed partial class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            if (initialState == Phd2AppState.Looping)
+            {
+                try
+                {
+                    var completed = await Task.WhenAny(nativeSelection.Task, guard.Task)
+                        .WaitAsync(options.MinimumLoopingFrameEventTimeout, cancellationToken).ConfigureAwait(false);
+                    await completed.ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    _ = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+                    if (guard.Task.IsCompleted) await guard.Task.ConfigureAwait(false);
+                    RequireSelectionContext();
+                    throw new Phd2GuideSelectionUnavailableException("Native preview did not complete selection within the existing frame deadline.");
+                }
+            }
+            if (guard.Task.IsCompleted) await guard.Task.ConfigureAwait(false);
+            var finalState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
             var result = await InvokeAsync("get_lock_position", parameters: null, cancellationToken).ConfigureAwait(false);
+            if (guard.Task.IsCompleted) await guard.Task.ConfigureAwait(false);
+            RequireSelectionContext();
             var selected = ParsePointArray(result)
                 ?? throw new Phd2Exception("PHD2 accepted guide-star selection but returned no lock position.");
+            if (!double.IsFinite(selected.X) || !double.IsFinite(selected.Y) || selected.X < 0 || selected.Y < 0 ||
+                announcedLock is not null && Distance(selected, announcedLock) > 0.25)
+                throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: lock readback differs from selection event.");
+            if (initialState == Phd2AppState.Looping &&
+                (finalState != Phd2AppState.Selected || Distance(selected, await nativeSelection.Task.ConfigureAwait(false)) > 0.25))
+                throw new Phd2CaptureException("PHD2_GUIDE_SELECTION_CONTEXT_CHANGED: final readback differs from native selection.");
             var deltaX = selected.X - approximatePosition.X;
             var deltaY = selected.Y - approximatePosition.Y;
             var separation = Math.Sqrt((deltaX * deltaX) + (deltaY * deltaY));
@@ -1500,8 +1588,11 @@ public sealed partial class Phd2Client : IPhd2Client
                     PendingSettleArmedAfterSequence = next.EventSequence,
                     PendingSettleBeginSequence = null,
                     PendingSettleCommandAccepted = false,
-                    PendingTakeoverLoopStopAllowed = current.AppState == Phd2AppState.Looping,
-                    PendingLateLoopFrameAllowed = current.AppState == Phd2AppState.Looping,
+                    // Native get_app_state reports Selected for an active
+                    // preview with a selected star; frame events say Looping.
+                    // Both are consumed by this local guide RPC, once only.
+                    PendingTakeoverLoopStopAllowed = current.AppState is Phd2AppState.Looping or Phd2AppState.Selected,
+                    PendingLateLoopFrameAllowed = current.AppState is Phd2AppState.Looping or Phd2AppState.Selected,
                     PendingForceRecalibration = forceRecalibration,
                     PendingOwnerCalibrationAllowed = ownerCalibrationAllowed,
                     PendingCalibrationStartSequence = null,
@@ -2223,6 +2314,14 @@ public sealed partial class Phd2Client : IPhd2Client
             {
                 LockPosition = ParsePointObject(message.Payload),
             }),
+            // PHD2 also clears the lock and emits StarLost when a selected
+            // preview candidate disappears. The camera is still looping:
+            // this invalidates the candidate, not the full-frame loop owner.
+            "LockPositionLost" when next.AppState == Phd2AppState.Looping &&
+                !next.PendingSettleOperationId.HasValue => InvalidateSettle(next with
+            {
+                LockPosition = null,
+            }),
             "LockPositionLost" => InvalidateSettle(next with
             {
                 LockPosition = null,
@@ -2316,6 +2415,11 @@ public sealed partial class Phd2Client : IPhd2Client
                 GuideOutput = next.GuideOutput?.Failed == true ? next.GuideOutput : null,
                 LastGuideStep = ParseGuideStep(message.Payload),
             },
+            "StarLost" when next.AppState == Phd2AppState.Looping => InvalidateSettle(next with
+            {
+                LockPosition = null,
+                LastGuideStep = ParseGuideStep(message.Payload),
+            }),
             "StarLost" => InvalidateSettle(next with
             {
                 AppState = Phd2AppState.LostLock,

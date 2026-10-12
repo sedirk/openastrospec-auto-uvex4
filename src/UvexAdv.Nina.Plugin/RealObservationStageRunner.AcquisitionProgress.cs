@@ -16,6 +16,6 @@ internal sealed partial class RealObservationStageRunner
             phase, role, captureId, phase == "Exposing" ? DateTimeOffset.UtcNow : null, exposureSeconds));
 
     private void PublishNativeSequenceProgress(ObservationAcquisitionProgress local) =>
-        host.PublishAcquisitionProgress(NativeMeridian?.Aggregate(local) ?? local);
+        host.PublishAcquisitionProgress(NativeTarget?.Aggregate(local) ?? local);
 
 }

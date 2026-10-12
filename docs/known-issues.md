@@ -1,6 +1,38 @@
 # Known issues
 
-## Current closeout boundary (2026-10-11, installed 0.4.0.277)
+## Current closeout boundary (2026-10-12, installed 0.4.0.285)
+
+The [October 12 closeout](closeout-2026-10-12.md) consolidates .278–.285. Historical
+results below remain version-specific, not current deployment claims.
+
+- The .285 native-selection fix waits for PHD2's own completed selection before
+  comparing ownership; it does not enlarge the strict lock-identity tolerance.
+  Local candidate loss/selection timeout can skip only after checked stop under
+  the saved target policy. Real external control changes, unknown stop, unsafe and
+  cancellation are not quality skips. HD 21641 recovery still needs sky acceptance.
+- .284's HD 21455 completed 2×600 s; its independent guardian confirmed deadline
+  closeout at 05:01:29 local time. These are recorded historical successes, not
+  .285 sky acceptance or generic unattended certification.
+- ADR-0032 meridian handoff spans acquisition/placement/science, with no additional
+  flip when a stable side change has already occurred. ADR-0035 permits one fresh
+  same-target continuation after stopped-boundary clock repair with original
+  frames, attempts, motion debits and deadlines. Actual two-side and clock-repair
+  continuation remain separate field checks; OnStep's date fault is not proven to
+  be hardware failure or repaired firmware.
+- ADR-0033 safety standby is independent of the observing sequence, **not** of
+  N.I.N.A.'s process. Exiting the application ends its software protection; restart
+  neither restores an old deadline watch nor resumes observing. Unconfirmed stop
+  retains diagnosis/monitoring without inventing mechanical closure authority.
+- The .285 installation verified 41 files, runtime version and startup/bridge state.
+  Actual panel navigation reported `PanelNotAvailable`; live visibility remains
+  unverified. Offline 166-scene coverage is separate. The installation snapshot was
+  idle/disarmed with N.I.N.A. devices disconnected, after the roof had closed.
+- 3,407 .NET and 75 reduction tests, Ruff and nine historical runs/26 accepted
+  spectra provide software regression evidence, not new capture or full FITS
+  reprocessing. Repeatable focus improvement, dual-N.I.N.A. photometry, calibrated
+  products and unattended commissioning remain separate work.
+
+## Historical closeout boundary (2026-10-11, installed 0.4.0.277)
 
 The [October 11 closeout](closeout-2026-10-11.md) consolidates .261–.277 and supersedes
 the current-status claims in the historical entries below, not their original evidence.

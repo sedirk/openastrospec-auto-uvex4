@@ -839,10 +839,11 @@ internal sealed partial class RealObservationStageRunner
         (GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected) guideSelectionResult;
         try
         {
-            guideSelectionResult = await SelectFreshPhd2GuideAsync(
+            var selected = await SelectFreshPhd2GuideAsync(
                 guideChoice,
                 preset,
                 cancellationToken).ConfigureAwait(false);
+            guideSelectionResult = (selected.Selection, selected.Requested, selected.Selected);
         }
         catch (Phd2NativeGuideSelectionExhaustedException exhausted)
         {
@@ -1588,8 +1589,14 @@ internal sealed partial class RealObservationStageRunner
             var preGuideLock = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
             if (!Phd2DependencyRebuildStopPolicy.CanRecordPreGuideOwner(
                 phd2.Snapshot, selectionConnectionEpoch, selectedGuide, preGuideLock))
+            {
+                await PublishRunJsonEvidenceAsync("phd2-pre-guide-owner-rejected",
+                    "Selection ownership readback rejected before guide",
+                    new { selectedGuide, preGuideLock, selectionConnectionEpoch, current = phd2.Snapshot,
+                        guideCommandSent = false }, lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
                 return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_PRE_GUIDE_OWNER_CHANGED",
                     "本轮选星后 PHD2 连接、状态或锁点发生变化；未接管外部导星，未发送 guide。");
+            }
             phd2PreMotionOutputOwner = (selectionConnectionEpoch, preGuideLock!);
             Volatile.Write(ref phd2GuidingEverStarted, 1);
             var recalibrationStartedUtc = DateTimeOffset.UtcNow;
@@ -1829,6 +1836,7 @@ internal sealed partial class RealObservationStageRunner
                 // authorized that motion. The genuinely new post-stage frame
                 // must remain unconsumed so it can authorize the next stage.
                 inheritedSettledBudget?.LastAcceptedFrameSha256);
+            ledger = NativeTarget?.ClockBudget?.Charge(ledger) ?? ledger;
             var session = new Phd2SlitPlacementSession(
                 guideChoice.Mode,
                 topology,
@@ -2025,6 +2033,9 @@ internal sealed partial class RealObservationStageRunner
                 return unmeasuredTarget.AfterStop(stopConfirmed);
             if (failure is TargetQualityEvidenceException qualityFailure)
                 return qualityFailure.AfterStop(stopConfirmed);
+            if (failure is Phd2GuideSelectionUnavailableException selectionFailure)
+                return new TargetQualityEvidenceException("PHD2_PRE_GUIDE_SELECTION_UNAVAILABLE",
+                    selectionFailure.Message).AfterStop(stopConfirmed);
             if (failure is PhysicalActionGateException physicalFailure)
                 return new StageResult(physicalFailure.Gate);
             return Attention(
@@ -2551,11 +2562,11 @@ internal sealed partial class RealObservationStageRunner
             catch (Exception ex)
             {
                 state = state with { CurrentLockX = verified.X, CurrentLockY = verified.Y,
-                    LastReason = "Fresh measured physical return not confirmed: " + ex.Message };
+                    LastReason = $"Original failure: {reason} Fresh measured physical return not confirmed: {ex.Message}" };
                 await Phd2LockShiftPendingStore.WriteAtomicAsync(path, state, CancellationToken.None).ConfigureAwait(false);
                 pendingPhd2LockShift = state;
                 return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED",
-                    "回程锁点已读回，但同一导星会话的新帧尚未证明星点回位；不冒充回位或入缝成功，保留停止后归档处理。" + ex.Message);
+                    $"回程锁点已读回，但同一导星会话的新帧尚未证明星点回位；保留停止后归档处理。原始原因：{reason} 回程核验：{ex.Message}");
             }
             await PublishRunJsonEvidenceAsync("phd2-lock-return-measured-window",
                 "Three fresh frame-bound native centroids confirm physical return, not slit placement or native settle",
@@ -2801,11 +2812,11 @@ internal sealed partial class RealObservationStageRunner
                 }
             }
 
-            // A neighbour-field motion forecast is acquisition guidance, not a
-            // measured target/slit residual. It must be replaced by a target
-            // measured in this immutable frame before any PHD2 placement step.
-            if (lastG3Field?.Solve?.Result.Success != true &&
-                targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)
+            // A formal WCS preserves catalogue identity, not a new star position
+            // in this frame. Apply the SAME bounded optical retry to both formal
+            // WCS and neighbour forecasts; otherwise a transient ambiguous core
+            // enters the rolling window and fails later as an untyped exception.
+            if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)
             {
                 // G3_POST_WCS_TARGET_NOT_MEASURED: prediction is only a search
                 // hint. A saturated core can split for one frame; wait for a
@@ -2838,7 +2849,7 @@ internal sealed partial class RealObservationStageRunner
                     Report($"目标位置复核警告：{rejectedTopology?.Gate.Code} / {rejectedStellar?.Gate.Code}；已丢弃本窗口 {discardedAcceptedFrames} 张测量，重新等待连续 {count} 张有效新帧（识别补取 {targetWindow.RejectedFrames}/{Phd2FreshTargetWindow.MaximumRejectedFramesToRetry}），原时限不变。");
                     continue;
                 }
-                throw new Phd2FreshTargetNotMeasuredException(GateResult.Unknown(
+                throw new Phd2FreshTargetNotMeasuredException(GateResult.TargetQuality(
                     Phd2FreshTargetWindow.FailureCode,
                     $"连续目标实测窗口未完成：{rejectedTopology?.Gate.Code} / {rejectedStellar?.Gate.Code}。已读取 {targetWindow.Captures} 张、拒绝 {targetWindow.RejectedFrames} 张；没有用预测位置或分裂亮块放行移锁/曝光。",
                     new Dictionary<string, double> { ["captureAttempts"] = targetWindow.Captures,
@@ -3104,10 +3115,12 @@ internal sealed partial class RealObservationStageRunner
             "invalid guide mode");
     }
 
-    private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected)> SelectFreshPhd2GuideAsync(
+    private async Task<(GuideStarSelection Selection, Phd2Point Requested, Phd2Point Selected, int Attempts)> SelectFreshPhd2GuideAsync(
         Phd2PlacementGuideChoice choice,
         Phd2SlitPlacementCommissioning preset,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<PixelPoint>? excludedCandidates = null,
+        int maximumNativeSelectionAttempts = 4)
     {
         if (choice.Mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding)
         {
@@ -3115,7 +3128,7 @@ internal sealed partial class RealObservationStageRunner
                 ?? throw new InvalidOperationException("Direct-target guiding has no fresh target centroid.");
             var requested = ToPhd2Domain(star.Centroid, preset);
             var selected = await phd2.SelectGuideStarAsync(requested, cancellationToken).ConfigureAwait(false);
-            return (choice.Selection, requested, selected);
+            return (choice.Selection, requested, selected, 1);
         }
 
         if (choice.Mode != Phd2SlitGuideMode.OffSlitGuideStar)
@@ -3157,9 +3170,8 @@ internal sealed partial class RealObservationStageRunner
         var targetGuard = targetIsUltraBright
             ? Math.Max(nativePolicy.TargetGuardPixels, nativePolicy.BrightTargetHaloGuardPixels)
             : nativePolicy.TargetGuardPixels;
-        const int maximumNativeSelectionAttempts = 4;
         var rejected = new List<string>(maximumNativeSelectionAttempts);
-        var rejectedPoints = new List<PixelPoint>();
+        var rejectedPoints = excludedCandidates?.ToList() ?? new List<PixelPoint>();
         var searchedRegions = new List<Phd2Rectangle>();
         for (var attempt = 1; attempt <= maximumNativeSelectionAttempts; attempt++)
         {
@@ -3168,7 +3180,7 @@ internal sealed partial class RealObservationStageRunner
             var selectedInsideRequestedRoi = true;
             try
             {
-                if (attempt == 1)
+                if (attempt == 1 && rejectedPoints.Count == 0)
                     selectedNative = await phd2.FindGuideStarAsync(cancellationToken).ConfigureAwait(false);
                 else
                 {
@@ -3254,7 +3266,7 @@ internal sealed partial class RealObservationStageRunner
                     nativePolicy);
                 if (validation.Gate.Disposition == GateDisposition.Passed)
                 {
-                    return (validation, selectedNative, selectedNative);
+                    return (validation, selectedNative, selectedNative, attempt);
                 }
                 // Local morphology is explicitly diagnostic. Geometry passed,
                 // so retain PHD2's native choice as a warning rather than
@@ -3267,7 +3279,8 @@ internal sealed partial class RealObservationStageRunner
                         validation.Star,
                         validation.Score),
                     selectedNative,
-                    selectedNative);
+                    selectedNative,
+                    attempt);
             }
 
             var reason =
@@ -3997,6 +4010,8 @@ internal sealed partial class RealObservationStageRunner
             new { accepted, guideTrackingWarning, residuals,
                 warningThresholdPixels = Phd2PlacementGuideWindowPolicy.GuideResidualWarningPixels,
                 precisionBlocks = false, sameEpochAndLock, liveOutputConfirmed,
+                targetPositionAuthorities = measurements.Select(x => x.Measurement.TargetPositionAuthority.ToString()).ToArray(),
+                measuredGuidePositions = measurements.Select(x => x.Measurement.GuidePositionMeasuredInFrame).ToArray(),
                 deadlineUtc, lockMutation = false, guidingRestarted = false, budgetReset = false },
             measurements.LastOrDefault()?.Frame.Path, cancellationToken).ConfigureAwait(false);
         if (!sameEpochAndLock)
@@ -4104,11 +4119,62 @@ internal sealed partial class RealObservationStageRunner
                 throw new PhysicalActionGateException(GateResult.Unknown(
                     "PHD2_SCIENCE_TARGET_IDENTITY_UNCONFIRMED", "Target identity was not confirmed in the pre-exposure window; no ATR exposure was started."));
             if (windowAttempt == maximumWindows)
+            {
+                if (configuration.ScienceQuality.WarningProbeEnabled &&
+                    await TryResumePreAtrPlacementAsync(context, session, preset, currentLock,
+                        measurements, cancellationToken).ConfigureAwait(false)) return;
                 throw new TargetQualityEvidenceException(
                     "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED",
                     $"Fresh pre-exposure window {windowAttempt}/{maximumWindows} residuals ({string.Join(", ", residuals.Select(value => value.ToString("F2", CultureInfo.InvariantCulture)))}) did not meet the saved quality policy with valid target identity; no ATR exposure was started.");
+            }
             Report($"ATR 曝光前遇到短时风扰：第 {windowAttempt}/{maximumWindows} 组新帧未全部满足 {tolerance:F2}px；保持 PHD2 导星，重采下一组，不移动锁点");
         }
+    }
+
+    private async Task<bool> TryResumePreAtrPlacementAsync(ObservationContext context,
+        Phd2SlitPlacementSession session, Phd2SlitPlacementCommissioning preset, Phd2Point currentLock,
+        IReadOnlyList<Phd2GuidingResidualState> measurements, CancellationToken token)
+    {
+        // Called once after this pre-exposure check's finite wait. Convergence
+        // cannot call the ATR check recursively; it owns all further motion and
+        // post-motion fresh-window acceptance under the original lineage.
+        if (pendingPhd2LockShift is not null || measurements.Count < 3 ||
+            measurements.Any(x => !x.Measurement.TargetIdentityConfirmed ||
+                !x.Measurement.GuidePositionMeasuredInFrame ||
+                !Phd2PlacementGuideWindowPolicy.HasMeasuredPositionAuthority(x.Measurement.TargetPositionAuthority)))
+            return false;
+        var path = Phd2LockShiftPendingPath(context.Plan.ObservationRunId);
+        var loaded = await Phd2LockShiftPendingStore.LoadAsync(path, token).ConfigureAwait(false);
+        if (loaded.Error is not null || loaded.State is not { } state) return false;
+        var binding = ValidateCurrentPhd2LockLedgerBinding(context, preset, state);
+        if (binding.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(binding);
+        var actual = await phd2.GetLockPositionAsync(token).ConfigureAwait(false);
+        if (!Phd2ScienceContinuationPolicy.CanObserveAtSettledLock(state, phd2.Snapshot,
+            session.ConnectionEpoch, session.GuideEpoch, IsGuidingStable(), actual,
+            preset.LockVerificationTolerancePixels) || actual is null ||
+            PointDistance(actual, currentLock) > preset.LockVerificationTolerancePixels) return false;
+        var ledger = Phd2ScienceContinuationPolicy.ResumeMotionLedger(state, DateTimeOffset.UtcNow);
+        if (ledger is null) return false;
+        var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), token).ConfigureAwait(false);
+        if (!identity.IsValid || ValidatePhdProfileBindingEvidence().Disposition != GateDisposition.Passed) return false;
+        await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+        phd2SettledHandoffBudget = state;
+        session = session with { LastMeasurement = measurements[^1] };
+        phd2SlitPlacementSession = session;
+        lastG3Field = UpdateG3FieldFromGuidingResidual(lastG3Field!, measurements[^1], preset);
+        await PublishRunJsonEvidenceAsync("phd2-pre-atr-resume-placement",
+            "Fresh pre-exposure drift returned to the same bounded placement lineage",
+            new { state.LineageId, state.StartedUtc, state.ExcludedAtrExposureSeconds,
+                state.AttemptsUsed, state.CumulativeCommandedPixels, state.OriginLockX, state.OriginLockY,
+                budgetReset = false, nativeGuideRestarted = false, exposureStarted = false },
+            measurements[^1].Frame.Path, token).ConfigureAwait(false);
+        Report("试拍前目标偏离：沿原导星会话和原精调预算继续修正；不重选星、不重校准、不重置计数。");
+        var result = await phd2Convergence.ConvergeAsync(context,
+            new(session, ledger, measurements, preset, identity, path, Metadata(commissioning!), 0, 0,
+                AllowCoarseReacquisition: false), token)
+            .ConfigureAwait(false);
+        if (!result.CanAdvance) throw new PhysicalActionGateException(result.Gate);
+        return true;
     }
 
     private static Dictionary<string, double> Phd2QualityMetrics(

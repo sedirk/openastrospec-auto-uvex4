@@ -32,16 +32,24 @@ public sealed class Phd2LoopSelectionGuideTakeoverTests
             await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 1 }, cancellationToken);
             await session.ReplyResultAsync(loop, 0, cancellationToken);
 
+            var selectionState = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", selectionState.GetProperty("method").GetString());
+            await session.ReplyResultAsync(selectionState, "Looping", cancellationToken);
             var select = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("set_lock_position", select.GetProperty("method").GetString());
             Assert.False(select.GetProperty("params").GetProperty("exact").GetBoolean());
             Assert.Equal(requestedGuide.X, select.GetProperty("params").GetProperty("x").GetDouble());
             Assert.Equal(requestedGuide.Y, select.GetProperty("params").GetProperty("y").GetDouble());
             await session.SendEventAsync(
+                new { Event = "LockPositionSet", X = selectedGuide.X, Y = selectedGuide.Y }, cancellationToken);
+            await session.SendEventAsync(
                 new { Event = "StarSelected", X = selectedGuide.X, Y = selectedGuide.Y },
                 cancellationToken);
             await session.ReplyResultAsync(select, 0, cancellationToken);
 
+            var finalSelectionState = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("get_app_state", finalSelectionState.GetProperty("method").GetString());
+            await session.ReplyResultAsync(finalSelectionState, "Selected", cancellationToken);
             var lockPosition = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("get_lock_position", lockPosition.GetProperty("method").GetString());
             await session.ReplyResultAsync(

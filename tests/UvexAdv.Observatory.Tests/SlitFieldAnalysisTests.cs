@@ -6,6 +6,33 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class SlitFieldAnalysisTests
 {
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ResolvedFaintComponentAtCataloguePositionIsNotPreemptedByNearbyClippedPrimary(bool faintIsTarget)
+    {
+        const int width = 300, height = 220;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddGaussian(pixels, width, height, 190, 130, 9, 100_000);
+        var primaryPixels = pixels.ToArray();
+        AddGaussian(pixels, width, height, 144, 69, 2.2, 5000);
+        for (var i = 0; i < pixels.Length; i++) pixels[i] = Math.Max(pixels[i], primaryPixels[i]);
+        var frame = new MonochromeFrame(width, height, pixels, 65520);
+        var faint = new StarCandidate(new(144, 69), 6000, 40000, 30, 5.2, 0.1, 0, 1000);
+        var primary = new StarCandidate(new(190, 130), 65535, 500000, 100, 20, 0.1, .5, 1000);
+        var predicted = faintIsTarget ? new PixelPoint(145, 70) : new PixelPoint(191, 131);
+        Assert.Equal(GateDisposition.Passed,
+            SaturatedTargetGhostTopologyAnalyzer.Analyze(frame, predicted, 100).Gate.Disposition);
+        var result = SlitTargetIdentifier.Identify(frame, [primary, faint], predicted, 100);
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        if (faintIsTarget) Assert.Same(faint, result.Target);
+        else
+        {
+            Assert.Equal(TargetIdentificationAuthority.BrightWingCentroid, result.Authority);
+            Assert.InRange(result.Target!.Centroid.X, 188, 192);
+        }
+    }
+
+    [Theory]
     [InlineData(80, true)]
     [InlineData(20, false)]
     public void AClippedIslandInTheLargerCoreHaloCannotWinByBeingCloserToTheWcsPrediction(

@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-11.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-12.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +38,24 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 11 closeout](docs/closeout-2026-10-11.md) consolidates **0.4.0.261–277**:
+The [October 12 closeout](docs/closeout-2026-10-12.md) consolidates **0.4.0.278–285**:
+per-target fixed/automatic exposure, a readable spectrum plot and compact status;
+native meridian handoff across acquisition, slit placement and science boundaries;
+finite observing sequences with independent safety standby; and same-target
+reacquisition after verified clock repair without replenishing the original budget.
+It also fixes native capture-lease attribution, coarse-acquisition routing, fresh
+target-window classification and a premature PHD2 native-selection handoff. Both
+frontends still use one production route, preserving safety and immutable evidence.
+
+**3,407 .NET tests, 75 reduction tests and Ruff pass**. The closeout records nine
+historical runs/26 accepted spectra replayed read-only and 166 offline UI scenes.
+Installed **.285** matches all 41 package files; bridge/startup checks pass, but
+**live-panel visibility and new-version sky recovery remain unverified**. Earlier
+.284 completed HD 21455 with 2×600 s; its independent guardian closed out at the
+deadline at 05:01:29 local time. Neither result is credited to .285. This Git
+closeout does not operate devices, restart applications or start/resume observing.
+
+The historical [October 11 closeout](docs/closeout-2026-10-11.md) consolidates **0.4.0.261–277**:
 reusable clock-only night windows, explicit sequence closeout and protected standby,
 fresh-frame guiding recovery, neighbouring-field continuity, and checked target-local
 failure skips. Scientific-quality warning consent now works independently of the full

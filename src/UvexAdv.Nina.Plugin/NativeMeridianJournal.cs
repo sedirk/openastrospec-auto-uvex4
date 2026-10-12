@@ -5,7 +5,7 @@ using UvexAdv.Observatory;
 namespace UvexAdv.Nina.Plugin;
 
 internal sealed record NativeMeridianJournal(string RunId, string Phase, string BeforeSide, string AfterSide,
-    DateTimeOffset UpdatedUtc, IReadOnlyList<string> Segments);
+    DateTimeOffset UpdatedUtc, IReadOnlyList<string> Segments, string Reason = "Scheduled");
 
 internal static class NativeMeridianJournalStore
 {
@@ -15,7 +15,8 @@ internal static class NativeMeridianJournalStore
         try
         {
             var entry = JsonSerializer.Deserialize<NativeMeridianJournal>(File.ReadAllText(path));
-            if (entry is { Phase: "MountVerified" } && !string.IsNullOrWhiteSpace(entry.RunId) &&
+            if (entry is { Phase: "MountVerified" } or { Phase: "SideChangeVerified", Reason: "ObservedSideChange" } &&
+                !string.IsNullOrWhiteSpace(entry.RunId) &&
                 entry.BeforeSide is "pierEast" or "pierWest" && entry.AfterSide is "pierEast" or "pierWest" &&
                 entry.AfterSide != entry.BeforeSide) return null;
             return GateResult.Unknown("NATIVE_FLIP_UNCONFIRMED",

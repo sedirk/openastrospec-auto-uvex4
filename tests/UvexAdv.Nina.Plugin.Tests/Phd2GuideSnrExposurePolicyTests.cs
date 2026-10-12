@@ -6,6 +6,25 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2GuideSnrExposurePolicyTests
 {
     [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void PreviewCandidateLossAllowsLocalReselectionWithoutAnyPreviousExposureTier(int epochDelta)
+    {
+        Phd2Point star = new(629.19, 577.24);
+        var baseline = Phd2StateSnapshot.Disconnected with { IsConnected = true, AppState = Phd2AppState.Looping,
+            ConnectionEpoch = 1, GuideEpoch = 100, EventSequence = 100, SelectedStar = star, LockPosition = star };
+        var lost = baseline with { GuideEpoch = 100 + epochDelta, EventSequence = 105, LockPosition = null };
+        Assert.True(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, true, false));
+        foreach (var changed in new[] { lost with { AppState = Phd2AppState.Guiding },
+            lost with { AppState = Phd2AppState.Calibrating }, lost with { CalibrationChangeSequence = 1 },
+            lost with { ConnectionEpoch = 2 }, lost with { Phd2Paused = true }, lost with { GuideEpoch = 104 } })
+            Assert.False(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, changed, star, true, false));
+        Assert.False(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, false, false));
+        Assert.False(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, true, true));
+    }
+
+    [Theory]
     [InlineData(Phd2AppState.Selected, 1)]
     [InlineData(Phd2AppState.Selected, 2)]
     [InlineData(Phd2AppState.Looping, 1)]

@@ -6,12 +6,260 @@ using NINA.Profile.Interfaces;
 using NINA.Sequencer.Container;
 using NINA.Sequencer.Trigger.MeridianFlip;
 using UvexAdv.Nina.Plugin.SequenceItems;
+using UvexAdv.Observatory;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NativeMeridianFlipTests
 {
+    [Fact]
+    public void SmallSameSideCorrectionsContinueUntilNativeTimingOrDestinationRequestsHandoff()
+    {
+        var durations = new List<double>();
+        var session = new NativeMeridianSession(new(2, 4, 120), s => { durations.Add(s); return false; });
+        // HA changing sign is deliberately NOT a criterion or a supplied input.
+        Assert.False(session.RequestAtOperationBoundary(PierSide.pierWest, 5));
+        Assert.False(session.RequestAtOperationBoundary(PierSide.pierWest, 10));
+        Assert.False(session.Requested);
+        Assert.True(session.RequestAtOperationBoundary(PierSide.pierWest, 10, destinationWouldChangeSide: true));
+        Assert.False(session.ObservedSideChange);
+        Assert.Equal(PierSide.pierWest, session.BeforeSide);
+        Assert.Equal(new double[] { 5, 10 }, durations);
+    }
+
+    [Fact]
+    public void ObservedSideChangeUsesSavedGeometryWithoutRequiringAnotherTimingTrigger()
+    {
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => throw new Exception("already changed side"));
+        Assert.True(session.RequestAtOperationBoundary(PierSide.pierEast, savedSide: PierSide.pierWest));
+        Assert.True(session.ObservedSideChange);
+        Assert.Equal(PierSide.pierWest, session.BeforeSide);
+        Assert.Equal(PierSide.pierEast, session.AfterSide);
+        session.RecordSegment("first", 1, 2, 1, 120);
+        session.ConfirmFlip();
+        Assert.Equal(1, session.RemainingPlan().ScienceFrames);
+        Assert.Equal(2, session.RemainingPlan().MaximumAttempts);
+        Assert.Throws<InvalidOperationException>(() => session.RequestAtOperationBoundary(PierSide.pierWest));
+    }
+
+    [Fact]
+    public void OrdinaryFailureCannotManufactureScheduledHandoffButActualChangeStillInvalidatesOldVectors()
+    {
+        var calls = 0;
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => { calls++; return true; });
+        Assert.False(session.RequestAtOperationBoundary(PierSide.pierWest, allowScheduled: false));
+        Assert.Equal(0, calls);
+        Assert.True(session.RequestAtOperationBoundary(PierSide.pierEast, allowScheduled: false));
+        Assert.True(session.ObservedSideChange);
+        Assert.Equal(0, calls);
+    }
+
+    [Theory]
+    [InlineData(ObservationStage.AcquireG3SlitField)]
+    [InlineData(ObservationStage.PlaceTargetOnSlit)]
+    public async Task NativeMarkersCompleteSegmentAfterInternalBoundaryAndDoNotStartScience(ObservationStage interruptAt)
+    {
+        using var host = new ObservationCoordinatorHost(new QuietNotifier());
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => true);
+        var runner = new StageFixture(session, interruptAt);
+        using var bridge = new SequencerStageBridge(runner) { EndRunOnGateFailure = true };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var plan = new ObservationPlan("meridian-fixture-" + Guid.NewGuid().ToString("N"), "test",
+            new("fixture", "fixture", 0, 89), new(31, 121, 20), DateTimeOffset.UtcNow,
+            TimeSpan.FromMinutes(1), new(0, 0, 0), new(), "ATR", "G3", "QHY");
+        var run = host.RunAsync(plan, bridge, timeout.Token);
+        foreach (var stage in Enum.GetValues<ObservationStage>())
+            await bridge.ExecuteMarkerAsync(stage, new Progress<NINA.Core.Model.ApplicationStatus>(), timeout.Token);
+        await run;
+        Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
+        Assert.True(bridge.HasCompletedFinalMarker);
+        Assert.False(bridge.HasTerminalGateResult);
+        Assert.True(runner.OwnerJoined);
+        Assert.True(runner.Finalized);
+        Assert.DoesNotContain(ObservationStage.RunScienceBlock, runner.Actions);
+        Assert.DoesNotContain(ObservationStage.SelectAtrExposure, runner.Actions);
+        Assert.True(session.Requested);
+        session.RecordSegment(plan.ObservationRunId, 0, 0, 0, 0);
+        session.ConfirmFlip(); // synthetic readback fixture, no device dispatch
+        Assert.Equal(2, session.RemainingPlan().ScienceFrames);
+        Assert.Equal(4, session.RemainingPlan().MaximumAttempts);
+    }
+
+    private sealed class StageFixture(NativeMeridianSession session, ObservationStage interruptAt) : ObservationStageRunnerBase
+    {
+        internal List<ObservationStage> Actions { get; } = [];
+        internal bool OwnerJoined, Finalized;
+        public override async Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
+        {
+            StageResult Boundary() => new(GateResult.Pass("NATIVE_MERIDIAN_SEGMENT_BOUNDARY", "fixture"));
+            if (stage == ObservationStage.FinalizeObservation) { Finalized = true; return Boundary(); }
+            if (session.Requested) return Boundary();
+            using var boundary = new NativeMeridianStageBoundary(token);
+            return await boundary.ExecuteAsync(async _ =>
+            {
+                Actions.Add(stage);
+                if (stage == interruptAt)
+                {
+                    try
+                    {
+                        await Task.Yield();
+                        session.RequestAtOperationBoundary(PierSide.pierWest);
+                        boundary.Interrupt();
+                        throw new Exception("stale stage continued");
+                    }
+                    finally { OwnerJoined = true; }
+                }
+                return new StageResult(GateResult.Pass("FIXTURE_STAGE", ""));
+            }, Boundary);
+        }
+    }
+
+    private sealed class QuietNotifier : IObservationAttentionNotifier
+    {
+        public void Notify(ObservationAttentionNotification notification) { }
+        public void ClearActiveIndicator() { }
+        public void Dispose() { }
+    }
+
+    [Theory]
+    [InlineData(PierSide.pierUnknown, 1)]
+    [InlineData(PierSide.pierEast, -1)]
+    [InlineData(PierSide.pierEast, double.NaN)]
+    public void UnknownSideOrDurationDoesNotRequestBoundary(PierSide side, double seconds)
+    {
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => true);
+        Assert.Throws<InvalidOperationException>(() => session.RequestAtOperationBoundary(side, seconds));
+        Assert.False(session.Requested);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task InternalStageInterruptionJoinsOwnerAndDoesNotCancelLogicalTarget(bool adapterReturnsFailure)
+    {
+        using var parent = new CancellationTokenSource();
+        using var boundary = new NativeMeridianStageBoundary(parent.Token);
+        var events = new List<string>();
+        var result = await boundary.ExecuteAsync(async token =>
+        {
+            try
+            {
+                await Task.Yield();
+                boundary.Interrupt();
+                events.Add("stale-move");
+            }
+            catch (OperationCanceledException) when (adapterReturnsFailure && token.IsCancellationRequested)
+            {
+                return new StageResult(GateResult.Unknown("OWNER_STOPPED", "adapter converted cancellation"));
+            }
+            finally { events.Add("owner-joined"); }
+            return new StageResult(GateResult.Pass("UNREACHABLE", ""));
+        }, () => { events.Add("handoff"); return new(GateResult.Pass("MERIDIAN", "")); });
+        Assert.Equal("MERIDIAN", result.Gate.Code);
+        Assert.Equal(new[] { "owner-joined", "handoff" }, events);
+        Assert.False(parent.IsCancellationRequested);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task ActualCancellationWinsOverInternalHandoff(bool simultaneous)
+    {
+        using var parent = new CancellationTokenSource();
+        using var boundary = new NativeMeridianStageBoundary(parent.Token);
+        var handoffs = 0;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => boundary.ExecuteAsync(_ =>
+        {
+            if (!simultaneous) parent.Cancel();
+            try { boundary.Interrupt(); }
+            finally { parent.Cancel(); }
+            return Task.FromResult(new StageResult(GateResult.Pass("UNREACHABLE", "")));
+        }, () => { handoffs++; return new(GateResult.Pass("MERIDIAN", "")); }));
+        Assert.Equal(0, handoffs);
+    }
+
+    [Fact]
+    public async Task UnrequestedCancellationAndRealErrorsAreNeverReclassifiedAsMeridian()
+    {
+        using var boundary = new NativeMeridianStageBoundary(default);
+        StageResult Handoff() => throw new Exception("must not hand off");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => boundary.ExecuteAsync(
+            _ => throw new OperationCanceledException("owner timeout"), Handoff));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => boundary.ExecuteAsync(
+            _ => throw new InvalidOperationException("identity changed"), Handoff));
+    }
+
+    [Fact]
+    public async Task ObservedOrientationIsVerifiedWithoutAcceptingAnyMotionDispatchPort()
+    {
+        var readbacks = 0;
+        var result = await NativeMeridianMountOperation.VerifyObservedChangeAsync(PierSide.pierWest,
+            PierSide.pierEast, () => { readbacks++; return Ready(PierSide.pierEast); },
+            () => { }, _ => Task.CompletedTask, default);
+        Assert.Equal(PierSide.pierEast, result);
+        Assert.Equal(2, readbacks);
+    }
+
+    [Theory]
+    [InlineData("flapping")] [InlineData("slewing")] [InlineData("disconnect")]
+    [InlineData("tracking-off")] [InlineData("unknown")]
+    public async Task ObservedSideMustRemainIdleAndStableAcrossSettle(string failure)
+    {
+        var state = Ready(PierSide.pierEast);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => NativeMeridianMountOperation.VerifyObservedChangeAsync(
+            PierSide.pierWest, PierSide.pierEast, () => state, () => { }, _ =>
+            {
+                state = failure switch
+                {
+                    "flapping" => state with { Side = PierSide.pierWest },
+                    "slewing" => state with { Slewing = true },
+                    "disconnect" => state with { Connected = false },
+                    "tracking-off" => state with { Tracking = false },
+                    _ => state with { Side = PierSide.pierUnknown },
+                };
+                return Task.CompletedTask;
+            }, default));
+    }
+
+    [Theory]
+    [InlineData("ObservedSideChange", "pierWest", false)]
+    [InlineData("Scheduled", "pierWest", true)]
+    [InlineData("ObservedSideChange", "pierEast", true)]
+    public async Task ObservedJournalRequiresExplicitReasonAndChangedSide(string reason, string after, bool blocked)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "uvex-observed-side-" + Guid.NewGuid().ToString("N"), "journal.json");
+        await NativeMeridianJournalStore.SaveAsync(path, new("run", "SideChangeVerified", "pierEast", after,
+            DateTimeOffset.UtcNow, ["run"], reason), default);
+        Assert.Equal(blocked, NativeMeridianJournalStore.PendingGate(path) is not null);
+    }
+
+    [Fact]
+    public void MeridianFinalizationBypassesOldSideReturnsAndPostShutterPathCannotInterruptSave()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var start = source.IndexOf("private async Task<StageResult> ExecuteStageCoreAsync", StringComparison.Ordinal);
+        var body = source[start..source.IndexOf("var automaticRecovery = await", start, StringComparison.Ordinal)];
+        Assert.True(body.IndexOf("await FinalizeObservationAsync", StringComparison.Ordinal) <
+            body.IndexOf("await RecoverDurableG3AcquisitionBeforeStageAsync", StringComparison.Ordinal));
+        var capture = source.IndexOf("await imagingMediator.CaptureImage", StringComparison.Ordinal);
+        var savedEnd = source.IndexOf("private SpectralProbeMetrics MeasureSpectralProbe", capture, StringComparison.Ordinal);
+        Assert.DoesNotContain("CheckNativeMeridian", source[capture..savedEnd]);
+        Assert.DoesNotContain("CheckpointAndRejectStaleStageStackAsync", source[capture..savedEnd]);
+        Assert.DoesNotContain("RequireImmediatePhysicalActionGatesAsync", source[capture..savedEnd]);
+    }
+
+    [Fact]
+    public void IndependentTransformLedgerIsReadBeforeMeridianRetirementOrAnyMountDispatch()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.NativeMeridianFlip.cs"));
+        var durable = source.IndexOf("await ResolveSlitPlacementPendingAsync", StringComparison.Ordinal);
+        var journal = source.IndexOf("await Journal(\"OwnersIdle\")", StringComparison.Ordinal);
+        Assert.True(durable > 0 && journal > durable);
+        Assert.Contains("independent.Error is { } independentError", source[durable..journal]);
+        Assert.Contains("independent.Resolution?.State is { Phase: not SlitPlacementPendingPhase.SettledBudgetLedger }", source[durable..journal]);
+        Assert.True(source.IndexOf("await GuideStateBoundaryRetirement.RetireMeridianSegmentAsync", StringComparison.Ordinal) > journal);
+        Assert.True(source.IndexOf("telescopeMediator.SetTrackingEnabled(false)", StringComparison.Ordinal) > journal);
+    }
+
     [Fact]
     public void TargetBudgetAndIntegrationCarryAcrossTwoSegmentsWithoutRecreditingFiles()
     {

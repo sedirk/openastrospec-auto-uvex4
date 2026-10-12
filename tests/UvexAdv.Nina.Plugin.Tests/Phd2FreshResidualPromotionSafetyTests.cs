@@ -121,11 +121,12 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
     }
 
     [Fact]
-    public void UnsolvedMotionForecastMustBeReplacedBeforeGuideResidualConstruction()
+    public void EveryUnmeasuredProjectionUsesBoundedRetryBeforeGuideResidualConstruction()
     {
+        Assert.DoesNotContain("if (lastG3Field?.Solve?.Result.Success != true &&\r\n                targetPositionAuthority", Source);
+        Assert.DoesNotContain("if (lastG3Field?.Solve?.Result.Success != true &&\n                targetPositionAuthority", Source);
         AssertOrdered(Source,
-            "if (lastG3Field?.Solve?.Result.Success != true &&",
-            "targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)",
+            "if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)",
             "G3_POST_WCS_TARGET_NOT_MEASURED:",
             "PixelPoint guideLocal;");
     }
@@ -145,7 +146,8 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
     [Fact]
     public void NativeRoiEscapeIsRejectedWithinTheExistingSelectionBudget()
     {
-        Assert.Contains("const int maximumNativeSelectionAttempts = 4;", Source, StringComparison.Ordinal);
+        Assert.Contains("int maximumNativeSelectionAttempts = 4)", Source, StringComparison.Ordinal);
+        Assert.Contains("attempt <= maximumNativeSelectionAttempts", Source, StringComparison.Ordinal);
         Assert.Contains("catch (Phd2GuideStarOutsideRoiException outsideRoi)", Source, StringComparison.Ordinal);
         Assert.Contains("var geometryAccepted = insideFrame && selectedInsideRequestedRoi &&", Source, StringComparison.Ordinal);
     }

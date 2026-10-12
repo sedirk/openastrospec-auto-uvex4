@@ -18,6 +18,20 @@ public sealed class Phd2ScienceContinuationPolicyTests
     { IsConnected = true, AppState = Phd2AppState.Guiding, ConnectionEpoch = 1, GuideEpoch = 86 };
 
     [Fact]
+    public void PreExposureResumePreservesOriginChargesConsumedFrameAndExposureClock()
+    {
+        var state = Credit(Ledger(), 100, 700, 600, 600)!;
+        var resumed = Phd2ScienceContinuationPolicy.ResumeMotionLedger(state, Start.AddSeconds(700));
+        Assert.Equal(state.ToPlannerLedger(), resumed);
+        Assert.Equal(new Phd2Point(state.OriginLockX, state.OriginLockY), resumed!.OriginLockPosition);
+        Assert.NotEqual(resumed.OriginLockPosition, resumed.CurrentLockPosition);
+        Assert.Equal(state.LastAcceptedFrameSha256, resumed.LastAcceptedFrameSha256);
+        Assert.Null(Phd2ScienceContinuationPolicy.ResumeMotionLedger(state, Start.AddSeconds(900)));
+        Assert.Null(Phd2ScienceContinuationPolicy.ResumeMotionLedger(state with { AttemptsUsed = 8 }, Start.AddSeconds(700)));
+        Assert.Null(Phd2ScienceContinuationPolicy.ResumeMotionLedger(state with { Phase = Phd2LockShiftPendingPhase.ReturnRequired }, Start.AddSeconds(700)));
+    }
+
+    [Fact]
     public void Real601SecondExampleAllowsOnlyExistingLockObservationWithoutResettingBudget()
     {
         var ledger = Ledger();

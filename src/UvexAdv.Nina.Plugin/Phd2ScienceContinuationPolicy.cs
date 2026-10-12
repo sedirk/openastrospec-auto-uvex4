@@ -4,6 +4,11 @@ namespace UvexAdv.Nina.Plugin;
 
 internal static class Phd2ScienceContinuationPolicy
 {
+    // Resume the original motion lineage, not a new placement budget. The
+    // caller must separately attest the exact owner/session/binding/lock.
+    internal static Phd2LockShiftLedger? ResumeMotionLedger(Phd2LockShiftPendingState ledger,
+        DateTimeOffset now) => !HasReplacementBudget(ledger, now) ? null : ledger.ToPlannerLedger();
+
     // A completed motion ledger is not an exposure timer. This only permits
     // fresh observations at the existing lock, never another motion command.
     internal static bool CanObserveAtSettledLock(Phd2LockShiftPendingState ledger,

@@ -38,8 +38,7 @@ public sealed class EmbeddedImageViewerControlTests
 
                 var overlay = new DrawingImage(new GeometryDrawing(Brushes.OrangeRed, null,
                     new RectangleGeometry(new Rect(0, 0, 1600, 1200))));
-                var spectrum = new DrawingImage(new GeometryDrawing(Brushes.Turquoise, null,
-                    new RectangleGeometry(new Rect(0, 0, 1200, 180))));
+                var spectrum = new SpectrumPreviewData(new[] { 10d, 20, double.NaN, 40, 30 });
                 viewer.PreviewImage = ObservationPreviewLayers.Attach(CreateTestBitmap(), overlay, spectrum);
                 viewer.Measure(new Size(800, 500));
                 viewer.Arrange(new Rect(0, 0, 800, 500));

@@ -1,25 +1,45 @@
 using UvexAdv.Observatory;
+using NINA.Core.Enum;
 
 namespace UvexAdv.Nina.Plugin;
 
 /// <summary>
-/// One target, at most one scheduled flip, two immutable acquisition segments.
+/// One target, at most one scheduled flip; immutable acquisition segments.
 /// Counts are local to each manifest; only the target presentation is cumulative.
-/// Never reuses a FITS, a lock position, or a motion budget from the other side.
+/// Never reuses a FITS or lock position from the other side. An earlier clock
+/// continuation retains its numeric debits across this boundary (ADR-0035).
 /// </summary>
-internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<double, bool> isDue)
+internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<double, bool> isDue) : NativeTargetSession(original)
 {
-    public NativeSequencePlan Original { get; } = original;
-    internal AdaptiveGuidingRecovery GuidingRecovery { get; } = new();
-    public int Accepted { get; private set; }
-    public int Attempts { get; private set; }
-    public int ReusedProbes { get; private set; }
-    public double AcceptedSeconds { get; private set; }
     public bool Requested { get; private set; }
     public bool Flipped { get; private set; }
-    public ObservationPlan? TargetPlan { get; set; }
+    public bool ObservedSideChange { get; private set; }
+    public PierSide? BeforeSide { get; private set; }
+    public PierSide? AfterSide { get; private set; }
+    private PierSide? segmentSide;
     public Action? VerifyScope { get; init; }
-    public List<string> SegmentRunIds { get; } = [];
+
+    internal bool RequestAtOperationBoundary(PierSide side, double operationSeconds = 0,
+        bool destinationWouldChangeSide = false, PierSide? savedSide = null, bool allowScheduled = true)
+    {
+        if (side is not (PierSide.pierEast or PierSide.pierWest) ||
+            !double.IsFinite(operationSeconds) || operationSeconds < 0)
+            throw new InvalidOperationException("中天交接需要已知侧别和有效动作时长。");
+        if (Requested) return true;
+        segmentSide ??= savedSide is PierSide.pierEast or PierSide.pierWest ? savedSide : side;
+        if (side != segmentSide)
+        {
+            if (Flipped) throw new InvalidOperationException("本目标已经换侧一次；拒绝重复翻转或反复重发取场预算。");
+            BeforeSide = segmentSide;
+            AfterSide = side;
+            ObservedSideChange = true;
+            return Requested = true;
+        }
+        if (!allowScheduled || (!destinationWouldChangeSide && !isDue(operationSeconds))) return false;
+        if (Flipped) throw new InvalidOperationException("本目标再次要求翻转；没有新增翻转预算。");
+        BeforeSide = side;
+        return Requested = true;
+    }
 
     public bool RequestAtFrameBoundary(double exposureSeconds)
     {
@@ -31,44 +51,11 @@ internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<do
         return Requested = true;
     }
 
-    public NativeSequencePlan RemainingPlan()
-    {
-        var remaining = Original with
-        {
-            ScienceFrames = Original.ScienceFrames - Accepted,
-            MaximumAttempts = Original.MaximumAttempts - Attempts,
-            DeferObservatoryCloseout = true,
-            // This is an operator choice once per logical target, not per segment.
-            ForceGuideCalibration = Original.ForceGuideCalibration && SegmentRunIds.Count == 0 && !Flipped,
-        };
-        if (remaining.Validate().Count != 0)
-            throw new InvalidOperationException("剩余科学帧或尝试预算不足；翻转不能重新发放曝光尝试预算。");
-        return remaining;
-    }
-
-    public void RecordSegment(string runId, int accepted, int attempts, int reused, double seconds)
-    {
-        if (SegmentRunIds.Contains(runId, StringComparer.Ordinal) || accepted < 0 || attempts < accepted ||
-            reused < 0 || reused > accepted || !double.IsFinite(seconds) || seconds < 0 ||
-            Accepted + accepted > Original.ScienceFrames || Attempts + attempts > Original.MaximumAttempts)
-            throw new InvalidOperationException("翻转分段计数无效或重复；禁止重新计入原始帧。");
-        SegmentRunIds.Add(runId);
-        Accepted += accepted; Attempts += attempts; ReusedProbes += reused; AcceptedSeconds += seconds;
-    }
-
     public void ConfirmFlip()
     {
         if (!Requested || Flipped) throw new InvalidOperationException("没有待确认的唯一翻转请求。");
         Requested = false; Flipped = true;
+        segmentSide = AfterSide;
     }
 
-    public ObservationAcquisitionProgress Aggregate(ObservationAcquisitionProgress local) => local with
-    {
-        RequestedFrames = Original.ScienceFrames,
-        AcceptedFrames = Accepted + local.AcceptedFrames,
-        AttemptedFrames = Attempts + local.AttemptedFrames,
-        MaximumAttempts = Original.MaximumAttempts,
-        ReusedProbeFrames = ReusedProbes + local.ReusedProbeFrames,
-        AcceptedExposureSeconds = AcceptedSeconds + local.AcceptedExposureSeconds,
-    };
 }

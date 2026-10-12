@@ -111,6 +111,39 @@ public sealed class G3WorkflowTests
     }
 
     private static GateResult Pass => GateResult.Pass("pass", "fixture");
+    [Theory]
+    [InlineData("G3_SEARCH_PIER_SIDE_CHANGED", true)]
+    [InlineData("G3_SEARCH_PIER_SIDE_UNKNOWN", false)]
+    [InlineData("G3_SEARCH_MOUNT_DISCONNECTED", false)]
+    [InlineData("G3_SEARCH_MOUNT_SLEWING", false)]
+    [InlineData("G3_SEARCH_PULSE_GUIDING_ACTIVE", false)]
+    public async Task ChangedPierStopsOldReturnAndRetainsTypedCauseForTerminalSkip(string code, bool targetScoped)
+    {
+        var f = new ReturnFixture();
+        var failure = GateResult.Fail(code, "reported pierWest -> pierEast");
+        f.Trace.Handlers["ValidateG3SearchMountState"] = _ => failure;
+        var result = await f.Workflow.ReturnAsync(f.Context, f.State, "original.json", default);
+        Assert.False(result.ReturnedToOrigin);
+        Assert.Same(failure, result.FailureGate);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", f.Trace.Calls);
+        Assert.Empty(f.Persisted);
+        Assert.Equal(f.State.BudgetLineageId, result.State.BudgetLineageId);
+        Assert.Equal(f.State.CumulativeMotionArcseconds, result.State.CumulativeMotionArcseconds);
+        var gate = G3WcsRecoveryPolicy.UnreturnedCenteringGate(result.FailureGate, result.Message,
+            new Dictionary<string, double> { ["returnedToOrigin"] = 0 });
+        Assert.Equal(targetScoped, NativeSequencePlan.IsSkippableQualityFailure(gate));
+        Assert.Equal(0, gate.Metrics!["returnedToOrigin"]);
+    }
+
+    [Fact]
+    public void UnstructuredReturnMessageDoesNotBecomeASkippableSideChange()
+    {
+        var gate = G3WcsRecoveryPolicy.UnreturnedCenteringGate(null,
+            "G3_SEARCH_PIER_SIDE_CHANGED: arbitrary exception text", new Dictionary<string, double>());
+        Assert.Equal("G3_WCS_CENTERING_RETURN_BLOCKED", gate.Code);
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(gate));
+    }
+
     private static G3RunConfiguration Configuration => new(1000, 50, 1, 65535, 1000, 2.4, false, 5,
         null!, null!, 60, 120, 3, WideToSlitTransferMode.Skip, null!);
 

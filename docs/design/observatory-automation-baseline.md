@@ -251,7 +251,44 @@ It retains the night reservation, safety monitoring, original deadline and all
 unresolved motion records; it neither resumes nor skips the blocked target.
 Explicit end-night, cutoff, dawn, unsafe or lost safety-monitor/binding proof still
 invokes checked closure. Ordinary cancellation does not authorize mechanical
-closeout, and uncertain physical stop cannot enter standby.
+closeout, and uncertain physical stop cannot enter standby with motion authority.
+
+Under owner-requested [ADR-0033](../adr/0033-independent-observatory-safety-standby.md),
+the preceding standby lifetime now belongs to an independent safety owner in the
+same master N.I.N.A. process, not to the native sequence Execute task. After target
+owners join, keep-open completion/failure or ordinary cancellation terminates the
+observing sequence and transfers its exclusive lease and immutable safety request
+without a monitoring gap. Cancellation does not disarm AIWeather, dawn or the
+original cutoff and does not itself command motion. Checked closure remains bounded
+and single-attempt. Unconfirmed stop allows monitoring/diagnosis only, not motion.
+An explicitly started, compatible new night may atomically take over safe waiting
+protection with its own watch; an already-started closeout cannot be overtaken.
+Separate journals/status preserve failure and unresolved debt; begin-run resets
+transient state. N.I.N.A. exit stops this software protection; restart never replays
+standby motion or automatically resumes observation. Hardware ownership is unchanged.
+
+Under owner-requested [ADR-0034](../adr/0034-idle-boundary-mount-clock-recovery.md),
+a persistent UTC failure may receive one durably precharged recovery attempt per
+active native night, only after the failed target and original owners have joined,
+stopped and reconciled their control handles. Reuse the same N.I.N.A. TimeSync
+reconnect route as startup, with bounded lifecycle calls, continuous safety/deadline
+checks and consecutive valid time/identity/pier/tracking readbacks. Only confirmed
+repair permits skipping the failed target and freshly positioning the next one.
+It is not a quality-gate waiver, old-target resume or permission to reuse old
+optical state. Failed/unknown/cancelled recovery still stops subsequent targets.
+
+Owner-requested [ADR-0035](../adr/0035-clock-repair-same-target-continuation.md)
+supersedes the preceding mandatory skip after successful repair. One fresh
+canonical segment may first reacquire the SAME target and finish its missing
+frames. Persist the continuation intent and accumulated accepted frames/attempts;
+carry original numeric G3/PHD2/independent-motion debits, ceilings and PC-clock
+deadlines without importing old coordinates, lock vectors or optical authority.
+The original failed segment and archived envelopes remain immutable. A fresh
+local origin does not replenish cumulative motion, actions or time. Exhausted
+budget or target-local reacquisition failure follows checked skip, while unsafe,
+unknown stop, ownership errors, cancellation and an unrepaired clock still stop.
+This is the narrow same-target terminal-archive exception, not a generic retry
+or restart/resume authority; meridian and clock segments share target accounting.
 
 Under owner-requested [ADR-0027](../adr/0027-terminal-target-guide-state-retirement.md),
 a completed/failed/cancelled logical target may retire its G3/PHD2 recovery
@@ -263,6 +300,19 @@ The next target uses fresh acquisition, not old pixel vectors. Same-target
 pause/resume/retry and meridian segments retain their original budgets and debt.
 Unknown stop, identity, nonterminal old runs and other mechanical/flip obligations
 remain blocking. Roof/AIWeather authority is unchanged.
+
+Owner-requested [ADR-0032](../adr/0032-meridian-boundaries-through-acquisition.md)
+narrowly extends the existing native meridian session to acquisition/placement
+checkpoints. Sky-coordinate meridian crossing alone does not stop same-side
+corrections. A scheduled flip or a stable observed side change ends the first
+joined segment under the night lease. Only after original-owner stopped proof
+and durable meridian intent may its authenticated G3/PHD2 control handles be
+archived byte-for-byte without claiming return; this is the specific exception
+to the preceding same-target retirement prohibition. One new-side segment then
+reacquires fresh target/slit/guide evidence with cumulative science/attempt counts
+and unchanged night safety/deadline. Observed side change never dispatches an
+extra flip. Ordinary retries, unknown stop, other mechanical debt and crash
+ambiguity cannot use this exception or reset budgets.
 
 Under [ADR-0021](../adr/0021-station-attested-noninterfering-roof.md), only a
 station with explicit hash-bound owner confirmation of clearance at **all mount

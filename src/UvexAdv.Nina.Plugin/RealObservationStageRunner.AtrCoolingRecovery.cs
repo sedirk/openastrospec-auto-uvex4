@@ -33,13 +33,13 @@ internal sealed partial class RealObservationStageRunner
             return GateResult.Unknown("ATR_COOLING_RECOVERY_EXHAUSTED",
                 "ATR 已重新设温并重连同一相机各一次，温度读回仍无改善；未开始曝光。请检查供电、制冷能力和驱动，未放宽温度门。");
         await atrCoolingCommandGate.WaitAsync(token).ConfigureAwait(false);
-        var captureBlock = new object();
-        var blockHeld = false;
+        NativeCameraCaptureLease? captureLease = null;
         try
         {
             var expectedId = context.Plan.ExpectedAtrCameraId;
             var expectedProfile = profileService.ActiveProfile;
             var owner = cameraMediator.GetDevice();
+            object? SequenceOwner() => NativeTarget is not null ? nativeSequenceCaptureOwner?.Invoke() : null;
             GateResult IdleIdentityGate()
             {
                 var info = cameraMediator.GetInfo();
@@ -49,14 +49,17 @@ internal sealed partial class RealObservationStageRunner
                     !ReferenceEquals(owner, cameraMediator.GetDevice()))
                     return GateResult.Unknown("ATR_COOLING_RECOVERY_OWNER_CHANGED", "ATR 连接或 Profile 身份已改变；未自动恢复或选择另一设备。");
                 if (info.IsExposing || info.CameraState is not (CameraStates.Idle or CameraStates.NoState) ||
-                    !cameraMediator.IsFreeToCapture(captureBlock))
+                    captureLease is not null && !captureLease.IsCurrent(SequenceOwner()))
                     return GateResult.Unknown("ATR_COOLING_RECOVERY_CAMERA_BUSY", "ATR 正在曝光、读出或被另一任务占用；未重连、未中断采集。");
                 return GateResult.Pass("ATR_COOLING_RECOVERY_IDLE", "同一 ATR 拥有者空闲。");
             }
             var idle = IdleIdentityGate();
             if (idle.Disposition != GateDisposition.Passed) return idle;
-            cameraMediator.RegisterCaptureBlock(captureBlock);
-            blockHeld = true;
+            captureLease = NativeCameraCaptureLease.TryAcquire(cameraMediator, SequenceOwner());
+            if (captureLease is null)
+                return GateResult.Unknown("ATR_COOLING_RECOVERY_CAMERA_BUSY", "ATR 由其他任务占用；当前原生序列的采集锁未被识别，未重连或中断采集。");
+            idle = IdleIdentityGate();
+            if (idle.Disposition != GateDisposition.Passed) return idle;
             // Cancel ONLY our cooling task and await its finally/cancel handler:
             // NINA's handler writes a set-point on cancellation. Never race that
             // old write against a reconnected owner or the new target command.
@@ -119,7 +122,7 @@ internal sealed partial class RealObservationStageRunner
         }
         finally
         {
-            if (blockHeld) cameraMediator.ReleaseCaptureBlock(captureBlock);
+            captureLease?.Dispose();
             atrCoolingCommandGate.Release();
         }
     }

@@ -49,7 +49,12 @@ internal sealed partial class RealObservationStageRunner
         bool measuredTargetConfirmed)
     {
         var initial = preset.HandoffResidualPixels(measuredTargetConfirmed);
-        return phd2SettledHandoffBudget is not { } spent ? initial :
+        if (phd2SettledHandoffBudget is not { } spent)
+            return NativeTarget?.ClockBudget?.Phd2 is not { } debit ? initial :
+                Phd2CoarseHandoffPolicy.LimitToRemainingLedger(initial, preset.BuildMotionLimits(),
+                    preset.CalibrationQualityPolicy.DegradedMaximumLockShiftScale, preset.MaximumResidualGrowthPixels,
+                    debit.Attempts, debit.Distance, DateTimeOffset.UtcNow - debit.StartedUtc);
+        return
             Phd2CoarseHandoffPolicy.LimitToRemainingLedger(initial, preset.BuildMotionLimits(),
                 preset.CalibrationQualityPolicy.DegradedMaximumLockShiftScale, preset.MaximumResidualGrowthPixels,
                 spent.AttemptsUsed, spent.CumulativeCommandedPixels, DateTimeOffset.UtcNow - spent.MotionClockStartedUtc);

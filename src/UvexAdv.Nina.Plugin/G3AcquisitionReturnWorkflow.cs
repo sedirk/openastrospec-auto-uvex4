@@ -53,7 +53,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             var mountGate = port.ValidateG3SearchMountState(state.PierSide);
             if (mountGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{mountGate.Code}: {mountGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{mountGate.Code}: {mountGate.Message}", mountGate);
             }
 
             // A driver can finish a long segmented return a fraction of an
@@ -147,7 +147,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             var intentMountGate = port.ValidateG3SearchMountState(state.PierSide);
             if (intentMountGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{intentMountGate.Code}: {intentMountGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{intentMountGate.Code}: {intentMountGate.Message}", intentMountGate);
             }
             if (!string.Equals(state.CoordinateEpoch, reportedBeforeIntent.Epoch.ToString(), StringComparison.Ordinal) ||
                 AngularSeparationArcseconds(reported, reportedBeforeIntent) > state.ArrivalToleranceArcseconds)
@@ -222,7 +222,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             var precommandMountGate = port.ValidateG3SearchMountState(state.PierSide);
             if (precommandMountGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{precommandMountGate.Code}: {precommandMountGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{precommandMountGate.Code}: {precommandMountGate.Message}", precommandMountGate);
             }
             if (!string.Equals(state.CoordinateEpoch, immediatelyBefore.Epoch.ToString(), StringComparison.Ordinal))
             {
@@ -272,7 +272,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             var afterMountGate = port.ValidateG3SearchMountState(state.PierSide);
             if (afterMountGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{afterMountGate.Code}: {afterMountGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{afterMountGate.Code}: {afterMountGate.Message}", afterMountGate);
             }
             var reportedHorizonGate = port.ValidateCommandCoordinateHorizon(context, after, "durable G3 acquisition reported return arrival");
             if (reportedHorizonGate.Disposition != GateDisposition.Passed)

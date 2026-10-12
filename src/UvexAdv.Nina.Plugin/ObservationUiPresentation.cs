@@ -39,6 +39,17 @@ public sealed record ObservationUiOperationError(string Message, string Technica
 /// </summary>
 public static partial class ObservationUiPresentation
 {
+    public static string PlanDraftNotice(ObservationDashboardSnapshot dashboard, CultureInfo culture)
+    {
+        var notice = Text("本页是单目标草稿，不代表高级序列计划；序列目标与曝光请在序列器的目标卡中修改。",
+            "This page is the single-target draft, not the advanced sequence plan. Edit sequence targets and exposures in their Sequencer cards.", culture);
+        if (dashboard.LockedPlan is not { } plan || plan.ObservationRunId != dashboard.Run.ObservationRunId)
+            return notice;
+        var ended = dashboard.Run.State is ObservationRunState.Completed or ObservationRunState.Cancelled or ObservationRunState.Faulted;
+        return Text(ended ? $"上次执行目标：{plan.Target.Name}（已结束）。" : $"本次执行目标：{plan.Target.Name}。",
+            ended ? $"Last executed target: {plan.Target.Name} (ended). " : $"Executing target: {plan.Target.Name}. ", culture) + notice;
+    }
+
     public static string AtrFrameCaption(bool science, int frame, int total, int attempt,
         double exposureSeconds, double highPercentileAdu, double clippedColumns, double lineSnr, CultureInfo culture)
     {
@@ -535,7 +546,8 @@ public static partial class ObservationUiPresentation
             "PHD2_LOCK_MANIFEST_UNREADABLE" => "PHD2 锁点关联的运行记录无法读取或校验；请查看原始原因中的运行日期和文件，不代表本帧导星质量不合格",
             "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星/目标证据失效，后续恢复的运动余额不足；不是曝光时长超限。未启动回退定位，原始原因见技术详情，已保存光谱保留",
             "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED" => "试拍前的导星会话或狭缝证据已失效；需要有界复核，不能用旧证据开始下一帧",
-            "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；没有追加移动或曝光",
+            "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；原预算内等待／精调仍未通过，没有开始新曝光",
+            "MOUNT_CLOCK_RECHECK_REQUIRED" => "赤道仪 UTC 持续异常，本段停止；整夜序列确认设备停止并校时成功后，按原剩余预算重新定位、入缝和导星，续拍本目标；目标恢复失败再跳过，取消或安全异常仍停止",
             "PHD2_SCIENCE_IN_PLACE_CHECK_FAILED" => "原位复核导星与狭缝证据时发生异常；已保留原始原因，没有因此重建定位或追加移动",
             "PHD2_LOCK_RECOVERY_FRESH_FIELD_REQUIRED" => "PHD2 旧锁点账本恢复时未取得新的正式 G3/PL3 目标与狭缝联合证据",
             "PHD2_LOCK_RECOVERY_FOREIGN_ENDPOINT_UNPROVEN" => "旧观测留下的 PHD2 锁点端点无法由持久化读回唯一确认；没有发送返回命令",
@@ -586,6 +598,7 @@ public static partial class ObservationUiPresentation
                     : raw.Contains("G3_DESTINATION_PIER_SIDE_QUERY_FAILED", StringComparison.Ordinal)
                         ? "赤道仪驱动的目的地侧别查询失败，WCS 回程未完成；请查看驱动原始异常。不是星点识别或哈希错误，旧运动账本保留"
                         : "WCS 居中后的回程未取得安全到位确认；不是单纯未找到星点，请查看原始回程原因，旧运动账本保留",
+            "G3_WCS_CENTERING_PIER_CHANGED" => "WCS 修正后赤道仪报告换侧，旧侧坐标已失效；未确认回到起点，不跨侧执行旧位移。仅在目标终止、设备停止及旧账本归档均通过后，才按序列策略跳过并让下一目标重新取场",
             "G3_DESTINATION_PIER_SIDE_CHANGE" => "驱动预测目的地会改变赤道仪侧别；未发送跨侧转向，旧运动账本保留",
             "G3_DESTINATION_PIER_SIDE_QUERY_FAILED" => "赤道仪目的地侧别查询失败；尚未发送本次转向，请查看驱动原始错误",
             "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已返回起点，没有继续邻场搜索",

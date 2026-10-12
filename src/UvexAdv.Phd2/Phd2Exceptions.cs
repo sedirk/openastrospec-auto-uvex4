@@ -98,6 +98,10 @@ public sealed class Phd2CaptureException : Phd2Exception
     public Phd2AppState? RejectedBeforeMutationState { get; }
 }
 
+/// <summary>A local preview candidate was lost or never completed selection;
+/// no guide command was issued. The caller must confirm stop before skipping.</summary>
+public sealed class Phd2GuideSelectionUnavailableException(string message) : Phd2Exception(message);
+
 /// <summary>Owner-reported loss, not silence from the camera or an inferred weather diagnosis.</summary>
 public sealed class Phd2GuidingFrameLostException : Phd2Exception
 {

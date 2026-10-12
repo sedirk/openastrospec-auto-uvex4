@@ -40,6 +40,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     private bool loadingTarget = true;
     private int scienceFrames, maximumScienceAttempts;
     private double fixedExposureSeconds, durationMinutes;
+    private double lastFixedExposureSeconds = 120;
     private bool forceGuideCalibration;
     private bool automaticGuideRecovery = true;
     private int guideStarWaitSeconds = 300;
@@ -113,6 +114,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         ScienceFrames = copy.ScienceFrames;
         MaximumScienceAttempts = copy.MaximumScienceAttempts;
         FixedExposureSeconds = copy.FixedExposureSeconds;
+        lastFixedExposureSeconds = copy.lastFixedExposureSeconds;
         FailurePolicy = copy.FailurePolicy;
         ForceGuideCalibration = copy.ForceGuideCalibration;
         AutomaticGuideRecovery = copy.AutomaticGuideRecovery;
@@ -204,7 +206,38 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
 
     [JsonProperty] public int ScienceFrames { get => scienceFrames; set => SetPlanValue(ref scienceFrames, value); }
     [JsonProperty] public int MaximumScienceAttempts { get => maximumScienceAttempts; set => SetPlanValue(ref maximumScienceAttempts, value); }
-    [JsonProperty] public double FixedExposureSeconds { get => fixedExposureSeconds; set => SetPlanValue(ref fixedExposureSeconds, value); }
+    // Keep the existing serialized contract: zero means the shared probe ladder.
+    // The UI mode is a view of it, not a second independently saved policy.
+    [JsonProperty]
+    public double FixedExposureSeconds
+    {
+        get => fixedExposureSeconds;
+        set
+        {
+            SetPlanValue(ref fixedExposureSeconds, value);
+            if (double.IsFinite(value) && value is > 0 and <= 3600) lastFixedExposureSeconds = value;
+            RaisePropertyChanged(nameof(ExposureMode));
+            RaisePropertyChanged(nameof(IsFixedExposure));
+            RaisePropertyChanged(nameof(ExposureModeDescription));
+        }
+    }
+    [JsonIgnore]
+    public SpectroscopyExposureMode ExposureMode
+    {
+        get => FixedExposureSeconds == 0 ? SpectroscopyExposureMode.Automatic : SpectroscopyExposureMode.Fixed;
+        set
+        {
+            RequireEditablePlan();
+            if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            if (value == ExposureMode) return;
+            FixedExposureSeconds = value == SpectroscopyExposureMode.Automatic ? 0 : lastFixedExposureSeconds;
+        }
+    }
+    [JsonIgnore] public bool IsFixedExposure => ExposureMode == SpectroscopyExposureMode.Fixed;
+    [JsonIgnore] public IReadOnlyList<SpectroscopyExposureModeChoice> AvailableExposureModes => SpectroscopyExposureModeChoice.Choices;
+    [JsonIgnore] public string ExposureModeDescription => UiText(IsFixedExposure
+        ? "固定：按指定秒数试拍与采集；仍保留饱和、信号及安全检查。"
+        : "自动：先试拍，沿用观测计划中的曝光阶梯选档；不修改其他目标或全局设置。");
     [JsonProperty] public SpectroscopyTargetFailurePolicy FailurePolicy { get => failurePolicy; set => SetPlanValue(ref failurePolicy, value); }
     [JsonProperty] public bool ForceGuideCalibration { get => forceGuideCalibration; set => SetPlanValue(ref forceGuideCalibration, value); }
     [JsonProperty] public bool AutomaticGuideRecovery { get => automaticGuideRecovery; set => SetPlanValue(ref automaticGuideRecovery, value); }
@@ -321,6 +354,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        progress = ObservationStatusProgress.Wrap(progress);
         // The coordinator finishes each acquisition segment before a flip.
         // Keep a target-wide token so native Interrupt also stops that handoff.
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -383,9 +417,10 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
                 VerifyScope();
                 return flip.IsDue(seconds);
             }) { VerifyScope = VerifyScope } : null;
+            NativeTargetSession? session = meridian ?? (night is not null ? new NativeTargetSession(nativePlan) : null);
             // The second segment is a new production runner with no old optical
             // state. The night retains the exclusive lease throughout the flip.
-            while (await ExecuteTargetAsync(progress, token, night, meridian, flip, flipConfiguration).ConfigureAwait(false))
+            while (await ExecuteTargetAsync(progress, token, night, session, meridian, flip, flipConfiguration).ConfigureAwait(false))
             {
                 token.ThrowIfCancellationRequested();
                 foreach (var item in Items) item.ResetProgress();
@@ -397,13 +432,13 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             // The original manifest/gate and stop readbacks have already been
             // recorded by the night owner. Native child sequencing may proceed
             // only when that owner explicitly accepted the quality skip.
-            LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" : "质量失败，已确认停止并跳过。";
+            LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" : "本目标未完成，已确认退出并跳过；查看本夜处理记录。";
         }
         finally { RaisePropertyChanged(nameof(LastOutcome)); }
     }
 
     private async Task<bool> ExecuteTargetAsync(IProgress<ApplicationStatus> progress, CancellationToken token,
-        UvexNightSequenceContainer? night, NativeMeridianSession? meridian = null,
+        UvexNightSequenceContainer? night, NativeTargetSession? session = null, NativeMeridianSession? meridian = null,
         SpectroscopyMeridianFlipTrigger? flip = null, string? flipConfiguration = null)
     {
         NinaInstancePolicy.RequireMaster(settings);
@@ -434,22 +469,25 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         };
         RealObservationStageRunner? realRunner = null;
         RealRunConfiguration? lockedConfiguration = null;
-        var sequencePlan = meridian?.RemainingPlan() ?? night?.ApplyNight(TargetSequencePlan()) ?? TargetSequencePlan();
+        var sequencePlan = session?.RemainingPlan() ?? night?.ApplyNight(TargetSequencePlan()) ?? TargetSequencePlan();
         if (UseRealMode)
         {
             lockedConfiguration = realRunnerFactory.CaptureConfiguration(settings);
             night?.CheckConfiguration(lockedConfiguration);
             lockedConfiguration = lockedConfiguration.WithSequencePlan(sequencePlan);
         }
-        var plan = meridian?.TargetPlan is { } originalTarget
+        var plan = session?.TargetPlan is { } originalTarget
             ? originalTarget with { ObservationRunId = Guid.NewGuid().ToString("N"), PlannedStartUtc = DateTimeOffset.UtcNow }
             : BuildPlan(lockedConfiguration);
         activeRunId = plan.ObservationRunId;
-        if (meridian is not null) meridian.TargetPlan ??= plan;
+        if (session is not null) session.TargetPlan ??= plan;
+        if (session?.ClockContinuationUsed == true && sequencePlan.TargetDeadlineUtc is { } targetEnd)
+            plan = plan with { PlannedDuration = targetEnd > plan.PlannedStartUtc ? targetEnd - plan.PlannedStartUtc : TimeSpan.FromSeconds(1) };
         IObservationStageRunner inner = UseRealMode
             ? realRunner = realRunnerFactory.Create(host, settings, progress, lockedConfiguration)
             : simulationRunnerFactory?.Invoke() ?? new SimulatedObservationStageRunner(host, Math.Clamp(SimulationStageMilliseconds, 250, 30_000), progress);
-        if (realRunner is not null) realRunner.NativeMeridian = meridian;
+        var boundaryRunner = inner as INativeTargetBoundary;
+        boundaryRunner?.AttachNativeTarget(session);
         using var bridge = new SequencerStageBridge(inner)
         { EndRunOnGateFailure = night is not null, BoundaryGate = sequencePlan.StopGateNow };
         activeBridge = bridge;
@@ -457,6 +495,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         ApplyStageStatuses(host.Dashboard);
         var coordinatorRun = host.RunAsync(plan, bridge, token, night);
         var continueAfterFlip = false;
+        var continueAfterClock = false;
         string? boundaryFailure = null;
         try
         {
@@ -482,16 +521,19 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
                 bridge.Abort(new OperationCanceledException("Native sequence conditions ended the target block."));
             }
             await coordinatorRun.ConfigureAwait(false);
+            if (session is not null && boundaryRunner is not null)
+                boundaryRunner.RecordMeridianSegment(session, plan.ObservationRunId);
             if (meridian is not null && realRunner is not null && host.Dashboard.Run.State == ObservationRunState.Completed)
             {
-                realRunner.RecordMeridianSegment(meridian, plan.ObservationRunId);
                 if (meridian.Requested)
                 {
                     LastOutcome = $"中天翻转中 · 已接受 {meridian.Accepted}/{meridian.Original.ScienceFrames} 张，保留已用尝试 {meridian.Attempts} 次";
                     RaisePropertyChanged(nameof(LastOutcome));
                     try
                     {
+                        var remainingClockBudget = realRunner.CaptureClockContinuationBudget();
                         await realRunner.PerformNativeMeridianFlipAsync(flip!, meridian, flipConfiguration!, token).ConfigureAwait(false);
+                        session!.RetainClockBudget(remainingClockBudget);
                         continueAfterFlip = true;
                     }
                     catch (Exception ex)
@@ -519,12 +561,19 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             ApplyStageStatuses(host.Dashboard);
             try
             {
-                if (night is not null && !continueAfterFlip) await night.RecordTargetAsync(TargetName, host.Dashboard, realRunner,
-                    FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure).ConfigureAwait(false);
+                if (night is not null && !continueAfterFlip) continueAfterClock = await night.RecordTargetAsync(TargetName, host.Dashboard, boundaryRunner,
+                    FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure, plan, session).ConfigureAwait(false);
             }
             finally { if (realRunner is not null) await realRunner.DisposeAsync().ConfigureAwait(false); }
         }
         var final = host.Dashboard.Run;
+        if (continueAfterClock)
+        {
+            LastOutcome = $"校时已恢复 · 已接受 {session!.Accepted}/{session.Original.ScienceFrames} 张；按原剩余预算重新定位、入缝和导星。";
+            RaisePropertyChanged(nameof(LastOutcome));
+            Report(progress, LastOutcome);
+            return true;
+        }
         if (final.State != ObservationRunState.Completed)
         {
             throw new InvalidOperationException($"UVEX Target Observation ended in {final.State}: {final.StatusMessage}");
@@ -548,6 +597,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
 
     public override bool Validate()
     {
+        if (realRunnerFactory is { } nativeFactory) nativeFactory.ObserveNativeSequenceLifetime();
         var childrenValid = base.Validate();
         Issues.Clear();
         foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(this)) Issues.Add(issue);
@@ -752,6 +802,8 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     private void ClearFactoryDefaultsForTemplate(System.Runtime.Serialization.StreamingContext context)
     {
         loadingTarget = true;
+        fixedExposureSeconds = 0;
+        lastFixedExposureSeconds = 120;
         // An old template must not inherit the MEF prototype's checked switch.
         forceGuideCalibration = false;
         automaticGuideRecovery = true;

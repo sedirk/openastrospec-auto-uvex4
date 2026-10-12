@@ -10,6 +10,10 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("shortHandoffConfirmationAttempted = true",runner);
         Assert.Contains("shortExposure < exposureMilliseconds",runner);
         Assert.Contains("handoffPreset.DirectTargetGuidingExposureMilliseconds",runner);
+        Assert.Contains("G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)", runner);
+        // The same image proceeds to the existing formal solver. A failed or
+        // transient solve exits before a longer tier; no second acquisition loop.
+        Assert.Equal(2, runner.Split("if (outsideShortHandoff is not null) return outsideShortHandoff;").Length - 1);
         var source=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.ShortHandoff.cs"));
         Assert.Contains("CaptureG3NativeSingleFrameForAcquisitionAsync",source);
         Assert.Contains("ValidateG3SolveProbeImage",source);
