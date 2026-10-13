@@ -73,6 +73,12 @@ internal sealed record NativeSequencePlan(
         gate is { Disposition: not GateDisposition.Passed } &&
         (gate.FailureScope == GateFailureScope.TargetQuality || IsSkippableQualityFailure(gate.Code));
 
+    // Dictionary insertion order reflects old stage visits, not the terminal
+    // stage after dependency rebuilds. Never let a stale sibling gate decide.
+    internal static GateResult? TerminalFailure(ObservationDashboardSnapshot snapshot) =>
+        snapshot.Run.CurrentStage is { } stage && snapshot.Gates.TryGetValue(stage, out var gate) &&
+        gate.Disposition != GateDisposition.Passed ? gate : null;
+
     // An explicit allow-list, never an exception-text or 'not safety' heuristic.
     // Post-WCS image confirmation failures reject this target, not the whole
     // night. Confirmed coarse-return exhaustion/non-convergence is likewise a

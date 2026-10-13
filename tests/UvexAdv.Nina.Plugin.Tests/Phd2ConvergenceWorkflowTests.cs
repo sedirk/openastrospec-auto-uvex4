@@ -40,9 +40,32 @@ public sealed class Phd2ConvergenceWorkflowTests
         request = request with { AllowCoarseReacquisition = false,
             Ledger = request.Ledger with { AttemptsUsed = request.Preset.MaximumAttempts + 1 } };
         var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
-        Assert.Equal(GateFailureScope.TargetQuality, result.Gate.FailureScope);
+        // Overdrawn is an invalid ledger, not ordinary exhaustion at the ceiling.
+        Assert.Equal("SLIT_LOCK_LEDGER_INVALID", result.Gate.Code);
+        Assert.Equal(GateFailureScope.Run, result.Gate.FailureScope);
         Assert.DoesNotContain("HandleDeniedPhd2AcquisitionBudgetAsync", f.Trace.Calls);
         Assert.DoesNotContain("SetExactLockPositionAsync", f.Trace.Calls);
+    }
+
+    [Theory]
+    [InlineData("attempt", "skip")] [InlineData("attempt", "cleanup-failure")] [InlineData("attempt", "end-policy")]
+    [InlineData("weather", "unknown-gate")] [InlineData("topology", "unknown-gate")]
+    [InlineData("invalid-ledger", "unknown-gate")] [InlineData("future-clock", "unknown-gate")]
+    public async Task RealConvergenceDenialKeepsScopeAndExecutesNextNativeTargetOnlyForValidExhaustion(string failure, string boundary)
+    {
+        var f = new Phd2ConvergenceFixture();
+        var request = f.Request([23, 23, 24]) with { AllowCoarseReacquisition = false };
+        if (failure == "attempt") request = request with { Ledger = request.Ledger with { AttemptsUsed = request.Preset.MaximumAttempts } };
+        if (failure == "weather") f.Safe = false;
+        if (failure == "topology") request = request with { Session = request.Session with { Qualification = request.Session.Qualification with { CurrentTopologyFingerprintSha256 = new('0', 64) } } };
+        if (failure == "invalid-ledger") request = request with { Ledger = request.Ledger with { CumulativeCommandedPixels = double.NaN } };
+        if (failure == "future-clock") request = request with { Ledger = request.Ledger with { StartedUtc = DateTimeOffset.UtcNow.AddDays(1) } };
+        var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
+        Assert.False(result.CanAdvance);
+        Assert.Equal(failure == "attempt" ? GateFailureScope.TargetQuality : GateFailureScope.Run, result.Gate.FailureScope);
+        Assert.DoesNotContain("SetExactLockPositionAsync", f.Trace.Calls);
+        Assert.Empty(f.Persisted);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, result.Gate.Code, result.Gate, ObservationStage.RunScienceBlock);
     }
 
     [Theory]

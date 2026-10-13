@@ -93,7 +93,7 @@ internal sealed partial class RealObservationStageRunner
         var stopped = await EnsurePhdStoppedForAutomaticRebuildAsync(
             ObservationStage.PlaceTargetOnSlit, budget.Code, cancellationToken).ConfigureAwait(false);
         if (stopped.Disposition != GateDisposition.Passed) return new StageResult(stopped, session.LastMeasurement.Frame.Path);
-        return new StageResult(GateResult.Unknown(budget.Code,
+        return new StageResult(Phd2HandoffRecoveryPolicy.FailureGate(budget.Code,
             $"{budget.Message} No new exact-lock command was issued; the existing ledger and limits were retained."),
             session.LastMeasurement.Frame.Path);
     }
@@ -114,7 +114,7 @@ internal sealed partial class RealObservationStageRunner
             var stop = await EnsurePhdStoppedForAutomaticRebuildAsync(
                 ObservationStage.PlaceTargetOnSlit, sourceCode, cancellationToken).ConfigureAwait(false);
             if (stop.Disposition != GateDisposition.Passed) return new StageResult(stop);
-            return new StageResult(GateResult.Unknown("PHD2_COARSE_HANDOFF_RECOVERY_EXHAUSTED",
+            return new StageResult(GateResult.TargetQuality("PHD2_COARSE_HANDOFF_RECOVERY_EXHAUSTED",
                 $"{sourceCode}: {reason} 本轮已完成一次有界 WCS／精调交接重建，仍未满足条件；保留原预算与证据，未发出新的精调。"), lastG3Field?.FramePath);
         }
         phd2CoarseHandoffRecoveryAttempts++;

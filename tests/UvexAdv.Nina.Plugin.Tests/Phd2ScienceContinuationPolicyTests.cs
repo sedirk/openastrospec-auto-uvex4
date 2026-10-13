@@ -1,5 +1,6 @@
 using UvexAdv.Nina.Plugin;
 using UvexAdv.Phd2;
+using UvexAdv.Observatory;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
@@ -16,6 +17,36 @@ public sealed class Phd2ScienceContinuationPolicyTests
         816, 413, 817, 428);
     private static Phd2StateSnapshot State() => Phd2StateSnapshot.Disconnected with
     { IsConnected = true, AppState = Phd2AppState.Guiding, ConnectionEpoch = 1, GuideEpoch = 86 };
+
+    [Theory]
+    [InlineData("time", "skip")] [InlineData("time", "cleanup-failure")] [InlineData("time", "end-policy")]
+    [InlineData("attempt", "skip")] [InlineData("attempt", "cleanup-failure")] [InlineData("attempt", "end-policy")]
+    [InlineData("pixels", "skip")] [InlineData("pixels", "cleanup-failure")] [InlineData("pixels", "end-policy")]
+    [InlineData("binding", "unknown-gate")] [InlineData("invalid", "unknown-gate")]
+    [InlineData("pending", "unknown-gate")] [InlineData("clock", "unknown-gate")]
+    public async Task ScienceRebuildBudgetIsNotConfusedWithInvalidLedgerAndActuallyContinuesNativeNight(string failure, string boundary)
+    {
+        var ledger = failure switch
+        {
+            "attempt" => Ledger() with { AttemptsUsed = 8 },
+            "pixels" => Ledger() with { CumulativeCommandedPixels = 100 },
+            "invalid" => Ledger() with { CumulativeCommandedPixels = double.NaN },
+            "pending" => Ledger() with { Phase = Phd2LockShiftPendingPhase.ReturnRequired },
+            _ => Ledger(),
+        };
+        var binding = failure == "binding" ? GateResult.Unknown("PHD2_LOCK_LEDGER_BINDING_CHANGED", "binding") : GateResult.Pass("bound", "fixture");
+        var gate = Phd2ScienceContinuationPolicy.RebuildBudgetGate(ledger,
+            Start.AddSeconds(failure == "time" ? 600 : failure == "clock" ? -1 : 50),
+            GateResult.Unknown("GUIDING_LOST", "original star loss"), binding)!;
+        Assert.NotNull(gate);
+        if (boundary != "unknown-gate")
+        {
+            Assert.Equal("PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE", gate.Code);
+            Assert.Contains("GUIDING_LOST", gate.Message);
+            Assert.Equal(ledger.AttemptsUsed, gate.Metrics!["attemptsUsed"]);
+        }
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate, ObservationStage.RunScienceBlock);
+    }
 
     [Fact]
     public void PreExposureResumePreservesOriginChargesConsumedFrameAndExposureClock()

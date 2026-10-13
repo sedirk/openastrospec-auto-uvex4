@@ -604,6 +604,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     }).ConfigureAwait(false);
                     continue;
                 }
+                catch (ObservationCheckpointGateException recoveryGate)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    automaticRecovery = (false, new StageResult(recoveryGate.Gate));
+                }
+                catch (PhysicalActionGateException recoveryGate)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    automaticRecovery = (false, new StageResult(recoveryGate.Gate));
+                }
                 if (automaticRecovery.Retry)
                 {
                     continue;
@@ -612,6 +622,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     stage,
                     automaticRecovery.Result,
                     cancellationToken).ConfigureAwait(false);
+            }
+            catch (G3ReturnTimeReserveException ex)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return await CompleteStageResultAsync(stage, new StageResult(ex.Gate), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -642,6 +657,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     }
                     catch (ResumeStageRestartException) { continue; }
                     catch (OperationCanceledException) { throw; }
+                    catch (ObservationCheckpointGateException recoveryGate)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return await CompleteStageResultAsync(stage, new StageResult(recoveryGate.Gate), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (PhysicalActionGateException recoveryGate)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return await CompleteStageResultAsync(stage, new StageResult(recoveryGate.Gate), cancellationToken).ConfigureAwait(false);
+                    }
                     catch (Exception recoveryError)
                     {
                         // An unclassified recovery fault is not a quality skip.
@@ -6104,9 +6129,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD",
                     $"All {preset.ExposureMilliseconds.Count} versioned G3 exposure tier(s) failed to produce WCS and the local morphology classifier found no coherent source. " +
                     $"The observing plan explicitly declares {context.Plan.TargetObservability}, so the deterministic slit sequence and bounded overlapping-neighbour recovery may use catalogue/WCS geometry without inventing a visible target peak. No target identity or optical offset was inferred.")
-            : GateResult.Unknown(
-                "G3_CLOUD_OR_TRANSPARENCY_INVALID",
-                $"All {preset.ExposureMilliseconds.Count} versioned G3 exposure tier(s) lacked a coherent source or valid pixel evidence. Cloud, lost transparency and an empty field cannot be distinguished safely, so no mount search motion is authorized.");
+            : ClassifyG3EmptyLadder(attempts, preset.ExposureMilliseconds.Count);
         var retainedProbeForPresentation = hasOverexposedContent &&
             earliestNonOverexposedStructuredProbe is not null
                 ? earliestNonOverexposedStructuredProbe
@@ -7033,16 +7056,23 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             cancellationToken.ThrowIfCancellationRequested();
             var reported = telescopeMediator.GetCurrentPosition();
             try { state = ReanchorG3AcquisitionMotionFromReportedPosition(state, reported); }
-            catch (Exception ex) { stopReason = ex.Message; break; }
+            catch (Exception ex)
+            {
+                stopReason = ex.Message;
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
+                break;
+            }
             mountGate = ValidateG3SearchMountState(state.PierSide);
             if (mountGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{mountGate.Code}: {mountGate.Message}";
+                destinationPreflightStopGate = mountGate;
                 break;
             }
             if (currentField.Image is null)
             {
                 stopReason = "The fresh solved G3 field has no immutable image dimensions for detector-to-slit inversion.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var targetCoordinates = TargetCoordinates(context.Plan);
@@ -7065,6 +7095,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             catch (Exception ex)
             {
                 stopReason = $"The fresh G3 WCS could not be inverted onto the detector-fixed slit destination: {ex.Message}";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var adoptedTargetPixel = currentField.TargetIdentification.Target?.Centroid ?? inverse.CurrentTargetPixel;
@@ -7142,12 +7173,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (!double.IsFinite(fullMagnitude) || fullMagnitude <= 0)
             {
                 stopReason = "The fresh solved-centre-to-slit-destination correction is invalid.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var maximumCommand = state.MaximumSingleCorrectionArcseconds - state.ArrivalToleranceArcseconds;
             if (maximumCommand <= 0)
             {
                 stopReason = "The WCS single-motion limit does not exceed the required arrival tolerance.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var scale = Math.Min(1, maximumCommand / fullMagnitude);
@@ -7172,6 +7205,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (!double.IsFinite(commandedCoordinate.RaDegrees) || !double.IsFinite(commandedCoordinate.DecDegrees))
             {
                 stopReason = "The spherical G3 WCS-centering command coordinate is invalid.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var commanded = new Coordinates(
@@ -7196,12 +7230,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     exhaustedReserveGate = reserve.Gate;
                 }
                 stopReason = $"{reserve.Gate.Code}: {reserve.Gate.Message}";
+                if (!G3WcsRecoveryPolicy.IsReserveFailure(reserve.Gate)) destinationPreflightStopGate = reserve.Gate;
                 break;
             }
             var horizonGate = ValidateCommandCoordinateHorizon(context, commanded, "G3 WCS-centering outbound move");
             if (horizonGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{horizonGate.Code}: {horizonGate.Message}";
+                destinationPreflightStopGate = horizonGate;
                 break;
             }
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -7209,6 +7245,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (mountGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{mountGate.Code}: {mountGate.Message}";
+                destinationPreflightStopGate = mountGate;
                 break;
             }
             sourceBindingGate = await ValidateG3FieldMountBindingForMotionAsync(
@@ -7218,6 +7255,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (sourceBindingGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{sourceBindingGate.Code}: {sourceBindingGate.Message}";
+                destinationPreflightStopGate = sourceBindingGate;
                 break;
             }
             var reportedBeforeIntent = telescopeMediator.GetCurrentPosition();
@@ -7225,6 +7263,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 AngularSeparationArcseconds(reported, reportedBeforeIntent) > state.ArrivalToleranceArcseconds)
             {
                 stopReason = "The fresh reported mount coordinate changed beyond the reserved arrival tolerance before the WCS outbound intent; the intent was not written.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var reportedIntentHorizon = ValidateCommandCoordinateHorizon(
@@ -7234,6 +7273,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (reportedIntentHorizon.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{reportedIntentHorizon.Code}: {reportedIntentHorizon.Message}";
+                destinationPreflightStopGate = reportedIntentHorizon;
                 break;
             }
             var sphericalIntentGate = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
@@ -7246,6 +7286,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (sphericalIntentGate.Gate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{sphericalIntentGate.Gate.Code}: {sphericalIntentGate.Gate.Message}";
+                destinationPreflightStopGate = sphericalIntentGate.Gate;
                 break;
             }
 
@@ -7288,6 +7329,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (mountGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{mountGate.Code}: {mountGate.Message}";
+                destinationPreflightStopGate = mountGate;
                 break;
             }
             sourceBindingGate = await ValidateG3FieldMountBindingForMotionAsync(
@@ -7297,16 +7339,19 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (sourceBindingGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{sourceBindingGate.Code}: {sourceBindingGate.Message}";
+                destinationPreflightStopGate = sourceBindingGate;
                 break;
             }
             if (!string.Equals(state.CoordinateEpoch, immediatelyBefore.Epoch.ToString(), StringComparison.Ordinal))
             {
                 stopReason = "Mount coordinate epoch changed after the durable WCS outbound intent; the command was withheld.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             if (AngularSeparationArcseconds(reportedBeforeIntent, immediatelyBefore) > MountCommandArrivalToleranceArcseconds)
             {
                 stopReason = "Mount position changed after the durable WCS outbound intent; the stale absolute command was withheld.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var freshReportedHorizon = ValidateCommandCoordinateHorizon(
@@ -7316,6 +7361,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (freshReportedHorizon.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{freshReportedHorizon.Code}: {freshReportedHorizon.Message}";
+                destinationPreflightStopGate = freshReportedHorizon;
                 break;
             }
             var freshSphericalGate = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
@@ -7328,12 +7374,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (freshSphericalGate.Gate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{freshSphericalGate.Gate.Code}: {freshSphericalGate.Gate.Message}";
+                destinationPreflightStopGate = freshSphericalGate.Gate;
                 break;
             }
             horizonGate = ValidateCommandCoordinateHorizon(context, commanded, "G3 WCS-centering final outbound check");
             if (horizonGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{horizonGate.Code}: {horizonGate.Message}";
+                destinationPreflightStopGate = horizonGate;
                 break;
             }
             Report($"G3 WCS 直接入缝 {attempts + 1}：当前目标距狭缝 {targetToSlitResidualPixels:F1}px，移动 {reserve.MoveFromCurrentArcseconds:F1}″，随后新拍 G3 验证");
@@ -7347,6 +7395,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (!await telescopeMediator.SlewToCoordinatesAsync(commanded, cancellationToken).ConfigureAwait(false))
             {
                 stopReason = "N.I.N.A. rejected the WCS-centering command; its durable precharged intent remains authoritative.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             await telescopeMediator.WaitForSlew(cancellationToken).ConfigureAwait(false);
@@ -7355,17 +7404,20 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (mountGate.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{mountGate.Code}: {mountGate.Message}";
+                destinationPreflightStopGate = mountGate;
                 break;
             }
             if (!string.Equals(state.CoordinateEpoch, after.Epoch.ToString(), StringComparison.Ordinal))
             {
                 stopReason = "Mount coordinate epoch changed after WCS centering; no arrival or fresh solve was accepted.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             var reportedHorizon = ValidateCommandCoordinateHorizon(context, after, "G3 WCS-centering reported arrival");
             if (reportedHorizon.Disposition != GateDisposition.Passed)
             {
                 stopReason = $"{reportedHorizon.Code}: {reportedHorizon.Message}";
+                destinationPreflightStopGate = reportedHorizon;
                 break;
             }
             var initialCommandResidual = AngularSeparationArcseconds(after, commanded);
@@ -7396,6 +7448,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 };
                 await PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
                 stopReason = $"The WCS arrival cannot be safely verified (command residual {initialCommandResidual:F2} arcsec, actual move {actualMoveArcseconds:F2} arcsec, origin radius {actualOriginRadiusArcseconds:F2} arcsec); reported coordinates were retained and fresh solve was withheld.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
                 break;
             }
             if (additionalActualMotionCharge > 0)
@@ -7430,6 +7483,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     await PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
                 }
                 stopReason = $"{stability.Gate.Code}: {stability.Gate.Message}";
+                destinationPreflightStopGate = stability.Gate;
                 break;
             }
             var settledAfter = stability.Reported;
@@ -7779,7 +7833,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         ["chargedActions"] = returned.State.CorrectionAttempts,
                         ["cumulativeMotionArcseconds"] = returned.State.CumulativeMotionArcseconds,
                         ["returnedToOrigin"] = 0,
-                    }),
+                    }, destinationPreflightStopGate ??
+                        (currentField.Gate.Disposition != GateDisposition.Passed && !IsRecoverableG3SearchGate(currentField.Gate)
+                            ? currentField.Gate : null)),
                 summaryPath);
         }
 
@@ -8081,6 +8137,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         // free to declare a new envelope.
         pendingG3SearchReturn = search;
         var stopCode = "G3_SEARCH_ATTEMPTS_EXHAUSTED";
+        GateResult? searchStopGate = null;
         var stopReason = $"All {waypoints.Count} configured search waypoint(s) were attempted without identifying the target.";
         var automaticDurableReturnPermitted = true;
         var automaticDurableReturnBlockReason = string.Empty;
@@ -8101,6 +8158,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var reserveGate = ValidateG3SearchMoveAndReturnReserve(search, waypoint, commissioning.MotionLimits);
                 if (reserveGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = reserveGate;
                     stopCode = reserveGate.Code;
                     stopReason = reserveGate.Message;
                     break;
@@ -8154,6 +8212,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     DateTimeOffset.UtcNow);
                 if (durableReserve.Gate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = durableReserve.Gate;
                     stopCode = durableReserve.Gate.Code;
                     stopReason = durableReserve.Gate.Message;
                     break;
@@ -8168,6 +8227,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     (durableReserve.MoveFromCurrentArcseconds + MountCommandArrivalToleranceArcseconds) / 3600d);
                 if (budget.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = budget;
                     stopCode = budget.Code;
                     stopReason = budget.Message;
                     break;
@@ -8182,6 +8242,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var commandHorizon = ValidateCommandCoordinateHorizon(context, commanded, "G3 bounded-search outbound move");
                 if (commandHorizon.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = commandHorizon;
                     stopCode = commandHorizon.Code;
                     stopReason = commandHorizon.Message;
                     break;
@@ -8191,6 +8252,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 mountGate = ValidateG3SearchMountState(originPierSide);
                 if (mountGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = mountGate;
                     stopCode = mountGate.Code;
                     stopReason = mountGate.Message;
                     break;
@@ -8201,6 +8263,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     cancellationToken).ConfigureAwait(false);
                 if (sourceBindingGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = sourceBindingGate;
                     stopCode = sourceBindingGate.Code;
                     stopReason = sourceBindingGate.Message;
                     break;
@@ -8218,6 +8281,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "G3 bounded-search fresh reported position before outbound intent");
                 if (reportedIntentHorizon.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = reportedIntentHorizon;
                     stopCode = reportedIntentHorizon.Code;
                     stopReason = reportedIntentHorizon.Message;
                     break;
@@ -8231,6 +8295,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     durableReserve.MoveFromCurrentArcseconds);
                 if (sphericalIntentGate.Gate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = sphericalIntentGate.Gate;
                     stopCode = sphericalIntentGate.Gate.Code;
                     stopReason = sphericalIntentGate.Gate.Message;
                     break;
@@ -8442,6 +8507,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 mountGate = ValidateG3SearchMountState(originPierSide);
                 if (mountGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = mountGate;
                     stopCode = mountGate.Code;
                     stopReason = mountGate.Message;
                     break;
@@ -8452,6 +8518,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     cancellationToken).ConfigureAwait(false);
                 if (sourceBindingGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = sourceBindingGate;
                     stopCode = sourceBindingGate.Code;
                     stopReason = sourceBindingGate.Message;
                     break;
@@ -8474,6 +8541,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     "G3 bounded-search fresh reported position before outbound command");
                 if (freshReportedHorizon.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = freshReportedHorizon;
                     stopCode = freshReportedHorizon.Code;
                     stopReason = freshReportedHorizon.Message;
                     break;
@@ -8487,6 +8555,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     sphericalIntentGate.CommandDistanceArcseconds);
                 if (freshSphericalGate.Gate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = freshSphericalGate.Gate;
                     stopCode = freshSphericalGate.Gate.Code;
                     stopReason = freshSphericalGate.Gate.Message;
                     break;
@@ -8494,6 +8563,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 commandHorizon = ValidateCommandCoordinateHorizon(context, commanded, "G3 bounded-search final outbound check");
                 if (commandHorizon.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = commandHorizon;
                     stopCode = commandHorizon.Code;
                     stopReason = commandHorizon.Message;
                     break;
@@ -8519,6 +8589,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 mountGate = ValidateG3SearchMountState(originPierSide);
                 if (mountGate.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = mountGate;
                     stopCode = mountGate.Code;
                     stopReason = mountGate.Message;
                     break;
@@ -8532,6 +8603,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var reportedHorizon = ValidateCommandCoordinateHorizon(context, reportedAfterMove, "G3 bounded-search reported arrival");
                 if (reportedHorizon.Disposition != GateDisposition.Passed)
                 {
+                    searchStopGate = reportedHorizon;
                     stopCode = reportedHorizon.Code;
                     stopReason = reportedHorizon.Message;
                     break;
@@ -8562,6 +8634,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     cancellationToken).ConfigureAwait(false);
                 if (stability.Gate.Disposition != GateDisposition.Passed || stability.Reported is null)
                 {
+                    searchStopGate = stability.Gate;
                     stopCode = stability.Gate.Code;
                     stopReason = stability.Gate.Message;
                     if (stability.Reported is not null)
@@ -8727,6 +8800,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 }
                 catch (G3ReturnTimeReserveException ex) when (ex.Gate.Code == G3AcquisitionReturnTimePolicy.ReserveCode)
                 {
+                    searchStopGate = ex.Gate;
                     stopCode = ex.Gate.Code;
                     stopReason = ex.Message;
                     break;
@@ -8847,6 +8921,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 }
                 if (!IsRecoverableG3SearchGate(lastG3Field.Gate))
                 {
+                    searchStopGate = lastG3Field.Gate;
                     stopCode = "G3_SEARCH_NONRECOVERABLE_GATE";
                     stopReason = $"Search stopped on non-recoverable gate {lastG3Field.Gate.Code}: {lastG3Field.Gate.Message}";
                     break;
@@ -8916,6 +8991,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         ["searchAttempts"] = attempts.Count,
                         ["remainingOriginOffsetArcseconds"] = search.CurrentRadiusArcseconds,
                     });
+            gate = G3WcsRecoveryPolicy.SearchTerminalGate(gate,
+                G3WcsRecoveryPolicy.SearchStopGate(stopCode, stopReason, searchStopGate),
+                returnResult.ReturnedToOrigin, durableReturnResult.FailureGate);
             return new StageResult(gate, summaryPath, new Dictionary<string, string>
             {
                 ["wideToSlitTransferMode"] = WideToSlitTransferMode.Skip.ToString(),
@@ -9005,7 +9083,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             returnMoves * durableSingleArcseconds;
         if (localRequired > searchLimits.MaximumCumulativeMotionArcseconds + 1e-9)
         {
-            return GateResult.Fail(
+            return GateResult.TargetQuality(
                 "G3_SEARCH_CUMULATIVE_RESERVE_LIMIT",
                 $"Search move {waypoint.Attempt} plus a straight-line return would require {localRequired:F2} arcsec, exceeding the declared {searchLimits.MaximumCumulativeMotionArcseconds:F2} arcsec search envelope.");
         }
@@ -9020,13 +9098,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
              returnMoves * durableSingleArcseconds) / 3600d;
         if (globalRequiredDegrees > fineLimits.MaximumCumulativeCorrectionDegrees + 1e-12)
         {
-            return GateResult.Fail(
+            return GateResult.TargetQuality(
                 "G3_SEARCH_FINE_CUMULATIVE_RESERVE_LIMIT",
                 $"Search move {waypoint.Attempt} plus its reserved return would exceed the commissioned fine cumulative limit {fineLimits.MaximumCumulativeCorrectionDegrees * 3600d:F2} arcsec.");
         }
         if (correctionAttempts + 1 + returnMoves > fineLimits.MaximumCorrectionAttempts)
         {
-            return GateResult.Fail(
+            return GateResult.TargetQuality(
                 "G3_SEARCH_FINE_ATTEMPT_RESERVE_LIMIT",
                 $"Search move {waypoint.Attempt} plus {returnMoves} reserved return move(s) would exceed the commissioned fine attempt limit {fineLimits.MaximumCorrectionAttempts}.");
         }
@@ -14934,27 +15012,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     {
         if (commissioning is null) return GateResult.Unknown("COMMISSIONING_PRESET_REQUIRED", "No trusted commissioning preset is loaded.");
         fineAcquisitionStartedUtc ??= DateTimeOffset.UtcNow;
-        if (DateTimeOffset.UtcNow - fineAcquisitionStartedUtc.Value > limits.EffectiveMaximumAcquisitionTime)
-        {
-            return GateResult.Fail("ACQUISITION_TIME_LIMIT", $"Acquisition/correction elapsed time exceeded {limits.EffectiveMaximumAcquisitionTime.TotalMinutes:F1} minutes.");
-        }
-        if (correctionAttempts >= limits.MaximumCorrectionAttempts)
-        {
-            return GateResult.Fail("CORRECTION_ATTEMPT_LIMIT", $"Correction attempt limit {limits.MaximumCorrectionAttempts} has been reached.");
-        }
-        if (!double.IsFinite(requestedDegrees) || requestedDegrees <= 0)
-        {
-            return GateResult.Fail("CORRECTION_INVALID", "Requested correction magnitude is not positive and finite.");
-        }
-        if (requestedDegrees > limits.MaximumSingleCorrectionDegrees)
-        {
-            return GateResult.Fail("MOTION_SINGLE_LIMIT", $"Requested correction {requestedDegrees * 3600:F2} arcsec exceeds {limits.MaximumSingleCorrectionDegrees * 3600:F2} arcsec.");
-        }
-        if (cumulativeCorrectionDegrees + requestedDegrees > limits.MaximumCumulativeCorrectionDegrees)
-        {
-            return GateResult.Fail("MOTION_CUMULATIVE_LIMIT", $"Correction would exceed cumulative limit {limits.MaximumCumulativeCorrectionDegrees * 3600:F2} arcsec.");
-        }
-        return GateResult.Pass("MOTION_BUDGET_VALID", "Commissioned single, cumulative, attempt and elapsed-time limits passed.");
+        return SlitPlacementRecoveryPlanner.ValidateCorrectionBudget(limits, cumulativeCorrectionDegrees,
+            correctionAttempts, requestedDegrees, fineAcquisitionStartedUtc.Value, DateTimeOffset.UtcNow);
     }
 
     private void RegisterCorrection(double magnitudeDegrees)

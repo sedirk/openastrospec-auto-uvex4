@@ -81,6 +81,96 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
         var plan = Plan(s);
         Assert.NotEqual(GateDisposition.Passed, plan.Gate.Disposition);
         Assert.Null(plan.ChargedLedger);
+        Assert.Equal(bound is "attempt" or "cumulative" or "elapsed" ? GateFailureScope.TargetQuality : GateFailureScope.Run,
+            plan.Gate.FailureScope);
+    }
+
+    public static IEnumerable<object[]> BudgetBoundaries() =>
+        from budget in new[] { "attempt", "cumulative", "elapsed" }
+        from boundary in new[] { "skip", "cleanup-failure", "end-policy" }
+        select new object[] { budget, boundary };
+
+    [Theory]
+    [MemberData(nameof(BudgetBoundaries))]
+    public async Task RecoveryBudgetFailureDuringScienceExecutesNextNativeTargetOnlyAfterCheckedStop(string budget, string boundary)
+    {
+        var original = budget switch
+        {
+            "attempt" => State() with { CorrectionAttempts = 7 },
+            "cumulative" => State() with { CumulativeMotionArcseconds = 21500 },
+            _ => State() with { MaximumElapsedSeconds = 650 },
+        };
+        var before = original with { };
+        var plan = Plan(original);
+        Assert.Equal("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", plan.Gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, plan.Gate.FailureScope);
+        Assert.Equal(before, original);
+        Assert.Null(plan.ChargedLedger); // No new motion authority or persisted charge on refusal.
+        Assert.True(NativeSequencePlan.IsSkippableQualityFailure(plan.Gate));
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(GateResult.Unknown(plan.Gate.Code, "Unverified context")));
+        Assert.NotNull(plan.Gate.Metrics);
+        Assert.Equal(600, plan.Gate.Metrics["elapsedSeconds"]);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, plan.Gate.Code,
+            plan.Gate, ObservationStage.RunScienceBlock);
+    }
+
+    [Fact]
+    public void Hd218393ElapsedBudgetRetainsOriginalClockAndStopsBeforeAnyReturn()
+    {
+        // Recorded numeric ledger from 2026-10-12, with synthetic identity and
+        // a displaced post-guide position inside the commissioned geometry.
+        // No raw data or machine-local identity is embedded or rewritten.
+        var start = DateTimeOffset.Parse("2026-10-12T14:30:54.3681872Z");
+        var end = DateTimeOffset.Parse("2026-10-12T14:58:27.566688Z");
+        var state = State() with
+        {
+            PierSide = "pierEast", OriginRaDegrees = 347.0837191666667, OriginDeclinationDegrees = 50.34157916666667,
+            PriorReportedRaDegrees = 347.2377775, PriorReportedDeclinationDegrees = 50.19137222222222,
+            CommandedRaDegrees = 347.2380841751832, CommandedDeclinationDegrees = 50.191428752994895,
+            CurrentRaTangentOffsetArcseconds = 355.0767163308616, CurrentDeclinationOffsetArcseconds = -540.3795281525065,
+            CumulativeMotionArcseconds = 682.5347126193966, CorrectionAttempts = 3,
+            StartedUtc = start, UpdatedUtc = end, CreatedUtc = start,
+        };
+        var plan = G3GuidingRecoveryReturnPolicy.Plan(state, "run-replay", 347.25, 50.20,
+            "JNOW", "pierEast", true, 5, 10, end);
+        Assert.Equal(GateFailureScope.TargetQuality, plan.Gate.FailureScope);
+        Assert.Null(plan.ChargedLedger);
+        var metrics = Assert.IsAssignableFrom<IReadOnlyDictionary<string, double>>(plan.Gate.Metrics);
+        Assert.InRange(metrics["elapsedSeconds"], 1653, 1654);
+        Assert.Equal(1200, metrics["maximumElapsedSeconds"]);
+        Assert.True(metrics["requiredSeconds"] > metrics["maximumElapsedSeconds"]);
+        Assert.True(metrics["requiredActions"] <= metrics["maximumActions"]);
+        Assert.True(metrics["requiredMotionArcseconds"] <= metrics["maximumMotionArcseconds"]);
+        Assert.Equal(start, state.StartedUtc);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("run")]
+    [InlineData("epoch")]
+    [InlineData("pier")]
+    [InlineData("pending")]
+    [InlineData("position")]
+    [InlineData("nonfinite")]
+    public async Task ExhaustedClockCannotHideInvalidRecoveryContextOrStartNextTarget(string failure)
+    {
+        var state = State() with { MaximumElapsedSeconds = 650 };
+        state = failure switch
+        {
+            "run" => state with { ObservationRunId = "another-run" },
+            "epoch" => state with { CoordinateEpoch = "J2000" },
+            "pier" => state with { PierSide = "pierEast" },
+            "pending" => state with { Phase = G3AcquisitionMotionPhase.OutboundIntent },
+            "position" => state with { MaximumSingleCorrectionArcseconds = 90 },
+            _ => state,
+        };
+        var plan = G3GuidingRecoveryReturnPolicy.Plan(state, "run-replay",
+            failure == "nonfinite" ? double.NaN : 340.06963, 39.19148166666666,
+            "JNOW", "pierWest", failure != "stop", 5, 10, Now);
+        Assert.Equal(GateFailureScope.Run, plan.Gate.FailureScope);
+        Assert.Null(plan.ChargedLedger);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("unknown-gate", plan.Gate.Code,
+            plan.Gate, ObservationStage.RunScienceBlock);
     }
 
     [Fact]
@@ -129,6 +219,8 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
         Assert.Contains("loaded.State != state", helper, StringComparison.Ordinal);
         Assert.Contains("ValidateIdentityAsync", helper, StringComparison.Ordinal);
         Assert.Contains("returned.ReturnedToOrigin", helper, StringComparison.Ordinal);
+        Assert.Contains("g3-guiding-recovery-return-declined", helper, StringComparison.Ordinal);
+        Assert.Contains("returnCommandSent = false", helper, StringComparison.Ordinal);
         Assert.Contains("Math.Max(cumulativeCorrectionDegrees, returned.State.CumulativeMotionArcseconds / 3600d)", helper, StringComparison.Ordinal);
         Assert.Contains("Math.Max(correctionAttempts, returned.State.CorrectionAttempts)", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("SlewToCoordinatesAsync", helper, StringComparison.Ordinal);

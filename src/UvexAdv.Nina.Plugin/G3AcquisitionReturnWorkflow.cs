@@ -21,6 +21,11 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
         CancellationToken cancellationToken,
         Phd2DependencyRebuildStopProof? stoppedGuideProof = null)
     {
+        // Reanchoring refreshes UpdatedUtc; validate the incoming durable clock
+        // before that readback can hide a future/corrupt timestamp.
+        if (clock.GetUtcNow() < state.UpdatedUtc)
+            return new(false, state, path, "Durable G3 motion clock is ahead of now.",
+                GateResult.Unknown("G3_MOTION_CLOCK_INVALID", "Durable G3 motion clock is ahead of now."));
         var stableNearOriginToleranceArcseconds =
             G3AcquisitionMotionPlanner.ComputeStableNearOriginToleranceArcseconds(
                 state,
@@ -88,7 +93,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                         false,
                         state,
                         path,
-                        $"{stableNearOrigin.Gate.Code}: {stableNearOrigin.Gate.Message}");
+                        $"{stableNearOrigin.Gate.Code}: {stableNearOrigin.Gate.Message}", stableNearOrigin.Gate);
                 }
 
                 state = ReanchorG3AcquisitionMotionFromReportedPosition(state, stableNearOrigin.Reported) with
@@ -108,7 +113,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 clock.GetUtcNow());
             if (step.Gate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{step.Gate.Code}: {step.Gate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{step.Gate.Code}: {step.Gate.Message}", step.Gate);
             }
             if (step.AlreadyAtOrigin)
             {
@@ -136,7 +141,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             catch (ResumeStageRestartException) { throw; }
             catch (PhysicalActionGateException ex)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{ex.Gate.Code}: {ex.Gate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{ex.Gate.Code}: {ex.Gate.Message}", ex.Gate);
             }
             var commanded = new Coordinates(
                 step.CommandedRaDegrees,
@@ -160,12 +165,12 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 "durable G3 acquisition fresh reported position before return intent");
             if (reportedIntentHorizon.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{reportedIntentHorizon.Code}: {reportedIntentHorizon.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{reportedIntentHorizon.Code}: {reportedIntentHorizon.Message}", reportedIntentHorizon);
             }
             var horizonGate = port.ValidateCommandCoordinateHorizon(context, commanded, "durable G3 acquisition return move");
             if (horizonGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{horizonGate.Code}: {horizonGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{horizonGate.Code}: {horizonGate.Message}", horizonGate);
             }
             var sphericalIntentGate = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
                 state,
@@ -176,7 +181,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 step.CommandMagnitudeArcseconds);
             if (sphericalIntentGate.Gate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{sphericalIntentGate.Gate.Code}: {sphericalIntentGate.Gate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{sphericalIntentGate.Gate.Code}: {sphericalIntentGate.Gate.Message}", sphericalIntentGate.Gate);
             }
 
             // ValidateOutboundAndReturnReserve reserves every return segment at
@@ -186,7 +191,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             // command+tolerance alone is not a complete crash-safe charge.
             var destinationSideGate = port.ValidateG3DestinationPierSide(commanded, state.PierSide);
             if (destinationSideGate.Disposition != GateDisposition.Passed)
-                return new(false, state, path, $"{destinationSideGate.Code}: {destinationSideGate.Message}");
+                return new(false, state, path, $"{destinationSideGate.Code}: {destinationSideGate.Message}", destinationSideGate);
             var fullyChargedReturnArcseconds = state.MaximumSingleCorrectionArcseconds;
             if (state.CumulativeMotionArcseconds + fullyChargedReturnArcseconds >
                 state.MaximumCumulativeMotionArcseconds + 1e-9)
@@ -195,7 +200,8 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                     false,
                     state,
                     path,
-                    "G3_MOTION_RETURN_FULL_PRECHARGE_LIMIT: The next return command was withheld because its fully charged single-motion reserve no longer fits the durable cumulative envelope.");
+                    "G3_MOTION_RETURN_FULL_PRECHARGE_LIMIT: The next return command was withheld because its fully charged single-motion reserve no longer fits the durable cumulative envelope.",
+                    GateResult.TargetQuality("G3_MOTION_RETURN_FULL_PRECHARGE_LIMIT", "No new return command fits the unchanged cumulative budget; origin arrival remains unconfirmed."));
             }
             // Conservatively consume the action and the complete reserved
             // segment before persisting the intent and before the command.
@@ -238,7 +244,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 "durable G3 acquisition fresh reported position before return command");
             if (freshReportedHorizon.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{freshReportedHorizon.Code}: {freshReportedHorizon.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{freshReportedHorizon.Code}: {freshReportedHorizon.Message}", freshReportedHorizon);
             }
             var freshSphericalGate = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
                 state,
@@ -249,16 +255,16 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 sphericalIntentGate.CommandDistanceArcseconds);
             if (freshSphericalGate.Gate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{freshSphericalGate.Gate.Code}: {freshSphericalGate.Gate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{freshSphericalGate.Gate.Code}: {freshSphericalGate.Gate.Message}", freshSphericalGate.Gate);
             }
             var finalHorizonGate = port.ValidateCommandCoordinateHorizon(context, commanded, "durable G3 acquisition final return check");
             if (finalHorizonGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{finalHorizonGate.Code}: {finalHorizonGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{finalHorizonGate.Code}: {finalHorizonGate.Message}", finalHorizonGate);
             }
             destinationSideGate = port.ValidateG3DestinationPierSide(commanded, state.PierSide);
             if (destinationSideGate.Disposition != GateDisposition.Passed)
-                return new(false, state, path, $"{destinationSideGate.Code}: {destinationSideGate.Message} Precharge retained.");
+                return new(false, state, path, $"{destinationSideGate.Code}: {destinationSideGate.Message} Precharge retained.", destinationSideGate);
             if (!await port.SlewToCoordinatesAsync(commanded, cancellationToken).ConfigureAwait(false))
             {
                 return new G3AcquisitionMotionReturnResult(false, state, path, "N.I.N.A. rejected the durable G3 return command; its precharged intent remains inspectable.");
@@ -277,7 +283,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             var reportedHorizonGate = port.ValidateCommandCoordinateHorizon(context, after, "durable G3 acquisition reported return arrival");
             if (reportedHorizonGate.Disposition != GateDisposition.Passed)
             {
-                return new G3AcquisitionMotionReturnResult(false, state, path, $"{reportedHorizonGate.Code}: {reportedHorizonGate.Message}");
+                return new G3AcquisitionMotionReturnResult(false, state, path, $"{reportedHorizonGate.Code}: {reportedHorizonGate.Message}", reportedHorizonGate);
             }
             var commandResidual = AngularSeparationArcseconds(after, commanded);
             var actualReturnMoveArcseconds = AngularSeparationArcseconds(immediatelyBefore, after);
@@ -321,7 +327,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                     false,
                     state,
                     path,
-                    $"{stability.Gate.Code}: {stability.Gate.Message}");
+                    $"{stability.Gate.Code}: {stability.Gate.Message}", stability.Gate);
             }
 
             var settledActualReturnMoveArcseconds = AngularSeparationArcseconds(
@@ -402,7 +408,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                     false,
                     state,
                     path,
-                    $"{stability.Gate.Code}: {stability.Gate.Message}");
+                    $"{stability.Gate.Code}: {stability.Gate.Message}", stability.Gate);
             }
 
             // The mount is stable but still outside the near-origin envelope.

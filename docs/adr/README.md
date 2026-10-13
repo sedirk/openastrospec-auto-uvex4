@@ -46,3 +46,4 @@ Current accepted decisions:
 - [ADR-0033: Independent observatory safety standby](0033-independent-observatory-safety-standby.md)
 - [ADR-0034: Idle-boundary mount clock recovery](0034-idle-boundary-mount-clock-recovery.md)
 - [ADR-0035: Clock-repair same-target continuation](0035-clock-repair-same-target-continuation.md)
+- [ADR-0036: Native preparation cards and an explicit native end area](0036-native-sequence-preparation-and-end-area.md)

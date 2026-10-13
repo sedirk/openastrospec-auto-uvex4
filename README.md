@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-12.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-13.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +38,26 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 12 closeout](docs/closeout-2026-10-12.md) consolidates **0.4.0.278–285**:
+The [October 13 closeout](docs/closeout-2026-10-13.md) consolidates **0.4.0.286–289**:
+target-local optical/budget failures retain their classification through acquisition,
+return and guiding recovery, while late cancellation, unsafe, dawn and cutoff prevent
+the next target. Native-engine regressions verify the next target actually executes
+only after independent stop and ledger checks. Device and weather safety remain intact.
+
+ADR-0036 reuses native safety-monitor connection/wait cards and adds an explicit native
+End area with a closeout choice and an editable, guarded additional-instructions group.
+The existing night/standby owner still performs checked closure, even if End is bypassed.
+Three personal ten-target files and both saved templates were migrated without changing
+their targets, clocks or keep-open choices; distributed templates now default to AUTO.
+
+**3,564 .NET tests (including five optional local-file cases), 75 reduction tests and
+Ruff pass**. Installed **.289** matches all 41 package files; runtime loading is verified.
+Historical nine-run/26-spectrum replay and 166 offline UI scenes remain software
+evidence, not new sky acceptance. **Live-panel visibility and new-version sky recovery
+remain unverified**. This Git closeout does not operate devices, restart applications
+or start/resume observing.
+
+The historical [October 12 closeout](docs/closeout-2026-10-12.md) consolidates **0.4.0.278–285**:
 per-target fixed/automatic exposure, a readable spectrum plot and compact status;
 native meridian handoff across acquisition, slit placement and science boundaries;
 finite observing sequences with independent safety standby; and same-target

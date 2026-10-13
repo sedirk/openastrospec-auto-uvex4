@@ -1,5 +1,6 @@
 using System.Reflection;
 using UvexAdv.Phd2;
+using UvexAdv.Observatory;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
@@ -30,8 +31,12 @@ public sealed class Phd2MeasuredReturnWindowTests
     public async Task CoordinatesAloneAndInvalidFramesNeverConfirmReturn(string fault)
     {
         var (client, proxy) = Create(); proxy.Fault = fault;
-        await Assert.ThrowsAsync<Phd2Exception>(() => Observe(client));
+        var failure = await Assert.ThrowsAsync<PhysicalActionGateException>(() => Observe(client));
         Assert.InRange(proxy.Count, 1, 16);
+        var ordinary = fault is "never-arrived" or "lost";
+        Assert.Equal(ordinary ? GateFailureScope.TargetQuality : GateFailureScope.Run, failure.Gate.FailureScope);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(ordinary ? "skip" : "unknown-gate",
+            failure.Gate.Code, failure.Gate, ObservationStage.PlaceTargetOnSlit);
     }
 
     private static Task<IReadOnlyList<Phd2GuidingFrameResult>> Observe(IPhd2Client client) =>

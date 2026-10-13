@@ -17,6 +17,24 @@ internal enum G3PlateSolveTransientOperation
 
 internal sealed partial class RealObservationStageRunner
 {
+    internal static GateResult ClassifyG3EmptyLadder(
+        IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, int expectedTiers)
+    {
+        // Only a complete ladder of validated pixels + ordinary failed solves
+        // supports an optical no-stars conclusion. A valid empty image cannot
+        // launder an invalid capture/identity/buffer from another tier.
+        var validEmpty = expectedTiers > 0 && attempts.Count == expectedTiers &&
+            attempts.Select(a => a.LadderIndex).SequenceEqual(Enumerable.Range(1, expectedTiers)) &&
+            attempts.All(a => !a.SolveSucceeded && a.GateCode == "G3_PLATE_SOLVE_TIER_FAILED" &&
+                a.ContentGateCode == "G3_CLOUD_OR_TRANSPARENCY_INVALID" && a.CoherentSourceCount == 0 &&
+                a.MountBinding is not null && !string.IsNullOrWhiteSpace(a.FramePath));
+        return validEmpty
+            ? GateResult.TargetQuality("G3_CLOUD_OR_TRANSPARENCY_INVALID",
+                "Validated G3 frames and completed solves found no coherent source. Keep the bounded stationary retries; after exhaustion this is a target-local optical failure, not a weather-monitor verdict. No search motion is authorized.")
+            : GateResult.Unknown("G3_PLATE_SOLVE_PIXEL_EVIDENCE_INVALID",
+                "The exhausted G3 ladder lacks complete validated empty-field evidence; invalid pixels/capture/solver evidence cannot be classified as cloud or target quality. No search motion is authorized.");
+    }
+
     /// <summary>
     /// Classifies only failures for which abandoning the current disposable
     /// evidence path and advancing the commissioned exposure ladder is safe.

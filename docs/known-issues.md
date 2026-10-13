@@ -1,6 +1,39 @@
 # Known issues
 
-## Current closeout boundary (2026-10-12, installed 0.4.0.285)
+## Current closeout boundary (2026-10-13, installed 0.4.0.289)
+
+The [October 13 closeout](closeout-2026-10-13.md) consolidates .286–.289. Earlier
+deployment and sky records below retain their original versions.
+
+- Target-quality and valid-budget exhaustion retain their original gate through
+  acquisition, return and guiding recovery. Native two-target tests verify actual
+  continuation after independent checked stop and ledger retirement. Unknown
+  faults, corrupt state, changed ownership and late safety/cancellation boundaries
+  do not become skips. Real cloud recovery on .289 remains a field acceptance item.
+- ADR-0036's native End area is not an emergency controller or a finally block.
+  The original night/standby owner still performs closure; optional native actions
+  require normal verified closeout and do not run during open-roof standby,
+  cancellation, unsafe/deadline/dawn termination or unsettled failure.
+- New full templates require .289 or later. Native preparation is saved as zero
+  iterations in simulations and one in real plans. Per-target calibration remains
+  custom because native Start Guiding does not implement the full spectroscopy
+  accounting/reacquisition contract; do not add a second calibration/guide path.
+- Three local ten-target files and two saved templates were migrated without
+  target, clock or budget changes. The frontend may restore an older in-memory
+  draft; reload the saved file to see the new layout. Personal files are not
+  distributed, and this migration does not prove a completed night on .289.
+- All 41 installed files, bridge version and startup logs were checked. ATR
+  workspace state was readable, but observation/calibration navigation returned
+  `PanelNotAvailable`; actual live-panel visibility remains unverified. The
+  installation snapshot is idle, disarmed and disconnected, not weather standby.
+- 3,564 .NET tests include five opt-in local-file cases; the regular suite has
+  3,559 without those private inputs. The 75 reduction tests, historical nine-run/
+  26-spectrum replay and 166 offline UI scenes do not certify physical stopping,
+  weather closure, near-companion selection, dual-instance photometry or an
+  uninterrupted new-version observing night. Application exit still ends the
+  independent software standby; restart does not resume it.
+
+## Historical closeout boundary (2026-10-12, installed 0.4.0.285)
 
 The [October 12 closeout](closeout-2026-10-12.md) consolidates .278–.285. Historical
 results below remain version-specific, not current deployment claims.

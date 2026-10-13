@@ -25,7 +25,7 @@ public sealed class ScienceRecoveryBoundaryTests
         Assert.Contains("CanObserveAtSettledLock", accounting);
         Assert.Contains("ValidateCurrentPhd2LockLedgerBinding", accounting);
         Assert.Contains("motionBudgetReset = false, scienceAccepted = false", accounting);
-        Assert.Contains("{sourceGate.Code}: {sourceGate.Message}", accounting);
+        Assert.Contains("Phd2ScienceContinuationPolicy.RebuildBudgetGate(ledger, DateTimeOffset.UtcNow, sourceGate, binding)", accounting);
     }
 
     [Theory]

@@ -191,7 +191,11 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
                         $"The target remains signal-limited at the longest configured safe, unclipped tier ({probeExposure:G4}s). This is expected for faint targets: continue science acquisition and improve SNR by stacking instead of blocking the run.",
                         decision.Metrics);
                 }
-                return Attention(ObservationStage.SelectAtrExposure, decision.Code, decision.Reason, decision.Metrics);
+                // Clipping with no permitted shorter tier rejects this target,
+                // not the night. Invalid telemetry/identity remains run-scoped.
+                return decision.Code is "NO_SAFE_SATURATION_BACKOFF" or "NO_SAFE_EXPOSURE_TIER"
+                    ? new StageResult(GateResult.TargetQuality(decision.Code, decision.Reason, decision.Metrics))
+                    : Attention(ObservationStage.SelectAtrExposure, decision.Code, decision.Reason, decision.Metrics);
             }
             if (selectedTierValidatedByThisFrame)
             {

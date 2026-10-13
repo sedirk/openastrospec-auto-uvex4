@@ -13,13 +13,21 @@ internal static partial class ObservationStaticTextCatalog
     private static readonly IReadOnlyDictionary<string, string> English =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["旧序列兼容卡。新序列请用原生“连接设备 → Safety Monitor”，并保留“等待安全”。连接不等于安全；不操作屋顶。"] = "Legacy compatibility card. New sequences should use native Connect Equipment → Safety Monitor, followed by Wait Until Safe. Connection is not safety; no roof command.",
+            ["放在原生“结束”区域，兼容旧版整夜末尾；全序列只选一处。选择在整夜开始时锁定，失败未到达此卡也会处理。截止、晨光、不安全或监视失联仍安全收口。"] = "Place in the native End area, or the legacy night tail, not both. The night locks this choice before targets and handles it even if failure prevents reaching this card. Cutoff, dawn, unsafe or lost monitoring still close out safely.",
+            ["附加动作放到下方原生顺序指令集，可拖入原生卡片；仅本轮正常关顶确认后执行。保持开顶、取消或收口失败时跳过，不撤销独立安全待机。"] = "Drag native cards into the additional sequential group below. It runs only after this night's normal verified closeout. Standby, cancellation or failed closeout skips it without disabling safety standby.",
+            ["正常关顶确认后执行一次；开顶待机、取消或失败时跳过附加收尾。不是关顶命令。"] = "Run once after normal verified closeout. Skip extra instructions during standby, cancellation or failure. This is not a roof command.",
+            ["关顶后 Home → Park（仅无干涉台站）"] = "Home → Park after roof closure (attested non-interfering station only)",
+            ["旧序列收口字段（优先使用收口卡）"] = "Legacy closeout fields (prefer the closeout card)",
+            ["收尾在原生“结束”区域设置；有收口卡时以其开关为准，上方保持开顶仅兼容旧序列。单次运行的关顶设置不影响本序列。"] = "Configure closeout in the native End area. Its card takes precedence over legacy keep-open settings here. Standalone roof preferences do not affect this sequence.",
+            ["默认沿用 PHD2 校准；勾选后本目标仅强制一次，校准后重新取场。不要另加原生“开始导星”，以免与入缝流程重复。"] = "Reuse PHD2 calibration by default; request it once per target when checked, then reacquire. Do not add native Start Guiding alongside slit placement.",
             ["安全待机关顶收口"] = "Close out safety standby",
             ["停止当前观测；序列开顶安全待机不会被此按钮关闭。"] = "Stop observing. This button does not disable open-roof safety standby.",
             ["目标结束或取消后序列退出；开顶保护转为独立安全待机，仍监视 AIWeather、原截止和晨光。失败及未结账本保留。更改仅对下一次启动生效；退出 N.I.N.A. 会停止软件保护。"] = "The sequence exits after targets finish or cancellation. Independent standby retains AIWeather, the original cutoff and dawn protection. Failures and unresolved ledgers remain. Edits apply to the next run; exiting N.I.N.A. stops software protection.",
             ["序列开始时选择真实模式"] = "Select real mode at sequence start",
             ["仅选择模式，不启动目标、不授权后台控制；每张目标卡仍须明确设为 REAL，并通过原有设备与安全检查。放在开始区域，默认关闭。"] = "Selects mode only; does not start a target or arm backend control. Each target must explicitly request REAL and pass existing equipment and safety checks. Place in the start area. Off by default.",
-            ["序列开始时启动 AIWeather 安全检测"] = "Start AIWeather monitoring at sequence start",
-            ["通过 N.I.N.A. 连接已选中的 AIWeather，已连接不重复启动。连接不代表安全：后面仍须保留等待安全，不操作屋顶。放在开始区域，默认关闭。"] = "Connects the selected AIWeather through N.I.N.A.; does not restart an existing connection. Connected does not mean safe: keep Wait Until Safe afterwards. Does not operate the roof. Place in the start area. Off by default.",
+            ["序列开始时自动启动安全监视器"] = "Automatically start the selected safety monitor",
+            ["通过 N.I.N.A. 连接 Profile 已选定的安全监视器，已连接不重复启动。连接不代表安全：后面仍须保留等待安全，不操作屋顶。放在开始区域，默认关闭。"] = "Connects the safety monitor selected in the N.I.N.A. Profile; does not restart an existing connection. Connected does not mean safe: keep Wait Until Safe afterwards. Does not operate the roof. Place in the start area. Off by default.",
             ["单次运行关顶（不控制整夜序列）"] = "Single-run roof closure (not the night sequence)",
             ["单次完成后关顶"] = "Close roof after single-run completion",
             ["单次普通失败后关顶"] = "Close roof after ordinary single-run failure",

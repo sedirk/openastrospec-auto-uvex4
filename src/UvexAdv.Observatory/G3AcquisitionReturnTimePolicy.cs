@@ -13,7 +13,7 @@ public static class G3AcquisitionReturnTimePolicy
         if (state is null || state.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger)
             return new(GateResult.Pass("G3_WORK_NO_PENDING_RETURN", "No outstanding acquisition return is being deferred."), null);
         var issues = state.Validate();
-        if (issues.Count > 0 || now < state.StartedUtc || state.Phase != G3AcquisitionMotionPhase.AwaitingFreshSolve)
+        if (issues.Count > 0 || now < state.UpdatedUtc || state.Phase != G3AcquisitionMotionPhase.AwaitingFreshSolve)
             return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
                 "Acquisition work requires a valid, arrived acquisition ledger and a non-reversed clock. " + string.Join(" ", issues)), null);
 
@@ -33,8 +33,10 @@ public static class G3AcquisitionReturnTimePolicy
             ["returnReserveSeconds"] = returnSeconds,
             ["cleanupReserveSeconds"] = CleanupReserveSeconds,
         };
-        if (!double.IsFinite(requiredSeconds) || remainingSeconds < requiredSeconds)
-            return new(GateResult.Unknown(ReserveCode,
+        if (!double.IsFinite(requiredSeconds))
+            return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID", "The required work/return duration is not finite."), null);
+        if (remainingSeconds < requiredSeconds)
+            return new(GateResult.TargetQuality(ReserveCode,
                 "No further capture or plate solve was started: its bounded duration would spend the original segmented-return and cleanup reserve.", values), null);
         return new(GateResult.Pass("G3_WORK_RETURN_TIME_PROTECTED",
             "This non-motion operation fits before the unchanged durable return reserve.", values), TimeSpan.FromSeconds(state.WorstCaseActionSeconds));
@@ -60,7 +62,7 @@ public static class G3AcquisitionReturnTimePolicy
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && bounded.IsCancellationRequested)
         {
-            throw new G3ReturnTimeReserveException(GateResult.Unknown(ReserveCode,
+            throw new G3ReturnTimeReserveException(GateResult.TargetQuality(ReserveCode,
                 "Capture/plate solve reached its bounded duration. Stop the ladder and preserve the original return reserve.", plan.Gate.Metrics), operationStarted: true);
         }
     }

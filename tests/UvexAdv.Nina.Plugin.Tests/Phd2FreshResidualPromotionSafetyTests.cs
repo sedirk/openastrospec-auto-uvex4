@@ -58,7 +58,7 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "return await ReturnPhd2LockToOriginAsync(",
             "Phd2HandoffRecoveryPolicy.ShouldReacquire(",
             "return await ReacquireG3ForPhd2HandoffAsync(",
-            "GateResult.Unknown(budget.Code,");
+            "Phd2HandoffRecoveryPolicy.FailureGate(budget.Code,");
     }
 
     [Fact]

@@ -253,6 +253,17 @@ Explicit end-night, cutoff, dawn, unsafe or lost safety-monitor/binding proof st
 invokes checked closure. Ordinary cancellation does not authorize mechanical
 closeout, and uncertain physical stop cannot enter standby with motion authority.
 
+Under owner-requested [ADR-0036](../adr/0036-native-sequence-preparation-and-end-area.md),
+new complete templates reuse native safety-monitor connection and wait cards.
+The optional closeout choice may instead live in the native End area of a root
+with one spectroscopy night; it is still locked at night start and executed by
+the existing reserved night/standby owner even if End is bypassed. Legacy inline
+choices remain compatible. Optional native sequential End instructions require
+this night's normal verified closeout and never run alongside open-roof standby,
+cancellation, unresolved target responsibility or failed safety closure. Native
+per-target guiding cards do not replace the spectroscopy calibration/acquisition
+contract. No equipment ownership or emergency authority changes.
+
 Under owner-requested [ADR-0033](../adr/0033-independent-observatory-safety-standby.md),
 the preceding standby lifetime now belongs to an independent safety owner in the
 same master N.I.N.A. process, not to the native sequence Execute task. After target

@@ -50,6 +50,42 @@ owner, invalid output, identity change, unknown exceptions or unconfirmed checke
 stop remain separate non-advancing faults. A rolling optical rejection clears the
 previous FIFO and reacquires a complete window under the unchanged deadline.
 
+In 0.4.0.286, slit reacquisition adds context without replacing the original gate,
+scope, metrics or evidence. ATR exhausted safe exposure tiers and checked-stopped
+strict off-slit native selection are target-quality outcomes. A complete G3 ladder
+whose bound, valid frames all report zero coherent sources remains eligible for
+the existing three bounded fresh retries and then target skip. Unsupported pixel
+buffers, capture/solver exceptions, missing binding or incomplete/mixed ladders
+are not evidence of an empty sky and remain run faults. No skip classification
+attests physical stopping by itself; the native night owner must still join and
+verify its independent terminal boundary before actually running the next target.
+
+In 0.4.0.287, a valid, same-owner G3 guiding-recovery return that cannot fit the
+original action, cumulative-motion or elapsed budget is also target-local. This
+does not execute a return, change the original clock, persist a new allowance or
+claim arrival. The native boundary must confirm stopped owners and retire the old
+ledger before a skip. Changed owner/epoch/pier, pending motion, invalid geometry,
+position limits and unconfirmed stopping remain run faults, even with an expired
+budget. Recovery-declined evidence records the required and available limits.
+
+In 0.4.0.288 this contract applies across G3 centering/search/return, independent
+slit corrections, PHD2 placement/rebuild and science continuation. Validate ledger,
+binding, finite geometry and clock before classifying ordinary time/action/travel
+exhaustion. A spent budget rejects the proposed command; it neither resets that
+budget nor asserts physical arrival. Only subsequent independent checked-stop and
+authenticated retirement can permit the next native target. Preserve typed gates
+through return results and nested recovery exceptions; never replace a device or
+ledger fault with a generic, skippable recovery-exhausted/position-timeout code.
+
+Return-window observations distinguish bounded non-arrival or same-owner StarLost
+from changed ownership, interrupted/stale frames or missing measured provenance.
+All reject further exposure; only the former are target-local. Native terminal
+classification reads the current failed stage and matching terminal event, not the
+last failed entry in a historical gate dictionary. Recheck cancellation, Unsafe,
+night end, dawn and cutoff after coordinator join/stop confirmation. These checks
+are shared by both ordinary skip and mount-clock continuation; they cannot revive
+a stopped night. See the [cross-layer audit](../reports/2026-10-13-failure-chain-audit.md).
+
 A condition may pause the production route only when at least one of the
 following is true:
 

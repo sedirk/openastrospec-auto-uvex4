@@ -82,9 +82,9 @@ public sealed class UvexSelectRealModeItem : SequenceItem, IValidatable
     }
 }
 
-[ExportMetadata("Name", "OpenAstroSpec · 启动 AIWeather 安全检测")]
-[ExportMetadata("Description", "通过 N.I.N.A. 连接当前选中的 AIWeather。已连接不重复启动；连接不等于安全，后面仍须等待安全。")]
-[ExportMetadata("Category", "OpenAstroSpec Auto")]
+[ExportMetadata("Name", "OpenAstroSpec · 自动启动安全监视器（旧序列兼容）")]
+[ExportMetadata("Description", "通过 N.I.N.A. 连接 Profile 已选定的安全监视器。已连接不重复启动；连接不等于安全，后面仍须等待安全。")]
+[ExportMetadata("Category", "OpenAstroSpec Auto / 兼容旧序列")]
 [Export(typeof(ISequenceItem))]
 [JsonObject(MemberSerialization.OptIn)]
 [SupportedOSPlatform("windows")]
@@ -94,7 +94,7 @@ public sealed class UvexStartSafetyMonitorItem : SequenceItem, IValidatable
     private readonly ObservationCoordinatorHost host;
     private readonly ISafetyMonitorMediator monitor;
     private readonly UvexPluginSettings settings;
-    internal const string AiWeatherId = "AIWeatherSafetyMonitor";
+    private static bool IsSelected(string? id) => !string.IsNullOrWhiteSpace(id) && id != "No_Device";
     [ImportingConstructor]
     public UvexStartSafetyMonitorItem(IProfileService profiles, ObservationCoordinatorHost host, ISafetyMonitorMediator monitor)
         : this(profiles, host, monitor, new UvexPluginSettings(profiles)) { }
@@ -109,8 +109,8 @@ public sealed class UvexStartSafetyMonitorItem : SequenceItem, IValidatable
         Issues.Clear();
         if (StartMonitoring)
             try { NinaInstancePolicy.RequireMaster(settings); SequenceStartupScope.ValidateRealTargets(this);
-                if (profiles.ActiveProfile.SafetyMonitorSettings.Id != AiWeatherId)
-                    throw new InvalidOperationException("先在 N.I.N.A. 安全监视器选择 AIWeather；启动卡片不会替换设备或启用网络天气源。"); }
+                if (!IsSelected(profiles.ActiveProfile.SafetyMonitorSettings.Id))
+                    throw new InvalidOperationException("先在 N.I.N.A. Profile 选择安全监视器；启动卡片不会替换设备或启用网络天气源。"); }
             catch (InvalidOperationException ex) { Issues.Add(ex.Message); }
         return Issues.Count == 0;
     }
@@ -121,19 +121,21 @@ public sealed class UvexStartSafetyMonitorItem : SequenceItem, IValidatable
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
         using var reservation = await host.ReserveNightAsync(this, true, token);
         var profile = profiles.ActiveProfile;
+        var selectedId = profile.SafetyMonitorSettings.Id;
+        if (!IsSelected(selectedId)) throw new InvalidOperationException("未选择安全监视器；不能连接。");
         var before = monitor.GetInfo();
-        if (before.Connected && before.DeviceId != AiWeatherId)
+        if (before.Connected && before.DeviceId != selectedId)
             throw new InvalidOperationException("已连接的安全监视器身份不符；未断开或替换它。");
         // Await the native owner operation to completion, including cancellation;
         // never abandon a Connect task that may finish after the lease is released.
         if (!before.Connected && !await monitor.Connect())
-            throw new InvalidOperationException("AIWeather 连接失败；未允许后续观测继续。");
+            throw new InvalidOperationException("安全监视器连接失败；未允许后续观测继续。");
         token.ThrowIfCancellationRequested();
         var after = monitor.GetInfo();
-        if (!ReferenceEquals(profile, profiles.ActiveProfile) || profiles.ActiveProfile.SafetyMonitorSettings.Id != AiWeatherId ||
-            !after.Connected || after.DeviceId != AiWeatherId)
-            throw new InvalidOperationException("AIWeather 连接或 Profile 身份读回不一致；不能继续。");
-        ObservationStatusProgress.Wrap(progress).Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "AIWeather 已连接 · 待安全判定" });
+        if (!ReferenceEquals(profile, profiles.ActiveProfile) || profiles.ActiveProfile.SafetyMonitorSettings.Id != selectedId ||
+            !after.Connected || after.DeviceId != selectedId)
+            throw new InvalidOperationException("安全监视器连接或 Profile 身份读回不一致；不能继续。");
+        ObservationStatusProgress.Wrap(progress).Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "安全监视器已连接 · 待安全判定" });
     }
     public override object Clone()
     {

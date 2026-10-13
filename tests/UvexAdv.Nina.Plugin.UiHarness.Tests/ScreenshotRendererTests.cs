@@ -117,11 +117,13 @@ public sealed class ScreenshotRendererTests
     [Theory]
     [InlineData("native-night")]
     [InlineData("native-night-narrow")]
-    public void NativeNightEditorShowsDeadlineCloseoutAndRuntimeWithoutExpanders(string name)
+    public void NativeNightEditorKeepsDeadlineVisibleAndCollapsesDuplicateLegacyCloseout(string name)
     {
         var result = RenderPhotometry(name);
         Assert.Contains(result.VisibleTexts, x => x.Contains("关顶与整夜收口", StringComparison.Ordinal));
-        Assert.Contains(result.VisibleTexts, x => x.Contains("测试结束保持开顶", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("测试结束保持开顶", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("旧序列收口字段", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("原生“结束”区域", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("监视 AIWeather", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("目标结束或取消后序列退出", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("退出 N.I.N.A. 会停止软件保护", StringComparison.Ordinal));
@@ -131,9 +133,26 @@ public sealed class ScreenshotRendererTests
         Assert.Contains(result.VisibleTexts, x => x.Contains("确认 Park → 开顶并回读", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("Park 并回读 → 关顶并回读", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("全姿态无干涉", StringComparison.Ordinal));
-        Assert.Contains(result.VisibleTexts, x => x.Contains("Home 再 Park", StringComparison.Ordinal));
-        Assert.Contains(result.VisibleTexts, x => x.Contains("Home 超时", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.VisibleTexts, x => x.Contains("Home 超时", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("晨光结束", StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains("截止时间", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("native-closeout", "原生“结束”区域", "关顶后 Home", "开顶、取消或收口失败")]
+    [InlineData("native-closeout-en", "native End area", "Home → Park", "Standby, cancellation or failed closeout")]
+    public void NativeEndCardExplainsItsScopeAndOptionalActionsWithoutHidingControls(
+        string name, string location, string home, string guard)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(result.VisibleTexts, x => x.Contains(location, StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains(home, StringComparison.Ordinal));
+        Assert.Contains(result.VisibleTexts, x => x.Contains(guard, StringComparison.Ordinal));
+        var card = Assert.IsType<UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem>(
+            ScenarioCatalog.Select(name).Single().AlternateViewModel);
+        Assert.NotNull(card.Night);
+        Assert.True(card.CanEditPlan);
+        Assert.IsType<NINA.Sequencer.Container.EndAreaContainer>(card.Parent);
     }
     [Theory]
     [InlineData("native-target-editor")]

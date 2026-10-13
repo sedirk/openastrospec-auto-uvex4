@@ -1070,7 +1070,8 @@ public sealed class Phd2SlitPlacementCommissioningTests
         var recovery = Section("private async Task<StageResult?> RecoverOutstandingPhd2LockBeforePlacementAsync(",
             "private async Task CapturePhd2HomeBoundaryBeforeCatalogSlewAsync(");
         Assert.Contains("if (!reacquired.CanAdvance)", recovery);
-        Assert.Contains("PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED", recovery);
+        Assert.Contains("ObservationWorkflowResults.WithFailureContext(reacquired", recovery);
+        Assert.DoesNotContain("PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED", recovery);
     }
 
     [Fact]

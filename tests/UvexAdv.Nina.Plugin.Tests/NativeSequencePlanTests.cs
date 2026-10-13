@@ -1,4 +1,5 @@
 using System.Reflection;
+using NINA.Sequencer.Container;
 using NINA.Profile.Interfaces;
 using NINA.Astrometry.Interfaces;
 using NINA.Core.Model;
@@ -691,6 +692,14 @@ public sealed class NativeSequencePlanTests
         });
         Assert.False(night.Validate()); // An unbounded open-roof wait cannot be saved as executable.
         night.EndAtIso8601 = DateTimeOffset.UtcNow.AddSeconds(mode == "deadline" ? 4 : 30).ToString("O");
+        var root = new SequenceRootContainer();
+        root.Add(new StartAreaContainer());
+        var targetArea = new TargetAreaContainer(); root.Add(targetArea); targetArea.Add(night);
+        var endArea = new EndAreaContainer(); root.Add(endArea);
+        endArea.Add(new UvexObservatoryCloseoutItem { CloseAfterTargets = false });
+        var extras = new SequentialContainer(); endArea.Add(extras);
+        extras.Add(new UvexNightClosedCondition());
+        var endProbe = new NINA.Sequencer.SequenceItem.Utility.Annotation(); extras.Add(endProbe);
         var clone = (UvexNightSequenceContainer)night.Clone();
         Assert.True(clone.HoldOpenAfterTargets);
         Assert.Equal(3, clone.InitialGuideSettlePixels);
@@ -707,6 +716,10 @@ public sealed class NativeSequencePlanTests
         Assert.True(night.CanEditPlan); Assert.True(activeTarget.CanEditPlan);
         var guard = Assert.IsType<NightSafetyStandby>(host.SafetyStandby);
         var originalDeadline = guard.Snapshot.DeadlineUtc;
+        await endArea.Execute(new Progress<ApplicationStatus>(), CancellationToken.None);
+        Assert.Equal(NINA.Core.Enum.SequenceEntityStatus.SKIPPED, endProbe.Status);
+        Assert.False(night.NativeEndInstructionsReady);
+        Assert.Same(guard, host.SafetyStandby);
         activeTarget.ForceGuideCalibration = true;
         activeTarget.TargetName = "Next run's target";
         activeTarget.FixedExposureSeconds = 600;
@@ -723,6 +736,9 @@ public sealed class NativeSequencePlanTests
             night.EndNightCommand.Execute(null);
         }
         await guard.Completion.WaitAsync(TimeSpan.FromSeconds(8));
+        extras.ResetAll();
+        await extras.Execute(new Progress<ApplicationStatus>(), CancellationToken.None);
+        Assert.Equal(NINA.Core.Enum.SequenceEntityStatus.SKIPPED, endProbe.Status);
         Assert.False(night.IsActive);
         using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
         var terminal = journal.RootElement.GetProperty("outcomes").EnumerateArray().Last();
@@ -1109,6 +1125,23 @@ public sealed class NativeSequencePlanTests
     [InlineData("typed-end-policy", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
     [InlineData("unknown-gate", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
     public async Task NativeFailedFirstTargetJoinsCoordinatorBeforeDecidingWhetherToSkip(string mode, string failureCode)
+        => await AssertNativeFailureBoundaryAsync(mode, failureCode);
+
+    [Theory]
+    [InlineData("typed-skip")]
+    [InlineData("typed-cleanup-failure")]
+    [InlineData("typed-end-policy")]
+    [InlineData("unknown-gate")]
+    [InlineData("late-cancel")]
+    [InlineData("late-unsafe")]
+    [InlineData("late-deadline")]
+    [InlineData("late-dawn")]
+    public async Task NativeEndGroupHonorsTheActualJoinedTargetAndSafetyBoundary(string mode) =>
+        await AssertNativeFailureBoundaryAsync(mode, "AUDITED_TARGET_FAILURE", nativeEndArea: true);
+
+    internal async Task AssertNativeFailureBoundaryAsync(string mode, string failureCode,
+        GateResult? producedGate = null, ObservationStage failureStage = ObservationStage.AcquireG3SlitField,
+        bool nativeEndArea = false)
     {
         var typedQuality = mode.StartsWith("typed-", StringComparison.Ordinal);
         if (typedQuality) mode = mode[6..];
@@ -1125,11 +1158,33 @@ public sealed class NativeSequencePlanTests
         // Quality notifications now wait for the saved native boundary, so make
         // the original race repeatable from the snapshot event, not the toast.
         var delayed = 0;
-        host.DashboardChanged += (_, d) => {
-            if (d.Run.State == ObservationRunState.Faulted && Interlocked.Exchange(ref delayed, 1) == 0) Thread.Sleep(500);
-        };
         var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
-        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality, freshWindow);
+        using var cancel = new CancellationTokenSource();
+        host.DashboardChanged += (_, d) => {
+            if (d.Run.State != ObservationRunState.Faulted || Interlocked.Exchange(ref delayed, 1) != 0) return;
+            if (mode == "stale-gate") host.PublishGate(ObservationStage.FinalizeObservation, GateResult.Unknown("STALE_SIBLING_FAILURE", "Not the terminal stage."));
+            if (mode == "late-cancel") cancel.Cancel();
+            if (mode == "late-unsafe") night.OnNightUnsafe();
+            if (mode == "late-end") night.StopAtNativeConditionBoundary();
+            if (mode is "late-deadline" or "late-dawn")
+            {
+                // Inject the night condition exactly during the terminal join.
+                // Use the production StopGateNow path, not a fake skip result.
+                var field = typeof(UvexNightSequenceContainer).GetField("standbyPlan", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var plan = (NativeSequencePlan)field.GetValue(night)!;
+                if (mode == "late-deadline") plan = plan with { DeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(-1) };
+                else
+                {
+                    var now = DateTime.UtcNow;
+                    var longitude = NINA.Astrometry.AstroUtil.GetSunAltitude(now, new NINA.Astrometry.ObserverInfo { Latitude = 0, Longitude = 0 }) >= -12 ? 0 : 180;
+                    plan = plan with { StopAtDawn = true, DawnSunAltitudeDegrees = -12, LatitudeDegrees = 0, LongitudeDegrees = longitude };
+                }
+                Assert.Equal(mode == "late-deadline" ? "NIGHT_DEADLINE_REACHED" : "NIGHT_DAWN_REACHED", plan.StopGateNow()!.Code);
+                field.SetValue(night, plan);
+            }
+            Thread.Sleep(500);
+        };
+        var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality, freshWindow, producedGate, failureStage);
         var second = new TerminalGateRunner(null, false);
         var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
         var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
@@ -1144,11 +1199,36 @@ public sealed class NativeSequencePlanTests
                 ScienceFrames = 1, MaximumScienceAttempts = 2,
                 FailurePolicy = mode == "end-policy" ? SpectroscopyTargetFailurePolicy.EndNight : SpectroscopyTargetFailurePolicy.SkipQualityFailure,
             });
-        await night.Execute(new Progress<ApplicationStatus>(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+        NINA.Sequencer.Container.EndAreaContainer? endArea = null;
+        NINA.Sequencer.SequenceItem.Utility.Annotation? endProbe = null;
+        if (nativeEndArea)
+        {
+            var root = new SequenceRootContainer();
+            root.Add(new StartAreaContainer());
+            var area = new TargetAreaContainer(); root.Add(area); area.Add(night);
+            endArea = new EndAreaContainer(); root.Add(endArea);
+            endArea.Add(new UvexObservatoryCloseoutItem { CloseAfterTargets = true });
+            var group = new SequentialContainer(); endArea.Add(group);
+            var condition = new UvexNightClosedCondition(); group.Conditions.Add(condition); condition.AttachNewParent(group);
+            endProbe = new NINA.Sequencer.SequenceItem.Utility.Annotation { Text = "Native end probe; no equipment." };
+            group.Add(endProbe);
+        }
+        var error = await Record.ExceptionAsync(() => night.Execute(new Progress<ApplicationStatus>(), cancel.Token).WaitAsync(TimeSpan.FromSeconds(15)));
+        if (mode is not ("late-cancel" or "late-unsafe")) Assert.Null(error);
         using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
         var outcomes = journal.RootElement.GetProperty("outcomes").EnumerateArray()
             .Where(x => x.TryGetProperty("outcome", out _)).ToArray();
-        var skip = mode == "skip";
+        var skip = mode is "skip" or "stale-gate";
+        if (endArea is not null)
+        {
+            // Even explicitly entering End with a fresh token cannot revive an unsafe/cancelled night.
+            await endArea.Execute(new Progress<ApplicationStatus>(), CancellationToken.None);
+            Assert.Equal(skip, endProbe!.Status == NINA.Core.Enum.SequenceEntityStatus.FINISHED);
+            Assert.Equal(skip, night.NativeEndInstructionsReady);
+            Assert.False(((UvexNightSequenceContainer)night.Clone()).NativeEndInstructionsReady);
+            night.ResetProgress();
+            Assert.False(night.NativeEndInstructionsReady);
+        }
         Assert.Equal(skip ? 2 : 1, outcomes.Length);
         Assert.Equal(skip ? "SkippedQualityFailure" : "Stopped", outcomes[0].GetProperty("outcome").GetString());
         Assert.Equal(failureCode, outcomes[0].GetProperty("gate").GetString());
@@ -1157,9 +1237,14 @@ public sealed class NativeSequencePlanTests
         Assert.Contains("Quality boundary 0", boundaryNotification.Body);
         Assert.Contains(failureCode, boundaryNotification.Body);
         if (skip) Assert.DoesNotContain(notifier.Notifications, x => x.Severity == ObservationAttentionSeverity.Error);
-        Assert.False(outcomes[0].GetProperty("endRequested").GetBoolean());
+        Assert.Equal(mode == "late-end", outcomes[0].GetProperty("endRequested").GetBoolean());
         Assert.Equal(skip, second.Stages.Contains(ObservationStage.FinalizeObservation));
-        Assert.DoesNotContain(ObservationStage.SelectAtrExposure, first.Stages);
+        Assert.DoesNotContain(failureStage switch
+        {
+            ObservationStage.RunScienceBlock => ObservationStage.FinalizeObservation,
+            ObservationStage.SelectAtrExposure => ObservationStage.RunScienceBlock,
+            _ => ObservationStage.SelectAtrExposure,
+        }, first.Stages);
         if (skip)
         {
             Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
@@ -1168,6 +1253,11 @@ public sealed class NativeSequencePlanTests
             Assert.Equal("完成", ((UvexTargetObservationContainer)night.Items[1]).LastOutcome);
         }
         else Assert.NotEqual("完成", ((UvexTargetObservationContainer)night.Items[1]).LastOutcome);
+        if (host.SafetyStandby is { } standby)
+        {
+            night.EndNightCommand.Execute(null);
+            await standby.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
     [Theory]
@@ -1281,7 +1371,8 @@ public sealed class NativeSequencePlanTests
     }
 
     private sealed class TerminalGateRunner(string? failure, bool failCleanup, bool typedQuality = false,
-        bool freshWindow = false) : ObservationStageRunnerBase
+        bool freshWindow = false, GateResult? producedGate = null,
+        ObservationStage failureStage = ObservationStage.AcquireG3SlitField) : ObservationStageRunnerBase
     {
         public List<ObservationStage> Stages { get; } = new();
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
@@ -1298,9 +1389,10 @@ public sealed class NativeSequencePlanTests
                         "Formal WCS identity retained, but three fresh frames remain ambiguous; no hardware."),
                     "synthetic-optical-window.json").AfterStop(stopConfirmed: true));
             }
-            return Task.FromResult(new StageResult(!freshWindow && stage == ObservationStage.AcquireG3SlitField && failure is not null
-                ? typedQuality ? new TargetQualityEvidenceException(failure, "Synthetic optical failure; no physical hardware.").AfterStop(true).Gate
+            return Task.FromResult(new StageResult(!freshWindow && stage == failureStage && failure is not null
+                ? producedGate ?? (typedQuality ? new TargetQualityEvidenceException(failure, "Synthetic optical failure; no physical hardware.").AfterStop(true).Gate
                     : GateResult.Unknown(failure, "Synthetic quality failure; no physical hardware.")
+                  )
                 : GateResult.Pass("SIM_STAGE_PASS", "Synthetic stage; no physical hardware.")));
         }
         public override Task OnCancelledAsync(ObservationContext context, CancellationToken token) =>

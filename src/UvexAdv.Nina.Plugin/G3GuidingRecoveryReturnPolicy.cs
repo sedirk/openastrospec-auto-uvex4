@@ -69,10 +69,24 @@ internal static class G3GuidingRecoveryReturnPolicy
         var returnActions = (int)returnActionCount;
         // Match the production return's full single-segment precharge, and
         // reserve every worst-case return segment before starting any of them.
-        if (charged.CorrectionAttempts + (long)returnActions > state.MaximumCorrectionAttempts ||
-            charged.CumulativeMotionArcseconds + returnActions * state.MaximumSingleCorrectionArcseconds > state.MaximumCumulativeMotionArcseconds ||
-            (now - state.StartedUtc).TotalSeconds + (1d + returnActions) * state.WorstCaseActionSeconds > state.MaximumElapsedSeconds)
-            return Block("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", "原动作、位移或时间预算不足以覆盖导星位置差及完整回程；未重置预算，请核验回零后新开一轮。");
+        var requiredActions = charged.CorrectionAttempts + (long)returnActions;
+        var requiredMotion = charged.CumulativeMotionArcseconds + returnActions * state.MaximumSingleCorrectionArcseconds;
+        var elapsed = (now - state.StartedUtc).TotalSeconds;
+        var requiredSeconds = elapsed + (1d + returnActions) * state.WorstCaseActionSeconds;
+        if (requiredActions > state.MaximumCorrectionAttempts ||
+            requiredMotion > state.MaximumCumulativeMotionArcseconds || requiredSeconds > state.MaximumElapsedSeconds)
+            // Numeric exhaustion is local to this target, not authority to execute a
+            // return or reset its ledger. The native boundary must independently join,
+            // confirm all owners stopped and retire the ledger before any next target.
+            return new(GateResult.TargetQuality("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT",
+                "原动作、位移或时间预算不足以覆盖导星位置差及完整回程；未发送回程、未重置预算。停止与旧账本归档确认后按本目标失败策略处理。",
+                new Dictionary<string, double>
+                {
+                    ["requiredActions"] = requiredActions, ["maximumActions"] = state.MaximumCorrectionAttempts,
+                    ["requiredMotionArcseconds"] = requiredMotion, ["maximumMotionArcseconds"] = state.MaximumCumulativeMotionArcseconds,
+                    ["elapsedSeconds"] = elapsed, ["requiredSeconds"] = requiredSeconds, ["maximumElapsedSeconds"] = state.MaximumElapsedSeconds,
+                    ["continuityDeltaArcseconds"] = delta, ["radiusArcseconds"] = radius, ["returnActions"] = returnActions,
+                }), ContinuityDeltaArcseconds: delta, ReservedReturnActions: returnActions);
         var next = G3AcquisitionMotionPlanner.PlanNextReturnStep(charged, reportedRa, reportedDec, nearOriginToleranceArcseconds, now);
         if (next.Gate.Disposition != GateDisposition.Passed) return new(next.Gate);
         return new(GateResult.Pass("G3_GUIDING_RECOVERY_RETURN_RESERVED",

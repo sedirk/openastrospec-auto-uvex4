@@ -25,9 +25,26 @@
         "Items": {
           "$values": [
             {
-              "$id": "startup-safety",
-              "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexStartSafetyMonitorItem, UvexAdv.Nina.Plugin",
-              "StartMonitoring": false,
+              "$id": "startup-devices",
+              "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+              "Name": "原生安全准备 · 模拟保持 0 次，真实运行改为 1 次",
+              "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+              "Conditions": { "$values": [
+                { "$type": "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer", "Iterations": 0, "Parent": { "$ref": "startup-devices" } }
+              ] },
+              "Triggers": { "$values": [] },
+              "IsExpanded": true,
+              "Items": { "$values": [
+                {
+                  "$type": "NINA.Sequencer.SequenceItem.Connect.ConnectEquipment, NINA.Sequencer",
+                  "SelectedDevice": "Safety Monitor",
+                  "Parent": { "$ref": "startup-devices" }, "ErrorBehavior": 2, "Attempts": 1
+                },
+                {
+                  "$type": "NINA.Sequencer.SequenceItem.SafetyMonitor.WaitUntilSafe, NINA.Sequencer",
+                  "Parent": { "$ref": "startup-devices" }, "ErrorBehavior": 2, "Attempts": 1
+                }
+              ] },
               "Parent": { "$ref": "2" },
               "ErrorBehavior": 2,
               "Attempts": 1
@@ -43,7 +60,7 @@
             {
               "$id": "3",
               "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
-              "Text": "默认所有目标为模拟：不会连接、曝光或运动。先填写 A/B/C 的真实目标名和 J2000 坐标（当前 0°/0° 仅占位）；每目标默认 3 张 × 300 秒，最多 6 次科学尝试。未使用的目标请删除；要增加目标请复制整个 UVEX4 目标块。",
+              "Text": "默认所有目标为模拟：不会连接、曝光或运动。先填写 A/B/C 的真实目标名和 J2000 坐标（当前 0°/0° 仅占位）；每目标默认 3 张 × AUTO 自动试拍选档，最多 6 次科学尝试。未使用的目标请删除；要增加目标请复制整个 UVEX4 目标块。",
               "Parent": {
                 "$ref": "2"
               },
@@ -53,7 +70,7 @@
             {
               "$id": "4",
               "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
-              "Text": "站点、Night Setup、设备身份、同步测光和翻转时机沿用当前光谱主控 Profile；本文件不携带台站绑定。真实整夜需已验收的完整安全链及结束关盖/关顶，不能用有人弱监督替代。主镜对焦请在整夜运行前完成；不要额外添加普通居中、dither、自动对焦、连接/开关顶指令。",
+              "Text": "真实使用：将安全准备的原生循环次数改为 1，启用真实模式，并逐目标选择 REAL。连接不等于安全；完整安全链仍在开夜复核。等待、连接安全监视器使用原生卡片；目标内部不要另加导星、居中、dither 或曝光，以免与入缝/光谱流程重复。",
               "Parent": {
                 "$ref": "2"
               },
@@ -112,7 +129,7 @@
                     "DurationMinutes": 45,
                     "ScienceFrames": 3,
                     "MaximumScienceAttempts": 6,
-                    "FixedExposureSeconds": 300,
+                    "FixedExposureSeconds": 0,
                     "ForceGuideCalibration": false,
                     "FailurePolicy": 0,
                     "SimulationStageMilliseconds": 250,
@@ -260,7 +277,7 @@
                     "DurationMinutes": 45,
                     "ScienceFrames": 3,
                     "MaximumScienceAttempts": 6,
-                    "FixedExposureSeconds": 300,
+                    "FixedExposureSeconds": 0,
                     "ForceGuideCalibration": false,
                     "FailurePolicy": 0,
                     "SimulationStageMilliseconds": 250,
@@ -408,7 +425,7 @@
                     "DurationMinutes": 45,
                     "ScienceFrames": 3,
                     "MaximumScienceAttempts": 6,
-                    "FixedExposureSeconds": 300,
+                    "FixedExposureSeconds": 0,
                     "ForceGuideCalibration": false,
                     "FailurePolicy": 0,
                     "SimulationStageMilliseconds": 250,
@@ -543,15 +560,6 @@
                     },
                     "ErrorBehavior": 0,
                     "Attempts": 1
-                  },
-                  {
-                    "$id": "46",
-                    "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem, UvexAdv.Nina.Plugin",
-                    "Name": "关顶与整夜收口（可选）",
-                    "CloseAfterTargets": true,
-                    "Parent": { "$ref": "6" },
-                    "ErrorBehavior": 2,
-                    "Attempts": 1
                   }
                 ]
               },
@@ -587,7 +595,7 @@
       {
         "$id": "44",
         "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
-        "Name": "结束 · 核对结果与收口日志",
+        "Name": "结束 · 整夜收口与自定义附加动作",
         "Strategy": {
           "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer"
         },
@@ -600,12 +608,32 @@
             {
               "$id": "45",
               "$type": "NINA.Sequencer.SequenceItem.Utility.Annotation, NINA.Sequencer",
-              "Text": "本行仅为说明，不操作设备、不宣告成功。真实整夜由光谱整夜容器统一停止采集、关盖、停放并关顶，须以回读和整夜日志为准；普通“取消”只停止采集，不执行机械收口。查看各目标结果及 %LOCALAPPDATA%\\UVEX-ADV\\nights\\night-*.json。",
+              "Text": "整夜开始前读取下方收口选择；目标失败未到达结束区域也不丢失安全收口。附加收尾使用原生顺序指令集：可拖入回温、通知等原生卡片；保持开顶、取消或收口未确认时整组跳过。不要删除其关顶确认条件，也不要另加重复开关顶或开始观测。",
               "Parent": {
                 "$ref": "44"
               },
               "ErrorBehavior": 2,
               "Attempts": 1
+            },
+            {
+              "$id": "46",
+              "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexObservatoryCloseoutItem, UvexAdv.Nina.Plugin",
+              "Name": "整夜收口选择（启动时锁定）",
+              "CloseAfterTargets": true,
+              "Parent": { "$ref": "44" }, "ErrorBehavior": 2, "Attempts": 1
+            },
+            {
+              "$id": "native-end-extras",
+              "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+              "Name": "自定义附加收尾 · 正常关顶确认后执行一次",
+              "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+              "Conditions": { "$values": [
+                { "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexNightClosedCondition, UvexAdv.Nina.Plugin", "Parent": { "$ref": "native-end-extras" } }
+              ] },
+              "Triggers": { "$values": [] },
+              "IsExpanded": true,
+              "Items": { "$values": [] },
+              "Parent": { "$ref": "44" }, "ErrorBehavior": 2, "Attempts": 1
             }
           ]
         },

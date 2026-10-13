@@ -85,17 +85,11 @@ internal sealed partial class RealObservationStageRunner
             Phd2LockShiftPendingPath(context.Plan.ObservationRunId), token).ConfigureAwait(false);
         if (loaded.Error is not null)
             return GateResult.Unknown("PHD2_LOCK_LEDGER_RECONCILIATION_REQUIRED", loaded.Error);
-        if (loaded.State is not { Phase: Phd2LockShiftPendingPhase.SettledBudgetLedger } ledger) return null;
-        if (Phd2ScienceContinuationPolicy.HasReplacementBudget(ledger, DateTimeOffset.UtcNow)) return null;
-        return GateResult.Unknown("PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE",
-            $"原始原因 {sourceGate.Code}: {sourceGate.Message} 导星/目标证据需要重建，但原精调账本已不能授权新的入缝运动；未启动回退定位。已保存的光谱保留原质量标记。" +
-            $" 原精调消耗 {ledger.AttemptsUsed}/{ledger.MaximumAttempts} 次、{ledger.CumulativeCommandedPixels:F2}/{ledger.MaximumCumulativePixels:F2} px；" +
-            $"精调计时 {(DateTimeOffset.UtcNow - ledger.MotionClockStartedUtc).TotalSeconds:F1}/{ledger.MaximumElapsedSeconds:F1} s；已排除确认的 ATR 曝光 {ledger.ExcludedAtrExposureSeconds:F1} s，原始起点未改。",
-            new Dictionary<string, double> { ["attemptsUsed"] = ledger.AttemptsUsed,
-                ["cumulativeCommandedPixels"] = ledger.CumulativeCommandedPixels,
-                ["lineageWallSeconds"] = (DateTimeOffset.UtcNow - ledger.StartedUtc).TotalSeconds,
-                ["excludedAtrExposureSeconds"] = ledger.ExcludedAtrExposureSeconds,
-                ["activeMotionElapsedSeconds"] = (DateTimeOffset.UtcNow - ledger.MotionClockStartedUtc).TotalSeconds,
-                ["maximumElapsedSeconds"] = ledger.MaximumElapsedSeconds });
+        if (loaded.State is not { } ledger) return null;
+        var preset = commissioning?.Value.Phd2SlitPlacement;
+        var binding = preset is null
+            ? GateResult.Unknown("COMMISSIONING_PRESET_REQUIRED", "No trusted PHD2 placement preset is loaded.")
+            : ValidateCurrentPhd2LockLedgerBinding(context, preset, ledger);
+        return Phd2ScienceContinuationPolicy.RebuildBudgetGate(ledger, DateTimeOffset.UtcNow, sourceGate, binding);
     }
 }

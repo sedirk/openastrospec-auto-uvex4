@@ -5,6 +5,24 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>Recovery classification only; never grants motion or replenishes a ledger.</summary>
 public static class G3WcsRecoveryPolicy
 {
+    internal static GateResult SearchStopGate(string code, string message, GateResult? original) =>
+        original ?? (code is "G3_SEARCH_ATTEMPTS_EXHAUSTED" or "G3_SEARCH_TIME_EXHAUSTED" or
+            "G3_SEARCH_STABLE_ENDPOINT_RETURN_RESERVE_LIMIT"
+            ? GateResult.TargetQuality(code, message) : GateResult.Unknown(code, message));
+
+    internal static GateResult SearchTerminalGate(GateResult report, GateResult source,
+        bool returned, GateResult? returnFailure)
+    {
+        // Returning does not repair a device/identity failure, and refusing a
+        // budget-limited return does not turn an ordinary miss into a night fault.
+        if (source.FailureScope != GateFailureScope.TargetQuality)
+            return source with { Message = $"{source.Message} {report.Message}" };
+        if (!returned)
+            return returnFailure is { Disposition: not GateDisposition.Passed }
+                ? returnFailure with { Message = $"{report.Message} {returnFailure.Message}" } : report;
+        return report with { FailureScope = GateFailureScope.TargetQuality };
+    }
+
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
     public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
     public const string PierChangedCode = "G3_WCS_CENTERING_PIER_CHANGED";
@@ -14,10 +32,22 @@ public static class G3WcsRecoveryPolicy
     // still requires terminal owner-stop proof and authenticated ledger retirement
     // before the night may skip. Unknown/unsafe/ownership failures remain hard.
     internal static GateResult UnreturnedCenteringGate(GateResult? returnFailure, string message,
-        IReadOnlyDictionary<string, double> metrics) => returnFailure is
-            { Code: "G3_SEARCH_PIER_SIDE_CHANGED", Disposition: GateDisposition.Failed }
-        ? GateResult.TargetQuality(PierChangedCode, message, metrics)
-        : GateResult.Unknown("G3_WCS_CENTERING_RETURN_BLOCKED", message, metrics);
+        IReadOnlyDictionary<string, double> metrics, GateResult? sourceFailure = null) =>
+        sourceFailure is { Disposition: not GateDisposition.Passed, FailureScope: GateFailureScope.Run }
+            ? sourceFailure with { Message = message, Metrics = WithReturnMetrics(sourceFailure, metrics) }
+        : returnFailure is { Code: "G3_SEARCH_PIER_SIDE_CHANGED", Disposition: GateDisposition.Failed }
+            ? GateResult.TargetQuality(PierChangedCode, message, metrics)
+        : returnFailure is { Disposition: not GateDisposition.Passed }
+            ? returnFailure with { Message = message, Metrics = WithReturnMetrics(returnFailure, metrics) }
+            : GateResult.Unknown("G3_WCS_CENTERING_RETURN_BLOCKED", message, metrics);
+
+    private static IReadOnlyDictionary<string, double> WithReturnMetrics(GateResult original, IReadOnlyDictionary<string, double> context)
+    {
+        var merged = new Dictionary<string, double>(context);
+        if (original.Metrics is not null)
+            foreach (var item in original.Metrics) merged[item.Key] = item.Value;
+        return merged;
+    }
 
     // A failed exterior staging field is not proof that the target field is
     // unusable. After returning and obtaining a fresh formal WCS, try the

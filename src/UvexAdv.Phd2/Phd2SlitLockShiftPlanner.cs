@@ -776,10 +776,12 @@ public static class Phd2SlitLockShiftPlanner
         var safetyAge = now - safety.EvaluatedUtc;
         if (safetyAge < TimeSpan.Zero || safetyAge > limits.MaximumSafetySnapshotAge)
             return Denied("SLIT_LOCK_SAFETY_STALE", "The safety/altitude snapshot is stale or from the future.");
-        if (ledger.AttemptsUsed < 0 || ledger.CumulativeCommandedPixels < 0 ||
+        if (ledger.AttemptsUsed < 0 || !double.IsFinite(ledger.CumulativeCommandedPixels) || ledger.CumulativeCommandedPixels < 0 ||
             ledger.AttemptsUsed > limits.MaximumAttempts || ledger.CumulativeCommandedPixels > limits.MaximumCumulativePixels ||
             string.IsNullOrWhiteSpace(ledger.LineageId))
             return Denied("SLIT_LOCK_LEDGER_INVALID", "The staged lock-shift ledger is invalid or already exhausted.");
+        if (ledger.StartedUtc == default || now < ledger.StartedUtc)
+            return Denied("SLIT_LOCK_LEDGER_CLOCK_INVALID", "The staged lock-shift clock is missing or ahead of the current time.");
         if (!InsideCoordinateDomain(ledger.OriginLockPosition, topology) || !InsideCoordinateDomain(ledger.CurrentLockPosition, topology))
             return Denied("SLIT_LOCK_POSITION_OUTSIDE_SENSOR", "Origin/current runtime lock position is outside the current G3 sensor.");
         return null;

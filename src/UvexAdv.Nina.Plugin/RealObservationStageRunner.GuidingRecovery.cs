@@ -33,7 +33,18 @@ internal sealed partial class RealObservationStageRunner
         var plan = G3GuidingRecoveryReturnPolicy.Plan(state, context.Plan.ObservationRunId,
             NormalizeDegrees(reported.RADegrees), reported.Dec, reported.Epoch.ToString(), state.PierSide,
             proof.IsCurrent(phd2.Snapshot), MountMotionFamilyHandoffToleranceArcseconds, nearTolerance, DateTimeOffset.UtcNow);
-        if (plan.Gate.Disposition != GateDisposition.Passed || plan.ChargedLedger is null) return plan.Gate;
+        if (plan.Gate.Disposition != GateDisposition.Passed)
+        {
+            await PublishRunJsonEvidenceAsync("g3-guiding-recovery-return-declined",
+                "Recovery return declined without motion or ledger reset",
+                new { before = state, plan.Gate, plan.ContinuityDeltaArcseconds, plan.ReservedReturnActions,
+                    reportedRaDegrees = NormalizeDegrees(reported.RADegrees), reportedDeclinationDegrees = reported.Dec,
+                    proof.EvidencePath, returnCommandSent = false, durableMotionBudgetsReset = false,
+                    requiresIndependentTerminalBoundary = true },
+                proof.EvidencePath, cancellationToken).ConfigureAwait(false);
+            return plan.Gate;
+        }
+        if (plan.ChargedLedger is null) return plan.Gate;
         await PublishRunJsonEvidenceAsync("g3-guiding-recovery-return-reserved",
             "Owned guide stop requires a charged return before fresh acquisition",
             new { before = state, charged = plan.ChargedLedger, plan.ContinuityDeltaArcseconds,
@@ -55,6 +66,8 @@ internal sealed partial class RealObservationStageRunner
             proof.EvidencePath, cancellationToken).ConfigureAwait(false);
         return returned.ReturnedToOrigin
             ? GateResult.Pass("G3_GUIDING_RECOVERY_ORIGIN_CONFIRMED", "已实测返回原搜索起点；下一步重拍定位，旧目标证据不复用。")
-            : GateResult.Unknown("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", $"导星后回原点未确认；不开始搜索：{returned.Message}");
+            : returned.FailureGate is { Disposition: not GateDisposition.Passed } failure
+                ? failure with { Message = $"导星后回原点未确认；不开始搜索：{returned.Message} {failure.Message}" }
+                : GateResult.Unknown("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", $"导星后回原点未确认；不开始搜索：{returned.Message}");
     }
 }

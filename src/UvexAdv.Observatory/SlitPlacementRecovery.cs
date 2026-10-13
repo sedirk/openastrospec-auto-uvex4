@@ -119,15 +119,40 @@ public sealed record SlitPlacementReturnStep(
 
 public static class SlitPlacementRecoveryPlanner
 {
+    public static GateResult ValidateCorrectionBudget(MotionLimits limits, double cumulativeDegrees,
+        int attempts, double requestedDegrees, DateTimeOffset started, DateTimeOffset now)
+    {
+        if (!ValidLimitsAndCounters(limits, cumulativeDegrees, attempts) || started == default || now < started)
+            return GateResult.Fail("SLIT_SEGMENT_BUDGET_INVALID", "Invalid correction limits, counters or clock; no motion authorized.");
+        if (!double.IsFinite(requestedDegrees) || requestedDegrees <= 0)
+            return GateResult.Fail("CORRECTION_INVALID", "Requested correction magnitude is not positive and finite.");
+        if (requestedDegrees > limits.MaximumSingleCorrectionDegrees)
+            return GateResult.Fail("MOTION_SINGLE_LIMIT", "The requested correction exceeds the commissioned single-motion limit.");
+        if (now - started > limits.EffectiveMaximumAcquisitionTime)
+            return GateResult.TargetQuality("ACQUISITION_TIME_LIMIT", "The original acquisition time budget is exhausted; no new correction authorized.");
+        if (attempts >= limits.MaximumCorrectionAttempts)
+            return GateResult.TargetQuality("CORRECTION_ATTEMPT_LIMIT", "The original correction attempt budget is exhausted; no new correction authorized.");
+        if (cumulativeDegrees + requestedDegrees > limits.MaximumCumulativeCorrectionDegrees)
+            return GateResult.TargetQuality("MOTION_CUMULATIVE_LIMIT", "The correction does not fit the remaining cumulative budget; no new correction authorized.");
+        return GateResult.Pass("MOTION_BUDGET_VALID", "Commissioned single, cumulative, attempt and elapsed-time limits passed.");
+    }
+
+    private static bool ValidLimitsAndCounters(MotionLimits limits, double cumulativeDegrees, int attempts) =>
+        double.IsFinite(limits.MaximumSingleCorrectionDegrees) && limits.MaximumSingleCorrectionDegrees > 0 &&
+        double.IsFinite(limits.MaximumCumulativeCorrectionDegrees) &&
+        limits.MaximumCumulativeCorrectionDegrees >= limits.MaximumSingleCorrectionDegrees &&
+        limits.MaximumCorrectionAttempts > 0 && limits.EffectiveMaximumAcquisitionTime > TimeSpan.Zero &&
+        double.IsFinite(cumulativeDegrees) && cumulativeDegrees >= 0 &&
+        cumulativeDegrees <= limits.MaximumCumulativeCorrectionDegrees + 1e-12 &&
+        attempts >= 0 && attempts <= limits.MaximumCorrectionAttempts;
+
     public static GateResult ValidateOutboundAndReturnReserve(
         MotionLimits limits,
         double cumulativeDegrees,
         int attempts,
         double segmentMagnitudeDegrees)
     {
-        if (!double.IsFinite(cumulativeDegrees) || cumulativeDegrees < 0 ||
-            cumulativeDegrees > limits.MaximumCumulativeCorrectionDegrees + 1e-12 ||
-            attempts < 0 || attempts > limits.MaximumCorrectionAttempts)
+        if (!ValidLimitsAndCounters(limits, cumulativeDegrees, attempts))
         {
             return GateResult.Fail("SLIT_SEGMENT_BUDGET_INVALID", "Current fine-motion budget counters are invalid or outside the commissioned envelope.");
         }
@@ -141,13 +166,13 @@ public static class SlitPlacementRecoveryPlanner
         var requiredCumulative = cumulativeDegrees + 2 * segmentMagnitudeDegrees;
         if (requiredCumulative > limits.MaximumCumulativeCorrectionDegrees + 1e-12)
         {
-            return GateResult.Fail(
+            return GateResult.TargetQuality(
                 "SLIT_SEGMENT_RETURN_CUMULATIVE_RESERVE_LIMIT",
                 $"The segment plus failure return requires {requiredCumulative * 3600:F2} arcsec cumulative, exceeding {limits.MaximumCumulativeCorrectionDegrees * 3600:F2} arcsec.");
         }
         if (attempts > limits.MaximumCorrectionAttempts - 2)
         {
-            return GateResult.Fail(
+            return GateResult.TargetQuality(
                 "SLIT_SEGMENT_RETURN_ATTEMPT_RESERVE_LIMIT",
                 $"The segment plus one failure-return move requires more than the {limits.MaximumCorrectionAttempts - attempts} remaining action(s).");
         }
@@ -205,11 +230,11 @@ public static class SlitPlacementRecoveryPlanner
         var moveDegrees = moveArcseconds / 3600;
         if (state.CumulativeCorrectionDegrees + moveDegrees > state.MaximumCumulativeCorrectionDegrees + 1e-12)
         {
-            return Block("SLIT_RETURN_CUMULATIVE_LIMIT", "The reported-position return no longer fits the durable cumulative-motion envelope.", radius);
+            return Block("SLIT_RETURN_CUMULATIVE_LIMIT", "The reported-position return no longer fits the durable cumulative-motion envelope.", radius, targetBudget: true);
         }
         if (state.CorrectionAttempts >= state.MaximumCorrectionAttempts)
         {
-            return Block("SLIT_RETURN_ATTEMPT_LIMIT", "The reported-position return no longer fits the durable correction-attempt envelope.", radius);
+            return Block("SLIT_RETURN_ATTEMPT_LIMIT", "The reported-position return no longer fits the durable correction-attempt envelope.", radius, targetBudget: true);
         }
 
         var fractionRemaining = Math.Max(0, 1 - moveArcseconds / radius);
@@ -237,8 +262,8 @@ public static class SlitPlacementRecoveryPlanner
             moveDegrees);
     }
 
-    private static SlitPlacementReturnStep Block(string code, string message, double radius = double.NaN) =>
-        new(GateResult.Unknown(code, message), false, radius, double.NaN, double.NaN, double.NaN);
+    private static SlitPlacementReturnStep Block(string code, string message, double radius = double.NaN, bool targetBudget = false) =>
+        new(targetBudget ? GateResult.TargetQuality(code, message) : GateResult.Unknown(code, message), false, radius, double.NaN, double.NaN, double.NaN);
 
     private static (double RaArcseconds, double DecArcseconds) SignedTangentOffsetArcseconds(
         double originRaDegrees,

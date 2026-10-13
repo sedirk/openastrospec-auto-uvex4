@@ -8,6 +8,19 @@ namespace UvexAdv.Nina.Plugin.UiHarness;
 /// <summary>The production target model and XAML, with inert profile/clock dependencies.</summary>
 public static class NativeTargetEditorFixture
 {
+    public static UvexObservatoryCloseoutItem CreateCloseout(bool close)
+    {
+        // Rendering only: no host, runner, physical device or Profile writes.
+        var night = new UvexNightSequenceContainer(Proxy<IProfileService>(), null!, null!, null!)
+        { HomeBeforeParkOnFinalize = false };
+        var root = new NINA.Sequencer.Container.SequenceRootContainer();
+        var targetArea = new NINA.Sequencer.Container.TargetAreaContainer(); root.Add(targetArea);
+        targetArea.Add(night);
+        var end = new NINA.Sequencer.Container.EndAreaContainer(); root.Add(end);
+        var card = new UvexObservatoryCloseoutItem { CloseAfterTargets = close }; end.Add(card);
+        return card;
+    }
+
     public static UvexTargetObservationContainer Create(string name, double ra = 90)
     {
         const string nina = @"C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy";

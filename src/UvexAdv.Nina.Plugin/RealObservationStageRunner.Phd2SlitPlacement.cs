@@ -179,10 +179,7 @@ internal sealed partial class RealObservationStageRunner
                 if (preset.GuideMode != Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget ||
                     choice.Mode != Phd2SlitGuideMode.OffSlitGuideStar)
                 {
-                    return Attention(
-                        ObservationStage.StartGuiding,
-                        "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED",
-                        $"Strict off-slit guiding stopped after bounded PHD2-native selection was exhausted; no coordinator-ranked substitute or guide command was sent. {exhausted.Message}");
+                    return exhausted.AfterCheckedStop();
                 }
                 if (pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger })
                 {
@@ -549,12 +546,8 @@ internal sealed partial class RealObservationStageRunner
             cancellationToken).ConfigureAwait(false);
         if (!reacquired.CanAdvance)
         {
-            return new StageResult(
-                GateResult.Unknown(
-                    "PHD2_LOCK_RETURN_G3_REACQUISITION_BLOCKED",
-                    $"The old PHD2 lock debt was safely returned and settled, but the single bounded fresh G3/PL3/slit rebuild did not pass: {reacquired.Gate.Code}: {reacquired.Gate.Message}"),
-                reacquired.EvidencePath,
-                reacquired.Metadata);
+            return ObservationWorkflowResults.WithFailureContext(reacquired,
+                "The old PHD2 lock debt was safely returned and settled, but the bounded fresh G3/PL3/slit rebuild did not pass.");
         }
 
         return null;
@@ -1501,10 +1494,7 @@ internal sealed partial class RealObservationStageRunner
                 if (preset.GuideMode != Phd2SlitGuideMode.AutoPreferOffSlitThenDirectTarget ||
                     guideChoice.Mode != Phd2SlitGuideMode.OffSlitGuideStar)
                 {
-                    return Attention(
-                        ObservationStage.PlaceTargetOnSlit,
-                        "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED",
-                        $"Strict off-slit guiding stopped after bounded PHD2-native selection was exhausted; no coordinator-ranked substitute, guide, lock or mount command was sent. {exhausted.Message}");
+                    return exhausted.AfterCheckedStop();
                 }
                 if (pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger })
                 {
@@ -1943,12 +1933,8 @@ internal sealed partial class RealObservationStageRunner
                         allowChargedCurrentPositionHandoff: true).ConfigureAwait(false);
                     if (!reacquired.CanAdvance)
                     {
-                        return new StageResult(
-                            GateResult.Unknown(
-                                "PHD2_RELOCK_G3_REACQUISITION_BLOCKED",
-                                $"PHD2 lost lock and the single bounded G3/PL3 reacquisition did not complete: {reacquired.Gate.Code}: {reacquired.Gate.Message}"),
-                            reacquired.EvidencePath,
-                            reacquired.Metadata);
+                        return ObservationWorkflowResults.WithFailureContext(reacquired,
+                            "PHD2 lost lock and the single bounded G3/PL3 reacquisition did not complete.");
                     }
 
                     return await PlaceTargetOnSlitWithPhd2Async(
@@ -2209,7 +2195,7 @@ internal sealed partial class RealObservationStageRunner
             if (!plan.IsAllowed)
             {
                 await Phd2LockShiftPendingStore.WriteAtomicAsync(path, state with { LastReason = $"{reason} {plan.Code}: {plan.Message}" }, CancellationToken.None).ConfigureAwait(false);
-                return Attention(ObservationStage.PlaceTargetOnSlit, plan.Code, plan.Message);
+                return new StageResult(Phd2HandoffRecoveryPolicy.FailureGate(plan.Code, plan.Message), path);
             }
             if (plan.IsComplete)
             {
@@ -2233,9 +2219,10 @@ internal sealed partial class RealObservationStageRunner
                         state = state with { LastFramePath = frames[^1].Path, LastAcceptedFrameSha256 = frames[^1].Sha256 };
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                    catch (PhysicalActionGateException ex) { return new StageResult(ex.Gate, path); }
                     catch (Exception ex)
                     {
-                        return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED",
+                        return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_MEASUREMENT_FAILED",
                             "锁点在原位，但新帧尚未证明星点回位；原回程记录保留。" + ex.Message);
                     }
                 }
@@ -2559,13 +2546,14 @@ internal sealed partial class RealObservationStageRunner
                     TimeSpan.FromSeconds(preset.FreshGuidingFrameTimeoutSeconds), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (PhysicalActionGateException ex) { return new StageResult(ex.Gate, path); }
             catch (Exception ex)
             {
                 state = state with { CurrentLockX = verified.X, CurrentLockY = verified.Y,
                     LastReason = $"Original failure: {reason} Fresh measured physical return not confirmed: {ex.Message}" };
                 await Phd2LockShiftPendingStore.WriteAtomicAsync(path, state, CancellationToken.None).ConfigureAwait(false);
                 pendingPhd2LockShift = state;
-                return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED",
+                return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_MEASUREMENT_FAILED",
                     $"回程锁点已读回，但同一导星会话的新帧尚未证明星点回位；保留停止后归档处理。原始原因：{reason} 回程核验：{ex.Message}");
             }
             await PublishRunJsonEvidenceAsync("phd2-lock-return-measured-window",
@@ -2584,7 +2572,7 @@ internal sealed partial class RealObservationStageRunner
             };
             await Phd2LockShiftPendingStore.WriteAtomicAsync(path, state, CancellationToken.None).ConfigureAwait(false);
         }
-        return Attention(ObservationStage.PlaceTargetOnSlit, "PHD2_LOCK_RETURN_ATTEMPT_LIMIT", "The durable runtime-lock recovery exhausted its bounded attempts; the ledger remains pending.");
+        return new StageResult(GateResult.TargetQuality("PHD2_LOCK_RETURN_ATTEMPT_LIMIT", "The durable runtime-lock recovery exhausted its bounded attempts; the ledger remains pending."), path);
     }
 
     private async Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2GuidingMeasurementsAsync(
@@ -4529,6 +4517,12 @@ internal sealed record Phd2PlacementGuideChoice(
 
 internal sealed class Phd2NativeGuideSelectionExhaustedException : Exception
 {
+    // Only called after the owned preview/guide operation has checked-stopped.
+    // Native target termination still independently verifies all owners/ledgers.
+    internal StageResult AfterCheckedStop() => new(GateResult.TargetQuality(
+        "PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED",
+        $"Bounded PHD2-native off-slit selection exhausted and checked-stopped; no substitute guide/lock/mount command is authorized. {Message}"));
+
     public const string FailureCode = "PHD2_NATIVE_GUIDE_RESELECTION_EXHAUSTED";
 
     public Phd2NativeGuideSelectionExhaustedException(

@@ -76,12 +76,14 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     [JsonIgnore] public string NightState { get => state; private set { state = value; RaisePropertyChanged(); } }
     [JsonIgnore] public ICommand EndNightCommand { get; }
     [JsonIgnore] public string JournalPath { get; private set; } = string.Empty;
-    [JsonIgnore] internal bool StopFollowingTargets => blocked || endRequested || unsafeTripped;
+    [JsonIgnore] internal bool StopFollowingTargets => blocked || endRequested || unsafeTripped || operatorCancelled || lifetime?.IsCancellationRequested == true;
     [JsonIgnore] internal bool IsActive => lifetime is not null;
     [JsonIgnore] public bool CanEditPlan => !IsActive;
+    // Transient proof for optional native end instructions, never serialized or cloned.
+    [JsonIgnore] internal bool NativeEndInstructionsReady { get; private set; }
     [JsonIgnore] internal bool HasRecordedCurrentTarget => outcomes.Count == attemptedTargets;
     [JsonIgnore] internal bool EffectiveHoldOpenAfterTargets =>
-        Items.OfType<UvexObservatoryCloseoutItem>().SingleOrDefault() is { } closeout
+        NativeNightEndArea.Choices(this).FirstOrDefault() is { } closeout
             ? !closeout.CloseAfterTargets : HoldOpenAfterTargets;
 
     internal void StopAtNativeConditionBoundary() { endRequested = true; blocked = true; }
@@ -103,11 +105,12 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     {
         factory?.ObserveNativeSequenceLifetime();
         var valid = base.Validate(); Issues.Clear();
-        var closeouts = Items.OfType<UvexObservatoryCloseoutItem>().ToArray();
+        var closeouts = NativeNightEndArea.Choices(this).ToArray();
         if (!Items.OfType<UvexTargetObservationContainer>().Any() ||
             Items.Any(x => x is not (UvexTargetObservationContainer or UvexObservatoryCloseoutItem)) ||
-            closeouts.Length > 1 || (closeouts.Length == 1 && !ReferenceEquals(Items.Last(), closeouts[0])))
-            Issues.Add("整夜容器接受顺序 UVEX4 目标和最多一个末尾关顶收口指令；准备动作放在容器前，禁止并行目标。");
+            closeouts.Length > 1 || Items.OfType<UvexObservatoryCloseoutItem>().Any(x => !ReferenceEquals(Items.Last(), x)))
+            Issues.Add("整夜容器接受顺序 UVEX4 目标；收口选择放原生结束区域或兼容旧版末尾，不能重复。禁止并行目标。");
+        foreach (var issue in NativeNightEndArea.Issues(this)) Issues.Add(issue);
         foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(this)) Issues.Add(issue);
         foreach (var child in Items.OfType<UvexTargetObservationContainer>())
             foreach (var issue in SpectroscopyMeridianFlipTrigger.ScopeIssues(child)) Issues.Add(issue);
@@ -175,19 +178,20 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         ObservationPlan? failedPlan = null, NativeTargetSession? session = null)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
-        var idleErrors = runner is null ? Array.Empty<string>() :
+        var idleErrors = runner is null ? (result.LockedRunAdapter == "real"
+            ? new[] { "NATIVE_TARGET_STOP_PROOF_MISSING: real target has no owner boundary verifier." } : Array.Empty<string>()) :
             (await runner.ConfirmSequenceIdleAsync(timeout.Token, requireSettledMotion: false).ConfigureAwait(false)).ToArray();
         targetsIdle = idleErrors.Length == 0;
         var settledErrors = !targetsIdle || runner is null ? idleErrors :
             (await runner.ConfirmSequenceIdleAsync(timeout.Token).ConfigureAwait(false)).ToArray();
         RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors);
-        var failedGate = result.Gates.Values.LastOrDefault(x => x.Disposition != GateDisposition.Passed);
+        var failedGate = NativeSequencePlan.TerminalFailure(result);
         var completed = result.Run.State == ObservationRunState.Completed && boundaryFailure is null;
         if (result.Run.State == ObservationRunState.Cancelled && !endRequested && !unsafeTripped) operatorCancelled = true;
         GateResult? clockRepair = null;
         var clockBoundaryEligible = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
             qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
-            !unsafeTripped && !endRequested && runner is not null && failedPlan is not null && lifetime is not null &&
+            !unsafeTripped && !endRequested && runner is not null && failedPlan is not null && lifetime is { IsCancellationRequested: false } &&
             result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && standbyPlan is not null && standbyPlan.StopGateNow() is null;
         if (clockBoundaryEligible && NightMountClockRecovery.IsClockFailure(failedGate))
         {
@@ -222,7 +226,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         var skip = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
             qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
             (NativeSequencePlan.IsSkippableQualityFailure(failedGate) || clockRecovered) &&
-            result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && !unsafeTripped && !endRequested;
+            result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && !unsafeTripped && !endRequested &&
+            lifetime is { IsCancellationRequested: false } && standbyPlan?.StopGateNow() is null;
         if (!completed && !skip) blocked = true;
         if (!targetsIdle || settledErrors.Length != 0) blocked = true;
         outcomes.Add(new { target, runId = result.Run.ObservationRunId, result.ManifestPath,
@@ -254,6 +259,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        NativeEndInstructionsReady = false;
         progress = ObservationStatusProgress.Wrap(progress);
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
         LockDeadline(DateTimeOffset.UtcNow, TimeZoneInfo.Local);
@@ -376,6 +382,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             if (closeErrors.Count > 0) throw new InvalidOperationException(NightState, failure);
             if (!ordinaryCancel && targetBoundaryFailures.Count > 0)
                 reconciliationFailure = new InvalidOperationException(NightState);
+            NativeEndInstructionsReady = !blocked && !endRequested && !unsafeTripped && !ordinaryCancel &&
+                !token.IsCancellationRequested && !handedToStandby && targetsIdle &&
+                closeErrors.Count == 0 && targetBoundaryFailures.Count == 0 &&
+                (physicalCloseoutConfirmed || !real);
         }
         if (failure is not null && !endRequested) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         // Preserve the original cancellation/failure when present. This reports
@@ -387,7 +397,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     {
         RaisePropertyChanged(nameof(CanEditPlan));
         foreach (var target in Items.OfType<UvexTargetObservationContainer>()) target.RefreshPlanEditability();
-        foreach (var closeout in Items.OfType<UvexObservatoryCloseoutItem>()) closeout.RefreshPlanEditability();
+        foreach (var closeout in NativeNightEndArea.Choices(this)) closeout.RefreshPlanEditability();
     }
 
     internal static string DescribeTerminalState(bool physicalHardware, bool ordinaryCancel,
@@ -458,15 +468,23 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         operatorCancelled = true; lifetime?.Cancel(); closeoutLifetime?.Cancel(); host.Cancel();
         return Task.CompletedTask;
     }
+    public override void ResetProgress()
+    {
+        NativeEndInstructionsReady = false;
+        base.ResetProgress();
+    }
     public override object Clone()
     {
         var clone = new UvexNightSequenceContainer(profiles, host, factory, settings)
         { StopAtDawn = StopAtDawn, DawnSunAltitudeDegrees = DawnSunAltitudeDegrees, EndAtIso8601 = EndAtIso8601,
             HomeBeforeParkOnFinalize = HomeBeforeParkOnFinalize, MountHomeTimeoutSeconds = MountHomeTimeoutSeconds,
-            HoldOpenAfterTargets = HoldOpenAfterTargets, InitialGuideSettlePixels = InitialGuideSettlePixels,
+            HoldOpenAfterTargets = EffectiveHoldOpenAfterTargets, InitialGuideSettlePixels = InitialGuideSettlePixels,
             InitialGuideStableSeconds = InitialGuideStableSeconds, InitialGuideTimeoutSeconds = InitialGuideTimeoutSeconds };
         clone.CopyMetaData(this);
         foreach (var item in Items) clone.Add((ISequenceItem)item.Clone());
+        // Retain an external choice in the legacy fallback when copying only
+        // this night. Do not synthesize another card that could compete with
+        // the End area when this copy is placed into another complete sequence.
         foreach (var condition in Conditions)
         {
             var child = (NINA.Sequencer.Conditions.ISequenceCondition)condition.Clone();

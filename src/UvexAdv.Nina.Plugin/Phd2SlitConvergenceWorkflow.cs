@@ -211,7 +211,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             if (!plan.IsAllowed && !supervisedSlitPrecisionWarning)
             {
                 if (!request.AllowCoarseReacquisition && port.PendingMotion is null)
-                    return new StageResult(GateResult.TargetQuality("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED",
+                    return new StageResult(Phd2HandoffRecoveryPolicy.FailureGate(plan.Code,
                         $"Same-lineage pre-exposure placement cannot continue: {plan.Code}: {plan.Message}"));
                 return await port.HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
                     new Phd2LockShiftAcquisitionBudget(false, plan.Code, plan.Message, 0, 0, 0, 0,
@@ -309,7 +309,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     ("SLIT_LOCK_RETURN_CUMULATIVE_RESERVE" or "SLIT_LOCK_ACQUISITION_CUMULATIVE_RESERVE"))
                 {
                     if (!request.AllowCoarseReacquisition && port.PendingMotion is null)
-                        return new StageResult(GateResult.TargetQuality("PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED",
+                        return new StageResult(Phd2HandoffRecoveryPolicy.FailureGate(nextAcquisitionBudget.Code,
                             $"Same-lineage pre-exposure placement cannot continue: {nextAcquisitionBudget.Code}: {nextAcquisitionBudget.Message}"));
                     return await port.HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,
                         nextAcquisitionBudget, request.PostCalibrationReacquisitionDepth, request.LostLockReacquisitionDepth,

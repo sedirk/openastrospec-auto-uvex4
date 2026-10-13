@@ -833,6 +833,17 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Fact]
+    public void WorkTimeFenceDoesNotClassifyReversedLedgerClockAsSpentBudget()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = State(now.AddMinutes(-10)) with { Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve, UpdatedUtc = now.AddSeconds(10) };
+        var result = G3AcquisitionReturnTimePolicy.Plan(state, now);
+        Assert.Equal("G3_WORK_RETURN_STATE_INVALID", result.Gate.Code);
+        Assert.Equal(GateFailureScope.Run, result.Gate.FailureScope);
+        Assert.Null(result.OperationTimeout);
+    }
+
+    [Fact]
     public void EachCaptureAndSolveReservesSegmentedReturnBeforeStarting()
     {
         var now = DateTimeOffset.UtcNow;

@@ -584,9 +584,11 @@ public static class G3AcquisitionMotionPlanner
         {
             return BlockReserve("G3_MOTION_NEXT_OFFSET_INVALID", "The next tangent-plane offset is not finite.");
         }
+        if (nowUtc < state.UpdatedUtc)
+            return BlockReserve("G3_MOTION_CLOCK_INVALID", "The durable motion ledger is ahead of the current clock.");
         if (nowUtc - state.StartedUtc > TimeSpan.FromSeconds(state.MaximumElapsedSeconds))
         {
-            return BlockReserve("G3_MOTION_TIME_LIMIT", "The G3 acquisition-motion elapsed-time limit has been reached.");
+            return BlockReserve("G3_MOTION_TIME_LIMIT", "The G3 acquisition-motion elapsed-time limit has been reached.", targetBudget: true);
         }
         var current = ApplyTangentOffsetArcseconds(
             state.OriginRaDegrees,
@@ -629,11 +631,11 @@ public static class G3AcquisitionMotionPlanner
             returnMoves * (maximumCommandArcseconds + state.ArrivalToleranceArcseconds);
         if (requiredCumulative > state.MaximumCumulativeMotionArcseconds + 1e-9)
         {
-            return BlockReserve("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT", "The outbound move plus a return to the reported origin exceeds the cumulative-motion envelope.", move, radius);
+            return BlockReserve("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT", "The outbound move plus a return to the reported origin exceeds the cumulative-motion envelope.", move, radius, targetBudget: true);
         }
         if (state.CorrectionAttempts + 1 + returnMoves > state.MaximumCorrectionAttempts)
         {
-            return BlockReserve("G3_MOTION_RETURN_ATTEMPT_RESERVE_LIMIT", "The outbound move plus its segmented return exceeds the action-count envelope.", move, radius, returnMoves);
+            return BlockReserve("G3_MOTION_RETURN_ATTEMPT_RESERVE_LIMIT", "The outbound move plus its segmented return exceeds the action-count envelope.", move, radius, returnMoves, targetBudget: true);
         }
         var requiredSeconds = (1 + returnMoves) * state.WorstCaseActionSeconds;
         if ((nowUtc - state.StartedUtc).TotalSeconds + requiredSeconds > state.MaximumElapsedSeconds + 1e-9)
@@ -643,7 +645,7 @@ public static class G3AcquisitionMotionPlanner
                 "The outbound action plus every worst-case return action does not fit the durable elapsed-time envelope.",
                 move,
                 radius,
-                returnMoves);
+                returnMoves, targetBudget: true);
         }
         return new G3AcquisitionMotionReserve(
             GateResult.Pass("G3_MOTION_OUTBOUND_AND_RETURN_RESERVED", "The outbound move and a segmented return to the reported origin are reserved."),
@@ -662,6 +664,8 @@ public static class G3AcquisitionMotionPlanner
         ArgumentNullException.ThrowIfNull(state);
         var issues = state.Validate();
         if (issues.Count > 0) return BlockReturn("G3_MOTION_LEDGER_INVALID", string.Join(" ", issues));
+        if (nowUtc < state.UpdatedUtc)
+            return BlockReturn("G3_MOTION_CLOCK_INVALID", "The durable motion ledger is ahead of the current clock.");
         if (!double.IsFinite(arrivalToleranceArcseconds) ||
             arrivalToleranceArcseconds <= 0 ||
             arrivalToleranceArcseconds >= state.MaximumSingleCorrectionArcseconds)
@@ -718,15 +722,15 @@ public static class G3AcquisitionMotionPlanner
         }
         if (state.CumulativeMotionArcseconds + move + commandResidualAllowanceArcseconds > state.MaximumCumulativeMotionArcseconds + 1e-9)
         {
-            return BlockReturn("G3_MOTION_RETURN_CUMULATIVE_LIMIT", "The next return step no longer fits the durable cumulative-motion budget.", radius);
+            return BlockReturn("G3_MOTION_RETURN_CUMULATIVE_LIMIT", "The next return step no longer fits the durable cumulative-motion budget.", radius, targetBudget: true);
         }
         if (state.CorrectionAttempts >= state.MaximumCorrectionAttempts)
         {
-            return BlockReturn("G3_MOTION_RETURN_ATTEMPT_LIMIT", "The next return step no longer fits the durable action-count budget.", radius);
+            return BlockReturn("G3_MOTION_RETURN_ATTEMPT_LIMIT", "The next return step no longer fits the durable action-count budget.", radius, targetBudget: true);
         }
         if ((nowUtc - state.StartedUtc).TotalSeconds + state.WorstCaseActionSeconds > state.MaximumElapsedSeconds + 1e-9)
         {
-            return BlockReturn("G3_MOTION_RETURN_TIME_LIMIT", "The next worst-case return action no longer fits the durable elapsed-time envelope.", radius);
+            return BlockReturn("G3_MOTION_RETURN_TIME_LIMIT", "The next worst-case return action no longer fits the durable elapsed-time envelope.", radius, targetBudget: true);
         }
         var fractionRemaining = Math.Max(0, 1 - move / radius);
         var (ra, dec) = InterpolateGreatCircle(
@@ -976,14 +980,14 @@ public static class G3AcquisitionMotionPlanner
         string message,
         double move = double.NaN,
         double radius = double.NaN,
-        int returnMoves = 0) =>
-        new(GateResult.Unknown(code, message), move, radius, returnMoves);
+        int returnMoves = 0, bool targetBudget = false) =>
+        new(targetBudget ? GateResult.TargetQuality(code, message) : GateResult.Unknown(code, message), move, radius, returnMoves);
 
     private static G3AcquisitionReturnStep BlockReturn(
         string code,
         string message,
-        double radius = double.NaN) =>
-        new(GateResult.Unknown(code, message), false, radius, double.NaN, double.NaN, double.NaN);
+        double radius = double.NaN, bool targetBudget = false) =>
+        new(targetBudget ? GateResult.TargetQuality(code, message) : GateResult.Unknown(code, message), false, radius, double.NaN, double.NaN, double.NaN);
 
     private static G3SphericalCommandValidation BlockSphericalCommand(
         string code,

@@ -2256,9 +2256,9 @@
     <StackPanel Margin="6" local:ObservationStaticTextLocalization.IsEnabled="True">
       <WrapPanel>
         <CheckBox IsChecked="{Binding StartMonitoring, Mode=TwoWay}" AutomationProperties.LabeledBy="{Binding ElementName=StartupSafetyLabel}" Margin="0,0,7,0"/>
-        <TextBlock x:Name="StartupSafetyLabel" Text="序列开始时启动 AIWeather 安全检测" FontWeight="Bold"/>
+        <TextBlock x:Name="StartupSafetyLabel" Text="序列开始时自动启动安全监视器" FontWeight="Bold"/>
       </WrapPanel>
-      <TextBlock Margin="0,5" TextWrapping="Wrap" Text="通过 N.I.N.A. 连接已选中的 AIWeather，已连接不重复启动。连接不代表安全：后面仍须保留等待安全，不操作屋顶。放在开始区域，默认关闭。"/>
+      <TextBlock Margin="0,5" TextWrapping="Wrap" Text="旧序列兼容卡。新序列请用原生“连接设备 → Safety Monitor”，并保留“等待安全”。连接不等于安全；不操作屋顶。"/>
     </StackPanel>
   </DataTemplate>
   <DataTemplate DataType="{x:Type seq:UvexStartSafetyMonitorItem}">
@@ -2271,12 +2271,23 @@
         <TextBlock x:Name="OptionalNightCloseoutLabel" Text="普通结束或失败后关顶收口" FontWeight="Bold"/>
       </WrapPanel>
       <TextBlock Text="开启：所有目标结束或阻断后统一关盖、停放、关顶。关闭：确认停止后保持开顶待处理，不启动后续目标、不清除未结账本。" TextWrapping="Wrap" Margin="0,4"/>
-      <TextBlock Text="放在光谱整夜容器最后，仅允许一个。截止、晨光、AIWeather 不安全或安全监视失联仍强制安全收口；普通取消不发机械命令。" TextWrapping="Wrap"/>
+      <TextBlock Text="放在原生“结束”区域，兼容旧版整夜末尾；全序列只选一处。选择在整夜开始时锁定，失败未到达此卡也会处理。截止、晨光、不安全或监视失联仍安全收口。" TextWrapping="Wrap"/>
+      <WrapPanel Margin="0,6">
+        <CheckBox IsChecked="{Binding Night.HomeBeforeParkOnFinalize}" AutomationProperties.LabeledBy="{Binding ElementName=EndAreaHomeLabel}" ToolTip="关顶后 Home → Park（仅无干涉台站）" Margin="0,0,6,0"/>
+        <TextBlock x:Name="EndAreaHomeLabel" Text="关顶后 Home → Park（仅无干涉台站）" VerticalAlignment="Center"/>
+        <TextBlock Text="Home 超时(s)" VerticalAlignment="Center" Margin="12,0,4,0"/>
+        <TextBox Text="{Binding Night.MountHomeTimeoutSeconds}" Width="60"/>
+      </WrapPanel>
+      <TextBlock Text="附加动作放到下方原生顺序指令集，可拖入原生卡片；仅本轮正常关顶确认后执行。保持开顶、取消或收口失败时跳过，不撤销独立安全待机。" TextWrapping="Wrap"/>
     </StackPanel>
   </DataTemplate>
 
   <DataTemplate DataType="{x:Type seq:UvexObservatoryCloseoutItem}">
     <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NativeObservatoryCloseoutPanel}"/>
+  </DataTemplate>
+  <DataTemplate DataType="{x:Type seq:UvexNightClosedCondition}">
+    <TextBlock Margin="6" TextWrapping="Wrap" local:ObservationStaticTextLocalization.IsEnabled="True"
+               Text="正常关顶确认后执行一次；开顶待机、取消或失败时跳过附加收尾。不是关顶命令。"/>
   </DataTemplate>
 
   <DataTemplate x:Key="NativeSpectroscopyNightSettingsPanel">
@@ -2286,13 +2297,6 @@
           <TextBlock Text="默认开夜：AIWeather / 天气安全 → 确认 Park → 开顶并回读 → 开镜盖。" TextWrapping="Wrap" Margin="0,2"/>
           <TextBlock Text="默认收夜：停止采集/导星 → 关镜盖 → Park 并回读 → 关顶并回读；目标之间不重复开关顶。" TextWrapping="Wrap" Margin="0,2"/>
           <TextBlock Text="本台站若已导入全姿态无干涉确认：开顶不要求 Park；收尾先停止运动、关顶，再独立停放。当前模式见高级设置 → 站点与模拟。" TextWrapping="Wrap" Margin="0,2"/>
-          <WrapPanel Margin="0,4">
-            <CheckBox ToolTip="收口先 Home 再 Park（仅无干涉台站）" AutomationProperties.LabeledBy="{Binding ElementName=NativeHomeBeforeParkLabel}" IsChecked="{Binding HomeBeforeParkOnFinalize}" Margin="0,0,6,0"/>
-            <TextBlock x:Name="NativeHomeBeforeParkLabel" Text="收口先 Home 再 Park（仅无干涉台站）" VerticalAlignment="Center" Margin="0,0,12,0"/>
-            <TextBlock Text="Home 超时(s)" VerticalAlignment="Center"/>
-            <TextBox Text="{Binding MountHomeTimeoutSeconds}" Width="60" Margin="4,0"/>
-          </WrapPanel>
-          <TextBlock Text="先确认关顶，再执行一次 Home 和一次 Park；已 Park 不再回零，失败保留原因，不循环重试。普通取消仍不执行机械收口。" TextWrapping="Wrap" Margin="0,2"/>
           <WrapPanel Margin="0,4">
             <CheckBox ToolTip="晨光结束" AutomationProperties.LabeledBy="{Binding ElementName=NativeStopAtDawnLabel}" IsChecked="{Binding StopAtDawn}" Margin="0,0,6,0"/>
             <TextBlock x:Name="NativeStopAtDawnLabel" Text="晨光结束" VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -2313,12 +2317,23 @@
           </WrapPanel>
           <TextBlock Text="仅影响开始导星的稳定等待，不改变实际入缝、丢星或设备输出检查。未稳定且停止确认后，按目标策略跳过。" TextWrapping="Wrap" Margin="0,2"/>
           <Separator Margin="0,6"/>
+          <Expander Header="旧序列收口字段（优先使用收口卡）" Foreground="{DynamicResource PrimaryBrush}" IsExpanded="False" Margin="0,4">
+          <StackPanel>
           <WrapPanel Margin="0,4">
             <CheckBox ToolTip="测试结束保持开顶，关顶收口单独操作" AutomationProperties.LabeledBy="{Binding ElementName=NativeHoldOpenLabel}" IsChecked="{Binding HoldOpenAfterTargets}" Margin="0,0,6,0"/>
             <TextBlock x:Name="NativeHoldOpenLabel" Text="测试结束保持开顶，关顶收口单独操作" VerticalAlignment="Center"/>
           </WrapPanel>
+          <WrapPanel Margin="0,4">
+            <CheckBox ToolTip="收口先 Home 再 Park（仅无干涉台站）" AutomationProperties.LabeledBy="{Binding ElementName=NativeHomeBeforeParkLabel}" IsChecked="{Binding HomeBeforeParkOnFinalize}" Margin="0,0,6,0"/>
+            <TextBlock x:Name="NativeHomeBeforeParkLabel" Text="收口先 Home 再 Park（仅无干涉台站）" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <TextBlock Text="Home 超时(s)" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding MountHomeTimeoutSeconds}" Width="60" Margin="4,0"/>
+          </WrapPanel>
+          <TextBlock Text="先确认关顶，再执行一次 Home 和一次 Park；已 Park 不再回零，失败保留原因，不循环重试。普通取消仍不执行机械收口。" TextWrapping="Wrap" Margin="0,2"/>
+          </StackPanel>
+          </Expander>
           <TextBlock Text="目标结束或取消后序列退出；开顶保护转为独立安全待机，仍监视 AIWeather、原截止和晨光。失败及未结账本保留。更改仅对下一次启动生效；退出 N.I.N.A. 会停止软件保护。" TextWrapping="Wrap" Margin="0,2,0,6"/>
-          <TextBlock Text="可把“关顶与整夜收口（可选）”拖入本容器最后；有该指令时以指令开关为准，上方保持开顶仅兼容旧序列。单次运行的关顶设置不影响本序列。" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <TextBlock Text="收尾在原生“结束”区域设置；有收口卡时以其开关为准，上方保持开顶仅兼容旧序列。单次运行的关顶设置不影响本序列。" TextWrapping="Wrap" Margin="0,2,0,6"/>
           <Button Content="关顶与整夜收口" Command="{Binding EndNightCommand}" HorizontalAlignment="Left" Padding="12,5"/>
           <TextBlock Text="{Binding NightState}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,6"/>
           <TextBlock Text="{Binding JournalPath}" TextWrapping="Wrap" Opacity="0.7"/>
@@ -2390,7 +2405,7 @@
             <CheckBox x:Name="NativeForceCalibration" IsChecked="{Binding ForceGuideCalibration, Mode=TwoWay}" ToolTip="本目标开始时强制 PHD2 校准一次" AutomationProperties.LabeledBy="{Binding ElementName=NativeForceCalibrationLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
             <TextBlock x:Name="NativeForceCalibrationLabel" Text="本目标开始时强制 PHD2 校准一次" VerticalAlignment="Center" TextWrapping="Wrap"/>
           </WrapPanel>
-          <TextBlock Text="默认沿用 PHD2 校准；勾选后本目标仅强制一次，校准后重新取场。" TextWrapping="Wrap" Opacity="0.85"/>
+          <TextBlock Text="默认沿用 PHD2 校准；勾选后本目标仅强制一次，校准后重新取场。不要另加原生“开始导星”，以免与入缝流程重复。" TextWrapping="Wrap" Opacity="0.85"/>
           <WrapPanel Margin="0,5">
             <CheckBox x:Name="NativeAutomaticGuideRecovery" IsChecked="{Binding AutomaticGuideRecovery, Mode=TwoWay}" AutomationProperties.LabeledBy="{Binding ElementName=NativeAutomaticGuideRecoveryLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
             <TextBlock x:Name="NativeAutomaticGuideRecoveryLabel" Text="本目标导星自动恢复" VerticalAlignment="Center"/>

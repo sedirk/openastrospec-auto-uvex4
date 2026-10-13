@@ -128,7 +128,7 @@ internal sealed partial class RealObservationStageRunner
                 {
                     var budget = await CheckScienceRebuildBudgetAsync(context, original.Gate, token).ConfigureAwait(false);
                     if (budget is not null)
-                        return (false, AdaptiveRecoveryExhausted(AdaptiveGuidingRecovery.ExhaustedCode, evidence));
+                        return (false, new StageResult(budget, evidence));
                 }
                 adaptiveCalibrationPending = action == GuideRecoveryAction.ForceCalibration;
                 Report(adaptiveCalibrationPending
@@ -149,7 +149,7 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private StageResult AdaptiveRecoveryExhausted(string code, string? evidence) =>
-        new(GateResult.Unknown(code,
+        new(GateResult.TargetQuality(code,
             "本目标有界导星恢复或星点等待已用尽，已停止；整夜序列独立复核空闲与原运动账本后，按本目标失败策略跳过。未降低入缝门限，未单独关顶。",
             new Dictionary<string, double> { ["stopConfirmed"] = 1,
                 ["reselectionAttempts"] = GuideRecovery.Reselections,

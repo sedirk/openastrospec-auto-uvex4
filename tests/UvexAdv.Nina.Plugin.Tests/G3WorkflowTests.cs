@@ -110,6 +110,36 @@ public sealed class G3WorkflowTests
         Assert.Equal(old.CorrectionAttempts, result.State.CorrectionAttempts);
     }
 
+    [Theory]
+    [InlineData("attempt", "skip")] [InlineData("attempt", "cleanup-failure")] [InlineData("attempt", "end-policy")]
+    [InlineData("time", "skip")] [InlineData("time", "cleanup-failure")] [InlineData("time", "end-policy")]
+    [InlineData("cumulative", "skip")] [InlineData("cumulative", "cleanup-failure")] [InlineData("cumulative", "end-policy")]
+    [InlineData("precharge", "skip")] [InlineData("precharge", "cleanup-failure")] [InlineData("precharge", "end-policy")]
+    [InlineData("clock", "unknown-gate")] [InlineData("invalid", "unknown-gate")]
+    public async Task ReturnWorkflowPreservesBudgetFailureToTheActualNextNativeTarget(string cause, string boundary)
+    {
+        var f = new ReturnFixture();
+        var state = cause switch
+        {
+            "attempt" => f.State with { CorrectionAttempts = f.State.MaximumCorrectionAttempts },
+            "time" => f.State with { StartedUtc = f.State.StartedUtc.AddHours(-1) },
+            "cumulative" => f.State with { CumulativeMotionArcseconds = 499 },
+            "precharge" => f.State with { CumulativeMotionArcseconds = 475 },
+            "clock" => f.State with { UpdatedUtc = DateTimeOffset.UtcNow.AddHours(1) },
+            _ => f.State with { CumulativeMotionArcseconds = double.NaN },
+        };
+        var returned = await f.Workflow.ReturnAsync(f.Context, state, "original.json", default);
+        Assert.False(returned.ReturnedToOrigin);
+        Assert.NotNull(returned.FailureGate);
+        Assert.Empty(f.Persisted);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", f.Trace.Calls);
+        Assert.Equal(state.StartedUtc, returned.State.StartedUtc);
+        Assert.Equal(state.CorrectionAttempts, returned.State.CorrectionAttempts);
+        var gate = G3WcsRecoveryPolicy.UnreturnedCenteringGate(returned.FailureGate, returned.Message,
+            new Dictionary<string, double> { ["returnedToOrigin"] = 0 });
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate);
+    }
+
     private static GateResult Pass => GateResult.Pass("pass", "fixture");
     [Theory]
     [InlineData("G3_SEARCH_PIER_SIDE_CHANGED", true)]

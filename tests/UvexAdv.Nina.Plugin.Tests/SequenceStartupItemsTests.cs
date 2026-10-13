@@ -4,6 +4,8 @@ using NINA.Core.Model;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Profile.Interfaces;
 using NINA.Sequencer.Container;
+using NINA.Sequencer.SequenceItem.Connect;
+using NINA.Sequencer.SequenceItem.SafetyMonitor;
 using UvexAdv.Nina.Plugin.SequenceItems;
 using Xunit;
 
@@ -11,6 +13,33 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class SequenceStartupItemsTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActualNativeSafetyConnectIsReusableAndIdempotent(bool connected)
+    {
+        using var f = new Fixture();
+        f.Connected = connected;
+        var native = f.NativeConnect();
+        Assert.Equal("Safety Monitor", ((ConnectEquipment)native.Clone()).SelectedDevice);
+        await native.Execute(f.Progress, default);
+        await native.Execute(f.Progress, default);
+        Assert.Equal(connected ? 0 : 1, f.ConnectCalls);
+        Assert.False(f.Settings.ObservationUseRealMode);
+        var wait = new WaitUntilSafe(f.Monitor) { WaitInterval = TimeSpan.FromMilliseconds(5) };
+        using var cancel = new CancellationTokenSource(40);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait.Execute(f.Progress, cancel.Token));
+        Assert.False(wait.IsSafe); // A native connection never turns Unsafe into Safe.
+    }
+
+    [Fact]
+    public async Task ActualNativeSafetyConnectPropagatesFailedConnection()
+    {
+        using var f = new Fixture(); f.ConnectResult = false;
+        await Assert.ThrowsAnyAsync<Exception>(() => f.NativeConnect().Execute(f.Progress, default));
+        Assert.Equal(1, f.ConnectCalls);
+        Assert.False(f.Connected);
+    }
     [Fact]
     public async Task DisabledCardsDoNotWriteProfileOrTouchHardware()
     {
@@ -63,11 +92,14 @@ public sealed class SequenceStartupItemsTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SafetyConnectIsIdempotentAndDoesNotClaimUnsafeIsSafe(bool connected)
+    [InlineData(false, "AIWeatherSafetyMonitor")]
+    [InlineData(true, "AIWeatherSafetyMonitor")]
+    [InlineData(false, "ASCOM.Example.SafetyMonitor")]
+    [InlineData(true, "ASCOM.Example.SafetyMonitor")]
+    public async Task SafetyConnectIsIdempotentAndDoesNotClaimUnsafeIsSafe(bool connected, string identity)
     {
         using var f = new Fixture();
+        f.Selection = f.Identity = identity;
         f.Connected = connected;
         await f.Safety.Execute(f.Progress, default);
         await f.Safety.Execute(f.Progress, default);
@@ -78,6 +110,8 @@ public sealed class SequenceStartupItemsTests
 
     [Theory]
     [InlineData("selection")]
+    [InlineData("blank-selection")]
+    [InlineData("selection-changed")]
     [InlineData("wrong-connected")]
     [InlineData("connect-failed")]
     [InlineData("wrong-readback")]
@@ -86,12 +120,14 @@ public sealed class SequenceStartupItemsTests
     {
         using var f = new Fixture();
         if (fault == "selection") f.Selection = "No_Device";
+        if (fault == "blank-selection") f.Selection = " ";
+        if (fault == "selection-changed") f.DuringConnect = () => f.Selection = "another";
         if (fault == "wrong-connected") { f.Connected = true; f.Identity = "another"; }
         if (fault == "connect-failed") f.ConnectResult = false;
         if (fault == "wrong-readback") f.Identity = "another";
         var token = fault == "cancelled" ? new CancellationToken(true) : default;
         await Assert.ThrowsAnyAsync<Exception>(() => f.Safety.Execute(f.Progress, token));
-        if (fault is "selection" or "wrong-connected" or "cancelled") Assert.Equal(0, f.ConnectCalls);
+        if (fault is "selection" or "blank-selection" or "wrong-connected" or "cancelled") Assert.Equal(0, f.ConnectCalls);
     }
 
     private sealed class Fixture : IDisposable
@@ -107,6 +143,11 @@ public sealed class SequenceStartupItemsTests
         public bool Connected, ConnectResult = true;
         public string Selection = "AIWeatherSafetyMonitor", Identity = "AIWeatherSafetyMonitor";
         public int ConnectCalls;
+        public Action? DuringConnect;
+        public IProfileService Profiles { get; }
+        public ISafetyMonitorMediator Monitor { get; }
+        public ConnectEquipment NativeConnect() => new(Profiles, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, Monitor)
+        { SelectedDevice = "Safety Monitor" };
         public Fixture()
         {
             Host = new(new SilentNotifier(), Path.Combine(leaseDirectory, "owner.lock"));
@@ -120,13 +161,16 @@ public sealed class SequenceStartupItemsTests
             var astrometry = Proxy<IAstrometrySettings>((m,_) => Default(m.ReturnType));
             var profile = Proxy<IProfile>((m,_) => m.Name switch {
                 "get_SafetyMonitorSettings" => safety,
+                "get_CameraSettings" => Proxy<ICameraSettings>((cm,_) => cm.Name == "get_Id" ? "OFFLINE-CAMERA" : Default(cm.ReturnType)),
                 "get_AstrometrySettings" => astrometry,
                 _ => Default(m.ReturnType),
             });
             var profiles = Proxy<IProfileService>((m,_) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+            Profiles = profiles;
             Settings = new(profiles, options) { RealModeCommissioned = true, ObservationUseRealMode = false };
             var mediator = Proxy<ISafetyMonitorMediator>((m,_) => {
-                if (m.Name == "Connect") { ConnectCalls++; Connected = ConnectResult; return Task.FromResult(ConnectResult); }
+                if (m.Name == "Rescan") return Task.FromResult<IList<string>>(new[] { Selection });
+                if (m.Name == "Connect") { ConnectCalls++; DuringConnect?.Invoke(); Connected = ConnectResult; return Task.FromResult(ConnectResult); }
                 if (m.Name == "GetInfo") {
                     var info = Activator.CreateInstance(m.ReturnType)!;
                     m.ReturnType.GetProperty("Connected")!.SetValue(info, Connected);
@@ -136,6 +180,7 @@ public sealed class SequenceStartupItemsTests
                 }
                 throw new InvalidOperationException("Unexpected equipment method: " + m.Name);
             });
+            Monitor = mediator;
             Mode = new(profiles, Host, Settings) { EnableRealMode = true };
             Safety = new(profiles, Host, mediator, Settings) { StartMonitoring = true };
             var root = new SequenceRootContainer();
