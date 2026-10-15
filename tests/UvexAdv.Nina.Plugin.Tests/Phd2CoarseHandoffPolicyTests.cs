@@ -1,5 +1,6 @@
 using UvexAdv.Nina.Plugin;
 using UvexAdv.Phd2;
+using UvexAdv.Observatory;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
@@ -66,17 +67,32 @@ public sealed class Phd2CoarseHandoffPolicyTests
     }
 
     [Fact]
-    public void ProductionRouteRequiresFormalSolveAndMeasuredIdentityAndKeepsLivePlanner()
+    public void ProductionRouteRequiresPassedFieldAndMeasuredPositionAndKeepsLivePlanner()
     {
         var handoff = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Handoff.cs"));
         Assert.Contains("field.Gate.Disposition == GateDisposition.Passed", handoff);
-        Assert.Contains("field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null", handoff);
-        Assert.Contains("field.TargetIdentification.HasCatalogPositionRefinement", handoff);
+        Assert.Contains("Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(field.TargetIdentification)", handoff);
         var placement = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
         Assert.Contains("Phd2HandoffResidualPixels(guideChoice.Field, preset)", placement);
         Assert.Contains("var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(", WorkflowSource.Convergence);
         Assert.Contains("if (!nextAcquisitionBudget.IsAllowed)", WorkflowSource.Convergence);
         Assert.Contains("HandleDeniedPhd2AcquisitionBudgetAsync(context, session, preset,", WorkflowSource.Convergence);
+    }
+
+    [Theory]
+    [InlineData(TargetIdentificationAuthority.StellarCentroid, "TARGET_IDENTIFIED")]
+    [InlineData(TargetIdentificationAuthority.BrightWingCentroid, "TARGET_IDENTIFIED_SATURATED_TOPOLOGY")]
+    [InlineData(TargetIdentificationAuthority.CatalogWcsProjection, "PHD2_GUIDE_FRAME_CATALOG_TARGET_TOPOLOGY_REFINED")]
+    public void RecordedHd18552MeasuredCoreUsesRemainingEnvelopeNotCatalogOnlyTwenty(
+        TargetIdentificationAuthority authority, string code)
+    {
+        var target = new StarCandidate(new(784, 419), 65520, 10000, 50, 20, .1, .5, 400);
+        var id = new TargetIdentification(GateResult.Pass(code, "measured"), target, new(819, 423), 35.68, 2, authority);
+        Assert.True(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(id));
+        Assert.True(36.70 < Phd2CoarseHandoffPolicy.SelectHandoffRadius(true, 20, 100, Limits(), .5, 2));
+        Assert.False(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(id with { Gate = GateResult.Unknown(code, "ambiguous") }));
+        Assert.False(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(TargetIdentification.FromCatalogWcs(new(819,423),1920,1080,"prediction")));
+        Assert.False(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(id with { Target = null }));
     }
 
     [Fact]

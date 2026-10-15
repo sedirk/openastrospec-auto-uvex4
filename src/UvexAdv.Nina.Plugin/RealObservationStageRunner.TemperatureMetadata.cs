@@ -46,7 +46,7 @@ internal sealed partial class RealObservationStageRunner
 
     private async Task<GateResult> ReadAtrPostSaveTemperatureAsync(AtrCapture capture, CancellationToken token)
     {
-        var cached = ReadAtrCoolingReadiness(capture.ExpectedCameraId);
+        var cached = await ReadFreshAtrCoolingReadinessAsync(capture.ExpectedCameraId, token).ConfigureAwait(false);
         if (cached.Code != "ATR_PRECOOLING_IN_PROGRESS" || cached.Metrics?.GetValueOrDefault("temperatureC") != 0) return cached;
         var owner = cameraMediator.GetDevice() as ICamera;
         if (owner is null) return cached;
@@ -57,7 +57,7 @@ internal sealed partial class RealObservationStageRunner
         await WriteAuditBestEffortAsync("atr-post-save-temperature-readback", new { capture.CaptureToken, result,
             originalFitsUnchanged = true }).ConfigureAwait(false);
         return result.Applied ? AtrCoolingReadinessPolicy.Evaluate(result.Samples[^1], capture.ExpectedCameraId,
-            configuration.Atr.TargetTemperatureC) : cached;
+            configuration.Atr.TargetTemperatureC) : result.FailureGate is { Disposition: not GateDisposition.Passed } failure ? failure : cached;
     }
 }
 

@@ -6,6 +6,66 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class G3GuidingRecoveryReturnPolicyTests
 {
+    [Fact]
+    public void Hd18552Completed600SecondProbeDoesNotConsumeTheOriginalReturnClock()
+    {
+        var started = DateTimeOffset.Parse("2026-10-13T16:03:04.5499177Z");
+        var state = State() with { ObservationRunId = "hd18552", OriginRaDegrees = 45.48297375,
+            OriginDeclinationDegrees = 38.23936944444444, PriorReportedRaDegrees = 45.37885,
+            PriorReportedDeclinationDegrees = 38.283476944444445, CommandedRaDegrees = 45.37798891313855,
+            CommandedDeclinationDegrees = 38.283198736924284, CurrentRaTangentOffsetArcseconds = -294.23710079019367,
+            CurrentDeclinationOffsetArcseconds = 158.9526743722364, CumulativeMotionArcseconds = 338.61698411637,
+            CorrectionAttempts = 1, StartedUtc = started, CreatedUtc = started, UpdatedUtc = started };
+        var now = started.AddSeconds(1136.1120301);
+        G3GuidingRecoveryReturnPlan Recover(G3AcquisitionMotionState s) => G3GuidingRecoveryReturnPolicy.Plan(s,
+            "hd18552", 45.43549458333331, 38.24236194444445, "JNOW", "pierWest", true, 5, 10, now);
+        Assert.Equal("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", Recover(state).Gate.Code);
+        var credited = Assert.IsType<G3AcquisitionMotionState>(G3SettledScienceContinuationPolicy.CreditExposure(
+            state, state, started.AddSeconds(450), started.AddSeconds(1055), 600, 605));
+        Assert.Equal(600, credited.ExcludedAtrExposureSeconds); // No five-second readout credit.
+        Assert.Equal(state.StartedUtc, credited.StartedUtc);
+        Assert.Equal(state.MaximumElapsedSeconds, credited.MaximumElapsedSeconds);
+        Assert.Equal(state.CorrectionAttempts, credited.CorrectionAttempts);
+        Assert.Equal(state.CumulativeMotionArcseconds, credited.CumulativeMotionArcseconds);
+        var plan = Recover(credited);
+        Assert.Equal(GateDisposition.Passed, plan.Gate.Disposition);
+        Assert.Equal(1, plan.ReservedReturnActions);
+        var step = G3AcquisitionMotionPlanner.PlanNextReturnStep(plan.ChargedLedger!,
+            45.43549458333331, 38.24236194444445, 10, now);
+        Assert.Equal(GateDisposition.Passed, step.Gate.Disposition);
+        Assert.Equal(state.OriginRaDegrees, step.CommandedRaDegrees, 9);
+        // Changed ledger, outstanding motion and duplicate receipt grant no credit.
+        Assert.Null(G3SettledScienceContinuationPolicy.CreditExposure(state, credited, started, now, 600, 600));
+        var pending = state with { Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve };
+        Assert.Null(G3SettledScienceContinuationPolicy.CreditExposure(pending, pending, started, now, 600, 600));
+    }
+
+    [Theory]
+    [InlineData(-1, 600)] [InlineData(600, double.NaN)] [InlineData(double.PositiveInfinity, 600)]
+    public void InvalidExposureClockCannotMintRecoveryTime(double requested, double elapsed)
+    {
+        var state = State();
+        Assert.Null(G3SettledScienceContinuationPolicy.CreditExposure(state, state, Started, Now, requested, elapsed));
+        Assert.NotEmpty((state with { ExcludedAtrExposureSeconds = 1 }).Validate());
+    }
+
+    [Fact]
+    public void PassiveCreditRoundTripsWithoutChangingTheOriginOrMintingAnotherReceipt()
+    {
+        var state = State();
+        var credited = Assert.IsType<G3AcquisitionMotionState>(G3SettledScienceContinuationPolicy.CreditExposure(
+            state, state, Started.AddSeconds(10), Started.AddSeconds(615), 600, 605));
+        var restored = System.Text.Json.JsonSerializer.Deserialize<G3AcquisitionMotionState>(
+            System.Text.Json.JsonSerializer.Serialize(credited))!;
+        Assert.Equal(credited, restored);
+        Assert.Empty(restored.Validate());
+        Assert.Equal(state.StartedUtc, restored.StartedUtc);
+        Assert.Equal(state.OriginRaDegrees, restored.OriginRaDegrees);
+        Assert.Equal(state.StartedUtc.AddSeconds(600), restored.MotionClockStartedUtc);
+        Assert.Null(G3SettledScienceContinuationPolicy.CreditExposure(restored, restored,
+            Started.AddSeconds(10), Started.AddSeconds(615), 600, 605));
+    }
+
     private static readonly DateTimeOffset Started = DateTimeOffset.Parse("2026-09-08T14:24:52Z");
     private static readonly DateTimeOffset Now = Started.AddMinutes(10);
 

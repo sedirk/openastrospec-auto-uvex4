@@ -3,6 +3,17 @@ namespace UvexAdv.Observatory;
 /// <summary>Skipping a redundant target-field solve requires a measured target, not a prediction alone.</summary>
 public static class G3PostWcsMeasuredHandoffPolicy
 {
+    public const string OutsideRemainingCode = "G3_POST_WCS_MEASURED_HANDOFF_OUTSIDE";
+
+    // The recognition window and the remaining round-trip motion envelope are
+    // independent. A valid centroid does not replenish the inherited ledger.
+    public static bool FitsRemainingHandoff(TargetIdentification identification, PixelPoint slit,
+        double remainingRadiusPixels) =>
+        identification.Gate.Disposition == GateDisposition.Passed && identification.Target is { } target &&
+        double.IsFinite(remainingRadiusPixels) && remainingRadiusPixels > 0 &&
+        double.IsFinite(identification.CatalogPositionSpreadPixels) && identification.CatalogPositionSpreadPixels >= 0 &&
+        Distance(target.Centroid, slit) + identification.CatalogPositionSpreadPixels <= remainingRadiusPixels;
+
     /// <summary>
     /// Admit a candidate to an image-only confirmation, not to guiding or science.
     /// The neighbour prediction keeps its original uncertainty/destination fence;

@@ -112,8 +112,10 @@ public sealed class Phd2GuidingFrameEvidenceTests
         Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
     }
 
-    [Fact]
-    public async Task SavesOnlyAfterFreshGuideStepWithoutChangingCaptureOrGuiding()
+    [Theory]
+    [InlineData("matched")] [InlineData("old-crop")] [InlineData("advanced-frame")]
+    [InlineData("malformed")]
+    public async Task SavesOnlyAfterFreshGuideStepWithoutChangingCaptureOrGuiding(string crop)
     {
         var directory = CreateTemporaryDirectory();
         var sourcePath = Path.Combine(directory, "phd2-current.fit");
@@ -126,6 +128,8 @@ public sealed class Phd2GuidingFrameEvidenceTests
             {
                 var state = await session.ReadRequestAsync(cancellationToken);
                 Assert.Equal("get_app_state", state.GetProperty("method").GetString());
+                await session.SendEventAsync(new { Event = "LockPositionSet", X = 100.0, Y = 100.0 }, cancellationToken);
+                await session.SendEventAsync(new { Event = "StartGuiding" }, cancellationToken);
                 await session.ReplyResultAsync(state, "Guiding", cancellationToken);
 
                 await session.SendEventAsync(new
@@ -144,6 +148,7 @@ public sealed class Phd2GuidingFrameEvidenceTests
                 // producing frames; model that bounded stream until save_image
                 // is requested instead of relying on a 50 ms scheduler race.
                 var saveRequest = session.ReadRequestAsync(cancellationToken);
+                var lastFrame = 41;
                 for (var frame = 42; frame <= 121 && !saveRequest.IsCompleted; frame++)
                 {
                     if (await Task.WhenAny(saveRequest, Task.Delay(50, cancellationToken)) == saveRequest) break;
@@ -152,10 +157,22 @@ public sealed class Phd2GuidingFrameEvidenceTests
                         Event = "GuideStep", Frame = frame, dx = 0.04, dy = -0.01,
                         SNR = 26.0, HFD = 2.4, AvgDist = 0.05, ErrorCode = 0,
                     }, cancellationToken);
+                    lastFrame = frame;
                 }
                 var save = await saveRequest.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
                 Assert.Equal("save_image", save.GetProperty("method").GetString());
                 await session.ReplyResultAsync(save, new { filename = sourcePath }, cancellationToken);
+                var star = await session.ReadRequestAsync(cancellationToken);
+                Assert.Equal("get_star_image", star.GetProperty("method").GetString());
+                if (crop == "advanced-frame")
+                    await session.SendEventAsync(new { Event = "GuideStep", Frame = lastFrame + 1,
+                        dx = .1, dy = .2, SNR = 26, ErrorCode = 0 }, cancellationToken);
+                if (crop == "malformed")
+                    await session.ReplyResultAsync(star, new { frame = "not-a-number" }, cancellationToken);
+                else
+                    await session.ReplyResultAsync(star, new { frame = crop == "old-crop" ? 0 : lastFrame,
+                        width = 2, height = 2, star_pos = new[] { .5, .5 },
+                        pixels = Convert.ToBase64String(new byte[] { 1, 0, 2, 0, 3, 0, 4, 0 }) }, cancellationToken);
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             });
             await using var client = CreateClient(server);
@@ -177,7 +194,13 @@ public sealed class Phd2GuidingFrameEvidenceTests
             Assert.False(result.CaptureLoopStarted);
             Assert.False(result.AutomaticRetryAllowed);
             Assert.Equal(bytes, await File.ReadAllBytesAsync(destinationPath));
-            Assert.Equal(new[] { "get_app_state", "save_image" }, server.ReceivedMethods.ToArray());
+            Assert.Equal(new[] { "get_app_state", "save_image", "get_star_image" }, server.ReceivedMethods.ToArray());
+            if (crop == "matched")
+            {
+                Assert.Equal(result.TriggerGuideFrame, Assert.IsType<Phd2PrimaryStarImage>(result.PrimaryStarImage).Frame);
+                Assert.Equal(new Phd2Point(.5, .5), result.ResolvePrimaryStarPosition(2, 2, new ushort[] { 1, 2, 3, 4 }));
+            }
+            else Assert.Null(result.PrimaryStarImage);
             Assert.DoesNotContain("set_exposure", server.ReceivedMethods);
             Assert.DoesNotContain("loop", server.ReceivedMethods);
             Assert.DoesNotContain("stop_capture", server.ReceivedMethods);

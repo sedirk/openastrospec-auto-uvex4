@@ -5,6 +5,98 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2LoopSelectionGuideTakeoverTests
 {
     [Theory]
+    [InlineData("delayed", false)]
+    [InlineData("delayed", true)]
+    [InlineData("delayed-owner", false)]
+    [InlineData("after-start", false)]
+    [InlineData("after-frame", false)]
+    [InlineData("second-lock", false)]
+    [InlineData("far-lock", false)]
+    [InlineData("reselect", false)]
+    [InlineData("paused", false)]
+    public async Task InitialCentroidAfterSettleBeginRetainsOnlyTheOwnedFirstGuideReceipt(
+        string scenario, bool succeeded)
+    {
+        // HD 21455, 2026-10-14: native settle began while CALIBRATED was
+        // waiting for a good star. Only then did PHD2 set the initial lock and
+        // announce StartGuiding. A normal timeout must remain a bound result.
+        var initial = new Phd2Point(359.19, 22.08);
+        var actual = new Phd2Point(368.021, 29.797);
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await ReplyValidCalibrationAsync(session, token);
+            var state = await session.ReadRequestAsync(token);
+            Assert.Equal("get_app_state", state.GetProperty("method").GetString());
+            await session.SendEventAsync(new { Event = "LockPositionSet", X = initial.X, Y = initial.Y }, token);
+            await session.SendEventAsync(new { Event = "AppState", State = "Selected" }, token);
+            await session.ReplyResultAsync(state, "Selected", token);
+            var profile = await session.ReadRequestAsync(token);
+            Assert.Equal("get_profile", profile.GetProperty("method").GetString());
+            await session.ReplyResultAsync(profile, new { id = 2, name = "c11+ccdt67+slit+2210" }, token);
+            var guide = await session.ReadRequestAsync(token);
+            Assert.Equal("guide", guide.GetProperty("method").GetString());
+            await session.ReplyResultAsync(guide, 0, token);
+            await session.SendEventAsync(new { Event = "SettleBegin" }, token);
+            await session.SendEventAsync(new { Event = "Settling", Distance = 0, Time = 0, SettleTime = 5, StarLocked = false }, token);
+            if (scenario == "after-start")
+                await session.SendEventAsync(new { Event = "StartGuiding" }, token);
+            if (scenario == "after-frame")
+                await session.SendEventAsync(new { Event = "GuideStep", Frame = 9, SNR = 24.6, ErrorCode = 0 }, token);
+            if (scenario == "paused")
+                await session.SendEventAsync(new { Event = "Paused" }, token);
+            await session.SendEventAsync(new { Event = scenario == "reselect" ? "StarSelected" : "LockPositionSet",
+                X = scenario == "far-lock" ? 600 : actual.X, Y = actual.Y }, token);
+            if (scenario == "second-lock")
+                await session.SendEventAsync(new { Event = "LockPositionSet", X = actual.X + 1, Y = actual.Y }, token);
+            await session.SendEventAsync(new { Event = "StartGuiding" }, token);
+            if (!succeeded)
+                await session.SendEventAsync(new { Event = "StarLost", Frame = 71, SNR = 0, ErrorCode = 2 }, token);
+            await session.SendEventAsync(new { Event = "SettleDone", Status = succeeded ? 0 : 1,
+                Error = succeeded ? null : "timed-out waiting for guider to settle", TotalFrames = 71,
+                DroppedFrames = succeeded ? 0 : 45 }, token);
+            if (!scenario.StartsWith("delayed", StringComparison.Ordinal))
+            {
+                var stop = await session.ReadRequestAsync(token);
+                Assert.Equal("stop_capture", stop.GetProperty("method").GetString());
+                await session.ReplyResultAsync(stop, 0, token);
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        client.EventReceived += (_, e) => events.Enqueue($"{e.Name}: {client.Snapshot.AppState}; initial={client.Snapshot.PendingInitialLockConfirmationAllowed}; pending={client.Snapshot.PendingSettleOperationId}; begin={client.Snapshot.PendingSettleBeginSequence}; lock={client.Snapshot.LockPosition}");
+        await client.ConnectAsync(CancellationToken.None);
+        _ = await client.ValidateCalibrationAsync(ValidCalibrationRequirement() with
+        {
+            OwnerManaged = scenario == "delayed-owner", AllowNativeCalibration = scenario == "delayed-owner",
+        }, CancellationToken.None);
+        _ = await client.GetAppStateAsync(CancellationToken.None);
+        var operation = client.GuideAndSettleAsync(new Phd2SettleCriteria(3, 1, 1), false,
+            new Phd2Rectangle(319, 0, 80, 80), CancellationToken.None);
+        if (!scenario.StartsWith("delayed", StringComparison.Ordinal))
+        {
+            await Assert.ThrowsAsync<Phd2CommandTimeoutException>(() => operation);
+            Assert.Null(client.Snapshot.LastSettle);
+            Assert.Null(client.Snapshot.PendingSettleOperationId);
+            return;
+        }
+        _ = await Task.WhenAny(operation, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.True(operation.IsCompleted, string.Join(Environment.NewLine, events));
+        var result = await operation;
+        Assert.Equal(succeeded, result.Succeeded);
+        Assert.Equal(actual, client.Snapshot.LockPosition);
+        Assert.Equal(result, client.Snapshot.LastSettle);
+        Assert.True(client.Snapshot.LastSettleCommandAccepted);
+        Assert.NotNull(client.Snapshot.LastSettleOperationId);
+        Assert.Equal(client.Snapshot.GuideEpoch, client.Snapshot.LastSettleGuideEpoch);
+        Assert.Equal(client.Snapshot.ConnectionEpoch, client.Snapshot.LastSettleConnectionEpoch);
+        Assert.Equal(succeeded, client.Snapshot.HasCurrentSuccessfulSettle);
+        Assert.Equal(1, server.ReceivedMethods.Count(method => method == "guide"));
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

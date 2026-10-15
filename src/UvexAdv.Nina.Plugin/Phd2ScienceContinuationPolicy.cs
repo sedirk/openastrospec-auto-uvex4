@@ -68,8 +68,7 @@ internal static class Phd2ScienceContinuationPolicy
             !double.IsFinite(requestedSeconds) || requestedSeconds <= 0 ||
             !double.IsFinite(monotonicElapsedSeconds) || monotonicElapsedSeconds <= 0)
             return null;
-        var credit = Math.Min(requestedSeconds,
-            Math.Min(monotonicElapsedSeconds, (completedUtc - openedUtc).TotalSeconds));
+        var credit = CompletedExposureCredit(openedUtc, completedUtc, requestedSeconds, monotonicElapsedSeconds);
         if (credit <= 0) return null;
         return before with
         {
@@ -77,6 +76,12 @@ internal static class Phd2ScienceContinuationPolicy
             UpdatedUtc = completedUtc,
         };
     }
+
+    internal static double CompletedExposureCredit(DateTimeOffset openedUtc, DateTimeOffset completedUtc,
+        double requestedSeconds, double monotonicElapsedSeconds) => completedUtc < openedUtc ||
+        !double.IsFinite(requestedSeconds) || requestedSeconds <= 0 ||
+        !double.IsFinite(monotonicElapsedSeconds) || monotonicElapsedSeconds <= 0 ? 0 :
+        Math.Min(requestedSeconds, Math.Min(monotonicElapsedSeconds, (completedUtc - openedUtc).TotalSeconds));
 
     private static double Distance(Phd2Point point, double x, double y) =>
         Math.Sqrt((point.X - x) * (point.X - x) + (point.Y - y) * (point.Y - y));

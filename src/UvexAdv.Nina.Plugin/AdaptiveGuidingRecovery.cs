@@ -17,6 +17,10 @@ internal sealed class AdaptiveGuidingRecovery
     private DateTimeOffset? previousFrameUtc;
     private bool actionIssued;
     private bool inPlaceCheckConsumed;
+    private readonly HashSet<(string Lineage, int Stage)> primaryStarSettles = [];
+    internal bool TryConsumePrimaryStarSettle(string lineage = "legacy", int chargedStage = 1) =>
+        !string.IsNullOrWhiteSpace(lineage) && chargedStage > 0 &&
+        primaryStarSettles.Add((lineage, chargedStage));
     internal bool TryConsumeInPlaceCheck()
     {
         if (inPlaceCheckConsumed) return false;

@@ -24,8 +24,38 @@ public static class G3WcsRecoveryPolicy
     }
 
     public const string ExhaustedReturnedCode = "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED";
+    public const string UnreachableAtOriginCode = "G3_WCS_TARGET_OUTSIDE_RETURN_BUDGET";
     public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
     public const string PierChangedCode = "G3_WCS_CENTERING_PIER_CHANGED";
+
+    internal static GateResult ReturnedBudgetGate(GateResult reserve, bool unreachableAtOrigin,
+        IReadOnlyDictionary<string, double> metrics) =>
+        GateResult.TargetQuality(unreachableAtOrigin ? UnreachableAtOriginCode : ExhaustedReturnedCode,
+            $"{reserve.Code}: {reserve.Message} " + (unreachableAtOrigin
+                ? "The mount stayed at the verified origin; no outbound correction was sent. The solved sky/target offset exceeds the original full-route and return budget. This is not a failed local star detection or a completed correction."
+                : "The mount returned to the saved WCS-centering origin. No further local search was started; the original cumulative motion, actions and clock remain charged."),
+            WithReturnMetrics(reserve, metrics));
+
+    // Fail the existing reserve check before spending outbound legs when even
+    // an optimistic full route cannot reach the target and return. Only the
+    // first, fresh solved origin qualifies; never infer this from a partial
+    // route or use it to replenish/relax any movement limit.
+    internal static GateResult? UnreachableRoundTripAtOrigin(int actions, double cumulative,
+        double radius, double required, double handoffAllowance, double arrivalTolerance, double ceiling)
+    {
+        if (actions != 0 || cumulative != 0 || !double.IsFinite(radius) || radius < 0 ||
+            !double.IsFinite(required) || required < 0 || !double.IsFinite(handoffAllowance) || handoffAllowance < 0 ||
+            !double.IsFinite(arrivalTolerance) || arrivalTolerance <= 0 || radius > arrivalTolerance ||
+            !double.IsFinite(ceiling) || ceiling <= 0) return null;
+        var optimisticRoundTrip = 2 * Math.Max(0, required - handoffAllowance - radius - arrivalTolerance);
+        if (optimisticRoundTrip <= ceiling) return null;
+        return GateResult.TargetQuality("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT",
+            $"Fresh WCS requires {required:F1} arcsec to the target; even the optimistic target/return route is " +
+            $"{optimisticRoundTrip:F1} arcsec, above the unchanged {ceiling:F1} arcsec cumulative limit. No outbound move sent.",
+            new Dictionary<string, double> { ["requiredTargetMotionArcseconds"] = required,
+                ["optimisticRoundTripArcseconds"] = optimisticRoundTrip, ["maximumCumulativeMotionArcseconds"] = ceiling,
+                ["outboundCommandSent"] = 0 });
+    }
 
     // A typed, known-side change invalidates this target's old coordinate frame;
     // it is not permission to return across the pier or to flip again. ADR-0027
@@ -151,7 +181,7 @@ public static class G3WcsRecoveryPolicy
             returned.CumulativeMotionArcseconds;
         var remainingActions = commissioned.MaximumCorrectionAttempts - returned.CorrectionAttempts;
         var remainingSeconds = commissioned.EffectiveMaximumAcquisitionTime.TotalSeconds -
-            Math.Max(0, (nowUtc - returned.StartedUtc).TotalSeconds);
+            Math.Max(0, (nowUtc - returned.MotionClockStartedUtc).TotalSeconds);
         return remainingMotion + 1e-9 < minimumRoundTrip || remainingActions < 2 ||
             remainingSeconds + 1e-9 < 2 * returned.WorstCaseActionSeconds;
     }

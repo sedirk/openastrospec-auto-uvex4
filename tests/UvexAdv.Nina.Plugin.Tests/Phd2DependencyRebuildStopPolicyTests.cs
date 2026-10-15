@@ -6,6 +6,26 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2DependencyRebuildStopPolicyTests
 {
     [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("late-unsafe")]
+    [InlineData("late-cancel")]
+    [InlineData("late-deadline")]
+    public async Task RecordedInitialLossTerminalExecutesNextNativeTargetOnlyAfterStoppedBoundary(string mode)
+    {
+        var result = new Phd2SettleResult(false, "timed-out waiting for guider to settle", 71, 45,
+            DateTimeOffset.Parse("2026-10-13T17:34:09Z"));
+        var snapshot = CompletedInitialGuide() with { AppState = Phd2AppState.LostLock,
+            LastSettle = result, LockPosition = new(368.021, 29.797) };
+        Assert.True(Phd2DependencyRebuildStopPolicy.CanClassifyInitialLostStarFailure(snapshot, 1, result, false));
+        var gate = Phd2DependencyRebuildStopPolicy.AfterConfirmedInitialGuideStop(result, lostStars: true);
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(
+            UvexAdv.Observatory.GateResult.Unknown(gate.Code, "Unconfirmed owner/stop is not optical quality")));
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(mode, gate.Code, gate,
+            UvexAdv.Observatory.ObservationStage.PlaceTargetOnSlit);
+    }
+
+    [Theory]
     [InlineData(Phd2AppState.Guiding, 0)]
     [InlineData(Phd2AppState.Guiding, 3)]
     [InlineData(Phd2AppState.LostLock, 3)]

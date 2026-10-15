@@ -55,7 +55,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var originCapture = body.IndexOf("var originField = await CaptureAndAnalyzeG3WithSolveLadderAsync", StringComparison.Ordinal);
         Assert.True(returnBlocked >= 0 && reserveStopped > returnBlocked && originCapture > reserveStopped);
         var stop = body[reserveStopped..originCapture];
-        Assert.Contains("G3WcsRecoveryPolicy.ExhaustedReturnedCode", stop);
+        Assert.Contains("G3WcsRecoveryPolicy.ReturnedBudgetGate(", stop);
+        Assert.Contains("exhaustedReserveGate, fullPathBudgetInfeasible", stop);
         Assert.Contains("BudgetExhaustedReturnedWithoutLocalSearch", stop);
         Assert.Contains("[\"g3MotionBudgetReset\"] = bool.FalseString", stop);
         Assert.DoesNotContain("RunBoundedG3LocalSearchAsync", stop);
@@ -406,8 +407,10 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("var maximumFreshBoundHandoffArcseconds = handoffToleranceArcseconds +", begin, StringComparison.Ordinal);
         Assert.Contains("2 * existing.ArrivalToleranceArcseconds", begin, StringComparison.Ordinal);
         Assert.Contains("G3_MOTION_FRESH_BINDING_HANDOFF_LIMIT", begin, StringComparison.Ordinal);
-        Assert.Contains("CumulativeMotionArcseconds = continued.CumulativeMotionArcseconds + chargedHandoffArcseconds", begin, StringComparison.Ordinal);
-        Assert.Contains("CorrectionAttempts = checked(continued.CorrectionAttempts + 1)", begin, StringComparison.Ordinal);
+        Assert.Contains("G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now)", begin, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(debit.Gate)", begin, StringComparison.Ordinal);
+        Assert.Contains("handoff.Proof.IsCurrent(phd2.Snapshot)", begin, StringComparison.Ordinal);
+        Assert.Contains("ValidateG3SearchMountState(pierSide)", begin, StringComparison.Ordinal);
         Assert.Contains("no physical command was issued and no origin, ceiling or clock was reset", begin, StringComparison.Ordinal);
         Assert.Contains("freshMountBoundHandoffAuthority: solvedOutsideField", wcs, StringComparison.Ordinal);
         Assert.Contains("freshMountBoundHandoffAuthority: directField", search, StringComparison.Ordinal);
@@ -983,6 +986,14 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("TELESCOPE_TRACKING_ENABLE_REJECTED", source, StringComparison.Ordinal);
         Assert.Contains("TELESCOPE_TRACKING_ENABLE_TIMEOUT", source, StringComparison.Ordinal);
         Assert.Contains("meridian/limit refusal", source, StringComparison.Ordinal);
+        Assert.Contains("CatalogSlewWorkflow.ExecuteAsync(trackingGate, intentPath", source, StringComparison.Ordinal);
+        Assert.Contains("Phd2MountIdleWait.WaitAfterTargetStopAsync", source, StringComparison.Ordinal);
+        Assert.Contains("ReadTerminalGuideWitnessAsync", source, StringComparison.Ordinal);
+        Assert.Contains("!witness.ExclusiveRunOwner", source, StringComparison.Ordinal);
+        Assert.Contains("NativeTarget?.ClockBudget is not null", source, StringComparison.Ordinal);
+        Assert.Contains("pendingPhd2LockShift is not null", source, StringComparison.Ordinal);
+        Assert.Contains("SequenceStopGate()", source, StringComparison.Ordinal);
+        Assert.Contains("NativeMeridianJournalStore.PendingGate", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1329,13 +1340,15 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("return latest with { MeasuredPostWcsTarget = null };", shortSource);
         // Accepted measured-warning evidence survives the cached-slit adapter;
         // it is not re-labelled as exact placement or returned to the 20 px route.
-        Assert.Contains("measured.Gate.Metrics, measured.Gate.Severity)", Source);
+        var measuredPolicy = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "Phd2FreshTargetFluxPolicy.cs"));
+        Assert.Contains("Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(", Source);
+        Assert.Contains("measured.Gate.Metrics, measured.Gate.Severity)", measuredPolicy);
+        Assert.Contains("? measured with", measuredPolicy);
         Assert.Contains("motionCaption, handoffMetrics, identification.Gate.Severity)", Source);
         Assert.Contains("handoffMetrics[metric.Key] = metric.Value", Source);
-        Assert.Contains("BoundShortPositionEvidencePath = measured.BoundShortPositionEvidencePath", Source);
         var handoff = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Handoff.cs"));
-        Assert.Contains("field.TargetIdentification.HasCatalogPositionRefinement", handoff);
-        Assert.Contains("!string.IsNullOrWhiteSpace(field.TargetIdentification.BoundShortPositionEvidencePath)", handoff);
+        Assert.Contains("Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(field.TargetIdentification)", handoff);
+        Assert.Contains("RemainingPhd2HandoffRadius(preset", handoff);
         Assert.Contains("Phd2HandoffResidualPixels(currentField, placementPreset)", Source);
     }
 

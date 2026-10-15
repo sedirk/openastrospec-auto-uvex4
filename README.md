@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-13.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-15.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +38,27 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 13 closeout](docs/closeout-2026-10-13.md) consolidates **0.4.0.286–289**:
+The [October 15 closeout](docs/closeout-2026-10-15.md) consolidates **0.4.0.290–300**.
+Same-frame primary-star motion now carries target-position continuity; a commanded
+lock displacement or multi-star average cannot stand in for measured arrival.
+ADR-0040 permits one persisted same-lock settle recovery per already-charged stage,
+budgeted fresh coarse/fine handoff, and explicitly selected quality-warning probes
+near the finite slit. Original movement/time/return budgets and the complete safety
+chain remain intact; no dark-point-source mode change is required.
+
+The same release includes ATR temperature recovery, native guide-selection/SNR race
+fixes, completion cleanup and checked next-target continuation. Distributed AUTO
+templates now use a **35-minute visibility estimate per target**, not a shutter
+timeout or a replenished movement budget. The report links the superseding design
+records and individual failure analyses; both frontends still use one production route.
+
+**3,798 .NET tests, 75 reduction tests and Ruff pass**. Historical measurement replay
+covers 15 runs/38 accepted frames; 169 offline UI scenes retain their .299 rendering.
+Installed **.300** was verified against all 41 package files and runtime loading.
+These checks do not establish new-version sky success or live-panel visibility.
+This Git closeout does not reinstall, restart, connect devices or start/resume observing.
+
+The historical [October 13 closeout](docs/closeout-2026-10-13.md) consolidates **0.4.0.286–289**:
 target-local optical/budget failures retain their classification through acquisition,
 return and guiding recovery, while late cancellation, unsafe, dawn and cutoff prevent
 the next target. Native-engine regressions verify the next target actually executes

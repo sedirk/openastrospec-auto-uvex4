@@ -12,6 +12,8 @@ public interface IPhd2Client : IAsyncDisposable
 
     Phd2StateSnapshot Snapshot { get; }
 
+    Task<Phd2AppState> GetAppStateAsync(CancellationToken cancellationToken);
+
     Task ConnectAsync(CancellationToken cancellationToken);
 
     Task DisconnectAsync(CancellationToken cancellationToken);
@@ -177,6 +179,9 @@ public interface IPhd2Client : IAsyncDisposable
         Phd2Rectangle? selectionRoi,
         bool preserveSameEpochGuidingOnSettleTimeout,
         CancellationToken cancellationToken);
+
+    /// <summary>One native settle on an already Guiding, unchanged lock/owner; never a guide start or recalibration.</summary>
+    Task<Phd2SettleResult> ResettleAtCurrentLockAsync(Phd2SameLockSettleRequest request, CancellationToken cancellationToken);
 
     Task<Phd2StopCaptureResult> StopCaptureAndConfirmAsync(CancellationToken cancellationToken);
 

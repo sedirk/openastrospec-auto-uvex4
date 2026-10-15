@@ -25,6 +25,12 @@ public sealed class Phd2SelectedStarSnrTests
     [InlineData("stopped")]
     [InlineData("calibration")]
     [InlineData("lock-changed")]
+    [InlineData("selected-last-sample-lost")]
+    [InlineData("selected-final-read-lost")]
+    [InlineData("selected-final-read-lost-reselected")]
+    [InlineData("selected-final-read-lost-stopped")]
+    [InlineData("selected-final-read-lost-calibration")]
+    [InlineData("selected-final-read-lost-paused")]
     public async Task SnrObservationIsReadOnlyFreshBoundedAndSelectionBound(string mode)
     {
         await using var server = new FakePhd2Server(async (session, token) =>
@@ -66,15 +72,37 @@ public sealed class Phd2SelectedStarSnrTests
                 await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 1, SNR = 999 }, token);
                 for (int frame = 2; frame <= 4; frame++)
                 {
-                    if (mode == "missing")
+                    if (mode == "selected-last-sample-lost" && frame == 4)
+                    {
+                        await session.SendEventAsync(new { Event = "LoopingExposures", Frame = frame, ErrorCode = 2 }, token);
+                        await session.SendEventAsync(new { Event = "LockPositionLost" }, token);
+                        await session.SendEventAsync(new { Event = "StarLost", Frame = frame, SNR = 2.9, ErrorCode = 2 }, token);
+                    }
+                    else if (mode == "missing")
                         await session.SendEventAsync(new { Event = "LoopingExposures", Frame = frame }, token);
                     else await session.SendEventAsync(new { Event = "LoopingExposures", Frame = frame, SNR = 20 + frame, ErrorCode = 0 }, token);
                 }
             }
-            if (mode is not ("reselected" or "guiding" or "selected-reselected-same" or "star-lost" or "preview-lock-lost" or "stopped" or "calibration" or "lock-changed"))
+            if (mode is not ("reselected" or "guiding" or "selected-reselected-same" or "stopped" or "calibration" or "lock-changed"))
             {
                 request = await session.ReadRequestAsync(token);
                 Assert.Equal("get_exposure", request.GetProperty("method").GetString());
+                if (mode.StartsWith("selected-final-read-lost"))
+                {
+                    // Reproduce the completed-window/final-RPC race, including
+                    // the native loss notification order from HD 24479.
+                    await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 5, ErrorCode = 2 }, token);
+                    await session.SendEventAsync(new { Event = "LockPositionLost" }, token);
+                    await session.SendEventAsync(new { Event = "StarLost", Frame = 5, SNR = 2.9, ErrorCode = 2 }, token);
+                    if (mode.EndsWith("reselected"))
+                        await session.SendEventAsync(new { Event = "StarSelected", X = Star.X, Y = Star.Y }, token);
+                    if (mode.EndsWith("stopped"))
+                        await session.SendEventAsync(new { Event = "LoopingExposuresStopped" }, token);
+                    if (mode.EndsWith("calibration"))
+                        await session.SendEventAsync(new { Event = "StartCalibration", Mount = "Mount" }, token);
+                    if (mode.EndsWith("paused"))
+                        await session.SendEventAsync(new { Event = "Paused" }, token);
+                }
                 await session.ReplyResultAsync(request, mode == "exposure-changed" ? 4000 : 2000, token);
             }
             await Task.Delay(Timeout.Infinite, token);
@@ -84,15 +112,21 @@ public sealed class Phd2SelectedStarSnrTests
         var selected = await client.FindGuideStarAsync(CancellationToken.None);
         var task = client.ObserveSelectedStarSnrAsync(selected, 2000,
             TimeSpan.FromMilliseconds(mode == "timeout" ? 120 : 2000), CancellationToken.None);
-        if (mode is "star-lost" or "preview-lock-lost")
+        if (mode is "star-lost" or "preview-lock-lost" or "selected-last-sample-lost" or "selected-final-read-lost")
         {
             var lost = await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() => task);
             Assert.NotNull(lost.SelectedStarSnrBaseline);
             Assert.Equal(Star, lost.SelectedStarSnrBaseline.SelectedStar);
-            Assert.Equal(Phd2AppState.Looping, lost.SelectedStarSnrBaseline.AppState);
+            Assert.Equal(mode.StartsWith("selected-") ? Phd2AppState.Selected : Phd2AppState.Looping, lost.SelectedStarSnrBaseline.AppState);
             Assert.True(lost.Snapshot.EventSequence > lost.SelectedStarSnrBaseline.EventSequence);
+            Assert.Equal(client.Snapshot.GuideEpoch, lost.Snapshot.GuideEpoch);
+            if (mode.StartsWith("selected-"))
+            {
+                Assert.Equal(3, lost.Snapshot.GuideEpoch - lost.SelectedStarSnrBaseline.GuideEpoch);
+                Assert.Equal(2, lost.LostFrame?.ErrorCode);
+            }
         }
-        else if (mode is "reselected" or "guiding" or "exposure-changed" or "selected-reselected-same" or "stopped" or "calibration" or "lock-changed")
+        else if (mode is "reselected" or "guiding" or "exposure-changed" or "selected-reselected-same" or "stopped" or "calibration" or "lock-changed" || mode.StartsWith("selected-final-read-lost-"))
             await Assert.ThrowsAsync<Phd2CaptureException>(() => task);
         else
         {

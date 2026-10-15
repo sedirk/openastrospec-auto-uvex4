@@ -5,7 +5,8 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed record Phd2SlitApertureResidual(
     double MidpointPixels, double AlongSlitPixels, double CrossSlitPixels,
-    double HalfLengthPixels, double UncertaintyPixels);
+    double HalfLengthPixels, double UncertaintyPixels,
+    double HalfWidthPixels = 0, double TargetCoreRadiusPixels = 0);
 
 internal sealed record Phd2CorrectionWindowDecision(
     bool CanContinue, string Code, double? LatestGuideResidualPixels = null,
@@ -48,6 +49,21 @@ internal static class Phd2PlacementGuideWindowPolicy
 
     // ADR-0028: diagnostic only; not a second native-settle or slit-placement gate.
     internal const double GuideResidualWarningPixels = 3;
+
+    // ADR-0028 applies to measured guide/lock error in BOTH guide modes. This
+    // is not target/slit acceptance, and native timeout is not permission to
+    // replace the threshold with a sensor diagonal. Keep the actual residual.
+    internal static Phd2CalibrationResidualEvidence CalibrationResidualEvidence(
+        Phd2GuidingResidualState residual, double guideLockResidual,
+        Phd2SensorTopology topology, DateTimeOffset evaluatedUtc) => new(
+        residual.Frame.Sha256, residual.Frame.GuideStepUtc, guideLockResidual,
+        GuideResidualWarningPixels, residual.Measurement.TargetIdentityConfirmed,
+        string.Equals(residual.Measurement.TopologyFingerprintSha256,
+            topology.ComputeFingerprintSha256(), StringComparison.OrdinalIgnoreCase),
+        NoUnvalidatedCalibrationOrLockShiftAfterMeasurement: true, evaluatedUtc,
+        IsAdvisoryMeasuredGuideLockResidual: residual.Measurement.GuidePositionMeasuredInFrame &&
+            HasMeasuredPositionAuthority(residual.Measurement.TargetPositionAuthority));
+
     internal static bool IsValidWarningCeiling(double preferred, double ceiling) =>
         Phd2SlitPlacementCommissioning.IsValidWarningCeiling(preferred, ceiling);
 
@@ -162,7 +178,24 @@ internal static class Phd2PlacementGuideWindowPolicy
         var dx = target.X - slit.AcquisitionPoint.X;
         var dy = target.Y - slit.AcquisitionPoint.Y;
         return new(Math.Sqrt(dx * dx + dy * dy), Math.Cos(angle) * dx + Math.Sin(angle) * dy,
-            -Math.Sin(angle) * dx + Math.Cos(angle) * dy, slit.LengthPixels / 2, slit.UncertaintyPixels);
+            -Math.Sin(angle) * dx + Math.Cos(angle) * dy, slit.LengthPixels / 2, slit.UncertaintyPixels,
+            slit.WidthPixels / 2);
+    }
+
+    internal static Phd2SlitApertureResidual? ProjectMeasuredTarget(Phd2GuidingResidualState sample, PixelPoint localTarget)
+    {
+        var aperture = ProjectOnMeasuredSlit(localTarget, sample.RuntimeSlitLocal);
+        if (aperture is null || sample.MonochromeFrame is null ||
+            !sample.Measurement.TargetIdentityConfirmed || !sample.Measurement.GuidePositionMeasuredInFrame ||
+            sample.Measurement.TargetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid)
+            return aperture;
+        var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(sample.MonochromeFrame, localTarget, 6);
+        if (topology.Gate.Disposition != GateDisposition.Passed || topology.Target is not { SaturatedPixels: > 0 } core ||
+            !Phd2TargetContinuityPolicy.IsContinuous(core.Centroid, localTarget, 1)) return aperture;
+        // Measured minor-axis extent of the connected filled core, not a guessed
+        // FWHM, halo or ghost-ring radius. This only warrants a diagnostic probe;
+        // a bounding box cannot certify throughput or exact slit placement.
+        return aperture with { TargetCoreRadiusPixels = Math.Min(core.BoundingWidthPixels, core.BoundingHeightPixels) / 2d };
     }
 
     internal static bool CanProbeAlongSlitWithPrecisionWarning(
@@ -185,7 +218,12 @@ internal static class Phd2PlacementGuideWindowPolicy
             double.IsFinite(sample.HalfLengthPixels) && sample.HalfLengthPixels > 0 &&
             double.IsFinite(sample.UncertaintyPixels) && sample.UncertaintyPixels >= 0 &&
             Math.Abs(sample.AlongSlitPixels) + sample.UncertaintyPixels < sample.HalfLengthPixels &&
-            Math.Abs(sample.CrossSlitPixels) + sample.UncertaintyPixels <= targetTolerance + nearTargetAllowance);
+            (Math.Abs(sample.CrossSlitPixels) + sample.UncertaintyPixels <= targetTolerance + nearTargetAllowance ||
+             double.IsFinite(sample.TargetCoreRadiusPixels) && sample.TargetCoreRadiusPixels > 0 &&
+             double.IsFinite(sample.HalfWidthPixels) && sample.HalfWidthPixels > 0 &&
+             Math.Abs(sample.AlongSlitPixels) + sample.TargetCoreRadiusPixels + sample.UncertaintyPixels < sample.HalfLengthPixels &&
+             Math.Abs(sample.CrossSlitPixels) + sample.UncertaintyPixels <=
+                sample.HalfWidthPixels + sample.TargetCoreRadiusPixels + nearTargetAllowance));
     }
 
     internal static bool CanProbeWithPrecisionWarning(

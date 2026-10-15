@@ -236,6 +236,7 @@ public sealed class ScenarioCatalogTests
             .Concat(Enumerable.Range(0, 10).Select(index => $"advanced-category-{index}")).ToArray();
         expected = expected.Concat(new[] { "atr-reduced", "atr-reduced-narrow", "atr-reduced-missing", "native-night", "native-night-narrow", "native-failure-popup", "native-failure-popup-en", "native-meridian", "native-meridian-narrow", "native-meridian-en" }).ToArray();
         expected = expected.Concat(new[] { "cancel-stop-unconfirmed", "cancel-stop-unconfirmed-narrow", "cancel-stop-unconfirmed-en" }).ToArray();
+        expected = expected.Concat(new[] { "night-scheduled-stop", "night-scheduled-stop-narrow", "night-scheduled-stop-en" }).ToArray();
         expected = expected.Concat(new[] { "native-night-unsettled-closeout", "native-night-cancel-stop-unconfirmed" }).ToArray();
         expected = expected.Concat(new[] { "photometry-legacy-master", "photometry-legacy-master-en", "photometry-legacy-master-narrow" }).ToArray();
         expected = expected.Concat(new[] { "guide-exposure-mismatch", "guide-exposure-mismatch-en", "guide-exposure-mismatch-narrow" }).ToArray();

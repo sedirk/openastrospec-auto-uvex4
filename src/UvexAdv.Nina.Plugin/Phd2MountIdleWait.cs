@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
+using NINA.Equipment.Interfaces.Mediator;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -10,6 +12,35 @@ internal static class Phd2MountIdleWait
     internal static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(3);
     internal const string TimeoutCode = "PHD2_STOP_MOUNT_IDLE_TIMEOUT";
+
+    // Target completion needs the same pulse-drain window as calibration
+    // handoff. StopCapture's RPC receipt precedes NINA's next device poll.
+    // This overload has read-only interfaces: it cannot stop/slew/reconnect.
+    internal static Task<GateResult> WaitAfterTargetStopAsync(IPhd2Client phd2,
+        ITelescopeMediator mount, string expectedMountId, CancellationToken token,
+        Func<TimeSpan>? elapsed = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        var stopped = phd2.Snapshot;
+        return WaitAsync(async ct =>
+        {
+            var state = await phd2.GetAppStateAsync(ct).ConfigureAwait(false);
+            var current = phd2.Snapshot;
+            if (!stopped.IsConnected || !current.IsConnected ||
+                stopped.AppState != Phd2AppState.Stopped || state != Phd2AppState.Stopped ||
+                current.ConnectionEpoch != stopped.ConnectionEpoch || current.GuideEpoch != stopped.GuideEpoch ||
+                current.PendingSettleOperationId is not null || current.Phd2Paused || current.AutomationPaused)
+                return GateResult.Unknown("NATIVE_TARGET_GUIDER_STOP_CHANGED",
+                    "目标结束等待期间导星停止状态或所有者改变；未发出新的采集或机械动作。");
+            var info = mount.GetInfo();
+            if (!info.Connected || string.IsNullOrWhiteSpace(expectedMountId) ||
+                !string.Equals(info.DeviceId, expectedMountId, StringComparison.Ordinal) || info.Slewing)
+                return GateResult.Unknown("NATIVE_TARGET_MOUNT_STOP_CHANGED",
+                    "目标结束等待期间赤道仪连接、身份或停止状态不符。");
+            return info.IsPulseGuiding
+                ? GateResult.Unknown("G3_SEARCH_PULSE_GUIDING_ACTIVE", "等待末次导星脉冲及 N.I.N.A. 轮询更新。")
+                : GateResult.Pass("NATIVE_TARGET_MOUNT_IDLE_SAMPLE", "同一赤道仪已报告无转向、无导星脉冲。");
+        }, token, elapsed, delay);
+    }
 
     internal static async Task<GateResult> WaitAsync(
         Func<CancellationToken, Task<GateResult>> probe,

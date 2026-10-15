@@ -322,7 +322,7 @@ public sealed class Phd2SlitLockShiftPlannerTests
     }
 
     [Fact]
-    public void OrdinaryDetectedTargetStillRejectsFluxAboveCommissionedEnvelope()
+    public void UnmeasuredGuidePositionCannotUseTargetFluxWarning()
     {
         var fixture = CreateFixture();
         var measurement = Measurement(
@@ -341,6 +341,41 @@ public sealed class Phd2SlitLockShiftPlannerTests
             fixture.MotionLimits,
             Now);
 
+        Assert.False(result.IsAllowed);
+        Assert.Equal("G3_TARGET_FLUX_OUTSIDE_ENVELOPE", result.Code);
+    }
+
+    [Theory]
+    [InlineData(324304)]
+    [InlineData(41185424)]
+    [InlineData(1)]
+    public void IdentifiedTargetAndSameFramePrimaryUseFluxAsWarningWithoutChangingMovementBudget(double flux)
+    {
+        var f = CreateFixture();
+        var m = Measurement(new(100, 100), new(200, 200), new(215, 200), fluxMetric: flux)
+            with { GuidePositionMeasuredInFrame = true };
+        Assert.True(Phd2SlitLockShiftPlanner.IsMeasuredTargetFluxWarning(m, f.MotionLimits));
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            m, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.True(result.IsAllowed, result.Message);
+        Assert.Equal(new Phd2Point(15, 0), result.Stage!.TargetToSlitDelta);
+        Assert.Equal(flux, m.FluxMetric);
+        Assert.False(Phd2SlitLockShiftPlanner.IsMeasuredTargetFluxWarning(m with { TargetIdentityConfirmed = false }, f.MotionLimits));
+        var unsafeResult = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            m with { TargetIdentityConfirmed = false }, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
+        Assert.False(unsafeResult.IsAllowed);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)] [InlineData(double.PositiveInfinity)] [InlineData(0)] [InlineData(-1)]
+    public void FluxWarningNeverConvertsMalformedFluxIntoMotionAuthority(double flux)
+    {
+        var f = CreateFixture();
+        var m = Measurement(new(100, 100), new(200, 200), new(215, 200), fluxMetric: flux)
+            with { GuidePositionMeasuredInFrame = true };
+        Assert.False(Phd2SlitLockShiftPlanner.IsMeasuredTargetFluxWarning(m, f.MotionLimits));
+        var result = Phd2SlitLockShiftPlanner.PlanOutboundStage(f.Qualification, Phd2SlitGuideMode.OffSlitGuideStar,
+            m, f.Ledger, f.Safety, f.Topology, f.MotionLimits, Now);
         Assert.False(result.IsAllowed);
         Assert.Equal("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", result.Code);
     }

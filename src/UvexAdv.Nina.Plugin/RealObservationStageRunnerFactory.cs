@@ -189,6 +189,35 @@ public sealed class RealObservationStageRunnerFactory : IDisposable
             CaptureEnvironmentDeviceSelection() == configuration.Environment.Devices;
     }
 
+    // Called only for an explicitly requested new night after the old runner
+    // attested settled acquisition/motion responsibilities. No runner creation
+    // (its disposal performs cleanup), adapter Connect, stop or motion commands.
+    internal async Task<bool> RecheckStandbyIdleAsync(RealRunConfiguration configuration, CancellationToken token)
+    {
+        bool ReadIdle()
+        {
+            var camera = cameraMediator.GetInfo();
+            var mount = telescopeMediator.GetInfo();
+            var focus = focuserMediator.GetInfo();
+            var roof = domeMediator.GetInfo();
+            return IsNightSafetyCurrent(configuration) &&
+                camera.Connected && camera.DeviceId == configuration.NightSetup.AtrStableId &&
+                !camera.IsExposing && !camera.LiveViewEnabled &&
+                mount.Connected && mount.DeviceId == configuration.ExpectedTelescopeId &&
+                !mount.Slewing && !mount.IsPulseGuiding && !focus.IsMoving && !focus.IsSettling &&
+                roof.Connected && roof.DeviceId == configuration.Environment.Devices.DomeOrRoofId && !roof.Slewing &&
+                roof.ShutterStatus is ShutterState.ShutterOpen or ShutterState.ShutterClosed;
+        }
+        if (!ReadIdle()) return false;
+        await using var phd = new UvexAdv.Phd2.Phd2Client(new()
+        { Host = configuration.Phd2Host, Port = configuration.Phd2Port });
+        await phd.ConnectAsync(token).ConfigureAwait(false); // Event-server socket, not a camera connection.
+        if (await phd.GetAppStateAsync(token).ConfigureAwait(false) != UvexAdv.Phd2.Phd2AppState.Stopped) return false;
+        var quiet = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd, telescopeMediator,
+            configuration.ExpectedTelescopeId, token).ConfigureAwait(false);
+        return quiet.Disposition == UvexAdv.Observatory.GateDisposition.Passed && ReadIdle();
+    }
+
     private NinaEnvironmentDeviceSelection CaptureEnvironmentDeviceSelection()
     {
         var profile = profileService.ActiveProfile;

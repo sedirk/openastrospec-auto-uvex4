@@ -220,8 +220,12 @@ public sealed record G3AcquisitionMotionState(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     int NearTargetResponseRetries = 0,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    int DirectApproachAfterNeighbourFailureAttempts = 0)
+    int DirectApproachAfterNeighbourFailureAttempts = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    double ExcludedAtrExposureSeconds = 0)
 {
+    [JsonIgnore]
+    public DateTimeOffset MotionClockStartedUtc => StartedUtc.AddSeconds(ExcludedAtrExposureSeconds);
     // Schema 2 changes persisted offsets to the versioned TAN projection.
     // Older outstanding ledgers fail closed instead of being geometrically
     // reinterpreted by a later executable.
@@ -308,6 +312,9 @@ public sealed record G3AcquisitionMotionState(
             issues.Add("An outstanding motion intent must conservatively precharge its command.");
         }
         if (StartedUtc == default || CreatedUtc < StartedUtc || UpdatedUtc < CreatedUtc) issues.Add("G3 acquisition-motion timestamps are invalid.");
+        if (!double.IsFinite(ExcludedAtrExposureSeconds) || ExcludedAtrExposureSeconds < 0 ||
+            ExcludedAtrExposureSeconds > (UpdatedUtc - StartedUtc).TotalSeconds)
+            issues.Add("G3 passive exposure credit is invalid.");
         if (string.IsNullOrWhiteSpace(DeclaredEvidencePath)) issues.Add("Declared recovery evidence path is missing.");
         return issues.AsReadOnly();
     }
@@ -500,7 +507,7 @@ public static class G3AcquisitionMotionPlanner
         {
             if (additionalElapsed <= TimeSpan.Zero || !double.IsFinite(additionalElapsed.TotalSeconds))
                 throw new InvalidOperationException("The current-family elapsed-time increment must be finite and positive.");
-            var consumedElapsedSeconds = Math.Max(0, (nowUtc - state.StartedUtc).TotalSeconds);
+            var consumedElapsedSeconds = Math.Max(0, (nowUtc - state.MotionClockStartedUtc).TotalSeconds);
             maximumElapsedSeconds = Math.Min(
                 elapsedCeilingSeconds,
                 checked(consumedElapsedSeconds + additionalElapsed.TotalSeconds));
@@ -529,7 +536,7 @@ public static class G3AcquisitionMotionPlanner
             !double.IsFinite(maximumCumulative) || maximumCumulative < state.CumulativeMotionArcseconds ||
             maximumAttempts < state.CorrectionAttempts ||
             !double.IsFinite(maximumElapsedSeconds) ||
-            maximumElapsedSeconds < Math.Max(0, (nowUtc - state.StartedUtc).TotalSeconds))
+            maximumElapsedSeconds < Math.Max(0, (nowUtc - state.MotionClockStartedUtc).TotalSeconds))
         {
             throw new InvalidOperationException("The continued G3 motion-family limits are invalid, already consumed, or incompatible with the inherited arrival tolerance.");
         }
@@ -586,7 +593,7 @@ public static class G3AcquisitionMotionPlanner
         }
         if (nowUtc < state.UpdatedUtc)
             return BlockReserve("G3_MOTION_CLOCK_INVALID", "The durable motion ledger is ahead of the current clock.");
-        if (nowUtc - state.StartedUtc > TimeSpan.FromSeconds(state.MaximumElapsedSeconds))
+        if (nowUtc - state.MotionClockStartedUtc > TimeSpan.FromSeconds(state.MaximumElapsedSeconds))
         {
             return BlockReserve("G3_MOTION_TIME_LIMIT", "The G3 acquisition-motion elapsed-time limit has been reached.", targetBudget: true);
         }
@@ -638,7 +645,7 @@ public static class G3AcquisitionMotionPlanner
             return BlockReserve("G3_MOTION_RETURN_ATTEMPT_RESERVE_LIMIT", "The outbound move plus its segmented return exceeds the action-count envelope.", move, radius, returnMoves, targetBudget: true);
         }
         var requiredSeconds = (1 + returnMoves) * state.WorstCaseActionSeconds;
-        if ((nowUtc - state.StartedUtc).TotalSeconds + requiredSeconds > state.MaximumElapsedSeconds + 1e-9)
+        if ((nowUtc - state.MotionClockStartedUtc).TotalSeconds + requiredSeconds > state.MaximumElapsedSeconds + 1e-9)
         {
             return BlockReserve(
                 "G3_MOTION_RETURN_TIME_RESERVE_LIMIT",
@@ -728,7 +735,7 @@ public static class G3AcquisitionMotionPlanner
         {
             return BlockReturn("G3_MOTION_RETURN_ATTEMPT_LIMIT", "The next return step no longer fits the durable action-count budget.", radius, targetBudget: true);
         }
-        if ((nowUtc - state.StartedUtc).TotalSeconds + state.WorstCaseActionSeconds > state.MaximumElapsedSeconds + 1e-9)
+        if ((nowUtc - state.MotionClockStartedUtc).TotalSeconds + state.WorstCaseActionSeconds > state.MaximumElapsedSeconds + 1e-9)
         {
             return BlockReturn("G3_MOTION_RETURN_TIME_LIMIT", "The next worst-case return action no longer fits the durable elapsed-time envelope.", radius, targetBudget: true);
         }

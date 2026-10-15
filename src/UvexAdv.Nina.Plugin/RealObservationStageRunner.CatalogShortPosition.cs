@@ -308,8 +308,8 @@ internal sealed partial class RealObservationStageRunner
                     Report(signalExposureIncreased ? ObservationUiPresentation.Text(
                         $"SEP 短帧未检出目标且未饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；仅增曝光寻找信号，仍须两张独立新帧确认，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",
                         $"SEP target unmeasured with unsaturated raw headroom: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%. Image-only signal search; require two independent new frames, cap {exposurePolicy.MaximumFrames}; no motion.") : blendExposureIncreased ? ObservationUiPresentation.Text(
-                        $"SEP 短帧星像持续分裂，亮度有余量：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张独立新帧，仍检查混叠与 4px 一致性，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",
-                        $"Persistent SEP sub-peaks with exposure headroom: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%. Require a new independent pair with unchanged blend and 4px consistency checks, cap {exposurePolicy.MaximumFrames}; no motion.") : ObservationUiPresentation.Text(
+                        $"SEP 短帧存在分裂或位置波动，亮度有余量：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张独立新帧，仍检查混叠与 4px 一致性，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",
+                        $"SEP sub-peaks or inconsistent positions with exposure headroom: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%. Require a new independent pair with unchanged blend and 4px consistency checks, cap {exposurePolicy.MaximumFrames}; no motion.") : ObservationUiPresentation.Text(
                         $"SEP 测到强星像饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；重新取得两张一致新帧，总上限 {exposurePolicy.MaximumFrames} 帧；不移动、不改变导星参数。",
                         $"SEP measured saturation: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%; require two fresh matching frames, cap {exposurePolicy.MaximumFrames}. No motion or guiding-setting change."));
                     continue;

@@ -23,7 +23,7 @@ public static class G3AcquisitionReturnTimePolicy
         var progress = state.MaximumSingleCorrectionArcseconds - 2 * state.ArrivalToleranceArcseconds;
         var segments = Math.Max(1, Math.Ceiling((state.CurrentRadiusArcseconds + 2 * state.ArrivalToleranceArcseconds) / progress));
         var returnSeconds = segments * state.WorstCaseActionSeconds;
-        var remainingSeconds = state.MaximumElapsedSeconds - (now - state.StartedUtc).TotalSeconds;
+        var remainingSeconds = state.MaximumElapsedSeconds - (now - state.MotionClockStartedUtc).TotalSeconds;
         var requiredSeconds = state.WorstCaseActionSeconds + returnSeconds + CleanupReserveSeconds;
         var values = new Dictionary<string, double>
         {

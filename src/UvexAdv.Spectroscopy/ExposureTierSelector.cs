@@ -27,7 +27,8 @@ public sealed record ExposureTierOptions(
     int MaximumConsecutiveClippedDispersionColumns = 3,
     double MinimumTargetToSkyContrast = 1.15,
     double MinimumContinuumSnr = 5,
-    double MinimumLineSnr = 8)
+    double MinimumLineSnr = 8,
+    bool PreferMeasuredSnrReadyTier = false)
 {
     public static ExposureTierOptions Default { get; } = new(
         [0.1, 0.3, 1, 3, 10, 30, 60, 120, 300, 600]);
@@ -124,6 +125,18 @@ public static class ExposureTierSelector
         {
             return Reject("NO_POSITIVE_SPECTRAL_SIGNAL", "Bias-subtracted spectral percentile is not positive.", ladder[0], 0, probe);
         }
+
+        // When an automatic run already has a real, unclipped, high-SNR
+        // configured tier, chasing the display/full-well optimum is optional.
+        // Temperature/provenance and science credit remain the caller's gates.
+        // These configured minima are detection/quality floors, not preferred
+        // science SNR. Require a tenfold margin to end optional optimization;
+        // barely detected spectra still use the original full-scale ladder.
+        if (options.PreferMeasuredSnrReadyTier && ladder.Contains(probe.ExposureSeconds) &&
+            (probe.ContinuumSnrPerResolutionElement >= 10 * options.MinimumContinuumSnr ||
+             probe.LineSnrPerResolutionElement >= 10 * options.MinimumLineSnr))
+            return Accept("MEASURED_SNR_READY_TIER", "Retain the measured safe tier with at least ten times the configured spectral SNR floor; no optional longer probe is required.",
+                probe.ExposureSeconds, observedFraction, probe);
 
         var targetExposure = probe.ExposureSeconds * options.TargetFullScaleFraction / observedFraction;
         var safeTiers = ladder

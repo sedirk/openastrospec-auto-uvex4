@@ -8,6 +8,44 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(11548.37, 0, 0, 0, 100, 2, 21600, true)]
+    [InlineData(10770.19, 0, 0, 0, 100, 2, 21600, false)]
+    [InlineData(10902, 0, 0, 0, 100, 2, 21600, false)]
+    [InlineData(11548, 1, 0, 0, 100, 2, 21600, false)]
+    [InlineData(11548, 0, 1, 0, 100, 2, 21600, false)]
+    [InlineData(11548, 0, 0, 3, 100, 2, 21600, false)]
+    [InlineData(double.NaN, 0, 0, 0, 100, 2, 21600, false)]
+    [InlineData(11548, 0, 0, 0, double.NaN, 2, 21600, false)]
+    [InlineData(11548, 0, 0, 0, 100, 2, double.NaN, false)]
+    public void GrossSolvedOffsetChecksWholeRouteWithoutRejectingFeasibleOrPartialRoutes(
+        double required, int actions, double cumulative, double radius, double handoff, double tolerance,
+        double ceiling, bool impossible)
+    {
+        var gate = G3WcsRecoveryPolicy.UnreachableRoundTripAtOrigin(actions, cumulative, radius, required, handoff, tolerance, ceiling);
+        Assert.Equal(impossible, gate is not null);
+        if (gate is null) return;
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        Assert.True(G3WcsRecoveryPolicy.IsReserveFailure(gate));
+        Assert.Equal(0, gate.Metrics!["outboundCommandSent"]);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("late-unsafe")]
+    [InlineData("late-cancel")]
+    public async Task UnreachableSolvedOriginSkipsOnlyAfterIndependentNativeStopBoundary(string mode)
+    {
+        var reserve = G3WcsRecoveryPolicy.UnreachableRoundTripAtOrigin(0, 0, 0, 11579.84559, 38.26784, 2, 21600)!;
+        var terminal = G3WcsRecoveryPolicy.ReturnedBudgetGate(reserve, true,
+            new Dictionary<string, double> { ["chargedActions"] = 0 });
+        Assert.Equal(0, terminal.Metrics!["outboundCommandSent"]);
+        Assert.Contains("stayed", terminal.Message);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("typed-" + mode,
+            G3WcsRecoveryPolicy.UnreachableAtOriginCode, terminal);
+    }
+
+    [Theory]
     [InlineData(1, 0, true, 1128.4555079707877, 1200, 2, true)]
     [InlineData(0, 0, true, 1128, 1200, 2, false)]
     [InlineData(1, 1, true, 1128, 1200, 2, false)]

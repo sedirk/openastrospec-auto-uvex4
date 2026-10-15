@@ -1,4 +1,5 @@
 using UvexAdv.Phd2;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -17,6 +18,12 @@ internal sealed record Phd2CompletedInitialGuideStopReceipt(
 internal static class Phd2DependencyRebuildStopPolicy
 {
     internal const string InitialSettleNotReachedCode = "PHD2_INITIAL_SETTLE_NOT_REACHED";
+
+    internal static GateResult AfterConfirmedInitialGuideStop(Phd2SettleResult settle, bool lostStars) =>
+        GateResult.TargetQuality(lostStars ? "PHD2_INITIAL_GUIDE_STAR_LOSS" : InitialSettleNotReachedCode,
+            "初始导星未达到稳定条件，已确认停止；尚未发出入缝微调，也未开始光谱曝光。按原预算尝试恢复，仍失败时由整夜序列独立核对空闲与运动账本后跳过。",
+            new Dictionary<string, double> { ["totalGuideFrames"] = settle.TotalFrames,
+                ["droppedGuideFrames"] = settle.DroppedFrames, ["stopConfirmed"] = 1 });
 
     internal static Phd2CompletedInitialGuideStopReceipt? RecordCompletedInitialGuide(
         Phd2StateSnapshot snapshot, long selectionConnectionEpoch, Phd2SettleResult returned,
@@ -77,7 +84,7 @@ internal static class Phd2DependencyRebuildStopPolicy
         CanRecordCompletedGuideOwner(snapshot, selectionConnectionEpoch, result);
 
     // The native guide RPC may snap the selected lock to its first new-frame
-    // centroid before SettleBegin. Accept that lock only from the returned,
+    // centroid before StartGuiding (possibly after SettleBegin). Accept that lock only from the returned,
     // locally correlated terminal operation, even when settling failed.
     // This is stop authority, not a successful-settle or placement attestation.
     internal static bool CanRecordCompletedGuideOwner(Phd2StateSnapshot snapshot,

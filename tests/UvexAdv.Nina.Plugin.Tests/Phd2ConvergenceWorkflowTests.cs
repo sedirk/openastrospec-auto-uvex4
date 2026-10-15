@@ -6,6 +6,207 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2ConvergenceWorkflowTests
 {
+    [Theory]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, true)]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, false)]
+    [InlineData(Phd2SlitGuideMode.DegradedDirectTargetGuiding, true)]
+    [InlineData(Phd2SlitGuideMode.DegradedDirectTargetGuiding, false)]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, true, 324304)]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, false, 41185424)]
+    public async Task Later0InitialGuideWarningReachesRealConvergenceWithoutWaitingForAnUnsentShift(
+        Phd2SlitGuideMode mode, bool nativeSucceeded, double flux = 100)
+    {
+        var f = new Phd2ConvergenceFixture(warning: true);
+        var request = f.Request([24, 24, 24]);
+        request = request with { Preset = request.Preset with { MaximumFluxMetric = 100000 } };
+        var direct = mode == Phd2SlitGuideMode.DegradedDirectTargetGuiding;
+        var guide = direct ? new Phd2Point(524, 400) : new Phd2Point(107.7386, 100);
+        var origin = direct ? new Phd2Point(516.2614, 400) : new Phd2Point(100, 100);
+        var window = request.InitialWindow.Select((item, i) => item with
+        {
+            Measurement = item.Measurement with { GuideStar = guide, CapturedUtc = f.Now.AddSeconds(i - 2), FluxMetric = flux },
+            RuntimeSlitLocal = item.RuntimeSlitLocal with { AngleDegrees = 90 },
+        }).ToArray();
+        var native = new Phd2SettleResult(nativeSucceeded, nativeSucceeded ? null : "native timeout retained", 9, 0, f.Now);
+        var residual = Phd2PlacementGuideWindowPolicy.CalibrationResidualEvidence(
+            window[^1], 7.7386, request.Session.Topology, f.Now);
+        var candidate = new Phd2CalibrationQualityCandidate("active", request.Session.Calibration with { OwnerManaged = true },
+            Phd2CalibrationEvaluationPhase.PostSettle, true, true, true, true, true, 1, 1,
+            new("local-guide", native, true, true, true, true, f.Now, !nativeSucceeded, 3), residual);
+        var assessment = Phd2CalibrationQualityEvaluator.Evaluate(candidate, Phd2CalibrationQualityPolicy.Default, f.Now);
+        Assert.True(assessment.IsLockShiftAuthority, string.Join("; ", assessment.HardFailures));
+        Assert.Equal(3, residual.MaximumResidualPixels);
+        Assert.True(residual.IsAdvisoryMeasuredGuideLockResidual);
+        Assert.Contains(assessment.Reasons, r => r.Contains("guide/lock tracking residual"));
+        Assert.False(Phd2PlacementGuideWindowPolicy.AllWithinTolerance([24, 24, 24], 2));
+        foreach (var bad in new[] { residual with { TargetIdentityConfirmed = false },
+            residual with { TopologyMatched = false }, residual with { ResidualPixels = double.NaN },
+            residual with { IsAdvisoryMeasuredGuideLockResidual = false } })
+            Assert.False(Phd2CalibrationQualityEvaluator.Evaluate(candidate with { FreshResidual = bad },
+                Phd2CalibrationQualityPolicy.Default, f.Now).IsLockShiftAuthority);
+        request = request with { InitialWindow = window,
+            Ledger = request.Ledger with { OriginLockPosition = origin, CurrentLockPosition = origin,
+                AttemptsUsed = 0, CumulativeCommandedPixels = 0 },
+            Session = request.Session with { GuideMode = mode, LastMeasurement = window[^1], Settle = native,
+                Quality = assessment, SelectedGuide = guide, OriginLock = origin } };
+        Phd2Point? dispatched = null;
+        var snapshot = Phd2StateSnapshot.Disconnected with { IsConnected = true, AppState = Phd2AppState.Guiding,
+            ConnectionEpoch = 1, GuideEpoch = 1, LockPosition = origin };
+        f.Trace.Handlers["get_GuideSnapshot"] = _ => snapshot;
+        f.Trace.Handlers["SetExactLockPositionAsync"] = a =>
+        {
+            Assert.DoesNotContain("CapturePhd2PlacementGuideWindowAsync", f.Trace.Calls);
+            var move = (Phd2ExactLockPositionRequest)a[0]!;
+            Assert.Equal(1, Assert.Single(f.Persisted).AttemptsUsed);
+            dispatched = move.DesiredPosition;
+            snapshot = snapshot with { LockPosition = dispatched, GuideEpoch = 2 };
+            return Task.FromResult(new Phd2ExactLockPositionResult(origin, dispatched, dispatched,
+                move.MaximumStepPixels, 0, f.Now.AddSeconds(-3), true, false, false, false, false));
+        };
+        f.Trace.Handlers["ValidateCalibrationAsync"] = _ => Task.FromResult(request.Session.Calibration);
+        f.Trace.Handlers["BeginFreshResidualObservation"] = _ => new Phd2PostLockGuidingObservation(
+            "local-shift", 1, 2, 9, dispatched!, 1, f.Now.AddSeconds(-3), MeasuredContinuation: true);
+        f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = _ =>
+        {
+            Assert.NotNull(dispatched);
+            return Task.FromResult<IReadOnlyList<Phd2GuidingResidualState>>(f.Window([.3, .3, .3], 'D')
+                .Select((item, i) => item with { Measurement = item.Measurement with {
+                    GuideStar = direct ? new(500.3, 400) : dispatched!, CapturedUtc = f.Now.AddSeconds(i - 2), FluxMetric = flux },
+                    Frame = item.Frame with { EventSequence = i + 10, TriggerGuideFrame = i + 10,
+                        GuideStepUtc = f.Now.AddSeconds(i - 2), CompletedUtc = f.Now.AddSeconds(i - 2) } }).ToArray());
+        };
+        f.Trace.Handlers["SelectPhd2CalibrationQuality"] = a => new Phd2CalibrationCandidateSelection(
+            Phd2CalibrationSelectionPurpose.LockShift, assessment, [assessment]);
+        f.Trace.Handlers["BuildPhd2LockShiftQualification"] = _ => request.Session.Qualification;
+        var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
+        Assert.True(result.CanAdvance, result.Gate.Message);
+        Assert.Single(f.Trace.Calls, c => c == "SetExactLockPositionAsync");
+        Assert.Single(f.Trace.Calls, c => c == "CapturePhd2PlacementGuideWindowAsync");
+        Assert.DoesNotContain("ResettleAtCurrentLockAsync", f.Trace.Calls);
+        Assert.Equal(request.Ledger.StartedUtc, f.Persisted[^1].StartedUtc);
+        Assert.Equal(nativeSucceeded, request.Session.Settle.Succeeded);
+    }
+
+    [Theory]
+    [InlineData("skip")] [InlineData("cleanup-failure")] [InlineData("late-unsafe")]
+    [InlineData("late-cancel")] [InlineData("late-deadline")] [InlineData("late-dawn")]
+    public async Task UnmeasuredFluxRefusalSkipsOnlyAtConfirmedNativeBoundary(string mode)
+    {
+        var f = new Phd2ConvergenceFixture();
+        var request = f.Request([15, 15, 15]);
+        request = request with { Preset = request.Preset with { MaximumFluxMetric = 100000 } };
+        var m = request.InitialWindow[^1].Measurement with { FluxMetric = 324304, GuidePositionMeasuredInFrame = false };
+        var budget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(request.Session.Qualification,
+            request.Session.GuideMode, m, request.Ledger,
+            new Phd2LockShiftSafetySnapshot(true, 60, 55, 40, request.Session.Topology.PierSide, f.Now),
+            request.Session.Topology, request.Preset.BuildMotionLimits(), f.Now);
+        Assert.Equal("G3_TARGET_FLUX_OUTSIDE_ENVELOPE", budget.Code);
+        var gate = Phd2HandoffRecoveryPolicy.FailureGate(budget.Code, budget.Message);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("typed-" + mode,
+            gate.Code, gate, ObservationStage.PlaceTargetOnSlit);
+        Assert.Equal(GateFailureScope.Run,
+            Phd2HandoffRecoveryPolicy.FailureGate("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "malformed").FailureScope);
+    }
+
+    [Theory]
+    [InlineData(true, true, false)] [InlineData(false, true, false)] [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false, true)]
+    public async Task MultiStarMismatchGetsOnlyOnePrechargedSameLockRecoveryAndFreshWindow(
+        bool nativeSuccess, bool physicalRecovery, bool missingTerminalReceipt, bool previousStageRecovered = false)
+    {
+        var f = new Phd2ConvergenceFixture();
+        var request = f.Request([16, 16, 16]);
+        var stalled = request.InitialWindow.Select((item, i) => item with
+        {
+            Measurement = item.Measurement with { GuideStar = new(116, 100) },
+            Frame = item.Frame with { NativeLockPosition = new(100, 100),
+                NativeGuideStep = new(i, .2, 0, 100, 6, .2, 0),
+                PrimaryStarImage = new(i, 2, 2, new(.5, .5), [1, 2, 3, 4]) },
+        }).ToArray();
+        request = request with { InitialWindow = stalled, Session = request.Session with {
+            LastMeasurement = stalled[^1], PrimaryStarSettleRecoveryAttempted = previousStageRecovered,
+            PrimaryStarSettleRecoveryStage = previousStageRecovered ? 1 : 0 } };
+        var pending = Phd2SlitPlacementCommissioningTests.CreateState("run", Phd2LockShiftPendingPhase.AwaitingFreshResidual) with
+        {
+            LineageId = request.Ledger.LineageId, StartedUtc = request.Ledger.StartedUtc,
+            CreatedUtc = request.Ledger.StartedUtc, UpdatedUtc = f.Now,
+            ConnectionEpoch = 1, GuideEpoch = 1, CurrentLockX = 100, CurrentLockY = 100,
+            RequestedLockX = 100, RequestedLockY = 100,
+            AttemptsUsed = request.Ledger.AttemptsUsed, CumulativeCommandedPixels = request.Ledger.CumulativeCommandedPixels,
+            PrimaryStarSettleRecoveryAttempted = previousStageRecovered,
+            PrimaryStarSettleRecoveryStage = previousStageRecovered ? 1 : 0,
+        };
+        var snapshot = Phd2StateSnapshot.Disconnected with { IsConnected = true, AppState = Phd2AppState.Guiding,
+            ConnectionEpoch = 1, GuideEpoch = 1, LockPosition = new(100, 100) };
+        f.Trace.Handlers["get_GuideSnapshot"] = _ => snapshot;
+        var targetRecovery = new AdaptiveGuidingRecovery();
+        if (previousStageRecovered) Assert.True(targetRecovery.TryConsumePrimaryStarSettle(request.Ledger.LineageId, 1));
+        f.Trace.Handlers["TryConsumePrimaryStarSettle"] = a => targetRecovery.TryConsumePrimaryStarSettle((string)a[0]!, (int)a[1]!);
+        f.Trace.Handlers["BuildPhd2LockShiftSafetySnapshot"] = _ => new Phd2LockShiftSafetySnapshot(true, 60, 55, 40,
+            request.Session.Topology.PierSide, f.ClockNow);
+        f.Trace.Handlers["get_PendingMotion"] = _ => pending;
+        f.Trace.Handlers["RecordPendingMotion"] = a => { pending = (Phd2LockShiftPendingState)a[0]!; return null; };
+        f.Trace.Handlers["ValidateCalibrationAsync"] = _ => Task.FromResult(request.Session.Calibration);
+        f.Trace.Handlers["ResettleAtCurrentLockAsync"] = a =>
+        {
+            Assert.True(Assert.Single(f.Persisted).PrimaryStarSettleRecoveryAttempted);
+            Assert.Equal(request.Ledger.AttemptsUsed, f.Persisted[0].AttemptsUsed);
+            Assert.Equal(request.Ledger.AttemptsUsed, f.Persisted[0].PrimaryStarSettleRecoveryStage);
+            Assert.Equal(request.Ledger.StartedUtc, f.Persisted[0].StartedUtc);
+            Assert.Equal(new Phd2Point(100, 100), ((Phd2SameLockSettleRequest)a[0]!).LockPosition);
+            if (missingTerminalReceipt)
+                return Task.FromException<Phd2SettleResult>(new Phd2CommandTimeoutException("guide", TimeSpan.FromSeconds(20)));
+            snapshot = snapshot with { GuideEpoch = 2 };
+            return Task.FromResult(new Phd2SettleResult(nativeSuccess, nativeSuccess ? null : "timeout", 3, 0, f.Now));
+        };
+        var captures = 0;
+        f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = a =>
+        {
+            captures++;
+            if (captures == 1) Assert.Null(a[10]); // Old FIFO discarded after the local epoch change.
+            if (!physicalRecovery && captures > 1) f.ClockNow = f.Now.AddSeconds(request.Preset.MaximumElapsedSeconds - 20);
+            var window = physicalRecovery ? f.Window([.5, .5, .5], 'D') : stalled;
+            return Task.FromResult<IReadOnlyList<Phd2GuidingResidualState>>(window.Select((item, i) => item with
+                { Measurement = item.Measurement with { CapturedUtc = f.ClockNow },
+                  Frame = item.Frame with { EventSequence = i + 5, TriggerGuideFrame = i + 5,
+                    GuideStepUtc = f.Now.AddMilliseconds(1), CompletedUtc = f.Now.AddMilliseconds(2) } }).ToArray());
+        };
+        f.Trace.Handlers["ReturnPhd2LockToOriginAsync"] = _ => Task.FromResult(new StageResult(GateResult.TargetQuality(
+            "PHD2_LOCK_RETURN_POSITION_UNCONFIRMED", "Original bounded return did not confirm arrival; checked stop required.")));
+        if (missingTerminalReceipt)
+        {
+            var failure = await Assert.ThrowsAsync<PhysicalActionGateException>(() => f.Workflow.ConvergeAsync(f.Context, request, default));
+            Assert.Single(f.Trace.Calls, method => method == "ResettleAtCurrentLockAsync");
+            Assert.DoesNotContain("SetExactLockPositionAsync", f.Trace.Calls);
+            Assert.True(f.Persisted[^1].PrimaryStarSettleRecoveryAttempted);
+            await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip", "PHD2_PRIMARY_RESET_TIME_EXHAUSTED", failure.Gate, ObservationStage.PlaceTargetOnSlit);
+            return;
+        }
+        var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
+        Assert.Equal(physicalRecovery, result.CanAdvance);
+        Assert.Single(f.Trace.Calls, method => method == "ResettleAtCurrentLockAsync");
+        Assert.DoesNotContain("SetExactLockPositionAsync", f.Trace.Calls);
+        Assert.All(f.Persisted, state => Assert.Equal(request.Ledger.StartedUtc, state.StartedUtc));
+        Assert.True(f.Persisted[^1].PrimaryStarSettleRecoveryAttempted);
+        if (!physicalRecovery)
+        {
+            Assert.Equal("PHD2_LOCK_RETURN_POSITION_UNCONFIRMED", result.Gate.Code);
+            await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip", result.Gate.Code, result.Gate, ObservationStage.PlaceTargetOnSlit);
+            await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("cleanup-failure", result.Gate.Code, result.Gate, ObservationStage.PlaceTargetOnSlit);
+        }
+    }
+
+    [Fact]
+    public void OneBadSampleOrMissingNativePrimaryDoesNotAuthorizeNativeRecovery()
+    {
+        var f = new Phd2ConvergenceFixture();
+        var window = f.Window([16, 16, 16]);
+        Assert.False(Phd2SlitConvergenceWorkflow.NeedsPrimaryStarRecovery(window, new(100, 100), Phd2SlitGuideMode.OffSlitGuideStar));
+        Assert.False(Phd2SlitConvergenceWorkflow.NeedsPrimaryStarRecovery(window[..1], new(100, 100), Phd2SlitGuideMode.OffSlitGuideStar));
+    }
+
     [Fact]
     public async Task Hd698BudgetDeniedStillWaitsAtExistingLockThenUsesFreshWarningWindow()
     {
@@ -224,7 +425,6 @@ public sealed class Phd2ConvergenceWorkflowTests
                 };
             }).ToArray());
         };
-        f.Trace.Handlers["CreateCalibrationResidualEvidence"] = _ => null;
         f.Trace.Handlers["SelectPhd2CalibrationQuality"] = _ => new Phd2CalibrationCandidateSelection(
             Phd2CalibrationSelectionPurpose.LockShift, request.Session.Quality, [request.Session.Quality]);
         f.Trace.Handlers["BuildPhd2LockShiftQualification"] = _ => request.Session.Qualification;
@@ -262,6 +462,9 @@ public sealed class Phd2ConvergenceWorkflowTests
             Session = request.Session with { LastMeasurement = window[^1] } };
         // An unusable motion window may now wait at the unchanged lock, but
         // must still stop at the original deadline without dispatching motion.
+        f.Trace.Handlers["get_GuideSnapshot"] = _ => Phd2StateSnapshot.Disconnected with {
+            IsConnected=true,AppState=Phd2AppState.Guiding,ConnectionEpoch=1,GuideEpoch=1,
+            LockPosition=request.Ledger.CurrentLockPosition };
         f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = _ =>
         {
             f.ClockNow = f.Now.AddHours(1);
@@ -293,6 +496,9 @@ internal sealed class Phd2ConvergenceFixture
         Trace.Handlers["ThrowIfGuideOutputFailed"] = _ => null;
         Trace.Handlers["BuildPhd2LockShiftSafetySnapshot"] = _ => new Phd2LockShiftSafetySnapshot(Safe, 60, 55, 40, topology.PierSide, Now);
         Trace.Handlers["get_PendingMotion"] = _ => null;
+        Trace.Handlers["get_GuideSnapshot"] = _ => Phd2StateSnapshot.Disconnected with {
+            IsConnected = true, AppState = Phd2AppState.Guiding, ConnectionEpoch = 1, GuideEpoch = 1,
+            LockPosition = new(100, 100) };
         Trace.Handlers["get_GuidePrecisionWarningActive"] = _ => false;
         Trace.Handlers["RecordSession"] = _ => null;
         Trace.Handlers["RecordPendingMotion"] = _ => null;
@@ -313,6 +519,8 @@ internal sealed class Phd2ConvergenceFixture
                 UpdatedUtc = Now, CreatedUtc = Now,
                 CumulativeCommandedPixels = ledger.CumulativeCommandedPixels,
                 LastAcceptedFrameSha256 = ledger.LastAcceptedFrameSha256,
+                PrimaryStarSettleRecoveryAttempted = ((Phd2SlitPlacementSession)a[2]!).PrimaryStarSettleRecoveryAttempted,
+                PrimaryStarSettleRecoveryStage = ((Phd2SlitPlacementSession)a[2]!).PrimaryStarSettleRecoveryStage,
             };
         };
         Trace.Handlers["PersistPendingAsync"] = a => { Persisted.Add((Phd2LockShiftPendingState)a[1]!); return Task.CompletedTask; };

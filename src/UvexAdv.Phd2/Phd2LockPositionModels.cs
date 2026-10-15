@@ -1,5 +1,9 @@
 namespace UvexAdv.Phd2;
 
+/// <summary>Same-session recovery only: no selection, lock change or calibration.</summary>
+public sealed record Phd2SameLockSettleRequest(long ConnectionEpoch, long GuideEpoch,
+    Phd2Point LockPosition, double LockTolerancePixels, Phd2SettleCriteria Criteria);
+
 /// <summary>
 /// One bounded exact runtime-lock-position mutation. The expected-current
 /// precondition prevents a plan made from a stale G3/lock snapshot from being
@@ -55,12 +59,13 @@ public sealed record Phd2GuidingFrameResult(
     bool CaptureLoopStarted,
     bool AutomaticRetryAllowed,
     Phd2GuideStep? NativeGuideStep = null,
-    Phd2Point? NativeLockPosition = null)
+    Phd2Point? NativeLockPosition = null,
+    Phd2PrimaryStarImage? PrimaryStarImage = null)
 {
-    // PHD2 camera offsets are measured star-minus-lock (or its native
-    // multistar refinement), not the requested destination. Never invent a
-    // zero guide residual when local star segmentation is inconclusive.
-    public Phd2Point? NativeMeasuredGuidePosition =>
+    // GuideStep dx/dy may be a MULTI-STAR correction, not the primary star's
+    // detector position. Keep it diagnostic; never use lock + dx/dy as a
+    // physical centroid or as proof that a return reached its origin.
+    public Phd2Point? NativeEffectiveGuidePosition =>
         NativeGuideStep is { Frame: { } frame, DxPixels: { } dx, DyPixels: { } dy } step &&
         // PHD2 STAR_SATURATED (1) still supplies a successful native centroid;
         // codes 2+ describe rejected/lost stars and cannot authorize geometry.
@@ -69,5 +74,11 @@ public sealed record Phd2GuidingFrameResult(
         double.IsFinite(dx) && double.IsFinite(dy) &&
         double.IsFinite(position.X) && double.IsFinite(position.Y)
             ? new Phd2Point(position.X + dx, position.Y + dy)
+            : null;
+
+    public Phd2Point? ResolvePrimaryStarPosition(int width, int height, ReadOnlySpan<ushort> pixels) =>
+        NativeGuideStep is { Frame: { } frame, ErrorCode: null or 0 or 1 } &&
+        frame == TriggerGuideFrame && PrimaryStarImage?.Frame == frame && NativeLockPosition is not null
+            ? PrimaryStarImage.LocateIn(width, height, pixels)
             : null;
 }

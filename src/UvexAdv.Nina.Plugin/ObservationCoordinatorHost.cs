@@ -77,16 +77,24 @@ public sealed class ObservationCoordinatorHost : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         token.ThrowIfCancellationRequested();
+        NightSafetyStandby? candidate;
+        lock (sync) candidate = safetyStandby;
+        var standbyWasActive = candidate?.Snapshot.IsActive == true;
+        var freshIdle = candidate is not null && (!real || watchSafety is not null) &&
+            await candidate.RecheckIdleAsync(real, configurationKey, token).ConfigureAwait(false);
         lock (sync)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             NightReservation? transferred = null;
             if ((!real || watchSafety is not null) && safetyStandby?.TryHandOver(real, configurationKey, () =>
                 {
                     token.ThrowIfCancellationRequested();
                     transferred = new NightReservation(this, owner, watchSafety?.Invoke());
                     nightOwner = owner; safetyStandby = null; standbySnapshot = null;
-                }) == true) return transferred!;
+                }, freshIdle && ReferenceEquals(candidate, safetyStandby)) == true) return transferred!;
         }
+        if (standbyWasActive)
+            throw new InvalidOperationException("安全待机本次未批准交接：请确认原绑定设备已连接且停止、天气安全，并检查未结责任。未发起新观测或机械动作。");
         if (!await runGate.WaitAsync(0, token).ConfigureAwait(false))
             throw new InvalidOperationException("观测、对焦或安全收口仍占用设备；待机须安全、同配置且无未结责任才能交接新序列。");
         try

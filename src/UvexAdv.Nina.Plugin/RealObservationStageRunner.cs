@@ -2740,13 +2740,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var waitingStarted = DateTimeOffset.UtcNow;
-        var deadline = waitingStarted.AddMinutes(30);
+        var deadline = atrScienceCoolingDeadlineUtc ??= waitingStarted.AddMinutes(30);
         var nextAudit = waitingStarted;
         var stableSamples = 0;
         Report($"ATR 即将曝光：等待实温稳定在 {configuration.Atr.TargetTemperatureC:F1} ± {AtrCoolingReadinessPolicy.TemperatureToleranceC:F1} °C；QHY 测光与导星保持运行");
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (SequenceStopGate() is { } stop) return stop;
+            var environment = ValidateEnvironment(context.Plan);
+            if (environment.Disposition != GateDisposition.Passed) return environment;
             // A finished native cooling task is not temperature evidence. Observe
             // its result for audit but let fresh telemetry drive bounded recovery.
             if (atrPreCoolingTask is { IsCompleted: true } completedCooling)
@@ -2816,10 +2819,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var last = await ReadFreshAtrCoolingReadinessAsync(context.Plan.ExpectedAtrCameraId, cancellationToken).ConfigureAwait(false);
-        return GateResult.Unknown(
+        return AtrCoolingReadinessPolicy.CoolingWaitExhausted(
             "ATR_SCIENCE_TEMPERATURE_TIMEOUT",
-            $"ATR585M did not provide {AtrCoolingReadinessPolicy.RequiredStableSamples} consecutive science-ready samples within 30 minutes. Last state: {last.Message}",
-            last.Metrics);
+            $"ATR585M did not provide {AtrCoolingReadinessPolicy.RequiredStableSamples} consecutive science-ready samples within the original 30-minute cooling deadline.", last);
     }
 
     private GateResult ValidateNinaProfileOwnerSelections(ObservationPlan plan)
@@ -3917,6 +3919,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
     private async Task<StageResult> SlewToCatalogTargetAsync(ObservationContext context, CancellationToken cancellationToken)
     {
+        var intentPath = Path.Combine(SlitPlacementObservationsRoot(),
+            SanitizeRunPathSegment(context.Plan.ObservationRunId), "control", "catalog-slew-intent.json");
+        if (File.Exists(intentPath)) return new StageResult(CatalogSlewWorkflow.AlreadyAttempted());
         var interlock = await EvaluateInterlocksAsync(context, connectQhy: false, cancellationToken).ConfigureAwait(false);
         if (interlock.Disposition != GateDisposition.Passed) return new StageResult(interlock);
         var info = telescopeMediator.GetInfo();
@@ -3940,18 +3945,57 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         await CapturePhd2HomeBoundaryBeforeCatalogSlewAsync(context, cancellationToken).ConfigureAwait(false);
         var trackingGate = await EnsureMountTrackingEnabledAsync(context, cancellationToken).ConfigureAwait(false);
-        if (trackingGate.Disposition != GateDisposition.Passed)
-        {
+        if (trackingGate.Disposition != GateDisposition.Passed && trackingGate.Code != "TELESCOPE_TRACKING_ENABLE_TIMEOUT")
             return new StageResult(trackingGate);
-        }
         var target = TargetCoordinates(context.Plan);
-        await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
-        Report("按目录坐标进行计划内初始转向");
-        if (!await telescopeMediator.SlewToCoordinatesAsync(target, cancellationToken).ConfigureAwait(false))
+        var recoveringTracking = trackingGate.Code == "TELESCOPE_TRACKING_ENABLE_TIMEOUT";
+        if (recoveringTracking)
         {
-            return Failed(ObservationStage.SlewToCatalogTarget, "CATALOG_SLEW_REJECTED", "N.I.N.A. telescope mediator rejected the catalog-coordinate slew.");
+            var idle = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd2, telescopeMediator,
+                configuration.ExpectedTelescopeId, cancellationToken).ConfigureAwait(false);
+            if (idle.Disposition != GateDisposition.Passed) return new StageResult(idle);
         }
-        await telescopeMediator.WaitForSlew(cancellationToken).ConfigureAwait(false);
+        async Task<GateResult> RequireCatalogBoundary(CancellationToken token)
+        {
+            if (SequenceStopGate() is { } stop) return stop;
+            await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+            if (!recoveringTracking) return GateResult.Pass("CATALOG_SLEW_BOUNDARY_CLEAR", "Normal initial slew gates passed.");
+            // This exception is unavailable to an old optical stage, return,
+            // clock continuation or an inherited movement/exposure budget.
+            if (configuration.Environment.WeakSupervisionEnabled || NativeTarget?.ClockBudget is not null ||
+                lastG3Field is not null || lastQhyAcquisition is not null || attemptedAtrFrames != 0 || attemptedAtrProbeFrames != 0 ||
+                correctionAttempts != 0 || cumulativeCorrectionDegrees != 0 || pendingQhyCoarseReturn is not null ||
+                pendingSlitPlacement is not null || pendingPhd2LockShift is not null || durableG3AcquisitionMotion is not null ||
+                File.Exists(Phd2LockShiftPendingPath(context.Plan.ObservationRunId)) ||
+                File.Exists(G3AcquisitionMotionPath(context.Plan.ObservationRunId)) ||
+                File.Exists(SlitPlacementPendingPath(context.Plan.ObservationRunId)))
+                return GateResult.Unknown("CATALOG_TRACKING_RECOVERY_NOT_INITIAL",
+                    "Tracking-timeout recovery is only available before initial optical acquisition; existing evidence and movement budgets are retained.");
+            if (NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is { } flip) return flip;
+            var witness = await ReadTerminalGuideWitnessAsync(token).ConfigureAwait(false);
+            if (!witness.OwnersIdle || !witness.ExclusiveRunOwner || !witness.CameraIdle || !witness.MountStationary ||
+                witness.Phd2State != Phd2AppState.Stopped || !witness.Phd2IdentityMatches ||
+                witness.TelescopeId != configuration.ExpectedTelescopeId || focuserMediator.GetInfo().IsSettling ||
+                phd2.Snapshot.PendingSettleOperationId is not null || phd2.Snapshot.Phd2Paused || phd2.Snapshot.AutomationPaused)
+                return GateResult.Unknown("CATALOG_TRACKING_RECOVERY_NOT_IDLE",
+                    "Acquisition, guiding, exclusive ownership or physical stop is unconfirmed; no tracking-recovery GOTO is authorized.");
+            // Refresh the synchronous full safety chain after the read-only RPCs.
+            if (SequenceStopGate() is { } lateStop) return lateStop;
+            await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+            return GateResult.Pass("CATALOG_TRACKING_RECOVERY_IDLE", "Full safety and stopped owners confirmed; only the original target GOTO is permitted.");
+        }
+        var slewGate = await CatalogSlewWorkflow.ExecuteAsync(trackingGate, intentPath,
+            new { context.Plan.ObservationRunId, context.Plan.Target, configuration.ActionConfigurationSha256,
+                telescopeId = configuration.ExpectedTelescopeId, countersReset = false, homeRequested = false, limitsChanged = false },
+            RequireCatalogBoundary, async token =>
+            {
+                Report(recoveringTracking
+                    ? "跟踪启用未保持：仅尝试一次原计划 GOTO，由驱动处理翻转和限位；随后重新验证跟踪与图像"
+                    : "按目录坐标进行计划内初始转向");
+                return await telescopeMediator.SlewToCoordinatesAsync(target, token).ConfigureAwait(false);
+            }, telescopeMediator, configuration.ExpectedTelescopeId, cancellationToken).ConfigureAwait(false);
+        await WriteAuditBestEffortAsync("catalog-slew-result", new { recoveringTracking, slewGate, intentPath }).ConfigureAwait(false);
+        if (slewGate.Disposition != GateDisposition.Passed) return new StageResult(slewGate);
         var solved = telescopeMediator.GetCurrentPosition();
         var residual = AngularSeparationArcseconds(target, solved);
         await WriteAuditBestEffortAsync("catalog-slew", new
@@ -4069,7 +4113,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var remaining = timeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
                 return Finish(GateResult.Unknown("TELESCOPE_TRACKING_ENABLE_TIMEOUT",
-                    $"After one tracking request N.I.N.A. still reports tracking off after {timeout.TotalSeconds:F0} s. Inspect driver status or a meridian/limit refusal; no slew, automatic home or repeated request was started."));
+                    $"After one tracking request N.I.N.A. still reports tracking off after {timeout.TotalSeconds:F0} s. A meridian/limit refusal is possible. No slew has yet started; the initial-stage owner may evaluate ADR-0038's sole, fully gated catalogue GOTO. No home or repeated enable request is authorized here."));
 
             await Task.Delay(
                     remaining < pollInterval ? remaining : pollInterval,
@@ -5861,13 +5905,16 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 {
                     var handoffPath = await PublishRunJsonEvidenceAsync(
                         "g3-post-wcs-measured-target-handoff",
-                        "Measured target near the slit bypasses redundant target-field PL3 and longer exposures",
+                        "Measured target checked against recognition and remaining fine-motion windows",
                         new
                         {
                             predictedTarget = motionPrediction.PredictedTargetPoint,
                             measuredTarget,
                             slit = handoffSlit.SlitDetection.Geometry.AcquisitionPoint,
                             handoffPreset.MaximumAcquisitionResidualPixels,
+                            remainingHandoffRadiusPixels = boundedCandidateRadius,
+                            fitsRemainingHandoff = G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(
+                                measuredTarget, handoffSlit.SlitDetection.Geometry.AcquisitionPoint, boundedCandidateRadius),
                             motionPrediction.SourceSolveEvidencePath,
                             motionPrediction.SourceMountBindingSha256,
                             motionPrediction.MaximumUncertaintyPixels,
@@ -5878,14 +5925,36 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                             scienceOrLockShiftAuthorized = false,
                             budgetReset = false,
                         }, captured.Path, cancellationToken).ConfigureAwait(false);
-                    Report("近邻 WCS 小步返回后，新帧已实测确认目标靠近狭缝；跳过本目标场重复解算及更长曝光，立即交给 PHD2 新帧精调。");
-                    return new G3PlateSolveProbeState(
+                    var measuredProbe = new G3PlateSolveProbeState(
                         GateResult.Unknown("G3_POST_WCS_MEASURED_TARGET_READY",
                             "A measured target is inside the original acquisition window; fresh PHD2 target/slit proof is still required."),
                         captured.Path, image, null, content, attempts.AsReadOnly(),
                         SummaryEvidencePath: handoffPath, MountBinding: probeMountBinding,
                         BeforeExposureMountReadback: beforeProbeMountReadback,
                         MeasuredPostWcsTarget: measuredTarget);
+                    if (G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(measuredTarget,
+                        handoffSlit.SlitDetection.Geometry.AcquisitionPoint, boundedCandidateRadius))
+                    {
+                        Report("近邻 WCS 小步返回后，新帧实测目标位于剩余精调范围内；跳过重复解算及更长曝光，交给 PHD2 新帧精调。");
+                        return measuredProbe;
+                    }
+                    // HD 223554: 10.58 px was within the original 20 px window,
+                    // but only 2 px remained. Previously we discarded this WCS
+                    // opportunity, then treated the known star as a missing field.
+                    // Reuse this immutable frame once; never start another ladder
+                    // or blind neighbour search if the coarse solve cannot help.
+                    outsideShortHandoff = measuredProbe with
+                    {
+                        Gate = GateResult.TargetQuality(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode,
+                            "A fresh measured target is identified, but lies outside the remaining fine-motion envelope. Try one formal solve of this existing frame for the original charged coarse route; if unavailable, preserve the measurement and return/skip, not blind search.",
+                            new Dictionary<string, double>
+                            {
+                                ["measuredTargetResidualPixels"] = PixelDistance(measuredTarget.Target!.Centroid,
+                                    handoffSlit.SlitDetection.Geometry.AcquisitionPoint),
+                                ["remainingHandoffRadiusPixels"] = boundedCandidateRadius,
+                            }),
+                    };
+                    Report("目标已实测找到，但超出剩余精调范围：仅解算已有图像一次，按原预算尝试粗修正；不重复曝光阶梯或盲搜。");
                 }
             }
 
@@ -6318,6 +6387,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 currentReadbackSeparationArcseconds <= handoffToleranceArcseconds &&
                 double.IsFinite(recordedCurrentOffsetSeparationArcseconds) &&
                 recordedCurrentOffsetSeparationArcseconds <= handoffToleranceArcseconds;
+            var ownedStoppedHandoff = g3StoppedHandoff is { } handoff &&
+                handoff.Run == context.Plan.ObservationRunId && handoff.Lineage == existing.BudgetLineageId &&
+                handoff.Proof.IsCurrent(phd2.Snapshot) &&
+                ValidateG3SearchMountState(pierSide).Disposition == GateDisposition.Passed;
             var requiresBudgetedFreshHandoff = allowChargedCurrentPositionHandoff &&
                 hasFreshMountBoundHandoffAuthority &&
                 !atChargedCurrentPosition &&
@@ -6325,7 +6398,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 double.IsFinite(currentReadbackSeparationArcseconds) &&
                 double.IsFinite(recordedCurrentOffsetSeparationArcseconds) &&
                 double.IsFinite(maximumFreshBoundHandoffArcseconds) &&
-                conservativeHandoffArcseconds <= maximumFreshBoundHandoffArcseconds;
+                (conservativeHandoffArcseconds <= maximumFreshBoundHandoffArcseconds || ownedStoppedHandoff);
             if (!atLineageOrigin && !atChargedCurrentPosition && !requiresBudgetedFreshHandoff)
             {
                 if (hasFreshMountBoundHandoffAuthority &&
@@ -6378,21 +6451,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 // solve ladder without rebasing the origin or silently
                 // minting motion, action, radius or elapsed-time budget.
                 var chargedHandoffArcseconds = conservativeHandoffArcseconds;
-                var remainingElapsed = continued.MaximumElapsedSeconds -
-                    Math.Max(0, (now - continued.StartedUtc).TotalSeconds);
-                if (chargedHandoffArcseconds > continued.MaximumSingleCorrectionArcseconds + 1e-9 ||
-                    inheritedOriginRadius > continued.MaximumRadiusArcseconds + continued.ArrivalToleranceArcseconds + 1e-9 ||
-                    continued.CumulativeMotionArcseconds + chargedHandoffArcseconds > continued.MaximumCumulativeMotionArcseconds + 1e-9 ||
-                    continued.CorrectionAttempts >= continued.MaximumCorrectionAttempts ||
-                    remainingElapsed < 0)
+                var debit = G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now);
+                if (debit.Gate.Disposition != GateDisposition.Passed)
+                    throw new PhysicalActionGateException(debit.Gate);
+                continued = debit.Charged! with
                 {
-                    throw new InvalidOperationException(
-                        $"Fresh immutable G3 authority is only {freshAuthoritySeparationArcseconds:F2} arcsec from the proposed handoff position, but conservatively charging its {chargedHandoffArcseconds:F2} arcsec displacement would exceed the inherited single/radius/cumulative/action/elapsed envelope; no budget was reset or rebased.");
-                }
-                continued = continued with
-                {
-                    CumulativeMotionArcseconds = continued.CumulativeMotionArcseconds + chargedHandoffArcseconds,
-                    CorrectionAttempts = checked(continued.CorrectionAttempts + 1),
                     LastReason =
                         $"Fresh immutable G3 mount binding {freshMountBoundHandoffAuthority!.MountBinding!.BindingSha256} ({Path.GetFileName(freshMountBoundHandoffAuthority.FramePath)}) authorized the current position {inheritedOriginRadius:F2} arcsec from the original field after a {chargedHandoffArcseconds:F2} arcsec continuity delta. The full delta and one action were conservatively charged; no physical command was issued and no origin, ceiling or clock was reset.",
                 };
@@ -6408,6 +6471,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
             continued = NativeTarget?.ClockBudget?.Charge(continued) ?? continued;
             await PersistG3AcquisitionMotionAsync(continued, cancellationToken).ConfigureAwait(false);
+            g3StoppedHandoff = null;
             return continued;
         }
         var state = new G3AcquisitionMotionState(
@@ -6819,6 +6883,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 NearTargetResponseRetries = lineageCopies.Max(copy => copy.NearTargetResponseRetries),
                 DirectApproachAfterNeighbourFailureAttempts = lineageCopies.Max(copy => copy.DirectApproachAfterNeighbourFailureAttempts),
                 StartedUtc = lineageCopies.Min(copy => copy.StartedUtc),
+                // Never add overlapping credits from durable copies. A stale
+                // copy can only reduce passive-time credit, not mint time.
+                ExcludedAtrExposureSeconds = lineageCopies.Min(copy => copy.ExcludedAtrExposureSeconds),
                 UpdatedUtc = DateTimeOffset.UtcNow,
                 LastReason = $"Monotonic G3 lineage aggregate adopted from {lineageCopies.Length} trustworthy durable copy/copies without counter or clock rollback.",
             };
@@ -6829,7 +6896,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // accepts an observed origin before checking action/time budgets.
             if (state.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger &&
                 !G3SettledScienceContinuationPolicy.CanRetainExpiredAccounting(stage, state.ObservationRunId, context.Plan.ObservationRunId) &&
-                (DateTimeOffset.UtcNow - state.StartedUtc).TotalSeconds > state.MaximumElapsedSeconds + 1e-9)
+                (DateTimeOffset.UtcNow - state.MotionClockStartedUtc).TotalSeconds > state.MaximumElapsedSeconds + 1e-9)
             {
                 aggregateIssues.Add("The strictest durable lineage elapsed-time limit is already consumed.");
             }
@@ -6869,8 +6936,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 cumulativeCorrectionDegrees,
                 state.CumulativeMotionArcseconds / 3600d);
             correctionAttempts = Math.Max(correctionAttempts, state.CorrectionAttempts);
-            fineAcquisitionStartedUtc = fineAcquisitionStartedUtc is null || state.StartedUtc < fineAcquisitionStartedUtc
-                ? state.StartedUtc
+            fineAcquisitionStartedUtc = fineAcquisitionStartedUtc is null || state.MotionClockStartedUtc < fineAcquisitionStartedUtc
+                ? state.MotionClockStartedUtc
                 : fineAcquisitionStartedUtc;
             durableG3AcquisitionMotion = state;
             if (state.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger)
@@ -7047,6 +7114,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         GateResult? destinationPreflightStopGate = null;
         GateResult? nearTargetResponseStopGate = null;
         var solveStoppedToPreserveReturn = false;
+        var fullPathBudgetInfeasible = false;
         var stopReason = "The WCS-centering envelope was exhausted before the target entered the commissioned coarse slit-acquisition window.";
 
         while ((currentField.Gate.Code == "G3_SOLVED_TARGET_OUTSIDE" || currentField.Gate.Disposition == GateDisposition.Passed) &&
@@ -7136,6 +7204,27 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var priorRequiredMotionArcseconds = Math.Sqrt(
                 priorDirectCorrection.RaArcseconds * priorDirectCorrection.RaArcseconds +
                 priorDirectCorrection.DecArcseconds * priorDirectCorrection.DecArcseconds);
+            var fullPathReserve = G3WcsRecoveryPolicy.UnreachableRoundTripAtOrigin(
+                state.CorrectionAttempts, state.CumulativeMotionArcseconds, state.CurrentRadiusArcseconds,
+                G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+                    currentField.Solve.Result.Coordinates.RADegrees, currentField.Solve.Result.Coordinates.Dec,
+                    inverse.DesiredG3Center.RADegrees, inverse.DesiredG3Center.Dec),
+                placementPreset.EffectiveAcquisitionResidualPixels * currentField.Solve.Result.Pixscale,
+                state.ArrivalToleranceArcseconds, state.MaximumCumulativeMotionArcseconds);
+            if (fullPathReserve is not null)
+            {
+                if (context.TryGet<string>("qhyMountCoordinateSyncFailureCode", out var syncFailure))
+                    fullPathReserve = fullPathReserve with { Message = $"{syncFailure}: mount Sync was not verified. {fullPathReserve.Message}" };
+                fullPathBudgetInfeasible = true;
+                exhaustedReserveGate = fullPathReserve;
+                stopReason = fullPathReserve.Message;
+                await PublishRunJsonEvidenceAsync("g3-wcs-full-path-reserve",
+                    "Fresh solved origin cannot reach target and reserve return within the existing budget",
+                    new { gate = fullPathReserve, budgetReset = false, syncRepeated = false },
+                    currentField.FramePath, cancellationToken).ConfigureAwait(false);
+                Report("新 WCS 显示指向偏差过大，目标与回程无法同时装入原运动预算；不先走半程再折返。确认停止后按本目标失败策略处理。");
+                break;
+            }
             var neighbourArrivalTolerancePixels = state.ArrivalToleranceArcseconds / currentField.Solve.Result.Pixscale;
             var directAfterFailedNeighbour = G3WcsRecoveryPolicy.CanTryDirectAfterFailedNeighbour(
                 failedNeighbourApproachesBefore, state.DirectApproachAfterNeighbourFailureAttempts,
@@ -7563,7 +7652,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
 
             var priorMeasuredPosition = currentField.Gate.Disposition == GateDisposition.Passed &&
-                currentField.TargetIdentification.HasCatalogPositionRefinement;
+                Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification);
             var priorPositionSpreadPixels = currentField.TargetIdentification.CatalogPositionSpreadPixels;
             attempts++;
             try
@@ -7615,7 +7704,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     shortPositionSpreadPixels = currentField.TargetIdentification.CatalogPositionSpreadPixels,
                     phd2CoarseHandoffResidualPixels = Phd2HandoffResidualPixels(currentField, placementPreset),
                     catalogOnlyHandoffResidualPixels = placementPreset.CoarseHandoffResidualPixels,
-                    measuredTargetConfirmed = currentField.TargetIdentification.HasCatalogPositionRefinement,
+                    measuredTargetConfirmed = Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification),
                     phd2RecognitionResidualPixels = placementPreset.EffectiveAcquisitionResidualPixels,
                     desiredTargetPixel,
                     projectionDestination,
@@ -7743,7 +7832,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
 
             var freshMeasuredPosition = currentField.Gate.Disposition == GateDisposition.Passed &&
-                currentField.TargetIdentification.HasCatalogPositionRefinement;
+                Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification);
             if (G3WcsRecoveryPolicy.CanRetryNearTargetResponse(
                 priorMeasuredPosition, freshMeasuredPosition, currentField.Solve?.Result.Success == true,
                 !isSolvedNeighbourApproach && scale == 1d, targetToSlitResidualPixels, currentResidual,
@@ -7783,7 +7872,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
 
         var returned = await ReturnDurableG3AcquisitionToOriginAsync(context, state, cancellationToken).ConfigureAwait(false);
-        var localSearchBudgetExhausted = solveStoppedToPreserveReturn || (exhaustedReserveGate is not null &&
+        var localSearchBudgetExhausted = solveStoppedToPreserveReturn || fullPathBudgetInfeasible || (exhaustedReserveGate is not null &&
             G3WcsRecoveryPolicy.HasNoGlobalSearchRoundTripBudget(
                 returned.State with
                 {
@@ -7811,6 +7900,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 returned.State.MaximumCorrectionAttempts,
                 returned.State.MaximumElapsedSeconds,
                 reserveFailureCode = exhaustedReserveGate?.Code,
+                fullPathBudgetInfeasible,
                 motionPreflightFailureCode = destinationPreflightStopGate?.Code,
                 responseFailureCode = nearTargetResponseStopGate?.Code,
                 localSearchBudgetExhausted,
@@ -7873,10 +7963,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (localSearchBudgetExhausted && exhaustedReserveGate is not null)
         {
             return new StageResult(
-                GateResult.Unknown(
-                    G3WcsRecoveryPolicy.ExhaustedReturnedCode,
-                    $"{exhaustedReserveGate.Code}: {exhaustedReserveGate.Message} " +
-                    "The mount returned to the saved WCS-centering origin. No further local search was started; the original cumulative motion, actions and clock remain charged.",
+                G3WcsRecoveryPolicy.ReturnedBudgetGate(
+                    exhaustedReserveGate, fullPathBudgetInfeasible,
                     new Dictionary<string, double>
                     {
                         ["wcsCenteringAttempts"] = attempts,
@@ -8330,7 +8418,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     ? double.PositiveInfinity
                     : prechargedReturnMoves * durableSearch.MaximumSingleCorrectionArcseconds;
                 var remainingPrecommandElapsedSeconds = durableSearch.MaximumElapsedSeconds -
-                    Math.Max(0, (DateTimeOffset.UtcNow - durableSearch.StartedUtc).TotalSeconds);
+                    Math.Max(0, (DateTimeOffset.UtcNow - durableSearch.MotionClockStartedUtc).TotalSeconds);
                 if (!double.IsFinite(outboundPrechargedMotionArcseconds) ||
                     outboundPrechargedMotionArcseconds > durableSearch.MaximumSingleCorrectionArcseconds + 1e-9 ||
                     !double.IsFinite(worstCaseEndpointRadiusArcseconds) ||
@@ -8697,7 +8785,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var projectedGlobalCumulativeArcseconds =
                     cumulativeCorrectionDegrees * 3600d + additionalActualMotionCharge;
                 var remainingElapsedSeconds = durableSearch.MaximumElapsedSeconds -
-                    Math.Max(0, (DateTimeOffset.UtcNow - durableSearch.StartedUtc).TotalSeconds);
+                    Math.Max(0, (DateTimeOffset.UtcNow - durableSearch.MotionClockStartedUtc).TotalSeconds);
                 if (!double.IsFinite(actualMoveArcseconds) ||
                     actualMoveArcseconds > durableSearch.MaximumSingleCorrectionArcseconds + 1e-9 ||
                     !double.IsFinite(actualOriginRadiusArcseconds) ||
@@ -10319,15 +10407,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         properties.Width,
                         properties.Height,
                         $"The fresh target field need not solve after a direct return from a formally solved overlapping field. The preceding PL3/mount prediction has {motionPrediction.MaximumUncertaintyPixels:F2}px bounded uncertainty and is evaluated against the unchanged run-cached detector-fixed slit geometry.");
-                    if (!UsesCatalogWcsTargetAuthority(context) && probe.MeasuredPostWcsTarget is { } measured)
-                        identification = identification with
-                        {
-                            BoundShortPositionEvidencePath = measured.BoundShortPositionEvidencePath,
-                            CatalogPositionSpreadPixels = measured.CatalogPositionSpreadPixels,
-                            Gate = new GateResult("TARGET_CATALOG_IDENTITY_MEASURED_HANDOFF", GateDisposition.Passed,
-                                "Original catalogue/WCS identity retained; fresh measured coarse position, not a motion prediction or completed slit placement.",
-                                measured.Gate.Metrics, measured.Gate.Severity),
-                        };
+                    identification = Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(
+                        identification, probe.MeasuredPostWcsTarget, UsesCatalogWcsTargetAuthority(context));
                     var motionCaption = probe.MeasuredPostWcsTarget is not null
                         ? $"G3 近邻返回：新帧实测目标 ({handoffTargetPoint.X:F1},{handoffTargetPoint.Y:F1}) 已通过有界交接；省去重复解算，交给 PHD2 获取新目标/狭缝残差并核对完整预算后精调。"
                         : $"G3 邻场 PL3 返回：预测目标 ({predictedTarget.X:F1},{predictedTarget.Y:F1})，缓存狭缝 ({cache.SlitDetection.Geometry.AcquisitionPoint.X:F1},{cache.SlitDetection.Geometry.AcquisitionPoint.Y:F1})，预测残差 {predictedResidual:F1}px（非实测）；保留目录身份，PHD2 仍须新帧测量，不代表已经入缝。";
@@ -10361,7 +10442,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         focusMeasurement,
                         MountBinding: probe.MountBinding,
                         SlitIdentity: cache.SlitIdentity,
-                        SlitIdentityEvidencePath: cache.SlitIdentityEvidencePath);
+                        SlitIdentityEvidencePath: cache.SlitIdentityEvidencePath)
+                    {
+                        // Preserve the already verified neighbour WCS/motion/short-frame
+                        // identity chain through later exposure-only guide frames.
+                        // Do not invent a successful target-field solve.
+                        NeighbourCatalogIdentityEvidencePath = motionPath,
+                    };
                 }
 
                 var predictionGate = GateResult.Unknown(
@@ -14350,6 +14437,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             captureToken, context.Plan.NightSetupId, imageType, context.Plan.Target.CatalogId.Trim(), HeaderSchemaVersion: 2);
         var identityHeaders = AtrFitsProvenance.CreateIdentityHeaders(provenance);
         var exposureLedger = await ReadSettledAtrExposureLedgerAsync(context, cancellationToken).ConfigureAwait(false);
+        var g3ExposureLedger = exposureLedger is null ? null : await ReadSettledG3ExposureLedgerAsync(context, cancellationToken).ConfigureAwait(false);
         var guideBeforeExposure = phd2.Snapshot;
         // A cloud/guide-window wait can outlast the earlier scheduling margin.
         // Re-evaluate at the actual shutter boundary; a charged failed attempt
@@ -14370,7 +14458,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         try
         {
             await RecordAtrExposureClockAsync(context, exposureLedger, captureToken, exposureOpenedUtc,
-                DateTimeOffset.UtcNow, exposureSeconds, exposureClock.Elapsed.TotalSeconds, cancellationToken).ConfigureAwait(false);
+                DateTimeOffset.UtcNow, exposureSeconds, exposureClock.Elapsed.TotalSeconds, cancellationToken, g3ExposureLedger).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -16064,6 +16152,10 @@ internal sealed record G3FieldState(
     string? SlitIdentityEvidencePath = null,
     G3CatalogRegistrationReference? CatalogRegistrationReference = null)
 {
+    // Set only by the validated neighbour handoff; copied by exposure-only
+    // continuity updates, never inferred from brightness or a catalogue name.
+    public string? NeighbourCatalogIdentityEvidencePath { get; init; }
+
     public static G3FieldState Failed(
         GateResult gate,
         string framePath = "",

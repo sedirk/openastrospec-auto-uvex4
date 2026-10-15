@@ -254,6 +254,11 @@ public static partial class ObservationUiPresentation
                 _ => state.ToString(),
             };
 
+    public static string RunStateName(ObservationRunState state, string? terminalCode, CultureInfo? culture) =>
+        state == ObservationRunState.Faulted && NativeSequencePlan.IsScheduledNightStop(terminalCode)
+            ? Text("已到计划收尾时间 · 请核对收口状态", "Scheduled stop reached; check closeout status", culture)
+            : RunStateName(state, culture);
+
     public static string GateStateName(GateResult gate, CultureInfo? culture = null) =>
         IsChinese(culture)
             ? gate switch
@@ -302,6 +307,13 @@ public static partial class ObservationUiPresentation
     {
         ArgumentNullException.ThrowIfNull(gate);
         var chinese = IsChinese(culture);
+        if (gate.Disposition != GateDisposition.Passed && NativeSequencePlan.IsScheduledNightStop(gate.Code))
+            return new ObservationIssuePresentation(
+                Text("已到本夜截止时间或晨光停止条件；不是解析或导星故障。", "The night deadline or dawn stop condition was reached; this is not a solve/guiding fault.", culture),
+                Text("停止后续目标，已保存帧保留；本目标未完成不等于设备故障。", "Further targets stop and saved frames are retained; an unfinished target is not an equipment failure.", culture),
+                Text("按原计划执行停止检查与安全收口；不延长截止、不自动续跑。", "Original stop checks and safe closeout remain active; no deadline extension or automatic restart.", culture),
+                Text("核对独立安全收口与屋顶回读；此提示不代表已经关顶或完成全部目标。", "Check independent closeout and roof readback; this message does not prove a closed roof or completion of all targets.", culture),
+                $"{gate.Code}: {gate.Message}");
         if (gate.Disposition == GateDisposition.Passed)
         {
             var warning = gate.Severity == GateSeverity.Warning;
@@ -601,6 +613,7 @@ public static partial class ObservationUiPresentation
             "G3_WCS_CENTERING_PIER_CHANGED" => "WCS 修正后赤道仪报告换侧，旧侧坐标已失效；未确认回到起点，不跨侧执行旧位移。仅在目标终止、设备停止及旧账本归档均通过后，才按序列策略跳过并让下一目标重新取场",
             "G3_DESTINATION_PIER_SIDE_CHANGE" => "驱动预测目的地会改变赤道仪侧别；未发送跨侧转向，旧运动账本保留",
             "G3_DESTINATION_PIER_SIDE_QUERY_FAILED" => "赤道仪目的地侧别查询失败；尚未发送本次转向，请查看驱动原始错误",
+            "G3_WCS_TARGET_OUTSIDE_RETURN_BUDGET" => "实际星场与目标相差过大，完整修正及回程超出原运动预算；仍在已确认的起点，未发送修正。请查看赤道仪坐标同步读回，不是本场无法解析",
             "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已返回起点，没有继续邻场搜索",
             "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED" => "目标已确认，但小幅修正后的实测位置未收敛；已返回起点，不再重复邻场搜索。请核对赤道仪的小幅运动响应及回差",
             "G3_MOTION_RETURN_INTERMEDIATE_RESIDUAL_LIMIT" => "G3 回原中间段未进入严格 2″ 命令包络；已保存 fresh 读回并停止后续回程段",

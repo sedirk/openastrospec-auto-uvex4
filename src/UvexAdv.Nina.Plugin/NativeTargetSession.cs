@@ -8,6 +8,9 @@ internal interface INativeTargetBoundary
     void RecordMeridianSegment(NativeTargetSession session, string runId);
     ClockContinuationBudget CaptureClockContinuationBudget();
     Task<IReadOnlyList<string>> ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion = true);
+    // Only a live owner can attest that cleanup/ledgers are settled. This is
+    // eligibility for a later fresh idle check, never physical-stop proof.
+    bool CanRecheckSequenceIdle => false;
     Task<GateResult> RecoverMountClockAtIdleBoundaryAsync(ObservationPlan failedPlan, CancellationToken token);
 }
 

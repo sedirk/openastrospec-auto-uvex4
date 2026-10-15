@@ -44,6 +44,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private readonly List<object> outcomes = new();
     private readonly List<NativeNightTargetBoundaryFailure> targetBoundaryFailures = new();
     private bool targetsIdle = true;
+    private bool targetResponsibilitiesSettled = true;
     private int attemptedTargets;
     private string? standbyJournalPath;
     private NightMountClockRecovery clockRecovery = new();
@@ -184,7 +185,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         targetsIdle = idleErrors.Length == 0;
         var settledErrors = !targetsIdle || runner is null ? idleErrors :
             (await runner.ConfirmSequenceIdleAsync(timeout.Token).ConfigureAwait(false)).ToArray();
-        RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors);
+        RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors,
+            runner?.CanRecheckSequenceIdle == true);
         var failedGate = NativeSequencePlan.TerminalFailure(result);
         var completed = result.Run.State == ObservationRunState.Completed && boundaryFailure is null;
         if (result.Run.State == ObservationRunState.Cancelled && !endRequested && !unsafeTripped) operatorCancelled = true;
@@ -247,9 +249,11 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         return false;
     }
 
-    internal void RecordUnsettledTargetBoundary(string target, string? runId, IReadOnlyList<string> errors)
+    internal void RecordUnsettledTargetBoundary(string target, string? runId, IReadOnlyList<string> errors,
+        bool canRecheckIdle = false)
     {
         if (errors.Count == 0) return;
+        targetResponsibilitiesSettled &= canRecheckIdle;
         // Closing a roof or parking a mount is not evidence that a target's
         // interrupted motion/flip ledger was reconciled. Retain this separately
         // from physical idleness, which still permits emergency roof closeout.
@@ -279,7 +283,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         {
             NightState = "正在开始本轮序列；尚未执行目标。";
             JournalPath = string.Empty; standbyJournalPath = null; lockedConfiguration = null;
-            attemptedTargets = 0; targetsIdle = true; outcomes.Clear(); targetBoundaryFailures.Clear();
+            attemptedTargets = 0; targetsIdle = targetResponsibilitiesSettled = true; outcomes.Clear(); targetBoundaryFailures.Clear();
             clockRecovery = new();
             clockContinuations.Clear();
             RefreshPlanEditability();
@@ -442,7 +446,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
                 await using var closer = factory.Create(host, settings, new Progress<ApplicationStatus>(), closeConfiguration);
                 return await closer.CloseSequenceNightAsync(timeout.Token).ConfigureAwait(false);
-            }, idle ? null : " 停止未确认：目前仅保留监控与报警，机械收口未获准，需人工处理。");
+            }, idle ? null : " 停止未确认：目前仅保留监控与报警，机械收口未获准。请确认设备连接和停止后手动重试；未结运动责任不会自动清除。",
+            real && configuration is not null && targetResponsibilitiesSettled
+                ? token => factory.RecheckStandbyIdleAsync(configuration, token) : null);
     }
 
     private async Task SaveJournalAsync(string phase)

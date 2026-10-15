@@ -14,6 +14,10 @@ public sealed class G3ShortHandoffSourceTests
         // The same image proceeds to the existing formal solver. A failed or
         // transient solve exits before a longer tier; no second acquisition loop.
         Assert.Equal(2, runner.Split("if (outsideShortHandoff is not null) return outsideShortHandoff;").Length - 1);
+        Assert.Contains("G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(measuredTarget", runner);
+        Assert.Contains("GateResult.TargetQuality(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode", runner);
+        Assert.Contains("Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(", runner);
+        Assert.Contains("Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification)", runner);
         var source=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.ShortHandoff.cs"));
         Assert.Contains("CaptureG3NativeSingleFrameForAcquisitionAsync",source);
         Assert.Contains("ValidateG3SolveProbeImage",source);
@@ -38,6 +42,8 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("maximumFrames = attempt + 2",source);
         Assert.Contains("previousHash = previousPath = null",source);
         Assert.Contains("boundaryRecheckUsed ? policy",source);
+        Assert.Contains("policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt)", source);
+        Assert.Contains("if (next.ExposureMilliseconds != policy.ExposureMilliseconds)", source);
         Assert.Contains("return latest with { MeasuredPostWcsTarget = null }",source);
         Assert.DoesNotContain("SlitTargetIdentifier.Identify",source);
         Assert.DoesNotContain("SolveImageAsync",source);

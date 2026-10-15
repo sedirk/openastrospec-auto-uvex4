@@ -99,7 +99,8 @@ public sealed class Phd2RollingCorrectionWindowTests
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
         var convergence = WorkflowSource.Convergence;
         Assert.Contains("requiredCompletionFrames, completionDeadline,", convergence);
-        Assert.Contains("cancellationToken, rollingCorrectionWindow ? previousCompletionWindow : null)", convergence);
+        Assert.Contains("cancellationToken, rollingCorrectionWindow ? previousCompletionWindow : null,", convergence);
+        Assert.Contains("session.LastMeasurement.Measurement.GuideStar).ConfigureAwait(false)", convergence);
         Assert.Contains("Phd2PlacementGuideWindowPolicy.CaptureConsecutiveWindowAsync(", source);
         Assert.DoesNotContain("newCompletionMeasurements.Single()", convergence);
         Assert.Contains("previousWindowDecision = correctionWindow", convergence);

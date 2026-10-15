@@ -131,6 +131,7 @@ public sealed partial class Phd2Client : IPhd2Client
                     PendingTakeoverLoopStopAllowed = false,
                     PendingLateLoopFrameAllowed = current.AppState == Phd2AppState.Looping,
                     PendingForceRecalibration = false,
+                    PendingInitialLockConfirmationAllowed = false,
                     PendingCalibrationStartSequence = null,
                     PendingCalibrationTerminalSequence = null,
                     LastSettleOperationId = null,
@@ -1249,6 +1250,13 @@ public sealed partial class Phd2Client : IPhd2Client
                     cancellationToken)
                 .ConfigureAwait(false);
             EnsureSameGuidingEpoch(baseline, "after immutable evidence copy");
+            // Read-only primary-star pixels, not GuideStep's potentially
+            // multi-star averaged displacement. Match both frame number and
+            // actual pixels before using its relative centroid downstream.
+            var primaryImageResult = await InvokeAsync("get_star_image", new { size = 15 }, cancellationToken)
+                .ConfigureAwait(false);
+            var primaryImage = Phd2PrimaryStarImage.Parse(primaryImageResult);
+            EnsureSameGuidingEpoch(baseline, "after primary-star image readback");
             ThrowIfGuideOutputFailed();
             var afterSave = Snapshot;
             var nativeFrameBound = beforeSave.LastGuideStep?.Frame == guideFrame &&
@@ -1268,7 +1276,8 @@ public sealed partial class Phd2Client : IPhd2Client
                 CaptureLoopStarted: false,
                 AutomaticRetryAllowed: false,
                 NativeGuideStep: nativeFrameBound ? guideStep : null,
-                NativeLockPosition: nativeFrameBound ? beforeSave.LockPosition : null);
+                NativeLockPosition: nativeFrameBound ? beforeSave.LockPosition : null,
+                PrimaryStarImage: nativeFrameBound && primaryImage?.Frame == guideFrame ? primaryImage : null);
         }
         finally
         {
@@ -1533,6 +1542,21 @@ public sealed partial class Phd2Client : IPhd2Client
         Phd2Rectangle? selectionRoi,
         bool preserveSameEpochGuidingOnSettleTimeout,
         CancellationToken cancellationToken)
+        => await GuideAndSettleCoreAsync(criteria, forceRecalibration, selectionRoi, cancellationToken).ConfigureAwait(false);
+
+    public Task<Phd2SettleResult> ResettleAtCurrentLockAsync(Phd2SameLockSettleRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!double.IsFinite(request.LockTolerancePixels) || request.LockTolerancePixels < 0 ||
+            !double.IsFinite(request.LockPosition.X) || !double.IsFinite(request.LockPosition.Y))
+            throw new ArgumentOutOfRangeException(nameof(request));
+        return GuideAndSettleCoreAsync(request.Criteria, false, null, cancellationToken, request);
+    }
+
+    private async Task<Phd2SettleResult> GuideAndSettleCoreAsync(Phd2SettleCriteria criteria,
+        bool forceRecalibration, Phd2Rectangle? selectionRoi, CancellationToken cancellationToken,
+        Phd2SameLockSettleRequest? sameLock = null)
     {
         ArgumentNullException.ThrowIfNull(criteria);
         ValidateSettleCriteria(criteria);
@@ -1552,6 +1576,12 @@ public sealed partial class Phd2Client : IPhd2Client
         {
             ThrowIfAutomationPaused();
             ThrowIfGuideOutputFailed();
+            if (sameLock is not null)
+            {
+                _ = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+                _ = await GetLockPositionCoreAsync(cancellationToken).ConfigureAwait(false);
+                RequireSameLockSettleOwner(sameLock, sameLock.GuideEpoch);
+            }
             if (forceRecalibration)
             {
                 await EnsureForcedRecalibrationPrerequisitesAsync(cancellationToken).ConfigureAwait(false);
@@ -1564,7 +1594,8 @@ public sealed partial class Phd2Client : IPhd2Client
                 EnsureCalibrationApprovedForGuiding();
             }
 
-            var ownerCalibrationAllowed = !forceRecalibration &&
+            if (sameLock is not null) RequireSameLockSettleOwner(sameLock, sameLock.GuideEpoch);
+            var ownerCalibrationAllowed = sameLock is null && !forceRecalibration &&
                 Snapshot.CalibrationValidation is { OwnerManaged: true, AllowNativeCalibration: true };
             var localOperationId = Interlocked.Increment(ref nextSettleOperationId);
             operationId = localOperationId;
@@ -1595,6 +1626,8 @@ public sealed partial class Phd2Client : IPhd2Client
                     PendingLateLoopFrameAllowed = current.AppState is Phd2AppState.Looping or Phd2AppState.Selected,
                     PendingForceRecalibration = forceRecalibration,
                     PendingOwnerCalibrationAllowed = ownerCalibrationAllowed,
+                    PendingInitialLockConfirmationAllowed = sameLock is null && !forceRecalibration &&
+                        current.AppState is Phd2AppState.Looping or Phd2AppState.Selected,
                     PendingCalibrationStartSequence = null,
                     PendingCalibrationTerminalSequence = null,
                 };
@@ -1689,6 +1722,10 @@ public sealed partial class Phd2Client : IPhd2Client
                     "PHD2 SettleDone was not accepted as a current connection/guide-epoch attestation.");
             }
             var result = attested.LastSettle;
+            if (sameLock is not null)
+                // InvalidateSettle above advances the local epoch exactly once.
+                // An external loss/selection/calibration invalidates this proof.
+                RequireSameLockSettleOwner(sameLock, checked(sameLock.GuideEpoch + 1));
             if (forceRecalibration)
             {
                 UpdateSnapshot(current => current with { CalibrationValidation = null });
@@ -1743,6 +1780,16 @@ public sealed partial class Phd2Client : IPhd2Client
             }
             operationGate.Release();
         }
+    }
+
+    private void RequireSameLockSettleOwner(Phd2SameLockSettleRequest request, long guideEpoch)
+    {
+        var s = Snapshot;
+        if (!s.IsConnected || s.AutomationPaused || s.Phd2Paused || s.AppState != Phd2AppState.Guiding ||
+            s.ConnectionEpoch != request.ConnectionEpoch || s.GuideEpoch != guideEpoch ||
+            s.PendingSettleOperationId is not null || s.GuideOutput?.Failed == true ||
+            s.LockPosition is not { } position || Distance(position, request.LockPosition) > request.LockTolerancePixels)
+            throw new Phd2Exception("PHD2_PRIMARY_RESET_OWNER_CHANGED: Same-lock native recovery requires the original active guide owner and unchanged lock; no new guide start is authorized.");
     }
 
     public async Task<Phd2StopCaptureResult> StopCaptureAndConfirmAsync(
@@ -2306,9 +2353,12 @@ public sealed partial class Phd2Client : IPhd2Client
             "AppState" => ApplyObservedAppState(
                 next,
                 ParseAppState(GetOptionalString(message.Payload, "State"))),
-            "LockPositionSet" when IsPendingGuideStartLockConfirmation(next, message.Payload) => next with
+            "LockPositionSet" when IsPendingGuideStartLockConfirmation(next, message.Payload,
+                allowDeferredInitialLock: true) => next with
             {
                 LockPosition = ParsePointObject(message.Payload),
+                PendingInitialLockConfirmationAllowed = next.PendingInitialLockConfirmationAllowed &&
+                    !next.PendingSettleBeginSequence.HasValue,
             },
             "LockPositionSet" => InvalidateSettle(next with
             {
@@ -2453,15 +2503,20 @@ public sealed partial class Phd2Client : IPhd2Client
             Phd2Paused = false,
             GuideOutput = current.GuideOutput?.Failed == true ? current.GuideOutput : null,
         });
-        return preservePending ? RestorePendingSettle(current, next) : next;
+        return preservePending ? RestorePendingSettle(current, next) with
+        {
+            PendingInitialLockConfirmationAllowed = false,
+        } : next;
     }
 
     private bool IsPendingGuideStartLockConfirmation(
         Phd2StateSnapshot current,
-        JsonElement payload)
+        JsonElement payload,
+        bool allowDeferredInitialLock = false)
     {
         if (!IsPendingSettleOperationCurrent(current) ||
-            current.PendingSettleBeginSequence.HasValue ||
+            (current.PendingSettleBeginSequence.HasValue &&
+             !(allowDeferredInitialLock && current.PendingInitialLockConfirmationAllowed)) ||
             current.LockPosition is null)
         {
             return false;
@@ -2471,6 +2526,10 @@ public sealed partial class Phd2Client : IPhd2Client
         // requested search coordinate to a nearby stellar centroid.  PHD2
         // announces that accepted centroid once more as guide takes over the
         // selection loop, so use the same bounded tolerance as selection.
+        // With initially lost frames, native CALIBRATED -> GUIDING sets this
+        // lock AFTER SettleBegin but BEFORE StartGuiding. Permit it once, only
+        // for this initial local takeover, never for same-lock recovery or a
+        // StarSelected event. The first guide event closes the extra window.
         var announced = ParsePointObject(payload);
         return announced is not null &&
                Distance(current.LockPosition, announced) <= options.GuideStarSelectionTolerancePixels;
@@ -2519,6 +2578,7 @@ public sealed partial class Phd2Client : IPhd2Client
         var step = ParseGuideStep(payload);
         current = current with
         {
+            PendingInitialLockConfirmationAllowed = false,
             GuideOutput = Phd2GuideOutputStatus.Observe(current.GuideOutput, step,
                 current.LastEventUtc ?? DateTimeOffset.UtcNow, current.Equipment),
         };
@@ -2580,6 +2640,7 @@ public sealed partial class Phd2Client : IPhd2Client
             PendingCalibrationTerminalSequence = null,
             PendingTakeoverLoopStopAllowed = false,
             PendingLateLoopFrameAllowed = true,
+            PendingInitialLockConfirmationAllowed = false,
         };
     }
 
@@ -2622,6 +2683,7 @@ public sealed partial class Phd2Client : IPhd2Client
         PendingLateLoopFrameAllowed = source.PendingLateLoopFrameAllowed,
         PendingForceRecalibration = source.PendingForceRecalibration,
         PendingOwnerCalibrationAllowed = source.PendingOwnerCalibrationAllowed,
+        PendingInitialLockConfirmationAllowed = source.PendingInitialLockConfirmationAllowed,
         PendingCalibrationStartSequence = source.PendingCalibrationStartSequence,
         PendingCalibrationTerminalSequence = source.PendingCalibrationTerminalSequence,
     };
@@ -2687,6 +2749,7 @@ public sealed partial class Phd2Client : IPhd2Client
             PendingLateLoopFrameAllowed = false,
             PendingForceRecalibration = false,
             PendingOwnerCalibrationAllowed = false,
+            PendingInitialLockConfirmationAllowed = false,
             PendingCalibrationStartSequence = null,
             PendingCalibrationTerminalSequence = null,
             LastSettleConnectionEpoch = current.ConnectionEpoch,
@@ -2710,6 +2773,7 @@ public sealed partial class Phd2Client : IPhd2Client
             PendingLateLoopFrameAllowed = false,
             PendingForceRecalibration = false,
             PendingOwnerCalibrationAllowed = false,
+            PendingInitialLockConfirmationAllowed = false,
             PendingCalibrationStartSequence = null,
             PendingCalibrationTerminalSequence = null,
             LastSettleOperationId = null,

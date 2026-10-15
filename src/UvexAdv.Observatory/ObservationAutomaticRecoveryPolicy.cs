@@ -130,11 +130,11 @@ public static class ObservationAutomaticRecoveryPolicy
                     "Repeat the identity-pinned connection/readback boundary; no movement, exposure or output command is authorized by the retry.",
                     TimeSpan.FromSeconds(1)),
 
-            // Tracking enable is idempotent.  The stage still has to obtain a
-            // positive readback before its catalogue slew is allowed.
+            // Only pre-command tracking failures can retry here. ADR-0038's
+            // catalogue GOTO has a durable one-command intent and distinct
+            // outcome codes; none may repeat the stage's movement.
             (ObservationStage.SlewToCatalogTarget,
                 "TELESCOPE_TRACKING_ENABLE_FAILED" or
-                "TELESCOPE_TRACKING_ENABLE_TIMEOUT" or
                 "TELESCOPE_TRACKING_CONNECTION_LOST") => RetrySameStage(
                     2,
                     "Re-read/re-establish tracking before the catalogue slew; no slew is authorized by this retry."),

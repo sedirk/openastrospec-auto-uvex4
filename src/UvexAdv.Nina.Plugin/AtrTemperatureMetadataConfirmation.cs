@@ -5,7 +5,7 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed record AtrTemperatureConfirmation(bool Applied, double OriginalTemperatureC,
     double? ConfirmedTemperatureC, DateTimeOffset? ConfirmedUtc, string Code,
-    IReadOnlyList<AtrCoolingTelemetry> Samples);
+    IReadOnlyList<AtrCoolingTelemetry> Samples, GateResult? FailureGate = null);
 
 /// <summary>
 /// Before first save only. A ToupTekAlike 0 C metadata sample can originate from
@@ -27,7 +27,8 @@ internal static class AtrTemperatureMetadataConfirmation
         Func<CancellationToken, Task> waitBetweenSamples, CancellationToken token)
     {
         var samples = new List<AtrCoolingTelemetry>();
-        AtrTemperatureConfirmation Unchanged(string code) => new(false, nativeTemperature, null, null, code, samples.ToArray());
+        GateResult? failure = null;
+        AtrTemperatureConfirmation Unchanged(string code) => new(false, nativeTemperature, null, null, code, samples.ToArray(), failure);
         if (!NeedsConfirmation(driverType, nativeTemperature, nativeSetPoint, target)) return Unchanged("NATIVE_METADATA_UNCHANGED");
         var started = Stopwatch.GetTimestamp();
         var consecutive = 0;
@@ -42,8 +43,9 @@ internal static class AtrTemperatureMetadataConfirmation
                 samples.Add(sample);
                 // Each SDK read is awaited before doing anything else; do not leave
                 // an abandoned task reading the owner during disconnect/restart.
-                if (Stopwatch.GetElapsedTime(started) > TimeSpan.FromSeconds(12)) return Unchanged("OWNER_TEMPERATURE_READBACK_TIMEOUT");
                 var gate = AtrCoolingReadinessPolicy.Evaluate(sample, expectedCameraId, target);
+                failure = gate;
+                if (Stopwatch.GetElapsedTime(started) > TimeSpan.FromSeconds(12)) return Unchanged("OWNER_TEMPERATURE_READBACK_TIMEOUT");
                 if (gate.Disposition != GateDisposition.Passed)
                 {
                     consecutive = 0;
@@ -59,6 +61,10 @@ internal static class AtrTemperatureMetadataConfirmation
             return Unchanged("OWNER_TEMPERATURE_READBACK_UNCONFIRMED");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return Unchanged("OWNER_TEMPERATURE_READBACK_FAILED"); }
+        catch (Exception)
+        {
+            failure = GateResult.Unknown("ATR_COOLING_FRESH_READ_FAILED", "Exact-owner temperature confirmation failed; no recovery or skip authority was inferred.");
+            return Unchanged("OWNER_TEMPERATURE_READBACK_FAILED");
+        }
     }
 }

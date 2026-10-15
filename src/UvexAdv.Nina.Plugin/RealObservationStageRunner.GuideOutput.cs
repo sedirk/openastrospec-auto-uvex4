@@ -33,10 +33,7 @@ internal sealed partial class RealObservationStageRunner
                 exactLockMotionIssued = false, slitPlacementProven = false, budgetReset = false },
             lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
         automaticRebuildStopProof = new(terminal.ConnectionEpoch, phd2.Snapshot.GuideEpoch, evidence);
-        return new StageResult(GateResult.Unknown(lostStars ? "PHD2_INITIAL_GUIDE_STAR_LOSS" : Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode,
-            "初始导星未达到稳定条件，已确认停止；尚未发出入缝微调，也未开始光谱曝光。整夜序列将在独立核对空闲与运动账本后跳过此目标。",
-            new Dictionary<string, double> { ["totalGuideFrames"] = settle.TotalFrames,
-                ["droppedGuideFrames"] = settle.DroppedFrames, ["stopConfirmed"] = 1 }), evidence);
+        return new StageResult(Phd2DependencyRebuildStopPolicy.AfterConfirmedInitialGuideStop(settle, lostStars), evidence);
     }
 
     private async Task<StageResult> HaltFailedPhd2GuideOutputAsync(

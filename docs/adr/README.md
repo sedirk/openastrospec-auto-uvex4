@@ -47,3 +47,7 @@ Current accepted decisions:
 - [ADR-0034: Idle-boundary mount clock recovery](0034-idle-boundary-mount-clock-recovery.md)
 - [ADR-0035: Clock-repair same-target continuation](0035-clock-repair-same-target-continuation.md)
 - [ADR-0036: Native preparation cards and an explicit native end area](0036-native-sequence-preparation-and-end-area.md)
+- [ADR-0037: Primary-star geometry and bounded same-lock recovery](0037-primary-star-geometry-and-bounded-settle-recovery.md)
+- [ADR-0038: One initial catalogue GOTO after tracking timeout](0038-initial-catalogue-goto-tracking-recovery.md)
+- [ADR-0039: Rapid maintenance restart for an explicitly requested next round](0039-explicit-round-rapid-maintenance-restart.md)
+- [ADR-0040: Continuous target placement and budgeted coarse/fine handoff](0040-continuous-target-placement-and-budgeted-handoff.md)

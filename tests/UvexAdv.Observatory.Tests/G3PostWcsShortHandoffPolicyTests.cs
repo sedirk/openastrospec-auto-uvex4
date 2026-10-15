@@ -5,6 +5,21 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3PostWcsShortHandoffPolicyTests
 {
+    [Fact]
+    public void PairInsideTwentyPixelWindowStillHonorsSmallerInheritedEnvelope()
+    {
+        var a = Measured(Prediction.X + 8, Prediction.Y + 1);
+        var b = Measured(Prediction.X + 8.5, Prediction.Y + 1);
+        var core = Long with { Target = Long.Target! with { Centroid = a.Identification.Target!.Centroid } };
+        Assert.True(Confirm(a, b).Accepted);
+        var d = G3PostWcsShortHandoffPolicy.Evaluate(core, Prediction, 5, Prediction,
+            1920, 1080, 20, a, b, Confirm(a, b), 2, false, 2, 100);
+        Assert.False(d.Accepted);
+        Assert.True(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(d.Gate));
+        Assert.True(G3PostWcsShortHandoffPolicy.Evaluate(core, Prediction, 5, Prediction,
+            1920, 1080, 20, a, b, Confirm(a, b), 2, false, 15, 100).Accepted);
+    }
+
     [Theory]
     // 2026-10-11 EW Lac / KY And. Original measured coordinates, not synthetic success.
     [InlineData(817.6258530793547, 421.36764123128467, 857.056768558952, 421.3467248908297,

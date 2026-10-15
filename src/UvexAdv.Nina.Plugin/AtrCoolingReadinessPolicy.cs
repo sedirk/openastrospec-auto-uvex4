@@ -42,11 +42,28 @@ internal static class AtrCoolingReadinessPolicy
             ownerReadback.Disposition == GateDisposition.Passed)
             return GateResult.Pass("ATR_SAVED_FRAME_TEMPERATURE_VERIFIED",
                 "Saved FITS temperature/set-point and post-save exact-owner cooling readback passed.", metrics);
-        return GateResult.Unknown(SavedFrameInvalidCode,
-            $"Saved FITS CCD-TEMP={temperature:G6} C, SET-TEMP={setPoint:G6} C, expected {targetTemperatureC:G6} C. " +
+        var message = $"Saved FITS CCD-TEMP={temperature:G6} C, SET-TEMP={setPoint:G6} C, expected {targetTemperatureC:G6} C. " +
             $"Post-save owner readback: {ownerReadback.Code}: {ownerReadback.Message} " +
-            "The immutable frame is retained but not accepted; no old temperature is substituted and no further exposure is authorized.", metrics);
+            "The immutable frame is retained but not accepted; no old temperature is substituted. Fresh readiness is required before another exposure.";
+        // A bad frame temperature is not loss of ownership. Conversely, never
+        // hide a disconnected/changed owner or unknown read failure in a
+        // skippable metadata wrapper.
+        if (ownerReadback.Disposition != GateDisposition.Passed && ownerReadback.Code != "ATR_PRECOOLING_IN_PROGRESS")
+            return ownerReadback with { Message = message };
+        if (!double.IsFinite(targetTemperatureC))
+            return GateResult.Unknown(SavedFrameInvalidCode, message, metrics);
+        return GateResult.TargetQuality(SavedFrameInvalidCode, message, metrics);
     }
+
+    internal static bool IsSavedTemperatureQualityFailure(GateResult gate) =>
+        gate.Disposition != GateDisposition.Passed && gate.FailureScope == GateFailureScope.TargetQuality &&
+        gate.Code == SavedFrameInvalidCode;
+
+    internal static GateResult CoolingWaitExhausted(string code, string message, GateResult last) =>
+        last.Disposition == GateDisposition.Passed || last.Code is "ATR_PRECOOLING_IN_PROGRESS" or
+            "ATR_COOLER_OFF" or "ATR_COOLING_SETPOINT_NOT_APPLIED" or "ATR_COOLING_TELEMETRY_INCOHERENT"
+            ? GateResult.TargetQuality(code, message + " Last readback: " + last.Message, last.Metrics)
+            : last;
 
     public static GateResult Evaluate(
         AtrCoolingTelemetry telemetry,

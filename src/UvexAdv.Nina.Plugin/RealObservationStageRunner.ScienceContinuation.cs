@@ -54,10 +54,19 @@ internal sealed partial class RealObservationStageRunner
             preset.BuildMotionLimits().LockVerificationTolerancePixels) ? ledger : null;
     }
 
+    private async Task<G3AcquisitionMotionState?> ReadSettledG3ExposureLedgerAsync(ObservationContext context, CancellationToken token)
+    {
+        if (!HasNoOutstandingGuideRecoveryMotion) return null;
+        var loaded = await G3AcquisitionMotionStore.LoadAsync(G3AcquisitionMotionPath(context.Plan.ObservationRunId), token).ConfigureAwait(false);
+        return loaded.Error is null && loaded.State is { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger } state &&
+            state.Validate().Count == 0 && ValidateG3AcquisitionMotionIdentity(context, state).Disposition == GateDisposition.Passed
+                ? state : null;
+    }
+
     private async Task RecordAtrExposureClockAsync(ObservationContext context,
         Phd2LockShiftPendingState? before, string captureToken, DateTimeOffset openedUtc,
         DateTimeOffset completedUtc, double requestedSeconds, double monotonicElapsedSeconds,
-        CancellationToken token)
+        CancellationToken token, G3AcquisitionMotionState? g3Before = null)
     {
         if (before is null || pendingPhd2LockShift is not null) return;
         var path = Phd2LockShiftPendingPath(context.Plan.ObservationRunId);
@@ -77,6 +86,26 @@ internal sealed partial class RealObservationStageRunner
             activeMotionElapsedSeconds = (completedUtc - credited.MotionClockStartedUtc).TotalSeconds,
             motionBudgetReset = false, scienceAccepted = false,
         }).ConfigureAwait(false);
+        if (g3Before is not null && HasNoOutstandingGuideRecoveryMotion)
+        {
+            var g3After = await ReadSettledG3ExposureLedgerAsync(context, token).ConfigureAwait(false);
+            var g3Credited = g3After is null ? null : G3SettledScienceContinuationPolicy.CreditExposure(
+                g3Before, g3After, openedUtc, completedUtc, requestedSeconds, monotonicElapsedSeconds);
+            if (g3Credited is not null)
+            {
+                await PersistG3AcquisitionMotionAsync(g3Credited, token).ConfigureAwait(false);
+                if (fineAcquisitionStartedUtc is { } start)
+                    fineAcquisitionStartedUtc = start.AddSeconds(g3Credited.ExcludedAtrExposureSeconds - g3Before.ExcludedAtrExposureSeconds);
+                await WriteAuditBestEffortAsync("g3-atr-exposure-clock-excluded", new
+                {
+                    context.Plan.ObservationRunId, captureToken, openedUtc, completedUtc, requestedSeconds,
+                    g3Credited.BudgetLineageId, g3Credited.StartedUtc, g3Credited.ExcludedAtrExposureSeconds,
+                    g3Credited.CorrectionAttempts, g3Credited.CumulativeMotionArcseconds,
+                    activeMotionElapsedSeconds = (completedUtc - g3Credited.MotionClockStartedUtc).TotalSeconds,
+                    motionBudgetReset = false, nightDeadlineChanged = false, scienceAccepted = false,
+                }).ConfigureAwait(false);
+            }
+        }
     }
 
     private async Task<GateResult?> CheckScienceRebuildBudgetAsync(ObservationContext context, GateResult sourceGate, CancellationToken token)

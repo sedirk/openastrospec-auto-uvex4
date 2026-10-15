@@ -56,7 +56,10 @@ public sealed class ScienceQualityPolicyTests
             "UVEX-20261002T161112Z-bea193475e354f5", "UVEX-20261004T160744Z-72f8a935699743d",
             "UVEX-20261005T111635Z-b188cc61bf2c45e", "UVEX-20261005T192232Z-b9d5f3375a81439",
             "UVEX-20261007T132717Z-c7c518f94151439", "UVEX-20261007T161631Z-25db169c1e3145b",
-            "UVEX-20261008T170531Z-f242c61e7e2a486"];
+            "UVEX-20261008T170531Z-f242c61e7e2a486",
+            "UVEX-20261014T112329Z-1862faa86ec84de", "UVEX-20261014T114529Z-20a16ea8c244410",
+            "UVEX-20261014T121814Z-bfef8e1f7392465", "UVEX-20261014T125018Z-07288c0a1416434",
+            "UVEX-20261011T190811Z-8c7a4b56c1e740b", "UVEX-20261013T162452Z-b53628410c2e452"];
         var reports = new List<object>();
         foreach (var id in ids)
         {
@@ -120,11 +123,8 @@ public sealed class ScienceQualityPolicyTests
             var rawHashes = recorded.Select(e => (Path: e.GetProperty("absolutePath").GetString()!,
                 Sha: e.GetProperty("sha256").GetString()!.ToUpperInvariant())).ToArray();
             foreach (var raw in rawHashes) Assert.Equal(raw.Sha, Hash(raw.Path));
-            var captures = new Queue<JsonElement>(recorded);
-            var atr = new AtrWorkflowFixture(accepted, tiers, accepted + 4, Number(probes[0].GetProperty("metadata"), "exposureSeconds"));
-            atr.Port.NextMetrics = expected =>
+            SpectralProbeMetrics RecordedMetrics(JsonElement frame, SpectralProbeMetrics expected)
             {
-                var frame = captures.Dequeue();
                 var m = frame.GetProperty("metadata");
                 Assert.Equal(expected.ExposureSeconds, Number(m, "exposureSeconds"));
                 return new SpectralProbeMetrics(Number(m, "exposureSeconds"), Number(m, "biasLevelAdu"),
@@ -133,12 +133,31 @@ public sealed class ScienceQualityPolicyTests
                     Number(m, "targetToSkyContrast"), bool.Parse(m.GetProperty("guidingStable").GetString()!),
                     frame.GetProperty("absolutePath").GetString()!, Number(m, "traceSaturatedFraction"),
                     Number(m, "clippedDispersionColumnFraction"), (int)Number(m, "longestClippedDispersionColumnRun"));
-            };
+            }
+            var captures = new Queue<JsonElement>(recorded);
+            var atr = new AtrWorkflowFixture(accepted, tiers, accepted + 4, Number(probes[0].GetProperty("metadata"), "exposureSeconds"));
+            atr.Port.NextMetrics = expected => RecordedMetrics(captures.Dequeue(), expected);
             var selection = await atr.Science.SelectExposureAsync(atr.Context, default);
             Assert.True(selection.CanAdvance, $"{id}: {selection.Gate.Message}");
-            var science = await atr.Science.RunAsync(atr.Context, default);
+            var earlyHighSnrSelection = atr.Probe.AttemptedFrames < probes.Length;
+            var scienceReplay = atr;
+            if (earlyHighSnrSelection)
+            {
+                // No historical future frames exist at the newly selected tier.
+                // Do not relabel 600s data as a counterfactual shorter capture.
+                // Separately verify the real historical final probe/science tier.
+                Assert.Equal(1, atr.Science.AcceptedFrames);
+                var finalProbe = probes[^1];
+                var finalTier = Number(finalProbe.GetProperty("metadata"), "exposureSeconds");
+                var historical = new Queue<JsonElement>(new[] { finalProbe }.Concat(
+                    recorded.Where(e => e.GetProperty("kind").GetString() == "atr-science-fits")));
+                scienceReplay = new AtrWorkflowFixture(accepted, [finalTier], accepted + 4, finalTier);
+                scienceReplay.Port.NextMetrics = expected => RecordedMetrics(historical.Dequeue(), expected);
+                Assert.True((await scienceReplay.Science.SelectExposureAsync(scienceReplay.Context, default)).CanAdvance);
+            }
+            var science = await scienceReplay.Science.RunAsync(scienceReplay.Context, default);
             Assert.True(science.CanAdvance, $"{id}: {science.Gate.Message}");
-            Assert.Equal(accepted, atr.Science.AcceptedFrames);
+            Assert.Equal(accepted, scienceReplay.Science.AcceptedFrames);
             foreach (var raw in rawHashes) Assert.Equal(raw.Sha, Hash(raw.Path));
             Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)), Hash(evidencePath));
             Assert.Equal(Convert.ToHexString(SHA256.HashData(manifestBytes)), Hash(manifestPath));
@@ -146,9 +165,11 @@ public sealed class ScienceQualityPolicyTests
             reports.Add(new { id, accepted, residuals, tolerance,
                 manifestSha256 = Hash(manifestPath), evidenceSha256 = Hash(evidencePath), rawFrameSha256 = rawHash,
                 strictProbe = false, warningProbeWithFullSafety = true, warningProbeWithWeakSafety = true,
-                extractedPlacementCode = placement.Gate.Code, extractedScienceAccepted = atr.Science.AcceptedFrames,
+                extractedPlacementCode = placement.Gate.Code, extractedScienceAccepted = scienceReplay.Science.AcceptedFrames,
                 extractedProbeCaptures = atr.Probe.AttemptedFrames, reusedFinalProbes = atr.Science.ReusedProbeFrames,
-                replayLadder = tiers, replayScope = "recorded metrics and visited tiers; fixture safety/identity; no FITS reprocessing",
+                earlyHighSnrSelection, newlySelectedTier = atr.Probe.SelectedExposureSeconds,
+                counterfactualScienceSuccessClaimed = false,
+                replayLadder = tiers, replayScope = "recorded metrics; early selection and historical final-tier science replay are separate; fixture safety/identity; no FITS reprocessing",
                 rawObservationsUnchanged = true, newAcquisition = false });
         }
         var output = Environment.GetEnvironmentVariable("UVEX_REPLAY_REPORT");

@@ -70,6 +70,12 @@ public sealed class AtrTemperatureMetadataConfirmationTests
         var r = await Confirm(bad, Good(), Good(), Good());
         Assert.False(r.Applied);
         Assert.Single(r.Samples);
+        Assert.NotNull(r.FailureGate);
+        if (fault is "identity" or "disconnected")
+        {
+            Assert.Equal(GateFailureScope.Run, r.FailureGate.FailureScope);
+            Assert.NotEqual("ATR_PRECOOLING_IN_PROGRESS", r.FailureGate.Code);
+        }
         var metadata = new ImageMetaData();
         metadata.Camera.Temperature = 0;
         AtrTemperatureMetadataHeaders.ApplyBeforeFirstSave(metadata, r);
@@ -98,6 +104,7 @@ public sealed class AtrTemperatureMetadataConfirmationTests
             0, -10, -10, Id, _ => throw new IOException("driver read failed"), NoWait, CancellationToken.None);
         Assert.False(r.Applied);
         Assert.Equal("OWNER_TEMPERATURE_READBACK_FAILED", r.Code);
+        Assert.Equal("ATR_COOLING_FRESH_READ_FAILED", r.FailureGate!.Code);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AtrTemperatureMetadataConfirmation.ConfirmAsync(

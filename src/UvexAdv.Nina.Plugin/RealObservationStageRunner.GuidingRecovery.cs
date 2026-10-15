@@ -6,12 +6,14 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed partial class RealObservationStageRunner
 {
     private Phd2DependencyRebuildStopProof? automaticRebuildStopProof;
+    private (string Run, string Lineage, Phd2DependencyRebuildStopProof Proof)? g3StoppedHandoff;
 
     private async Task<GateResult> ReturnAfterOwnedGuidingBeforeReacquisitionAsync(
         ObservationContext context, CancellationToken cancellationToken)
     {
         var proof = automaticRebuildStopProof;
         automaticRebuildStopProof = null; // Single use; never restart a return by replaying this receipt.
+        g3StoppedHandoff = null;
         if (proof is null || durableG3AcquisitionMotion is not { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger } state)
             return GateResult.Pass("G3_GUIDING_RECOVERY_NO_OWNED_HANDOFF", "没有待处理的本轮导星接续；沿原有恢复规则检查。");
         if (!proof.IsCurrent(phd2.Snapshot))
@@ -44,7 +46,13 @@ internal sealed partial class RealObservationStageRunner
                 proof.EvidencePath, cancellationToken).ConfigureAwait(false);
             return plan.Gate;
         }
-        if (plan.ChargedLedger is null) return plan.Gate;
+        if (plan.ChargedLedger is null)
+        {
+            // Retain only stopped accounting continuity for the ensuing fresh
+            // acquisition, not permission to replay the consumed return receipt.
+            g3StoppedHandoff = (context.Plan.ObservationRunId, state.BudgetLineageId, proof);
+            return plan.Gate;
+        }
         await PublishRunJsonEvidenceAsync("g3-guiding-recovery-return-reserved",
             "Owned guide stop requires a charged return before fresh acquisition",
             new { before = state, charged = plan.ChargedLedger, plan.ContinuityDeltaArcseconds,

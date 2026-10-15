@@ -6,6 +6,83 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NightSafetyStandbyTests
 {
+    [Fact]
+    public async Task FailedConnectionBoundaryCanBeRecheckedOnlyOnExplicitNewNight()
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var idle = false;
+        var checks = 0;
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false,
+            RecheckIdle = _ => { checks++; return Task.FromResult(idle); }
+        });
+        Assert.Equal(0, checks); // Guardian itself never starts recovery.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        Assert.Equal(1, checks);
+        Assert.Equal("Waiting", guard.Snapshot.Phase);
+        idle = true;
+        using var next = await f.Host.ReserveNightAsync(new object(), false, default,
+            () => f.Watch(() => { }), "config");
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(2, checks);
+        Assert.Equal("Transferred", guard.Snapshot.Phase);
+        Assert.Contains("历史失败记录保留", guard.Snapshot.Message);
+        Assert.Equal(0, f.Closes);
+        using var journal = JsonDocument.Parse(await File.ReadAllTextAsync(guard.Snapshot.JournalPath));
+        Assert.False(journal.RootElement.GetProperty("CanHandOver").GetBoolean());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve()); // New owner really holds the lease.
+    }
+
+    [Theory]
+    [InlineData("config")]
+    [InlineData("real")]
+    [InlineData("missing-proof")]
+    [InlineData("read-error")]
+    public async Task RecheckCannotEraseUnsettledResponsibilitiesOrChangeBinding(string reason)
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var checks = 0;
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false,
+            RecheckIdle = reason == "missing-proof" ? null : _ =>
+            { checks++; if (reason == "read-error") throw new IOException("offline"); return Task.FromResult(true); }
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Host.ReserveNightAsync(new object(),
+            reason == "real", default, () => f.Watch(() => { }), reason == "config" ? "changed" : "config"));
+        Assert.Equal(reason == "read-error" ? 1 : 0, checks);
+        Assert.Equal("Waiting", guard.Snapshot.Phase);
+        Assert.Equal(0, f.Closes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SafetyOrCancellationDuringRecheckCannotCommitTransfer(bool cancel)
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        using var cts = new CancellationTokenSource();
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false,
+            RecheckIdle = _ =>
+            {
+                if (cancel) cts.Cancel();
+                else f.Stop = GateResult.Unknown("NIGHT_UNSAFE", "Changed during idle check");
+                return Task.FromResult(true);
+            }
+        });
+        var watches = 0;
+        await Assert.ThrowsAnyAsync<Exception>(() => f.Host.ReserveNightAsync(new object(), false, cts.Token,
+            () => { watches++; return f.Watch(() => { }); }, "config"));
+        Assert.Equal(0, watches);
+        Assert.NotEqual("Transferred", guard.Snapshot.Phase);
+    }
+
     [Theory]
     [InlineData("NIGHT_UNSAFE")]
     [InlineData("NIGHT_SAFETY_UNAVAILABLE")]

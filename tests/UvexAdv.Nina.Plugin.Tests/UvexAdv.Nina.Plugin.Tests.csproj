@@ -35,6 +35,8 @@
     <ProjectReference Include="..\..\src\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\src\UvexAdv.Nina.Plugin\Phd2FreshTargetFluxPolicy.cs"
+          Link="Sources\Phd2FreshTargetFluxPolicy.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\UvexAdv.Nina.Plugin\*Workflow.cs;..\..\src\UvexAdv.Nina.Plugin\ObservationMotionGeometry.cs;..\..\src\UvexAdv.Nina.Plugin\RealObservationStageRunner.WorkflowPorts.cs"
           Link="Sources\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\config\sequences\*.json"

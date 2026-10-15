@@ -503,6 +503,17 @@ acceptance, output, ownership and movement limits remain mandatory. Return debt
 needs measured physical arrival or truthful checked-stop archival, never lock
 coordinates alone. Initial guide/calibration acquisition is unchanged.
 
+Owner-approved [ADR-0037](../adr/0037-primary-star-geometry-and-bounded-settle-recovery.md)
+adds one exception to ADR-0029's read-only continuation: three frame-bound native
+primary measurements may establish multi-star/primary disagreement and admit
+one durably precharged native settle at the unchanged lock, in the original time
+and motion budgets with the full return reserve. No new lock displacement,
+selection or calibration is authorized. GuideStep multi-star dx/dy is diagnostic,
+not a primary centroid. Fresh complete measurements still decide continuation;
+native settle failure is not fabricated as success. Completed passive ATR shutter
+time is recorded separately from both fine and coarse motion clocks; original
+origins, counters, ceilings, night deadlines and weather authority do not change.
+
 ADR-0028 supersedes optical guide/lock precision gating: a complete valid
 same-frame measured window uses one 3-pixel warning, not a 2/2.5/3 rejection
 staircase. The warning alone cannot block placement or qualified unattended
@@ -525,6 +536,35 @@ identity, guide output and all motion/return budgets remain independent gates.
 - Horizon, cancellation, crash, timeout, lease-expiry and guide-loss tests stop unsafe continuation.
 - Pause prevents new motions and exposures, resume revalidates stale gates, and every automatic-gate failure enters an inspectable `PausedNeedsAttention` state.
 - Simulator and recorded-data tests cover the full state machine before corresponding real-hardware actions are enabled.
+
+ADR-0038 permits the sole initial catalogue GOTO after a tracking-enable timeout
+only at the fully supervised, same-owner, confirmed-idle initial boundary, with
+no prior optical/return state or inherited correction budget. A durable one-use
+intent prevents retries across resume/restart. The normal N.I.N.A./driver slew
+retains all limits; no home, forced flip, sync or limit edit is permitted. Native
+completion plus stable tracking readback and fresh independent image acquisition
+are required afterward. Unknown motion or continued tracking failure retains
+cleanup/standby authority, never another target as an implicit motion retry.
+
+ADR-0039 narrows the maintenance confirmation practice only: when the owner
+explicitly requests repair, restart and an immediate new observing round, a
+repeated on-site-supervision confirmation is not required. Confirm idle before
+normal shutdown and restore/verify the selected safety monitor and roof state
+before the normal validated native start, retaining the original cutoff/dawn.
+This accepts a brief software-monitor gap; it does not imply uninterrupted
+protection, standing observation permission, automatic journal resume or any
+waiver of weather, stop, identity or mechanical limits.
+
+Owner-approved [ADR-0040](../adr/0040-continuous-target-placement-and-budgeted-handoff.md)
+refines placement without changing observing mode or budgets: same-frame primary
+motion translates target search continuity; a verified multi-star mismatch may
+receive one precharged same-lock settle per charged exact-lock stage. A confirmed
+owned guiding stop and fresh image binding permit conservative coarse-ledger
+handoff debits within the original full return envelope instead of a separate
+nine-arcsecond refusal. Explicit warning probes may use fresh filled-core overlap
+with the finite physical slit, not only its centroid; exact arrival and accepted
+ATR spectrum quality remain separate. Unknown stop/owner, weather and physical
+limits are not downgraded. See the ADR for persistence and negative-test rules.
 
 ## 13. Measurements still required
 

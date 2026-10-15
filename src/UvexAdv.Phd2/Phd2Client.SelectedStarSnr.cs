@@ -66,18 +66,48 @@ public sealed partial class Phd2Client
             var samples = new List<Phd2SelectedStarSnrSample>(3);
             long lastFrame = -1;
             bool pipelineDiscarded = false;
-            using var waiter = RegisterEventWaiter(message =>
+            var sampled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var observed = baseline;
+            var candidateLost = false;
+            Phd2GuideStep? lostFrame = null;
+            void RequireOwner(Phd2StateSnapshot now)
+            {
+                if (!now.IsConnected || now.AutomationPaused || now.Phd2Paused ||
+                    now.ConnectionEpoch != baseline.ConnectionEpoch || now.SelectedStar != selected ||
+                    now.Profile != baseline.Profile || now.Equipment != baseline.Equipment ||
+                    now.CalibrationChangeSequence != baseline.CalibrationChangeSequence ||
+                    now.LastConfigurationChange?.EventSequence != baseline.LastConfigurationChange?.EventSequence ||
+                    now.PendingSettleOperationId.HasValue || now.GuideOutput?.Failed == true)
+                    throw new Phd2CaptureException("PHD2_GUIDE_SNR_CONTEXT_CHANGED: preview owner changed while reading native SNR.");
+            }
+            // Keep the context guard alive THROUGH the final exposure readback.
+            // Completing a three-sample waiter used to remove it just before
+            // native LoopingExposures(ErrorCode=2), LockPositionLost, StarLost
+            // finished their same-frame notification sequence (HD 24479).
+            using var guard = RegisterEventWaiter(message =>
             {
                 if (message.Sequence <= baseline.EventSequence) return false;
-                // During preview, PHD2 clears the selected lock immediately
-                // before StarLost. Surface one candidate loss, not an unrelated
-                // owner failure that would restart the complete WCS chain.
-                if (message.Name == "StarLost" || message.Name == "LockPositionLost" &&
-                    Snapshot.AppState == Phd2AppState.Looping)
-                    throw new Phd2GuidingFrameLostException(Snapshot, ParseGuideStep(message.Payload))
-                        { SelectedStarSnrBaseline = baseline };
-                RequireSameSelection();
-                if (message.Name != "LoopingExposures") return false;
+                var now = Snapshot;
+                RequireOwner(now);
+                var lossEvent = message.Name is "StarLost" or "LockPositionLost";
+                var loopTransition = message.Name == "LoopingExposures" && observed.AppState != Phd2AppState.Looping;
+                var expectedState = loopTransition ? Phd2AppState.Looping :
+                    lossEvent && observed.AppState != Phd2AppState.Looping ? Phd2AppState.LostLock : observed.AppState;
+                var expectedLock = message.Name == "LockPositionLost" ||
+                    message.Name == "StarLost" && observed.AppState == Phd2AppState.Looping ? null : observed.LockPosition;
+                if (now.GuideEpoch != observed.GuideEpoch + (lossEvent || loopTransition ? 1 : 0) ||
+                    now.AppState != expectedState || now.LockPosition != expectedLock ||
+                    now.AppState is not (Phd2AppState.Selected or Phd2AppState.Looping or Phd2AppState.LostLock))
+                    throw new Phd2CaptureException("PHD2_GUIDE_SNR_CONTEXT_CHANGED: unexpected selection/lifecycle event during preview SNR.");
+                observed = now;
+                if (lossEvent || message.Name == "LoopingExposures" && GetOptionalInt64(message.Payload, "ErrorCode") is >= 2)
+                {
+                    candidateLost = true;
+                    if (message.Name != "LockPositionLost") lostFrame = ParseGuideStep(message.Payload);
+                    sampled.TrySetResult();
+                    return false;
+                }
+                if (message.Name != "LoopingExposures" || candidateLost || samples.Count == 3) return false;
                 var frame = GetOptionalInt64(message.Payload, "Frame");
                 if (frame is null or < 1 || frame <= lastFrame) return false;
                 lastFrame = frame.Value;
@@ -85,18 +115,28 @@ public sealed partial class Phd2Client
                 var snr = GetOptionalDouble(message.Payload, "SNR");
                 samples.Add(new(frame.Value, snr is { } s && double.IsFinite(s) && s > 0 ? s : null,
                     (int?)GetOptionalInt64(message.Payload, "ErrorCode")));
-                return samples.Count == 3;
+                if (samples.Count == 3) sampled.TrySetResult();
+                return false;
             });
-            RequireSameSelection();
             await RequireExposureAsync().ConfigureAwait(false);
             var timedOut = false;
-            try { await WaitForEventAsync(waiter, "selected-star SNR", timeout, token).ConfigureAwait(false); }
-            catch (Phd2CommandTimeoutException) { timedOut = true; }
-            // Remove before reading the sample list, including the timeout path.
-            waiter.Dispose();
-            RequireSameSelection();
+            try
+            {
+                var completed = await Task.WhenAny(sampled.Task, guard.Task).WaitAsync(timeout, token).ConfigureAwait(false);
+                await completed.ConfigureAwait(false);
+            }
+            catch (TimeoutException) { timedOut = true; }
             await RequireExposureAsync().ConfigureAwait(false);
-            RequireSameSelection();
+            // Dispose synchronizes with event dispatch before reading the list
+            // and loss witness. An external reselect/stop still wins over loss.
+            guard.Dispose();
+            if (guard.Task.IsCompleted) await guard.Task.ConfigureAwait(false);
+            var final = Snapshot;
+            RequireOwner(final);
+            if (final.GuideEpoch != observed.GuideEpoch || final.AppState != observed.AppState || final.LockPosition != observed.LockPosition)
+                throw new Phd2CaptureException("PHD2_GUIDE_SNR_CONTEXT_CHANGED: preview changed after final SNR readback.");
+            if (candidateLost)
+                throw new Phd2GuidingFrameLostException(final, lostFrame) { SelectedStarSnrBaseline = baseline };
             return new(baseline.ConnectionEpoch, Snapshot.GuideEpoch, selected,
                 exposureMilliseconds, samples.ToArray(), timedOut, DateTimeOffset.UtcNow);
         }

@@ -430,7 +430,11 @@ internal sealed record Phd2LockShiftPendingState(
     double OriginSlitX = double.NaN,
     double OriginSlitY = double.NaN,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    double ExcludedAtrExposureSeconds = 0)
+    double ExcludedAtrExposureSeconds = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    bool PrimaryStarSettleRecoveryAttempted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    int PrimaryStarSettleRecoveryStage = 0)
 {
     public const int CurrentSchemaVersion = 3;
 
@@ -523,6 +527,9 @@ internal sealed record Phd2LockShiftPendingState(
         if (!double.IsFinite(CumulativeCommandedPixels) || CumulativeCommandedPixels < 0 || CumulativeCommandedPixels > MaximumCumulativePixels + 1e-9)
             issues.Add("Consumed cumulative pixels is invalid.");
         if (AttemptsUsed < 0 || AttemptsUsed > MaximumAttempts) issues.Add("Consumed attempts is invalid.");
+        if (PrimaryStarSettleRecoveryStage < 0 || PrimaryStarSettleRecoveryStage > AttemptsUsed ||
+            (PrimaryStarSettleRecoveryStage > 0 && !PrimaryStarSettleRecoveryAttempted))
+            issues.Add("Primary-star settle stage is not backed by a charged motion attempt.");
         if (StartedUtc == default || CreatedUtc < StartedUtc || UpdatedUtc < CreatedUtc) issues.Add("Pending timestamps are invalid.");
         if (!double.IsFinite(ExcludedAtrExposureSeconds) || ExcludedAtrExposureSeconds < 0 ||
             ExcludedAtrExposureSeconds > (UpdatedUtc - StartedUtc).TotalSeconds)
@@ -645,7 +652,9 @@ internal static class Phd2LockShiftBudgetHandoff
         if (source.AttemptsUsed != currentCopy.AttemptsUsed ||
             !Same(source.CumulativeCommandedPixels, currentCopy.CumulativeCommandedPixels) ||
             source.StartedUtc != currentCopy.StartedUtc ||
-            !Same(source.ExcludedAtrExposureSeconds, currentCopy.ExcludedAtrExposureSeconds))
+            !Same(source.ExcludedAtrExposureSeconds, currentCopy.ExcludedAtrExposureSeconds) ||
+            source.PrimaryStarSettleRecoveryAttempted != currentCopy.PrimaryStarSettleRecoveryAttempted ||
+            source.PrimaryStarSettleRecoveryStage != currentCopy.PrimaryStarSettleRecoveryStage)
             issues.Add("consumed attempts, pixels or earliest budget clock changed");
         if (!Same(source.OriginLockX, currentCopy.OriginLockX) ||
             !Same(source.OriginLockY, currentCopy.OriginLockY) ||

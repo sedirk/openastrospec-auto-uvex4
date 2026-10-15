@@ -1370,11 +1370,50 @@ public sealed class NativeSequencePlanTests
         Assert.DoesNotContain("STAGE_EXCEPTION", body);
     }
 
+    internal async Task AssertCompletedTargetPulseDrainBoundaryAsync(Func<CancellationToken, Task> terminalCleanup, bool expectedNext)
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var astrometry = Proxy<IAstrometrySettings>();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? astrometry : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        var first = new TerminalGateRunner(null, false, terminalCleanup: terminalCleanup);
+        var second = new TerminalGateRunner(null, false);
+        var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
+        var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
+        foreach (var (runner, index) in new[] { (first, 0), (second, 1) })
+            night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () => runner)
+            {
+                TargetName = $"Pulse boundary {index}", CatalogId = $"SIM-{index}", NightSetupId = "SIM-NIGHT",
+                UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+                RightAscensionDegrees = ra, DeclinationDegrees = 33, DurationMinutes = 1,
+                HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+                ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+                ScienceFrames = 1, MaximumScienceAttempts = 2,
+            });
+        await night.Execute(new Progress<ApplicationStatus>(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Contains(ObservationStage.FinalizeObservation, first.Stages);
+        Assert.Equal(expectedNext, second.Stages.Contains(ObservationStage.FinalizeObservation));
+        using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
+        var outcomes = journal.RootElement.GetProperty("outcomes").EnumerateArray().Where(x => x.TryGetProperty("outcome", out _)).ToArray();
+        Assert.Equal(expectedNext ? 2 : 1, outcomes.Length);
+        Assert.Equal(expectedNext ? "Completed" : "Stopped", outcomes[0].GetProperty("outcome").GetString());
+        if (host.SafetyStandby is { } guard)
+        {
+            night.EndNightCommand.Execute(null);
+            await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+    }
+
     private sealed class TerminalGateRunner(string? failure, bool failCleanup, bool typedQuality = false,
         bool freshWindow = false, GateResult? producedGate = null,
-        ObservationStage failureStage = ObservationStage.AcquireG3SlitField) : ObservationStageRunnerBase
+        ObservationStage failureStage = ObservationStage.AcquireG3SlitField,
+        Func<CancellationToken, Task>? terminalCleanup = null) : ObservationStageRunnerBase, IObservationTerminalGuideCleanup
     {
         public List<ObservationStage> Stages { get; } = new();
+        public Task CleanupTerminalGuideStateAsync(string runId, CancellationToken token) => terminalCleanup?.Invoke(token) ?? Task.CompletedTask;
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
         {
             Stages.Add(stage);
@@ -1397,6 +1436,41 @@ public sealed class NativeSequencePlanTests
         }
         public override Task OnCancelledAsync(ObservationContext context, CancellationToken token) =>
             failCleanup ? Task.FromException(new InvalidOperationException("Synthetic stop not confirmed")) : Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ExplicitNightAfterFreshStandbyCheckActuallyExecutesNativeTarget()
+    {
+        InitializeAstrometry();
+        var settings = Settings();
+        var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? Proxy<IAstrometrySettings>() : Default(m.ReturnType));
+        var profiles = Proxy<IProfileService>((m, _) => m.Name == "get_ActiveProfile" ? profile : Default(m.ReturnType));
+        using var host = new ObservationCoordinatorHost(new SilentNotifier());
+        var oldOwner = new object();
+        using var old = await host.ReserveNightAsync(oldOwner, false, default);
+        var checkedIdle = 0;
+        var guard = await host.BeginSafetyStandbyAsync(oldOwner, new(false, "", null,
+            Path.Combine(Path.GetTempPath(), "UvexAdv-standby-tests", Guid.NewGuid().ToString("N"), "night.json"),
+            false, _ => null, () => null, _ => throw new InvalidOperationException("No roof cycle allowed"),
+            RecheckIdle: _ => { checkedIdle++; return Task.FromResult(true); }));
+        old.Dispose();
+        var runner = new TerminalGateRunner(null, false);
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () => runner)
+        {
+            TargetName = "Explicit retry", CatalogId = "SIM-RETRY", NightSetupId = "SIM-NIGHT",
+            UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+            RightAscensionDegrees = 0, DeclinationDegrees = 89, DurationMinutes = 1,
+            HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
+            ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
+            ScienceFrames = 1, MaximumScienceAttempts = 2,
+        });
+        await night.Execute(new Progress<ApplicationStatus>(), default).WaitAsync(TimeSpan.FromSeconds(15));
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, checkedIdle);
+        Assert.Equal("Transferred", guard.Snapshot.Phase);
+        Assert.Equal(ObservationRunCoordinator.Stages, runner.Stages);
+        Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
     }
 
     private static void InitializeAstrometry()

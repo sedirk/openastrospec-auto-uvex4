@@ -6,6 +6,46 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2FreshTargetFluxPolicyTests
 {
     [Fact]
+    public void ConfirmedNeighbourIdentitySurvivesExposureFramesWithoutInventingTargetFieldSolve()
+    {
+        var id = new TargetIdentification(GateResult.Pass("TARGET_IDENTIFIED", "short measured"),
+            new StarCandidate(new(850, 460), 65520, 41185424, 50, 15, .1, 1, 300), new(850, 460), 0, 2);
+        var field = G3FieldState.Failed(GateResult.Pass("G3_FIELD_ANALYZED_MOTION_PREDICTED", "verified neighbour"))
+            with { TargetIdentification = id, NeighbourCatalogIdentityEvidencePath = "verified-motion-and-two-shorts.json" };
+        var exposureOnly = field with { FramePath = "new-exposure.fit", TargetIdentification = id with { PredictionResidualPixels = 2 } };
+        Assert.Null(exposureOnly.Solve);
+        Assert.Equal("verified-motion-and-two-shorts.json", Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(exposureOnly));
+        Assert.Null(Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(field with { NeighbourCatalogIdentityEvidencePath = null }));
+        Assert.Null(Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(field with { Gate = GateResult.Unknown("UNCONFIRMED", "") }));
+        Assert.Null(Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(field with {
+            TargetIdentification = id with { Gate = GateResult.Unknown("TARGET_AMBIGUOUS", "") } }));
+        Assert.Null(Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(null));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MeasuredHandoffKeepsActualFluxAuthorityAndProvenance(bool shortPosition)
+    {
+        var prediction = TargetIdentification.FromCatalogWcs(new(816.445, 422.2), 1920, 1080, "neighbour prediction");
+        var measured = new TargetIdentification(GateResult.Pass("TARGET_IDENTIFIED", "HD 223554 fresh centroid"),
+            new StarCandidate(new(812.552, 420.257), 3070, 1396800, 58.4, 10.83, .1, 0, 100),
+            new(816.445, 422.2), 4.35, 2.6227)
+        { BoundShortPositionEvidencePath = shortPosition ? "independent-short.json" : null,
+            CatalogPositionSpreadPixels = shortPosition ? 1.14 : 0 };
+        var retained = Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(prediction, measured, false);
+        Assert.Same(measured.Target, retained.Target);
+        Assert.Equal(measured.Authority, retained.Authority);
+        Assert.Equal(measured.BoundShortPositionEvidencePath, retained.BoundShortPositionEvidencePath);
+        Assert.Equal(measured.CatalogPositionSpreadPixels, retained.CatalogPositionSpreadPixels);
+        Assert.True(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(retained));
+        Assert.Same(prediction, Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(prediction, measured, true));
+        Assert.Same(prediction, Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(prediction,
+            measured with { Gate = GateResult.Unknown("TARGET_AMBIGUOUS", "not measured") }, false));
+        Assert.Same(prediction, Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(prediction, null, false));
+    }
+
+    [Fact]
     public void CatalogRefinementRequiresFreshUniqueStellarPositionInsideOriginalAcquisitionWindow()
     {
         var point = new PixelPoint(803, 425);

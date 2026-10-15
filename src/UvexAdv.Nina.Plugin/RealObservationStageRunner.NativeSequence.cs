@@ -11,6 +11,8 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
     Task<IReadOnlyList<string>> INativeTargetBoundary.ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion) => ConfirmSequenceIdleAsync(token, requireSettledMotion);
     Task<GateResult> INativeTargetBoundary.RecoverMountClockAtIdleBoundaryAsync(ObservationPlan plan, CancellationToken token) => RecoverMountClockAtIdleBoundaryAsync(plan, token);
     internal NativeTargetSession? NativeTarget { get; private set; }
+    bool INativeTargetBoundary.CanRecheckSequenceIdle => canRecheckSequenceIdle;
+    private bool canRecheckSequenceIdle;
     private ClockContinuationBudget? retiredClockBudget;
 
     internal void AttachNativeTarget(NativeTargetSession? session)
@@ -34,7 +36,7 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         var g3 = durableG3AcquisitionMotion;
         var phd = pendingPhd2LockShift ?? phd2SettledHandoffBudget;
         return new(g3 is null ? old?.G3 : new(g3.CorrectionAttempts, g3.CumulativeMotionArcseconds,
-                g3.StartedUtc, g3.MaximumCorrectionAttempts, g3.MaximumCumulativeMotionArcseconds, g3.MaximumElapsedSeconds),
+                g3.MotionClockStartedUtc, g3.MaximumCorrectionAttempts, g3.MaximumCumulativeMotionArcseconds, g3.MaximumElapsedSeconds),
             phd is null ? old?.Phd2 : new(phd.AttemptsUsed, phd.CumulativeCommandedPixels,
                 phd.MotionClockStartedUtc, phd.MaximumAttempts, phd.MaximumCumulativePixels, phd.MaximumElapsedSeconds),
             g3?.MaximumSingleCorrectionArcseconds ?? old?.G3Single ?? 0,
@@ -69,14 +71,32 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
 
     internal async Task<IReadOnlyList<string>> ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion = true)
     {
+        canRecheckSequenceIdle = false;
         var errors = (await CleanupAfterFailureAsync("Native sequence target boundary", token,
             allowMechanicalActions: false).ConfigureAwait(false)).ToList();
+        canRecheckSequenceIdle = errors.Count == 0 && activeQhyJobs.IsEmpty && pendingQhyRequests.IsEmpty &&
+            (atrPreCoolingTask is null || atrPreCoolingTask.IsCompleted) && environmentSafetyShutdownTask.IsCompleted &&
+            NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is null &&
+            pendingSlitPlacement is null or { Phase: SlitPlacementPendingPhase.SettledBudgetLedger } &&
+            pendingPhd2LockShift is null or { Phase: Phd2LockShiftPendingPhase.SettledBudgetLedger } &&
+            durableG3AcquisitionMotion is null or { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger };
         // Unconfirmed flip intent prohibits another target, not emergency
         // closeout after all owners and physical motion are confirmed idle.
         if (requireSettledMotion && NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is { } flipGate)
             errors.Add(flipGate.Message);
         var camera = cameraMediator.GetInfo();
         if (!camera.Connected || camera.IsExposing) errors.Add("ATR 未确认连接且曝光空闲。");
+        if (errors.Count == 0 && phd2.IsConnected)
+        {
+            var quiet = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd2, telescopeMediator,
+                configuration.ExpectedTelescopeId, token).ConfigureAwait(false);
+            await WriteAuditBestEffortAsync("native-target-mount-pulse-drain", new
+            {
+                quiet, maximumWaitSeconds = Phd2MountIdleWait.MaximumWait.TotalSeconds,
+                quietSeconds = Phd2MountIdleWait.QuietPeriod.TotalSeconds, motionIssued = false,
+            }).ConfigureAwait(false);
+            if (quiet.Disposition != GateDisposition.Passed) errors.Add($"{quiet.Code}: {quiet.Message}");
+        }
         var telescope = telescopeMediator.GetInfo();
         if (!telescope.Connected || telescope.Slewing || telescope.IsPulseGuiding) errors.Add("赤道仪未确认连接、停止运动且无导星脉冲。");
         if (activeQhyJobs.Count != 0 || pendingQhyRequests.Count != 0) errors.Add("测光作业尚未确认结束。");

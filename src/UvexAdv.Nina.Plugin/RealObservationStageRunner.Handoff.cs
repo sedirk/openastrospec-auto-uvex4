@@ -40,9 +40,7 @@ internal sealed partial class RealObservationStageRunner
     {
         return RemainingPhd2HandoffRadius(preset,
             field.Gate.Disposition == GateDisposition.Passed &&
-            field.TargetIdentification.HasCatalogPositionRefinement &&
-            ((field.Solve?.Result.Success == true && field.Solve.Result.Coordinates is not null) ||
-             !string.IsNullOrWhiteSpace(field.TargetIdentification.BoundShortPositionEvidencePath)));
+            Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(field.TargetIdentification));
     }
 
     private double RemainingPhd2HandoffRadius(Phd2SlitPlacementCommissioning preset,
@@ -126,6 +124,12 @@ internal sealed partial class RealObservationStageRunner
         var stopped = await EnsurePhdStoppedForAutomaticRebuildAsync(
             ObservationStage.PlaceTargetOnSlit, sourceCode, cancellationToken).ConfigureAwait(false);
         if (stopped.Disposition != GateDisposition.Passed) return new StageResult(stopped, evidence);
+        if (automaticRebuildStopProof is { } stopProof)
+        {
+            var quiet = await WaitForPostCalibrationMountIdleAsync(stopProof,
+                telescopeMediator.GetInfo().SideOfPier.ToString(), cancellationToken, "PHD2 粗精交接已确认停止").ConfigureAwait(false);
+            if (!quiet.CanAdvance) return quiet;
+        }
         phd2SlitPlacementSession = null;
         lastG3Field = null;
         Report($"WCS／导星交接需重建：{reason} 先重拍并按原账本完成粗定位，不让精调走到半途耗尽回程预算。");

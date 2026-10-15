@@ -1,6 +1,37 @@
 # Known issues
 
-## Current closeout boundary (2026-10-13, installed 0.4.0.289)
+## Current closeout boundary (2026-10-15, installed 0.4.0.300)
+
+The [October 15 closeout](closeout-2026-10-15.md) consolidates .290–.300. Earlier
+deployment and sky records retain their original versions and outcomes.
+
+- HD 21455 / HD 21641 success and failure records exercise target continuity,
+  primary-star convergence, budgeted handoff and warning probes. They do not prove
+  either target will succeed on the next night. HD 21641's historical two accepted
+  frames do not turn its old final-cleanup failure into a completed run.
+- ADR-0040 permits one same-lock settle recovery per already-charged stage, not an
+  unlimited retry or a new movement/time budget. Stop, identity, owner, weather,
+  actual correction output, mechanical limits and full-return reserves still apply.
+  A fresh stopped-boundary handoff may exceed the old 9-arcsecond continuity cutoff
+  only with conservative accounting; unknown physical state is not a quality skip.
+- Filled-core/finite-slit overlap can authorize a diagnostic probe only under the
+  explicit warning policy. This is not exact midpoint arrival, calibrated flux,
+  guaranteed correct near-companion selection or an accepted spectrum. Independent
+  ATR checks still determine accepted frames; dark-point-source mode is unchanged.
+- Native two-target regressions execute the next target after checked target-quality
+  failure, but block continuation on unsafe, cancellation, dawn, cutoff, unconfirmed
+  stop or the saved end-night policy. These are software tests, not physical safety
+  certification. Valid budgets are never silently replenished.
+- All 41 installed .300 files and runtime loading were checked. The post-installation
+  snapshot is idle, disarmed, disconnected and has no active safety standby after
+  the old deadline closure completed. N.I.N.A. exit ends its software guardian;
+  neither installation nor restart restores an old watch or starts observing.
+- Runtime ATR workspace state and startup logs were checked, but observation and
+  calibration navigation returned `PanelNotAvailable`; actual live-panel visibility
+  remains unverified. 3,798 .NET tests, 75 reduction tests, 15 historical runs/38
+  accepted frames and 169 offline UI scenes are not a new-version real-sky run.
+
+## Historical closeout boundary (2026-10-13, installed 0.4.0.289)
 
 The [October 13 closeout](closeout-2026-10-13.md) consolidates .286–.289. Earlier
 deployment and sky records below retain their original versions.

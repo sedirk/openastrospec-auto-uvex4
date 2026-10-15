@@ -54,12 +54,30 @@ public sealed class AtrWorkflowTests
     {
         var f = new AtrWorkflowFixture(1, [30, 60]);
         var peaks = new Queue<double>([20000, 65000, 30000]);
-        f.Port.NextMetrics = m => m with { HighPercentileAdu = peaks.Dequeue() };
+        f.Port.NextMetrics = m => m with { HighPercentileAdu = peaks.Dequeue(),
+            ContinuumSnrPerResolutionElement = peaks.Count == 2 ? 1 : 20,
+            LineSnrPerResolutionElement = peaks.Count == 2 ? 1 : 30 };
         Assert.True((await f.Science.SelectExposureAsync(f.Context, default)).CanAdvance);
         Assert.Equal(new double[] { 30, 60, 30 }, f.Port.Captures.Select(c => c.Metrics.ExposureSeconds));
         Assert.Equal(3, f.Probe.RetainedFrames);
         Assert.Equal(1, f.Science.AcceptedFrames);
         Assert.Equal(f.Port.Saved[2].Path, Assert.Single(f.Port.ScienceReferences));
+    }
+
+    [Fact]
+    public async Task RecordedHd23552GoodThreeHundredSecondProbeIsCreditedWithoutChasingSixHundred()
+    {
+        var f = new AtrWorkflowFixture(2, [30, 300, 600]);
+        f.Port.NextMetrics = m => m.ExposureSeconds == 30
+            ? m with { HighPercentileAdu = 3000, ContinuumSnrPerResolutionElement = 1, LineSnrPerResolutionElement = 2 }
+            : m with { HighPercentileAdu = 9584, TargetToSkyContrast = 19, ContinuumSnrPerResolutionElement = 127.48, LineSnrPerResolutionElement = 194.93 };
+        Assert.True((await f.Science.SelectExposureAsync(f.Context, default)).CanAdvance);
+        Assert.Equal(300, f.Probe.SelectedExposureSeconds);
+        Assert.Equal(1, f.Science.AcceptedFrames);
+        Assert.True((await f.Science.RunAsync(f.Context, default)).CanAdvance);
+        Assert.Equal(new double[] { 30, 300, 300 }, f.Port.Captures.Select(c => c.Metrics.ExposureSeconds));
+        Assert.Equal(2, f.Science.AcceptedFrames);
+        Assert.Equal(600, f.Science.AcceptedExposureSeconds);
     }
 
     [Fact]
@@ -169,11 +187,19 @@ internal sealed class AtrTestPort : IAtrObservationPort
     internal Func<SpectralProbeMetrics, SpectralProbeMetrics> NextMetrics = m => m;
     internal string? Deny;
     internal bool Meridian;
+    internal Func<int, GateResult>? SavedTemperature;
+    internal Func<int, GateResult>? CoolingReadiness;
+    private int coolingCalls;
     private GateResult Gate(string name) { Events.Add(name); return Deny == name ? GateResult.Unknown(name, name) : GateResult.Pass(name, name); }
     public GateResult ValidateAtrCameraIdentity(string id) => Gate("identity");
     public void ThrowIfGuideOutputFailed() => Events.Add("guide-output");
     public bool IsGuidingStable() => true;
-    public Task<GateResult> WaitForAtrScienceTemperatureAsync(ObservationContext c, CancellationToken t) => Task.FromResult(Gate("temperature"));
+    public Task<GateResult> WaitForAtrScienceTemperatureAsync(ObservationContext c, CancellationToken t)
+    {
+        t.ThrowIfCancellationRequested();
+        var gate = Gate("temperature");
+        return Task.FromResult(CoolingReadiness?.Invoke(++coolingCalls) ?? gate);
+    }
     public Task<GateResult> EnsureOpticalCoverOpenAsync(ObservationContext c, CancellationToken t) => Task.FromResult(Gate("cover"));
     public GateResult? SequenceStopGate() => Deny == "stop" ? Gate("stop") : null;
     public bool MeridianRequested => Meridian;
@@ -202,7 +228,7 @@ internal sealed class AtrTestPort : IAtrObservationPort
     public Task<AtrSavedImage> SaveAtrImageAsync(AtrCapture capture, int attempt, bool accepted, GateDisposition disposition, string code, string message, CancellationToken t)
     {
         Events.Add("save");
-        var saved = new AtrSavedImage(Gate("saved-temperature"), capture.CaptureToken + ".fits", new() { ["fitsProvenanceVerified"] = "True" });
+        var saved = new AtrSavedImage(SavedTemperature?.Invoke(Saved.Count) ?? Gate("saved-temperature"), capture.CaptureToken + ".fits", new() { ["fitsProvenanceVerified"] = "True" });
         Saved.Add(saved); return Task.FromResult(saved);
     }
     public Task<string> ComputeFileSha256Async(string path, CancellationToken t) => Task.FromResult(new string('A', 64));

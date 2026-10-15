@@ -6,7 +6,17 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class ObservationAutomaticRecoveryPolicyTests
 {
     [Theory]
-    [InlineData(ObservationStage.SlewToCatalogTarget, "TELESCOPE_TRACKING_ENABLE_TIMEOUT", ObservationAutomaticRecoveryAction.RetrySameStage, 2)]
+    [InlineData("TELESCOPE_TRACKING_ENABLE_TIMEOUT")]
+    [InlineData("CATALOG_SLEW_REJECTED")]
+    [InlineData("CATALOG_SLEW_TIMEOUT")]
+    [InlineData("CATALOG_SLEW_EXCEPTION")]
+    [InlineData("CATALOG_SLEW_TRACKING_NOT_RESTORED")]
+    [InlineData("CATALOG_SLEW_ALREADY_ATTEMPTED")]
+    public void InitialGotoRecoveryCannotBeRepeatedByGenericRecovery(string code) =>
+        Assert.False(ObservationAutomaticRecoveryPolicy.For(ObservationStage.SlewToCatalogTarget,
+            GateResult.Unknown(code, "one native GOTO is separately owned by ADR-0038")).IsRecoverable);
+
+    [Theory]
     [InlineData(ObservationStage.AcquireG3SlitField, "G3_FIELD_MOUNT_BINDING_STALE", ObservationAutomaticRecoveryAction.RetryWithFreshStageEvidence, 1)]
     [InlineData(ObservationStage.AcquireG3SlitField, "G3_FIELD_MOUNT_BINDING_FRAME_MISSING", ObservationAutomaticRecoveryAction.RetryWithFreshStageEvidence, 1)]
     [InlineData(ObservationStage.AcquireG3SlitField, "G3_FIELD_MOUNT_BINDING_FRAME_UNREADABLE", ObservationAutomaticRecoveryAction.RetryWithFreshStageEvidence, 1)]

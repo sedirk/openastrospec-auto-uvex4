@@ -6,6 +6,20 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>Geometric exclusion only; never detects, scores or substitutes a star.</summary>
 internal static class Phd2NativeGuideSearchRegions
 {
+    // A valid seed at the edge can leave the detector when the target is moved
+    // onto the slit. The straight translation and its return fit the rectangle
+    // iff BOTH endpoints do. This is candidate geometry, not motion authority.
+    public static double PlannedEdgeDistance(int width, int height, PixelPoint guide,
+        PixelPoint target, PixelPoint slit)
+    {
+        if (width <= 0 || height <= 0 ||
+            new[] { guide.X, guide.Y, target.X, target.Y, slit.X, slit.Y }.Any(v => !double.IsFinite(v)))
+            return double.NegativeInfinity;
+        var end = new PixelPoint(guide.X + slit.X - target.X, guide.Y + slit.Y - target.Y);
+        double Edge(PixelPoint p) => Math.Min(Math.Min(p.X, width - 1 - p.X), Math.Min(p.Y, height - 1 - p.Y));
+        return Math.Min(Edge(guide), Edge(end));
+    }
+
     public static IReadOnlyList<Phd2Rectangle> Build(
         int width, int height, PixelPoint target, double targetGuard,
         SlitGeometry slit, double edgeGuard, double slitGuard,
@@ -23,7 +37,16 @@ internal static class Phd2NativeGuideSearchRegions
             return [];
         var edge = (int)Math.Ceiling(edgeGuard) + 1;
         if (width <= 2 * edge || height <= 2 * edge) return [];
-        var regions = new List<Phd2Rectangle> { new(edge, edge, width - 2 * edge, height - 2 * edge) };
+        var dx = slit.AcquisitionPoint.X - target.X;
+        var dy = slit.AcquisitionPoint.Y - target.Y;
+        // Restrict only the direction of the planned shift; do not inflate all
+        // four borders or rank stars. PHD2 still selects within each native ROI.
+        var left = (int)Math.Ceiling(edge - Math.Min(0, dx));
+        var top = (int)Math.Ceiling(edge - Math.Min(0, dy));
+        var right = (int)Math.Floor(width - edge - Math.Max(0, dx));
+        var bottom = (int)Math.Floor(height - edge - Math.Max(0, dy));
+        if (right <= left || bottom <= top) return [];
+        var regions = new List<Phd2Rectangle> { new(left, top, right - left, bottom - top) };
         var angle = slit.AngleDegrees * Math.PI / 180;
         var (start, end) = GuideStarSelector.GuideExclusionBounds(slit);
         if (!double.IsFinite(start) || !double.IsFinite(end) || end - start > 4d * Math.Max(width, height)) return [];

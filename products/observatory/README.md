@@ -18,10 +18,10 @@ must have exactly one owner:
 The recorded sky tests still used the legacy QHY service, not the native photometry
 worker. Never run both owners against the same physical camera. See the
 [dual-instance implementation](../../docs/dual-nina-implementation.md) and
-[latest software/sky closeout](../../docs/closeout-2026-10-13.md) for deployment
+[latest software/sky closeout](../../docs/closeout-2026-10-15.md) for deployment
 and acceptance boundaries.
 
-Installed **0.4.0.289** keeps standalone and native-sequence observations on one
+Installed **0.4.0.300** keeps standalone and native-sequence observations on one
 production route. Acquisition/return, PHD2 slit convergence, ATR probing and science
 accounting now own distinct decisions/state through finite ports to the existing
 device owners. See the [workflow boundaries and remaining debt](../../docs/reports/2026-10-11-observation-workflow-boundaries.md).
@@ -33,9 +33,15 @@ The failure-chain audit preserves target-quality classification without hiding o
 ledger or stop failures, and checks late safety changes before the next native target.
 ADR-0036 reuses native safety connection/wait cards and an explicit End area. Optional
 native end instructions run only after normal verified closure, never during standby.
-Distributed templates default to automatic exposure; per-target calibration retains
+ADR-0040 keeps target measurements continuous using same-frame primary-star motion,
+allows one durable same-lock settle recovery per already-charged stage, and accounts
+fresh coarse/fine handoff within the original movement and full-return budget.
+Explicit quality-warning probes retain their uncertainty and still pass independent
+ATR quality checks; they are not claims of exact slit arrival.
+Distributed templates default to automatic exposure and a 35-minute per-target
+visibility estimate, not a forced exposure cutoff; per-target calibration retains
 its bounded spectroscopy acquisition contract rather than duplicating Start Guiding.
-Software/historical replay and exact-package/runtime checks pass; live .289 panel
+Software/historical replay and exact-package/runtime checks pass; live .300 panel
 visibility and new-version real-sky recovery remain unverified.
 
 ## Human entry points

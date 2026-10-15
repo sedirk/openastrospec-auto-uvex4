@@ -363,7 +363,7 @@ public static class SlitTargetIdentifier
                 GateResult.Pass(
                     "TARGET_IDENTIFIED_SATURATED_TOPOLOGY",
                     $"Formal WCS proximity and filled-core topology identify the target at ({saturatedTarget.Centroid.X:F2}, {saturatedTarget.Centroid.Y:F2}) px; {topology.Ghosts.Count} hollow annular ghost(s) were excluded.",
-                    topology.Gate.Metrics),
+                    topology.Gate.Metrics) with { Severity = topology.Gate.Severity },
                 saturatedTarget.Source,
                 predictedPoint,
                 saturatedTarget.DistanceToPredictionPixels,

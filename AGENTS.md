@@ -86,6 +86,19 @@ N.I.N.A. installation/restart to the explicit-current-request rule below.
   authorization. Do not assume restart means continuing an old run.
 - Do not turn replay or installation checks into a claim of real-sky success.
 
+### Rapid restart followed by an explicitly requested new round (owner, 2026-10-15)
+
+When the current request explicitly includes restarting N.I.N.A. and immediately
+starting the next observing round, do not repeatedly ask the owner to confirm
+on-site supervision during that short restart. Prepare and verify the artifact
+before shutdown, keep the interruption brief, and confirm the selected safety
+monitor, roof status, device-stop boundary and original night cutoff before
+starting through the normal validated sequence. A short restart is not evidence
+that protection is restored: unsafe weather, unknown roof/stop state or an
+unavailable safety monitor still prevents starting. This preference does not
+authorize a new round when the request says installation only or no observing,
+nor does it authorize extending the night cutoff or bypassing any equipment limit.
+
 Source inspection, simulation, compilation, tests, and read-only status checks do not authorize equipment movement or acquisition. Except for the standing N.I.N.A. blocker-maintenance authorization above, unless the current user request explicitly authorizes the relevant action, do not:
 
 - slew or pulse the mount;

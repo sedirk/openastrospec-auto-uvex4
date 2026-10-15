@@ -135,6 +135,12 @@ internal sealed class AtrScienceWorkflow(AtrRunConfiguration configuration, AtrP
                 probe.Invalidate();
                 port.PublishFrameCounters();
                 port.PublishAcquisitionProgress(context);
+                if (RemainingAttemptGate is null)
+                {
+                    var recovered = await probe.TryRecoverSavedTemperatureAsync(context, savedScience.TemperatureGate, cancellationToken).ConfigureAwait(false);
+                    if (recovered is { Disposition: GateDisposition.Passed }) continue;
+                    if (recovered is not null) return new StageResult(recovered);
+                }
                 return new StageResult(savedScience.TemperatureGate);
             }
             if (quality.Severity == GateSeverity.Warning) atrWarningFrames++;

@@ -6,6 +6,21 @@ namespace UvexAdv.Spectroscopy.Tests;
 public sealed class ExposureTierSelectorTests
 {
     [Fact]
+    public void MeasuredSnrPreferenceDoesNotBypassClippingGuidingOrLowSignal()
+    {
+        var options = new ExposureTierOptions([30,300,600],PreferMeasuredSnrReadyTier:true);
+        var probe = new SpectralProbeMetrics(300,256,9584,65535,0,127.48,194.93,19,true,"HD23552-probe");
+        Assert.Equal(300,ExposureTierSelector.Select(probe,options).SelectedExposureSeconds);
+        Assert.Equal("MEASURED_SNR_READY_TIER",ExposureTierSelector.Select(probe,options).Code);
+        Assert.Equal(600,ExposureTierSelector.Select(probe with { ContinuumSnrPerResolutionElement=1,LineSnrPerResolutionElement=2 },options).SelectedExposureSeconds);
+        Assert.Equal(600,ExposureTierSelector.Select(probe with { ContinuumSnrPerResolutionElement=5,LineSnrPerResolutionElement=8 },options).SelectedExposureSeconds);
+        Assert.False(ExposureTierSelector.Select(probe with { GuidingStable=false },options).Accepted);
+        Assert.False(ExposureTierSelector.Select(probe with { TargetToSkyContrast=1.01 },options).Accepted);
+        Assert.Equal("SATURATION_BACKOFF",ExposureTierSelector.Select(probe with { HighPercentileAdu=65000 },options).Code);
+        Assert.Equal(600,ExposureTierSelector.Select(probe,options with { PreferMeasuredSnrReadyTier=false }).SelectedExposureSeconds);
+    }
+
+    [Fact]
     public void UsesSpectralRoiToSelectNearestSafeTier()
     {
         var probe = new SpectralProbeMetrics(10, 256, 10000, 65535, 0, 12, 20, 2, true, "probe");

@@ -131,6 +131,11 @@ internal sealed partial class RealObservationStageRunner
                         return (false, new StageResult(budget, evidence));
                 }
                 adaptiveCalibrationPending = action == GuideRecoveryAction.ForceCalibration;
+                // The old run-wide "guiding ever started" shortcut silently
+                // skipped SNR preparation on the very recovery that needed it.
+                // Admit once from the current checked stop; all exposure raises
+                // remain shared with the original selection and bounded to 6s.
+                guideSnrPreparation.AdmitRecovery(automaticRebuildStopProof, phd2.Snapshot);
                 Report(adaptiveCalibrationPending
                     ? "warning：重新选星后仍导星异常，连续新帧星场可用；预留本目标唯一一次 PHD2 强制校准，完成后重新定位和入缝。"
                     : "warning：连续新帧星场恢复可用；重新定位并由 PHD2 重新选星，原运动和曝光预算不变。");

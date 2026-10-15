@@ -13,12 +13,34 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
     private int attemptedAtrProbeFrames;
     private int retainedAtrProbeFrames;
     private int acceptedAtrProbeFrames;
+    private bool savedTemperatureRecoveryAttempted;
     internal double? SelectedExposureSeconds => selectedAtrExposureSeconds;
     internal int AttemptedFrames => Volatile.Read(ref attemptedAtrProbeFrames);
     internal int RetainedFrames => Volatile.Read(ref retainedAtrProbeFrames);
     internal int AcceptedFrames => Volatile.Read(ref acceptedAtrProbeFrames);
     internal bool RequiresReprobe { get; private set; }
     internal int InheritedAttempts { get; set; }
+
+    // Shared by probe and science. One recovery admission for this runner, not
+    // a new exposure/guide/motion budget and never acceptance of the old frame.
+    internal async Task<GateResult?> TryRecoverSavedTemperatureAsync(ObservationContext context,
+        GateResult failure, CancellationToken token)
+    {
+        if (!AtrCoolingReadinessPolicy.IsSavedTemperatureQualityFailure(failure) || savedTemperatureRecoveryAttempted)
+            return null;
+        token.ThrowIfCancellationRequested();
+        if (port.SequenceStopGate() is { } stop) return stop;
+        savedTemperatureRecoveryAttempted = true;
+        port.Report("本张光谱温度证据不合格，原帧保留但不计数；本目标仅一次等待/恢复同一 ATR 制冷，再用新帧验证，不重置预算。");
+        await port.WriteAuditBestEffortAsync("atr-saved-temperature-recovery", new
+        {
+            context.Plan.ObservationRunId, failure.Code, failure.Metrics,
+            immutableFrameAccepted = false, recoveryAdmission = 1, budgetsReset = false,
+        }).ConfigureAwait(false);
+        var ready = await port.WaitForAtrScienceTemperatureAsync(context, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        return port.SequenceStopGate() ?? ready;
+    }
 
     internal void Invalidate()
     {
@@ -62,6 +84,7 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
         var probeExposure = configuration.ProbeExposureSeconds;
         var visitBudget = new AtrProbeVisitBudget(availableTiers);
         var followsSaturationBackoff = false;
+        var followsTemperatureRecovery = false;
         while (visitBudget.AttemptCount < visitBudget.MaximumAttempts)
         {
             if (InheritedAttempts > 0 && InheritedAttempts + attemptedAtrProbeFrames >= visitBudget.MaximumAttempts)
@@ -70,11 +93,12 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
             if (port.SequenceStopGate() is { } sequenceStop) return new StageResult(sequenceStop);
             if (port.RequestNativeMeridianBoundary(context, probeExposure)) return port.MeridianSegmentBoundary();
             var backoffReprobesBefore = visitBudget.BackoffReprobes;
-            if (!visitBudget.TryBeginProbe(probeExposure, followsSaturationBackoff))
+            if (!visitBudget.TryBeginProbe(probeExposure, followsSaturationBackoff, followsTemperatureRecovery))
             {
-                return Attention(ObservationStage.SelectAtrExposure, "ATR_PROBE_TIER_CYCLE", "ATR exposure selection revisited a tier without a new saturation-backoff reason, or exhausted its single fresh backoff reprobe.");
+                return new StageResult(GateResult.TargetQuality("ATR_PROBE_TIER_CYCLE", "ATR exposure selection exhausted its permitted tier visits or its single fresh repeat shared by cooling recovery and saturation backoff; retained frames are not revalidated and no extra attempts are granted."));
             }
             followsSaturationBackoff = false;
+            followsTemperatureRecovery = false;
             if (visitBudget.BackoffReprobes > backoffReprobesBefore)
             {
                 port.Report($"较长光谱试拍档过亮；回退到 {probeExposure:G4}s 复拍验证（本次选档最多一次），不复用旧试拍帧。");
@@ -112,7 +136,8 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
                 MaximumConsecutiveClippedDispersionColumns: configuration.MaximumConsecutiveClippedDispersionColumns,
                 MinimumTargetToSkyContrast: configuration.MinimumTargetToSkyContrast,
                 MinimumContinuumSnr: configuration.MinimumContinuumSnr,
-                MinimumLineSnr: configuration.MinimumLineSnr);
+                MinimumLineSnr: configuration.MinimumLineSnr,
+                PreferMeasuredSnrReadyTier: true);
             var decision = ExposureTierSelector.Select(probe.Metrics, exposureOptions);
             var selectedTierValidatedByThisFrame = decision.Accepted &&
                 Math.Abs(decision.SelectedExposureSeconds - probeExposure) < 1e-9;
@@ -132,6 +157,18 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
             if (savedProbe.TemperatureGate.Disposition != GateDisposition.Passed)
             {
                 port.PublishFrameCounters();
+                if (visitBudget.CanRepeatAfterTemperatureFailure)
+                {
+                    var recovered = await TryRecoverSavedTemperatureAsync(context, savedProbe.TemperatureGate, cancellationToken).ConfigureAwait(false);
+                    if (recovered is { Disposition: GateDisposition.Passed })
+                    {
+                        // Same tier, fresh capture, charged to the original
+                        // single repeat slot also used by saturation backoff.
+                        followsTemperatureRecovery = true;
+                        continue;
+                    }
+                    if (recovered is not null) return new StageResult(recovered);
+                }
                 return new StageResult(savedProbe.TemperatureGate);
             }
             if (selectedTierValidatedByThisFrame) acceptedAtrProbeFrames++;
@@ -219,7 +256,7 @@ internal sealed class AtrProbeWorkflow(AtrRunConfiguration configuration, IAtrOb
             probeExposure = decision.SelectedExposureSeconds;
         }
 
-        return Attention(ObservationStage.SelectAtrExposure, "ATR_PROBE_ATTEMPT_LIMIT", "ATR exposure ladder was exhausted without a freshly validated spectral-trace probe.");
+        return new StageResult(GateResult.TargetQuality("ATR_PROBE_ATTEMPT_LIMIT", "ATR exposure ladder was exhausted without a freshly validated spectral-trace probe."));
     }
 
     private static bool IsSafeSignalLimitedAtrProbe(

@@ -18,6 +18,28 @@ public sealed class G3BlendExposureReprobeTests
     }
 
     [Fact]
+    public void RecordedHd21455UnsplitJitterGetsOneLongerPairNotAPositionBypass()
+    {
+        var first = Measure(803, 420, 1, 4320);
+        var second = Measure(812.8616, 420, 1, 4320);
+        var decision = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(first, second, new('a',64), new('b',64), 3, 100);
+        Assert.Equal("G3_SHORT_REPEAT_DISAGREES", decision.Gate.Code);
+        var next = new G3ShortExposurePolicy(10).AfterConfirmation(decision, second, 3, 65520);
+        Assert.Equal(40, next.ExposureMilliseconds);
+        Assert.Equal(6, next.MaximumFrames);
+        Assert.False(decision.Accepted);
+        var fresh = Measure(805, 420, 1, 11000);
+        var one = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(null, fresh, null, new('c',64), 4, 100, next.MaximumFrames);
+        Assert.False(one.Accepted);
+        var pair = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(fresh, fresh, new('c',64), new('d',64), 5, 100, next.MaximumFrames);
+        Assert.True(pair.Accepted);
+        Assert.Equal(next, next.AfterConfirmation(decision, second, 4, 65520));
+        Assert.Equal(new G3ShortExposurePolicy(10, 4, 1), new G3ShortExposurePolicy(10,4,1).AfterConfirmation(decision, second,3,65520));
+        var original = new G3ShortExposurePolicy(10);
+        Assert.Equal(original, original.AfterConfirmation(decision with { RetainPreviousMeasurement = true },second,3,65520));
+    }
+
+    [Fact]
     public void RecordedV460SplitPositionsSelectFortyMsButNeverAuthorizeTheBlendedCentre()
     {
         // 2026-10-02 11:54Z receipts 73/75. Rounded shape diagnostics; exact

@@ -99,6 +99,9 @@ internal sealed class ObservationAttentionNotificationTracker
             ? currentGate
             : null;
         var code = gate?.Code ?? ResolveCoordinatorCode(snapshot);
+        if (NativeSequencePlan.IsScheduledNightStop(code) &&
+            snapshot.RecentEvents.LastOrDefault()?.Code == "FAULT_CLEANUP_FAILED")
+            code = "FAULT_CLEANUP_FAILED";
         var reason = FirstNonBlank(
             gate?.Message,
             snapshot.PauseReason,
@@ -128,8 +131,9 @@ internal sealed class ObservationAttentionNotificationTracker
         // A quality gate is not the night outcome. Let the native container
         // confirm stop/cleanup and save its skip-or-stop decision first.
         if (nativeTarget && snapshot.State == ObservationRunState.Faulted &&
-            (gate is not null ? NativeSequencePlan.IsSkippableQualityFailure(gate) :
-                NativeSequencePlan.IsSkippableQualityFailure(code)))
+            (NativeSequencePlan.IsScheduledNightStop(code) ||
+             (gate is not null ? NativeSequencePlan.IsSkippableQualityFailure(gate) :
+                NativeSequencePlan.IsSkippableQualityFailure(code))))
             return new ObservationAttentionNotificationEvaluation(null, false);
         var severity = snapshot.State == ObservationRunState.Faulted
             ? ObservationAttentionSeverity.Error
@@ -158,6 +162,13 @@ internal sealed class ObservationAttentionNotificationTracker
     {
         if (string.IsNullOrWhiteSpace(runId) || !nativeBoundaries.Add(runId)) return null;
         var ui = culture ?? CultureInfo.CurrentUICulture;
+        if (!skipped && boundaryFailure is null && NativeSequencePlan.IsScheduledNightStop(code))
+            return new(ObservationAttentionSeverity.Warning,
+                ObservationUiPresentation.Text("OpenAstroSpec 已到计划收尾时间", "OpenAstroSpec scheduled stop reached", ui),
+                ObservationUiPresentation.Text(
+                    $"目标：{target}\n代码：{code}\n本夜截止或晨光条件已到，停止后续目标并执行已配置安全收口。不是解析或导星故障；未声称目标完成或屋顶已关闭，请查看收口状态。",
+                    $"Target: {target}\nCode: {code}\nNight deadline or dawn reached. Further targets stopped; configured safe closeout follows. This is not an acquisition/guiding fault or proof of target completion/closed roof. Check closeout status.", ui),
+                $"{runId}|NativeBoundary|ScheduledStop");
         return new(skipped ? ObservationAttentionSeverity.Warning : ObservationAttentionSeverity.Error,
             skipped
                 ? ObservationUiPresentation.Text("OpenAstroSpec 本目标已跳过", "OpenAstroSpec target skipped", ui)

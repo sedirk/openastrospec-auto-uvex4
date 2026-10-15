@@ -1,10 +1,62 @@
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class TargetFailureContinuationTests
 {
+    [Theory]
+    [InlineData("PHD2_DIRECT_TARGET_POSITION_UNMEASURED", ObservationStage.PlaceTargetOnSlit)]
+    [InlineData("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED", ObservationStage.SelectAtrExposure)]
+    [InlineData("G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED", ObservationStage.AcquireG3SlitField)]
+    [InlineData("PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE", ObservationStage.SelectAtrExposure)]
+    [InlineData("G3_SEARCH_NOT_STARTED_RETURNED", ObservationStage.AcquireG3SlitField)]
+    [InlineData(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode, ObservationStage.AcquireG3SlitField)]
+    public async Task October14Front1FailuresActuallyExecuteFollowingNativeTarget(string code, ObservationStage stage)
+    {
+        var gate=GateResult.TargetQuality(code,"Recorded front1 failure; no fabricated science or new motion budget.");
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip",code,gate,stage);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("cleanup-failure",code,gate,stage);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("end-policy")]
+    public async Task AmbiguousDirectFallbackCannotGuidePredictionOrEndNightAfterCheckedStop(string boundary)
+    {
+        var failure = new TargetQualityEvidenceException("PHD2_DIRECT_TARGET_POSITION_UNMEASURED",
+            "X Per: the old catalogue cursor is not a unique measured star in the fresh 10ms frame.");
+        var gate = failure.AfterStop(true).Gate;
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(failure.AfterStop(false).Gate));
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
+            ObservationStage.PlaceTargetOnSlit);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("end-policy")]
+    public async Task FinalSnrSampleLossUsesBoundedReselectionThenCheckedNativeTargetContinuation(string boundary)
+    {
+        var star = new Phd2Point(708.29, 130.89);
+        var baseline = Phd2StateSnapshot.Disconnected with { IsConnected = true,
+            AppState = Phd2AppState.Selected, ConnectionEpoch = 1, GuideEpoch = 20,
+            EventSequence = 100, SelectedStar = star, LockPosition = star };
+        // Selected -> loop, then same-frame LockPositionLost + StarLost.
+        var lost = baseline with { AppState = Phd2AppState.Looping, LockPosition = null,
+            GuideEpoch = 23, EventSequence = 107 };
+        Assert.True(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, true, false));
+        Assert.False(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, false, false));
+        Assert.False(Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost, lost, star, true, true));
+        var gate = new Phd2NativeGuideSelectionExhaustedException(4,
+            ["Pre-guide candidate lost after the final SNR sample; bounded native reselection exhausted."])
+            .AfterCheckedStop().Gate;
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
+            ObservationStage.PlaceTargetOnSlit);
+    }
+
     public static IEnumerable<object[]> NativeCases()
     {
         foreach (var failure in new[] { "return-reacquire", "relock-reacquire", "atr-clipping", "off-slit", "empty-g3" })
@@ -61,6 +113,7 @@ public sealed class TargetFailureContinuationTests
     [InlineData("PHD2_IDENTITY_STALE")]
     [InlineData("NIGHT_UNSAFE")]
     [InlineData("UNKNOWN_NEW_FAILURE")]
+    [InlineData("PHD2_GUIDE_SNR_CONTEXT_CHANGED")]
     public async Task ReacquisitionContextCannotConvertSafetyOrUnknownFailureIntoTargetQuality(string code)
     {
         var original = new StageResult(GateResult.Unknown(code, "Original failure", new Dictionary<string, double> { ["measurement"] = 7 }),

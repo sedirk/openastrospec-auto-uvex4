@@ -13,7 +13,7 @@ public sealed record G3ShortExposurePolicy(int ExposureMilliseconds, int Maximum
     public const int MaximumReductions = 3;
     public const int MinimumExposureMilliseconds = 1;
     public const string SaturatedCode = "G3_SEP_SATURATED";
-    public const string Version = "sep-short-exposure-v3-signal-reprobe";
+    public const string Version = "sep-short-exposure-v4-repeat-reprobe";
 
     /// <summary>No measurement is not proof that the source is absent. Search
     /// exposure only, below both the attested solve exposure and a fixed cap.
@@ -87,15 +87,21 @@ public sealed record G3ShortExposurePolicy(int ExposureMilliseconds, int Maximum
         // Apply the same argument bounds even when this branch is inapplicable.
         _ = AfterMeasurement("validate-only", attempt);
         if (BlendExposureIncreases is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(BlendExposureIncreases));
-        if (confirmation.Accepted || confirmation.Gate.Code != "G3_SEP_PARENT_BLEND_UNRESOLVED"
+        var splitRetry = confirmation.Gate.Code == "G3_SEP_PARENT_BLEND_UNRESOLVED" &&
+            G3SepShortPositionPolicy.IsSplitParent(measurement) &&
+            confirmation.PositionSpreadPixels <= G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels;
+        var repeatRetry = confirmation.Gate.Code == "G3_SHORT_REPEAT_DISAGREES" &&
+            G3SepShortPositionPolicy.IsUnsplitParent(measurement) &&
+            !confirmation.RetainPreviousMeasurement &&
+            !G3ResolvedCompanionPositionPolicy.IsPrimaryBound(measurement) &&
+            confirmation.PositionSpreadPixels > G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels;
+        if (confirmation.Accepted || !(splitRetry || repeatRetry)
             || measurement.Gate.Disposition != GateDisposition.Passed || measurement.Identification.Target is not { } target
-            || !G3SepShortPositionPolicy.IsSplitParent(measurement)
             || Reductions != 0 || BlendExposureIncreases != 0 || attempt < 2 || attempt > AbsoluteMaximumFrames - 2
             || ExposureMilliseconds >= MaximumBlendExposureMilliseconds
             || !double.IsFinite(saturationLevel) || saturationLevel <= 0
             || !double.IsFinite(target.PeakAdu) || target.PeakAdu <= 0 || target.SaturatedFraction != 0
-            || !double.IsFinite(confirmation.PositionSpreadPixels)
-            || confirmation.PositionSpreadPixels > G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels)
+            || !double.IsFinite(confirmation.PositionSpreadPixels))
             return this;
         var next = Math.Min(MaximumBlendExposureMilliseconds, ExposureMilliseconds * 4);
         // Conservative headroom: scale the whole raw peak INCLUDING bias. Do

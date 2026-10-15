@@ -6,6 +6,67 @@ namespace UvexAdv.Phd2.Tests;
 public sealed class Phd2ClientTests
 {
     [Theory]
+    [InlineData("success")] [InlineData("native-timeout")] [InlineData("lost")]
+    [InlineData("lock-changed")] [InlineData("external-epoch")]
+    public async Task PrimaryRecoverySettlesOnlyTheOriginalGuidingLockWithoutSelectionOrCalibration(string scenario)
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await ReplyValidCalibrationPreambleAsync(session, token);
+            var prepare = await session.ReadRequestAsync(token);
+            await session.SendEventAsync(new { Event = "LockPositionSet", X = 100.0, Y = 110.0 }, token);
+            await session.SendEventAsync(new { Event = "StartGuiding" }, token);
+            await session.ReplyResultAsync(prepare, "Guiding", token);
+            var state = await session.ReadRequestAsync(token);
+            Assert.Equal("get_app_state", state.GetProperty("method").GetString());
+            await session.ReplyResultAsync(state, scenario == "lost" ? "LostLock" : "Guiding", token);
+            var position = await session.ReadRequestAsync(token);
+            Assert.Equal("get_lock_position", position.GetProperty("method").GetString());
+            await session.ReplyResultAsync(position, new[] { scenario == "lock-changed" ? 120.0 : 100.0, 110.0 }, token);
+            if (scenario is "lost" or "lock-changed") { await Task.Delay(Timeout.InfiniteTimeSpan, token); return; }
+            var profile = await session.ReadRequestAsync(token);
+            Assert.Equal("get_profile", profile.GetProperty("method").GetString());
+            if (scenario == "external-epoch") await session.SendEventAsync(new { Event = "StarSelected", X = 100.0, Y = 110.0 }, token);
+            await session.ReplyResultAsync(profile, new { id = 2, name = "c11+ccdt67+slit+2210" }, token);
+            if (scenario == "external-epoch") { await Task.Delay(Timeout.InfiniteTimeSpan, token); return; }
+            var guide = await session.ReadRequestAsync(token);
+            Assert.Equal("guide", guide.GetProperty("method").GetString());
+            Assert.False(guide.GetProperty("params").GetProperty("recalibrate").GetBoolean());
+            Assert.False(guide.GetProperty("params").TryGetProperty("roi", out _));
+            await session.ReplyResultAsync(guide, 0, token);
+            await session.SendEventAsync(new { Event = "SettleBegin" }, token);
+            await session.SendEventAsync(new { Event = "SettleDone", Status = scenario == "native-timeout" ? 1 : 0,
+                Error = scenario == "native-timeout" ? "timed out" : null, TotalFrames = 3, DroppedFrames = 0 }, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(default);
+        Assert.True((await client.ValidateCalibrationAsync(ValidCalibrationRequirement(), default)).IsValid);
+        await client.GetAppStateAsync(default);
+        var before = client.Snapshot;
+        var request = new Phd2SameLockSettleRequest(before.ConnectionEpoch, before.GuideEpoch,
+            new(100, 110), .1, new(3, 1, 10));
+        if (scenario is "success" or "native-timeout")
+        {
+            var result = await client.ResettleAtCurrentLockAsync(request, default);
+            Assert.Equal(scenario == "success", result.Succeeded);
+            Assert.False(result.NativeCalibrationOccurred);
+            Assert.Equal(before.GuideEpoch + 1, client.Snapshot.GuideEpoch);
+            Assert.Equal(before.LockPosition, client.Snapshot.LockPosition);
+            Assert.Single(server.ReceivedMethods, method => method == "guide");
+        }
+        else
+        {
+            await Assert.ThrowsAsync<Phd2Exception>(() => client.ResettleAtCurrentLockAsync(request, default));
+            Assert.DoesNotContain("guide", server.ReceivedMethods);
+        }
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+        Assert.DoesNotContain("find_star", server.ReceivedMethods);
+        Assert.DoesNotContain("set_exposure", server.ReceivedMethods);
+        Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+    }
+
+    [Theory]
     [InlineData("Stopped", false)]
     [InlineData("Looping", true)]
     [InlineData("Selected", true)]
@@ -1196,7 +1257,13 @@ public sealed class Phd2ClientTests
     [Fact]
     public async Task MissingCalibrationAgeIsIndeterminateAndBlocksGuiding()
     {
-        await using var server = new FakePhd2Server(ReplyValidCalibrationPreambleAsync);
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await ReplyValidCalibrationPreambleAsync(session, token);
+            // This case tests missing age, not a disconnected owner. Keep the
+            // peer alive while the client validates its final connection epoch.
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
 

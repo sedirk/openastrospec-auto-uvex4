@@ -290,6 +290,8 @@ public sealed record Phd2StateSnapshot(
 {
     public long CalibrationChangeSequence { get; init; }
     public bool PendingOwnerCalibrationAllowed { get; init; }
+    // PHD2 can enter settle before the first good centroid starts guiding.
+    public bool PendingInitialLockConfirmationAllowed { get; init; }
 
     public bool HasCurrentSuccessfulSettle =>
         IsConnected &&

@@ -6,4 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="UvexAdv.Phd2.Tests" />
+  </ItemGroup>
+
 </Project>

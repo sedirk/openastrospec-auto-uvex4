@@ -76,8 +76,9 @@ public sealed class CatalogGuidingWindowTests
         Assert.Contains("ValidateIdentityAsync", branch);
         Assert.Contains("CanStopOwnedSession", branch);
         Assert.Contains("ThrowIfGuideOutputFailed", branch);
-        Assert.True(branch.IndexOf("ValidateConfirmedPhdStop", StringComparison.Ordinal) <
-            branch.IndexOf("GateResult.Unknown", StringComparison.Ordinal));
+        var classify = branch.IndexOf("AfterConfirmedInitialGuideStop", StringComparison.Ordinal);
+        Assert.True(classify > branch.IndexOf("ValidateConfirmedPhdStop", StringComparison.Ordinal));
+        Assert.True(branch.IndexOf("ValidateConfirmedPhdStop", StringComparison.Ordinal) >= 0);
     }
 
     [Theory]

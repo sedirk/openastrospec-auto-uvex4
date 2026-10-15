@@ -10,7 +10,8 @@ internal static class Phd2MeasuredReturnWindow
     internal static async Task<IReadOnlyList<Phd2GuidingFrameResult>> ObserveAsync(
         IPhd2Client client, long connectionEpoch, long guideEpoch, Phd2Point verifiedLock,
         double lockTolerance, double arrivalTolerance, DateTimeOffset verifiedUtc,
-        DateTimeOffset deadline, Func<string> reservePath, TimeSpan frameTimeout, CancellationToken token)
+        DateTimeOffset deadline, Func<string> reservePath, TimeSpan frameTimeout, CancellationToken token,
+        Func<Phd2GuidingFrameResult, CancellationToken, Task<Phd2Point?>> readPrimaryPosition)
     {
         if (!double.IsFinite(arrivalTolerance) || arrivalTolerance <= 0 ||
             !double.IsFinite(lockTolerance) || lockTolerance <= 0)
@@ -42,11 +43,22 @@ internal static class Phd2MeasuredReturnWindow
                 frame.CompletedUtc > DateTimeOffset.UtcNow || frame.CompletedUtc > deadline ||
                 frame.Sha256 is not { Length: 64 } || !frame.Sha256.All(Uri.IsHexDigit) || !seen.Add(frame.Sha256) ||
                 frame.GuidingWasInterrupted || frame.ExposureChanged || frame.CaptureLoopStarted ||
-                frame.NativeLockPosition is not { } actual || Distance(actual, verifiedLock) > lockTolerance ||
-                frame.NativeMeasuredGuidePosition is not { } measured)
+                frame.NativeLockPosition is not { } actual || Distance(actual, verifiedLock) > lockTolerance)
                 throw new PhysicalActionGateException(GateResult.Unknown("PHD2_RETURN_FRAME_PROVENANCE_INVALID", "Return has no fresh same-frame measured guide position/provenance."));
             sequence = frame.EventSequence;
             lastFrame = frame.TriggerGuideFrame;
+            Phd2Point? measured;
+            try { measured = await readPrimaryPosition(frame, bounded.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested && bounded.IsCancellationRequested) { throw NotArrived(); }
+            if (!baseline.IsCurrent(client.Snapshot)) throw ContinuityFailure(client.Snapshot, connectionEpoch, guideEpoch);
+            if (DateTimeOffset.UtcNow >= deadline || bounded.IsCancellationRequested) throw NotArrived();
+            if (measured is null)
+            {
+                // A frame/crop race or ambiguous crop is an optical rejection,
+                // not an owner failure and never proof from averaged dx/dy.
+                accepted.Clear();
+                continue;
+            }
             if (Distance(measured, verifiedLock) > arrivalTolerance) accepted.Clear();
             else accepted.Add(frame);
             if (accepted.Count == 3)

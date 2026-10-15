@@ -91,6 +91,7 @@ internal sealed record NativeSequencePlan(
         "G3_SEARCH_DURABLE_RESERVE_INVALID" or "G3_SEARCH_NOT_STARTED_RETURNED" or
         G3WcsRecoveryPolicy.ExhaustedReturnedCode or G3WcsRecoveryPolicy.ResponseNotConvergedCode or
         "G3_POST_WCS_SHORT_UNCONFIRMED" or G3PostWcsShortHandoffPolicy.OutsideCode or
+        G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode or
         "G3_POST_WCS_TARGET_NOT_MEASURED" or "ATR_ATTEMPT_LIMIT" or
         "ATR_PROBE_ATTEMPT_LIMIT" or HorizonEvaluation.WindowExhaustedCode or
         Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode or
@@ -123,6 +124,10 @@ internal sealed record NativeSequencePlan(
             return GateResult.TargetQuality("TARGET_CONTINUATION_TIME_LIMIT", "本目标原时间预算已耗尽；保留已保存帧，停止确认后跳过。");
         return null;
     }
+
+    // Presentation only: these still stop the night and require normal physical
+    // closeout. Never classify Unsafe, stop failures or a target budget this way.
+    internal static bool IsScheduledNightStop(string? code) => code is "NIGHT_DEADLINE_REACHED" or "NIGHT_DAWN_REACHED";
 
     internal GateResult? StopGateNow() => StopGate(DateTimeOffset.UtcNow, time =>
         NINA.Astrometry.AstroUtil.GetSunAltitude(time.UtcDateTime, new NINA.Astrometry.ObserverInfo

@@ -831,11 +831,14 @@ public static class Phd2SlitLockShiftPlanner
                     "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID",
                     "A catalogue-identified saturated target must explicitly mark integrated flux as not applicable; its fresh filled-core topology and centroid remain the position evidence.");
         }
-        else if (!double.IsFinite(measurement.FluxMetric) ||
-                 measurement.FluxMetric < limits.MinimumFluxMetric ||
-                 measurement.FluxMetric > limits.MaximumFluxMetric)
+        else if (!double.IsFinite(measurement.FluxMetric) || measurement.FluxMetric <= 0)
         {
-            return Denied("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "Detected-target flux must pass the commissioned hard envelope.");
+            return Denied("G3_FLUX_RESIDUAL_EVIDENCE_INVALID", "Detected-target flux must be finite and positive; missing evidence is not a quality warning.");
+        }
+        else if ((measurement.FluxMetric < limits.MinimumFluxMetric || measurement.FluxMetric > limits.MaximumFluxMetric) &&
+                 !IsMeasuredTargetFluxWarning(measurement, limits))
+        {
+            return Denied("G3_TARGET_FLUX_OUTSIDE_ENVELOPE", "Target flux is outside the reference envelope without same-frame measured guide/target geometry. No movement is authorized.");
         }
 
         var guideLockResidual = Distance(measurement.GuideStar, ledger.CurrentLockPosition);
@@ -873,6 +876,15 @@ public static class Phd2SlitLockShiftPlanner
         }
         return null;
     }
+
+    // Integrated ADU depends on exposure and aperture, not just per-pixel
+    // saturation. Fresh, identified measured geometry can carry a flux warning;
+    // it cannot turn a prediction, missing flux or unknown owner into motion.
+    public static bool IsMeasuredTargetFluxWarning(Phd2SlitFieldMeasurement measurement, Phd2LockShiftLimits limits) =>
+        measurement.TargetPositionAuthority == Phd2TargetPositionAuthority.DetectedTargetCentroid &&
+        measurement.TargetIdentityConfirmed && measurement.GuidePositionMeasuredInFrame &&
+        double.IsFinite(measurement.FluxMetric) && measurement.FluxMetric > 0 &&
+        (measurement.FluxMetric < limits.MinimumFluxMetric || measurement.FluxMetric > limits.MaximumFluxMetric);
 
     private static bool ValidateTopology(Phd2SensorTopology topology, List<string> failures)
     {

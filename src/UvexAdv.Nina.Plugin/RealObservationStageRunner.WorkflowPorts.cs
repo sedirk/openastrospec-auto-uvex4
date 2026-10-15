@@ -13,6 +13,8 @@ internal sealed partial class RealObservationStageRunner
         public Phd2StateSnapshot GuideSnapshot => run.phd2.Snapshot;
         public Phd2LockShiftPendingState? PendingMotion => run.pendingPhd2LockShift;
         public bool GuidePrecisionWarningActive => run.placementGuidePrecisionWarningActive;
+        public bool TryConsumePrimaryStarSettle(string lineage, int chargedStage) =>
+            run.GuideRecovery.TryConsumePrimaryStarSettle(lineage, chargedStage);
         public Phd2LockShiftSafetySnapshot BuildPhd2LockShiftSafetySnapshot(ObservationContext c,
             Phd2SlitPlacementCommissioning preset, string side) => run.BuildPhd2LockShiftSafetySnapshot(c, preset, side);
         public Task<StageResult> ReturnPhd2LockToOriginAsync(ObservationContext c, Phd2SlitPlacementSession session,
@@ -22,8 +24,8 @@ internal sealed partial class RealObservationStageRunner
         public Task<IReadOnlyList<Phd2GuidingResidualState>> CapturePhd2PlacementGuideWindowAsync(ObservationContext c,
             Phd2SlitPlacementCommissioning preset, Phd2SensorTopology topology, Phd2Point currentLock,
             Phd2Point expectedTarget, SlitGeometry slit, Phd2SlitGuideMode mode, int count, DateTimeOffset deadline,
-            CancellationToken t, IReadOnlyList<Phd2GuidingResidualState>? previousWindow = null) =>
-            run.CapturePhd2PlacementGuideWindowAsync(c, preset, topology, currentLock, expectedTarget, slit, mode, count, deadline, t, previousWindow);
+            CancellationToken t, IReadOnlyList<Phd2GuidingResidualState>? previousWindow = null, Phd2Point? referenceGuide = null) =>
+            run.CapturePhd2PlacementGuideWindowAsync(c, preset, topology, currentLock, expectedTarget, slit, mode, count, deadline, t, previousWindow, referenceGuide);
         public void RecordSession(Phd2SlitPlacementSession? session) => run.phd2SlitPlacementSession = session;
         public void RecordPendingMotion(Phd2LockShiftPendingState? state) => run.pendingPhd2LockShift = state;
         public void PromoteMeasurement(Phd2GuidingResidualState measurement, Phd2SlitPlacementCommissioning preset) =>
@@ -46,6 +48,8 @@ internal sealed partial class RealObservationStageRunner
         public Task RequireImmediatePhysicalActionGatesAsync(ObservationContext c, CancellationToken t) => run.RequireImmediatePhysicalActionGatesAsync(c, t);
         public Task<Phd2ExactLockPositionResult> SetExactLockPositionAsync(Phd2ExactLockPositionRequest request, CancellationToken t) =>
             run.phd2.SetExactLockPositionAsync(request, t);
+        public Task<Phd2SettleResult> ResettleAtCurrentLockAsync(Phd2SameLockSettleRequest request, CancellationToken t) =>
+            run.phd2.ResettleAtCurrentLockAsync(request, t);
         public Task<Phd2CalibrationValidation> ValidateCalibrationAsync(Phd2SlitPlacementCommissioning preset, CancellationToken t) =>
             run.phd2.ValidateCalibrationAsync(preset.CalibrationQualityPolicy.ApplyHardRejectionCeilings(run.PhdCalibrationRequirement()), t);
         public Phd2PostLockGuidingObservation BeginFreshResidualObservation(Phd2ExactLockPositionResult exact,
@@ -58,10 +62,6 @@ internal sealed partial class RealObservationStageRunner
             run.SelectPhd2CalibrationQuality(calibration, preset, phase, settle, residual, purpose);
         public Phd2CalibrationSettleEvidence CreateCalibrationSettleEvidence(Phd2SettleResult settle,
             Phd2StateSnapshot snapshot, bool fresh, int count) => run.CreateCalibrationSettleEvidence(settle, snapshot, fresh, count);
-        public Phd2CalibrationResidualEvidence CreateCalibrationResidualEvidence(Phd2GuidingResidualState residual,
-            double guideResidual, Phd2SlitPlacementCommissioning preset, Phd2SensorTopology topology,
-            Phd2SlitGuideMode mode, double? maximumResidualOverridePixels = null) =>
-            run.CreateCalibrationResidualEvidence(residual, guideResidual, preset, topology, mode, maximumResidualOverridePixels);
         public Phd2LockShiftQualification BuildPhd2LockShiftQualification(Phd2IdentityValidation identity,
             Phd2CalibrationValidation calibration, Phd2SensorTopology topology, Phd2SlitPlacementCommissioning preset,
             Phd2CalibrationQualityAssessment quality, string side) => run.BuildPhd2LockShiftQualification(identity, calibration, topology, preset, quality, side);

@@ -21,6 +21,7 @@ internal interface IPhd2SlitPlacementPort
     Phd2StateSnapshot GuideSnapshot { get; }
     Phd2LockShiftPendingState? PendingMotion { get; }
     bool GuidePrecisionWarningActive { get; }
+    bool TryConsumePrimaryStarSettle(string lineage, int chargedStage);
     Phd2LockShiftSafetySnapshot BuildPhd2LockShiftSafetySnapshot(ObservationContext context,
         Phd2SlitPlacementCommissioning preset, string pierSide);
     Task<StageResult> ReturnPhd2LockToOriginAsync(ObservationContext context, Phd2SlitPlacementSession session,
@@ -30,7 +31,7 @@ internal interface IPhd2SlitPlacementPort
         Phd2SlitPlacementCommissioning preset, Phd2SensorTopology topology, Phd2Point currentLock,
         Phd2Point expectedTarget, SlitGeometry runtimeSlitLocal, Phd2SlitGuideMode guideMode,
         int count, DateTimeOffset deadlineUtc, CancellationToken token,
-        IReadOnlyList<Phd2GuidingResidualState>? previousWindow = null);
+        IReadOnlyList<Phd2GuidingResidualState>? previousWindow = null, Phd2Point? referenceGuide = null);
     void RecordSession(Phd2SlitPlacementSession? session);
     void RecordPendingMotion(Phd2LockShiftPendingState? pending);
     void PromoteMeasurement(Phd2GuidingResidualState measurement, Phd2SlitPlacementCommissioning preset);
@@ -46,6 +47,7 @@ internal interface IPhd2SlitPlacementPort
     Task<GateResult> EnsurePhdStoppedForAutomaticRebuildAsync(ObservationStage stage, string reason, CancellationToken token);
     Task RequireImmediatePhysicalActionGatesAsync(ObservationContext context, CancellationToken token);
     Task<Phd2ExactLockPositionResult> SetExactLockPositionAsync(Phd2ExactLockPositionRequest request, CancellationToken token);
+    Task<Phd2SettleResult> ResettleAtCurrentLockAsync(Phd2SameLockSettleRequest request, CancellationToken token);
     Task<Phd2CalibrationValidation> ValidateCalibrationAsync(Phd2SlitPlacementCommissioning preset, CancellationToken token);
     Phd2PostLockGuidingObservation BeginFreshResidualObservation(Phd2ExactLockPositionResult exact,
         Phd2SlitPlacementSession session, double tolerance, bool supervised, CancellationToken token);
@@ -55,9 +57,6 @@ internal interface IPhd2SlitPlacementPort
         Phd2CalibrationSelectionPurpose purpose);
     Phd2CalibrationSettleEvidence CreateCalibrationSettleEvidence(Phd2SettleResult settle,
         Phd2StateSnapshot snapshot, bool freshGuidingWindowAccepted, int freshGuidingSampleCount);
-    Phd2CalibrationResidualEvidence CreateCalibrationResidualEvidence(Phd2GuidingResidualState residual,
-        double guideLockResidual, Phd2SlitPlacementCommissioning preset, Phd2SensorTopology topology,
-        Phd2SlitGuideMode guideMode, double? maximumResidualOverridePixels = null);
     Phd2LockShiftQualification BuildPhd2LockShiftQualification(Phd2IdentityValidation identity,
         Phd2CalibrationValidation calibration, Phd2SensorTopology topology,
         Phd2SlitPlacementCommissioning preset, Phd2CalibrationQualityAssessment quality, string pierSide);

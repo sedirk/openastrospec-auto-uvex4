@@ -10,6 +10,22 @@ public sealed class AdaptiveGuidingRecoveryTests
         session.Observe(Start.AddSeconds(seconds), Start.AddSeconds(seconds), true, 4, 10, 0);
 
     [Fact]
+    public void PrimarySettleAllowanceSurvivesReentryAndMeridianContinuation()
+    {
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => true);
+        var recovery = session.GuidingRecovery;
+        Assert.True(recovery.TryConsumePrimaryStarSettle());
+        recovery.BeginCheck(Start);
+        Assert.False(recovery.TryConsumePrimaryStarSettle());
+        session.RecordSegment("first", 1, 1, 0, 120);
+        session.RequestAtFrameBoundary(120);
+        session.ConfirmFlip();
+        Assert.Same(recovery, session.GuidingRecovery);
+        Assert.False(session.GuidingRecovery.TryConsumePrimaryStarSettle());
+        Assert.True(new AdaptiveGuidingRecovery().TryConsumePrimaryStarSettle());
+    }
+
+    [Fact]
     public void CloudsWaitWithoutSelectionOrCalibrationThenRequireTwoFreshClearFrames()
     {
         var s = new AdaptiveGuidingRecovery(); s.BeginCheck(Start);

@@ -102,7 +102,7 @@ internal sealed partial class RealObservationStageRunner
                 preset.MaximumAcquisitionResidualPixels, previous, measurement, confirmation, attempt, boundaryRecheckUsed,
                 RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true), preset.TargetSearchRadiusPixels);
             var accepted = decision.Accepted;
-            var next = boundaryRecheckUsed ? policy : policy.AfterMeasurement(measurement.Gate.Code, attempt);
+            var next = boundaryRecheckUsed ? policy : policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt);
             var receipt = await PublishRunJsonEvidenceAsync("g3-post-wcs-short-target-confirmation",
                 "SEP continuity check after a small WCS correction (no repeat solve)",
                 new { accepted, attempt, maximumFrames,

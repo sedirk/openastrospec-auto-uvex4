@@ -7,6 +7,36 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2NativeGuideSearchRegionsTests
 {
     [Fact]
+    public void RecordedHd220539SeedWouldLeaveDetectorDuringSlitPlacement()
+    {
+        var guide = new PixelPoint(1325.29, 1058.41);
+        var target = new PixelPoint(788.531, 410.521);
+        var slit = new SlitGeometry("slit", new(817, 429.571), -2, 410, 3.5, .5, "G3", 1, 1);
+        Assert.True(1079 - guide.Y > 20); // Old seed-only check admitted it.
+        Assert.Equal(1.54, Phd2NativeGuideSearchRegions.PlannedEdgeDistance(1920, 1080,
+            guide, target, slit.AcquisitionPoint), 3);
+        var regions = Phd2NativeGuideSearchRegions.Build(1920, 1080, target, 120, slit, 20, 10, [guide], []);
+        Assert.NotEmpty(regions); // Reject this candidate, not the target/night.
+        foreach (var r in regions)
+        foreach (var p in new[] { new PixelPoint(r.X, r.Y), new PixelPoint(r.X + r.Width - 1, r.Y + r.Height - 1) })
+            Assert.True(Phd2NativeGuideSearchRegions.PlannedEdgeDistance(1920, 1080, p, target, slit.AcquisitionPoint) >= 20);
+    }
+
+    [Theory]
+    [InlineData(25, 500, -30, 0)]
+    [InlineData(1895, 500, 30, 0)]
+    [InlineData(1000, 25, 0, -30)]
+    [InlineData(1000, 1055, 0, 30)]
+    public void DirectionalGuardRejectsOutwardTravelButAllowsMovingAway(double x, double y, double dx, double dy)
+    {
+        var target = new PixelPoint(817, 429);
+        Assert.True(Phd2NativeGuideSearchRegions.PlannedEdgeDistance(1920, 1080, new(x, y),
+            target, new(target.X + dx, target.Y + dy)) < 20);
+        Assert.True(Phd2NativeGuideSearchRegions.PlannedEdgeDistance(1920, 1080, new(x, y),
+            target, new(target.X - dx, target.Y - dy)) >= 20);
+    }
+
+    [Fact]
     public void LedExtentExcludesAsymmetricTailBeyondCommissionedCentralSegment()
     {
         var slit = new SlitGeometry("slit", new(817, 426), -2, 410, 3.5, .5, "G3", 1, 1)

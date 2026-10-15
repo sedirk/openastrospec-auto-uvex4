@@ -4,6 +4,40 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3PostWcsShortExposurePolicyTests
 {
+    private static G3ShortPositionConfirmationDecision Unconfirmed(string code, bool retry = true) =>
+        new(GateResult.Unknown(code, "Recorded short-frame confirmation outcome"), null, false, retry, false, .5);
+
+    [Fact]
+    public void Hd21455DisagreeingMeasuredPairUsesLastAdjustmentWhileTwoFreshFramesRemain()
+    {
+        var p = G3PostWcsShortExposurePolicy.Start(10);
+        p = p.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed("G3_SHORT_REPEAT_REQUIRED"), 1);
+        Assert.Equal(10, p.ExposureMilliseconds);
+        p = p.AfterConfirmation("G3_SEP_UNMEASURED", Unconfirmed("G3_SEP_UNMEASURED"), 2);
+        Assert.Equal(30, p.ExposureMilliseconds);
+        p = p.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed("G3_SHORT_REPEAT_REQUIRED"), 3);
+        Assert.Equal(30, p.ExposureMilliseconds);
+        p = p.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed("G3_SHORT_REPEAT_DISAGREES"), 4);
+        Assert.Equal(90, p.ExposureMilliseconds);
+        Assert.Equal(2, p.Adjustments);
+        Assert.Equal(p, p.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed("G3_SEP_PARENT_BLEND_UNRESOLVED"), 5));
+        Assert.Equal(p, p.AfterConfirmation("G3_SEP_AMBIGUOUS", Unconfirmed("G3_SEP_AMBIGUOUS", false), 6));
+        Assert.Equal(6, G3PostWcsShortExposurePolicy.MaximumFrames);
+    }
+
+    [Theory]
+    [InlineData("G3_SHORT_FRAME_REUSED")]
+    [InlineData("G3_SHORT_CONFIRMATION_INVALID")]
+    [InlineData("G3_SHORT_POSITION_OUTSIDE")]
+    public void ConfirmationFailureCannotBecomeNewCaptureAuthority(string code)
+    {
+        var p = G3PostWcsShortExposurePolicy.Start(10);
+        Assert.Equal(p, p.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed(code, false), 2));
+        Assert.Equal(p, p.AfterConfirmation("G3_SEP_UNMEASURED", Unconfirmed(code, false), 2));
+        var saturated = p.AfterMeasurement(G3ShortExposurePolicy.SaturatedCode, 1);
+        Assert.Equal(saturated, saturated.AfterConfirmation("G3_SEP_POSITION_MEASURED", Unconfirmed("G3_SHORT_REPEAT_DISAGREES"), 2));
+    }
+
     [Fact]
     public void WeakTenMillisecondFrameGetsBoundedSignalSearchNotLongSolveLadder()
     {

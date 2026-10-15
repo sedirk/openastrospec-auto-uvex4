@@ -36,6 +36,9 @@ public static class ScenarioCatalog
         new("cancel-stop-unconfirmed", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed()),
         new("cancel-stop-unconfirmed-narrow", 540, 900, ObservationDockMockViewModel.CancelStopUnconfirmed()),
         new("cancel-stop-unconfirmed-en", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("night-scheduled-stop", 1040, 850, ObservationDockMockViewModel.ScheduledStop()),
+        new("night-scheduled-stop-narrow", 540, 900, ObservationDockMockViewModel.ScheduledStop()),
+        new("night-scheduled-stop-en", 1040, 850, ObservationDockMockViewModel.ScheduledStop(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
         new("g3-split-morphology", 1040, 850, ObservationDockMockViewModel.SplitMorphology()),
         new("g3-split-morphology-narrow", 540, 850, ObservationDockMockViewModel.SplitMorphology()),
         new("g3-split-morphology-en", 1040, 850, ObservationDockMockViewModel.SplitMorphology(true)) { Culture=CultureInfo.GetCultureInfo("en-US") },
@@ -1223,6 +1226,25 @@ public sealed class ObservationDockMockViewModel
             LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
             LastFailureMetrics = ObservationUiPresentation.FormatMetrics(gate.Metrics, culture),
             OperatorNotice = english ? "Offline replay; no hardware action." : "离线重放；没有连接或操作设备。",
+        };
+    }
+
+    public static ObservationDockMockViewModel ScheduledStop(bool english = false)
+    {
+        var culture = CultureInfo.GetCultureInfo(english ? "en-US" : "zh-CN");
+        var gate = GateResult.Unknown("NIGHT_DEADLINE_REACHED", "Scheduled night deadline reached.");
+        var issue = ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture);
+        return new()
+        {
+            StateText = ObservationUiPresentation.RunStateName(ObservationRunState.Faulted, gate.Code, culture),
+            IsSimulationMode = true, HasFailure = true, SelectedWorkspaceTabIndex = 5,
+            CurrentStageText = ObservationUiPresentation.StageName(ObservationStage.PlaceTargetOnSlit, culture),
+            NextStageText = "—", ProgressPercent = 45, ProgressSummary = "5/11 · 45%",
+            LastFailureCode = gate.Code, LastFailureHeadline = issue.Summary,
+            LastFailureMessage = issue.Summary, LastFailureContext = english ? "Scheduled stop" : "计划收尾",
+            LastFailureImpact = issue.Impact, LastFailureRecovery = issue.AutomaticRecovery,
+            LastFailureRecommendation = issue.Recommendation, LastFailureTechnicalDetails = issue.TechnicalDetails,
+            OperatorNotice = english ? "Offline replay; no devices connected or commanded." : "离线回放；没有连接或操作设备。",
         };
     }
 

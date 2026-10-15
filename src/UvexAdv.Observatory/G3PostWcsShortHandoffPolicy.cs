@@ -52,8 +52,22 @@ public static class G3PostWcsShortHandoffPolicy
             return new(GateResult.Unknown("G3_POST_WCS_SHORT_UNCONFIRMED",
                 $"Independent short-frame confirmation is incomplete: {confirmation.Gate.Code}: {confirmation.Gate.Message}", metrics), false, false);
         if (currentGeometry && priorGeometry)
+        {
+            // A remaining envelope can be SMALLER than the original recognition
+            // window after guiding recovery. Do not bypass it via the old fast path.
+            if (measuredHandoffRadius != 0 &&
+                (!double.IsFinite(measuredHandoffRadius) || measuredHandoffRadius < 0 ||
+                 Math.Max(priorSlit, currentSlit) + confirmation.PositionSpreadPixels > measuredHandoffRadius))
+            {
+                Metric("measuredHandoffRadiusPixels", measuredHandoffRadius);
+                metrics["confirmedPairCoarseSolveEligible"] =
+                    double.IsFinite(measuredHandoffRadius) && measuredHandoffRadius > 0 ? 1 : 0;
+                return new(GateResult.Unknown(OutsideCode,
+                    "The independent pair agrees inside the recognition window, but exceeds the inherited remaining fine-motion envelope. Reuse the existing field for one coarse solve; no new budget or blind search.", metrics), false, false);
+            }
             return new(GateResult.Pass("G3_POST_WCS_SHORT_HANDOFF_CONFIRMED",
                 "Both independent short positions fit the unchanged prediction and slit windows; fresh PHD2 fine evidence is still required.", metrics), true, false);
+        }
 
         // Scatter authorizes only two more images, never a larger acceptance
         // window. Keep source validity, long/short identity and original prediction gates.

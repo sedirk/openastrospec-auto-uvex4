@@ -7,6 +7,31 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationAttentionNotificationTests
 {
     [Theory]
+    [InlineData("NIGHT_DEADLINE_REACHED")]
+    [InlineData("NIGHT_DAWN_REACHED")]
+    public void ScheduledStopWaitsForBoundaryThenExplainsCloseoutWithoutClaimingSuccess(string code)
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var s = Snapshot(ObservationRunState.Faulted, ObservationStage.PlaceTargetOnSlit, "planned stop", code);
+        var gate = GateResult.Unknown(code, "planned stop");
+        var culture = CultureInfo.GetCultureInfo("zh-CN");
+        Assert.Null(tracker.Evaluate(s, gate, culture, nativeTargetRunId: s.ObservationRunId).Notification);
+        var n = tracker.NativeBoundary(s.ObservationRunId!, "HD 417", code, false, null, culture)!;
+        Assert.Equal(ObservationAttentionSeverity.Warning, n.Severity);
+        Assert.Contains("计划收尾", n.Title);
+        Assert.Contains("未声称目标完成或屋顶已关闭", n.Body);
+        Assert.Null(tracker.NativeBoundary(s.ObservationRunId!, "HD 417", code, false, null, culture));
+        Assert.Contains("计划收尾", ObservationUiPresentation.RunStateName(s.State, code, culture));
+        Assert.Contains("不是解析或导星故障", ObservationUiPresentation.Present(ObservationStage.PlaceTargetOnSlit, gate, culture).Summary);
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(gate));
+        var unconfirmed = new ObservationAttentionNotificationTracker().NativeBoundary("bad-stop", "HD 417", code, false,
+            "PHD2_STOP_UNCONFIRMED", culture)!;
+        Assert.Equal(ObservationAttentionSeverity.Error, unconfirmed.Severity);
+        Assert.Contains("PHD2_STOP_UNCONFIRMED", unconfirmed.Body);
+        Assert.Contains("故障", ObservationUiPresentation.RunStateName(s.State, "FAULT_CLEANUP_FAILED", culture));
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void NativeQualityFaultWaitsForSavedBoundaryThenReportsActualSkipOrStop(bool skipped)

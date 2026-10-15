@@ -2,6 +2,8 @@
 
 Status: implementation and commissioning note. This document does not change
 the frozen device-ownership or physical-action invariants.
+Updated through [0.4.0.300 / October 15](closeout-2026-10-15.md); ADR-0040 supersedes
+the original once-per-observation settle-recovery limit from ADR-0037.
 
 ## Why this exists
 
@@ -20,12 +22,17 @@ bounded, audited and preserves durable movement/action counters.
 
 | Failure family | Automatic response | Bound | Important invariant |
 | --- | --- | ---: | --- |
+| Fresh target position disagrees with a search window carried across a lock shift | Translate the search position using same-frame measured primary-star motion; retry discontinuous peak changes through the existing fresh-frame path | Existing placement clock and movement ledger | Commanded lock displacement and multi-star average are not measured target motion; no fabricated centroid or automatic switch to a nearby bright source |
+| Three fresh frames show primary-star / multi-star correction mismatch at an already-charged exact-lock stage | Persist the stage before one native settle recovery at the same lock, then measure again | Once per charged stage, within original deadline and full-return reserve | No extra offset, reselection, recalibration, profile change or retry-credit reset across reload/return/handoff |
+| Fresh measured coarse/fine handoff exceeds the old continuity-only distance cutoff | Require checked guide stop, quiet same-side/epoch readbacks and current image binding; conservatively debit the displacement and one action | Original action, movement, time and complete-return budgets | Valid budget exhaustion is typed target-quality; unknown owner, position, ledger or stop is not downgraded |
+| Identified filled-core geometry overlaps or approaches the finite physical slit but misses preferred midpoint precision | Under explicit warning consent, enter the shared diagnostic ATR probe route with retained quality flags | Complete fresh window and existing placement/probe budgets | Not exact arrival or guaranteed science acceptance; strict mode and independent ATR quality checks remain unchanged |
+| Fresh identified target has positive finite integrated flux outside the reference interval | Preserve the actual sum as a warning when primary and target positions are measured in the same frame; a typed saturated core with a retained catalogue/neighbour identity chain uses explicit non-photometric N/A | Existing placement/return ledger only | No extra movement credit; missing/non-finite evidence, identity, topology and weather are not downgraded. Without measured support, the non-dispatched flux-range refusal is target-quality and the next native target requires independently confirmed stopping |
 | PHD2 native off-slit selection returns no candidate, or the selected point intersects detector edge, target halo or physical slit | Only a successful `find_star` null result or reviewed geometry rejection consumes one attempt; save/wait for another fresh full-frame native selection. When an `AutoPreferOffSlitThenDirectTarget` route exhausts, checked-stop and enter the explicitly commissioned, supervised direct-target route | 4 native selections; one route transition | RPC, connection, protocol and malformed-point failures do not inherit no-candidate retry; the coordinator never substitutes a locally ranked ordinary star |
 | Confirmed PHD2 disconnect or `LostLock`, with no outstanding unreturned lock mutation | Stop the stale session, acquire fresh G3/PL3/slit evidence and establish one new guide session | 1 | Semantic FITS/WCS errors, native selection rejection and same-epoch settle timeout are not lost lock |
 | `G3_TARGET_REQUIRED`, `PHD2_SLIT_TARGET_REQUIRED`, or `G3_FIELD_REQUIRED` | Run the existing earliest-safe resume dependency chain | 1 | G3, slit and guide authority are regenerated; no motion budget is reset |
 | `GUIDING_LOST`, `GUIDING_UNSTABLE`, or `GUIDING_NOT_STABLE` before science | Fresh G3 → replace target on slit → restart guiding → restore optional photometry, as required by the interrupted stage | 1 | No new ATR shutter action occurs before a fresh guide epoch passes |
 | Disposable G3 binding/carry-forward/slit-geometry evidence | Discard derived field and acquire one independent immutable evidence set | 1 | Cached detector-fixed slit geometry may remain; sky frames never cross mount motion |
-| Tracking-enable readback failure before catalogue slew | Re-read/re-establish tracking and repeat the stage precondition | 2 | The retry does not itself authorize the slew |
+| Tracking-enable timeout before initial catalogue slew | ADR-0038: one original-target native GOTO after full safe/idle checks; verify stable tracking afterward | 1 durable initial GOTO; no generic timeout retry | No home, forced flip, sync, limit edit or old optical reuse; native rejection/unknown stop retains safety standby |
 | `FINALIZE_INCOMPLETE` | Retry checked stop/OFF/close terminal actions | 2 | Finalization never reopens or resumes a data owner |
 | Optional QHY health, preview, pause or resume failure | Disable scientific use of QHY, retain its owner-job handle for final cleanup and continue spectroscopy | no QHY restart loop in the plugin | QHY failure cannot block ATR/G3/UVEX spectroscopy |
 | UVEX slit LED is verified OFF but lease release fails | Record a warning and reacquire/revalidate the lease before a later command | no output retry needed | Lease cleanup failure is not reported as unknown LED output |
@@ -46,9 +53,13 @@ bounded, audited and preserves durable movement/action counters.
 | Optional QHY job readback fails during finalization | Retry status read twice, then record a warning and continue required cleanup | 2 read-only attempts | No QHY reconnect/start/resume; UVEX OFF, PHD2 stop, cover and roof cleanup cannot be bypassed |
 | Locked optical-cover adapter is disconnected during cleanup | Revalidate the Profile selection, connect that exact adapter once, then reread identity/state before the existing idempotent close | 1 read-only reconnect | Identity mismatch, Error/NotPresent or ambiguous close state remain hard stops |
 
-## Deliberate hard stops
+## Non-retriable actions and independent safety stops
 
-The following remain operator blockers and receive zero generic retries:
+No generic retry may bypass the following boundaries. Rejecting an unsafe or
+unsupported **next action** is not automatically an entire-night stop: a reviewed
+target-quality or valid-budget failure can follow the saved skip policy only after
+independent checked stop and durable-state retirement. Owner, weather, cancellation,
+unknown physical state and corrupt evidence are never converted into quality skips.
 
 - camera/profile/COM-port/owner, commissioning, Night Setup or stable-identity mismatch;
 - FITS, WCS, evidence, manifest or durable-ledger hash/context mismatch;
@@ -58,14 +69,16 @@ The following remain operator blockers and receive zero generic retries:
   horizon or parked/untrackable mount;
 - ambiguous movement completion without a trusted current position and a
   corresponding durable intent;
-- single-step, cumulative movement, attempt, return reserve, elapsed-time or
-  bounded-search exhaustion;
+- a command that would exceed single-step, cumulative movement, attempt, return
+  reserve, elapsed-time or bounded-search limits; valid target-budget exhaustion
+  follows the checked-stop skip route without replenishing those limits;
 - more than one outstanding movement lineage or an endpoint that fresh evidence
   cannot distinguish;
 - UVEX slit illumination OFF that still cannot be command-completed and
   readback-verified after its bounded exact-COM5 reconnect attempt; and
 - target/ghost candidates that remain non-unique after fresh evidence and the
-  available external identity authority.
+  available external identity authority: do not invent target identity; a reviewed
+  acquisition-quality failure may skip after checked stop rather than end the night.
 
 ## Deferred follow-up (not part of the sunny-night closure)
 

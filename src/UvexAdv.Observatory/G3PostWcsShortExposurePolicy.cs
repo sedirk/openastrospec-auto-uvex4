@@ -24,4 +24,19 @@ public sealed record G3PostWcsShortExposurePolicy(int ExposureMilliseconds, int 
                 Adjustments = Adjustments + 1 };
         return this;
     }
+
+    public G3PostWcsShortExposurePolicy AfterConfirmation(string measurementCode,
+        G3ShortPositionConfirmationDecision confirmation, int attempt)
+    {
+        if (confirmation.Accepted || !confirmation.RetryAllowed) return this;
+        // A centroid in each frame is not a confirmed position. HD 21455 had
+        // two unsaturated centroids but split/disagreeing profiles: looking only
+        // at POSITION_MEASURED repeated the weak setting until all six frames
+        // were spent. Seek a stronger independent pair within the same caps;
+        // never merge components or choose a brighter companion to pass.
+        var code = measurementCode == "G3_SEP_POSITION_MEASURED" &&
+            confirmation.Gate.Code is "G3_SHORT_REPEAT_DISAGREES" or "G3_SEP_PARENT_BLEND_UNRESOLVED"
+                ? "G3_SEP_UNMEASURED" : measurementCode;
+        return AfterMeasurement(code, attempt);
+    }
 }

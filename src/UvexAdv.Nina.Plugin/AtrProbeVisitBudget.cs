@@ -20,15 +20,20 @@ internal sealed class AtrProbeVisitBudget
     public int AttemptCount { get; private set; }
     public int MaximumAttempts { get; }
     public int BackoffReprobes { get; private set; }
+    public int TemperatureReprobes { get; private set; }
+    public bool CanRepeatAfterTemperatureFailure => AttemptCount < MaximumAttempts && BackoffReprobes + TemperatureReprobes == 0;
 
-    public bool TryBeginProbe(double exposure, bool followsSaturationBackoff)
+    public bool TryBeginProbe(double exposure, bool followsSaturationBackoff, bool followsTemperatureRecovery = false)
     {
         if (!configuredTiers.Contains(exposure) || AttemptCount >= MaximumAttempts) return false;
         if (visited.Contains(exposure))
         {
-            if (!followsSaturationBackoff || exposure >= previousExposure || BackoffReprobes != 0)
-                return false;
-            BackoffReprobes++;
+            if (BackoffReprobes + TemperatureReprobes != 0) return false;
+            if (followsTemperatureRecovery && !followsSaturationBackoff && exposure == previousExposure)
+                TemperatureReprobes++;
+            else if (followsSaturationBackoff && !followsTemperatureRecovery && exposure < previousExposure)
+                BackoffReprobes++;
+            else return false;
         }
         visited.Add(exposure);
         previousExposure = exposure;

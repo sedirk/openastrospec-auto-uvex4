@@ -9,6 +9,7 @@ internal sealed partial class RealObservationStageRunner
 {
     private readonly AtrCoolingRecoveryPolicy atrCoolingRecovery = new();
     private CancellationTokenSource? atrPreCoolingCancellation;
+    private DateTimeOffset? atrScienceCoolingDeadlineUtc;
 
     private async Task<GateResult> ReadFreshAtrCoolingReadinessAsync(string expectedId, CancellationToken token)
     {
@@ -30,8 +31,9 @@ internal sealed partial class RealObservationStageRunner
         AtrCoolingRecoveryAction action, CancellationToken token)
     {
         if (action == AtrCoolingRecoveryAction.Exhausted)
-            return GateResult.Unknown("ATR_COOLING_RECOVERY_EXHAUSTED",
-                "ATR 已重新设温并重连同一相机各一次，温度读回仍无改善；未开始曝光。请检查供电、制冷能力和驱动，未放宽温度门。");
+            return AtrCoolingReadinessPolicy.CoolingWaitExhausted("ATR_COOLING_RECOVERY_EXHAUSTED",
+                "ATR 已重新设温并重连同一相机各一次，温度读回仍无改善；未开始新曝光。保留原帧，停止确认后按目标策略处理。",
+                await ReadFreshAtrCoolingReadinessAsync(context.Plan.ExpectedAtrCameraId, token).ConfigureAwait(false));
         await atrCoolingCommandGate.WaitAsync(token).ConfigureAwait(false);
         NativeCameraCaptureLease? captureLease = null;
         try

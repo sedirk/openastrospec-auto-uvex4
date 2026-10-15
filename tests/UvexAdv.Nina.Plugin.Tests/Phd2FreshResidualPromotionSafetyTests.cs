@@ -18,7 +18,8 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
             "var measuredSupervisedGeometry = qualityPolicy.AllowsMeasuredContinuation &&",
             "var correctionWindow = Phd2PlacementGuideWindowPolicy.EvaluateCorrectionWindow(",
             "session.GuideMode, measuredSupervisedGeometry, plan.IsAllowed, plan.IsComplete,",
-            "var existingLockNotReached = !correctionWindow.CanContinue &&",
+            "var existingLockNotReached = port.PendingMotion is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } &&",
+            "!correctionWindow.CanContinue && Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(",
             "if (!plan.IsAllowed && !supervisedSlitPrecisionWarning)",
             "if (plan.IsComplete || supervisedSlitPrecisionWarning)",
             "var nextAcquisitionBudget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(",
@@ -66,9 +67,12 @@ public sealed class Phd2FreshResidualPromotionSafetyTests
     {
         AssertOrdered(Source,
             "var slitApertureResiduals = targetCompletionWindow.Select(item =>",
-            "Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(",
-            "ToFrameLocal(item.Measurement.TargetCentroid, preset),",
-            "item.RuntimeSlitLocal)");
+            "Phd2PlacementGuideWindowPolicy.ProjectMeasuredTarget(",
+            "item, ToFrameLocal(item.Measurement.TargetCentroid, preset))");
+        var policy = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "UvexAdv.Nina.Plugin",
+            "Phd2PlacementGuideWindowPolicy.cs"));
+        Assert.Contains("ProjectOnMeasuredSlit(localTarget, sample.RuntimeSlitLocal)", policy);
+        Assert.Contains("SaturatedTargetGhostTopologyAnalyzer.Analyze(sample.MonochromeFrame, localTarget, 6)", policy);
     }
 
     [Fact]

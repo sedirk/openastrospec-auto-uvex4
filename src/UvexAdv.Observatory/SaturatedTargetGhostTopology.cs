@@ -154,7 +154,7 @@ public static class SaturatedTargetGhostTopologyAnalyzer
             GateResult.Pass(
                 "SATURATED_TARGET_SOLID_CORE_IDENTIFIED",
                 $"A filled saturated stellar core was identified at ({target.Centroid.X:F2}, {target.Centroid.Y:F2}) px after rejecting {ghosts.Length} hollow annular ghost(s); WCS residual {target.DistanceToPredictionPixels:F2}px.",
-                metrics),
+                metrics) with { Severity = target.Gate.Severity },
             target,
             ghosts,
             measured,
@@ -225,8 +225,15 @@ public static class SaturatedTargetGhostTopologyAnalyzer
         var isGhost = centerSaturationFraction <= options.MaximumGhostCentralSaturationFraction &&
                       annularSaturationFraction >= options.MinimumGhostAnnularSaturationFraction &&
                       centerToAnnularSignalRatio <= options.MaximumGhostCentralToAnnularSignalRatio;
+        // A speckled/partially clipped plateau is not a dark hole. Measure
+        // central signal as well as the binary clipping mask. Retain this as
+        // advisory morphology, never a new catalogue identity or linear flux.
+        var centralLowerSignalFraction = (Percentile(centerValues, .25) - background) /
+            Math.Max(1, frame.SaturationLevel - background);
+        var brightFilledCenter = centerSaturationFraction >= .20 &&
+            centerToAnnularSignalRatio >= .85 && centralLowerSignalFraction >= .70;
         var isSolid = !isGhost &&
-                      centerSaturationFraction >= options.MinimumSolidCentralSaturationFraction &&
+                      (centerSaturationFraction >= options.MinimumSolidCentralSaturationFraction || brightFilledCenter) &&
                       fillFraction >= options.MinimumSolidBoundingBoxFillFraction;
         var topology = isGhost
             ? SaturatedSourceTopology.AnnularGhost
@@ -263,11 +270,16 @@ public static class SaturatedTargetGhostTopologyAnalyzer
             ["centralSaturationFraction"] = centerSaturationFraction,
             ["annularSaturationFraction"] = annularSaturationFraction,
             ["centralToAnnularSignalRatio"] = centerToAnnularSignalRatio,
+            ["centralLowerSignalFraction"] = centralLowerSignalFraction,
+            ["partialClippingSignalSupport"] = brightFilledCenter && centerSaturationFraction < options.MinimumSolidCentralSaturationFraction ? 1 : 0,
             ["predictionResidualPixels"] = distanceToPrediction,
             ["selectionScore"] = selectionScore,
         };
         var gate = topology switch
         {
+            SaturatedSourceTopology.SolidStellarCore when centerSaturationFraction < options.MinimumSolidCentralSaturationFraction => GateResult.Warn(
+                "SATURATED_SOURCE_BRIGHT_FILLED_CENTER",
+                "The central signal is bright despite incomplete clipping; use its measured core position with a morphology warning, not a linear flux or independent identity claim.", candidateMetrics),
             SaturatedSourceTopology.SolidStellarCore => GateResult.Pass(
                 "SATURATED_SOURCE_SOLID_STELLAR_CORE",
                 "The connected saturated source has a filled central core rather than a hollow annular topology.",
@@ -315,6 +327,7 @@ public static class SaturatedTargetGhostTopologyAnalyzer
         ["targetX"] = solid.Count > 0 ? solid[0].Centroid.X : 0,
         ["targetY"] = solid.Count > 0 ? solid[0].Centroid.Y : 0,
         ["targetPredictionResidualPixels"] = solid.Count > 0 ? solid[0].DistanceToPredictionPixels : 0,
+        ["partialClippingSignalSupport"] = solid.Count > 0 ? solid[0].Gate.Metrics!.GetValueOrDefault("partialClippingSignalSupport") : 0,
     };
 
     private static IReadOnlyList<SaturatedComponent> FindSaturatedComponents(MonochromeFrame frame)

@@ -3888,7 +3888,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
                 culture,
                 isAttention: true);
 
-        StateText = ObservationUiPresentation.RunStateName(run.State, culture);
+        StateText = ObservationUiPresentation.RunStateName(run.State, statusCode, culture);
         CurrentStageText = run.CurrentStage is { } current ? ObservationUiPresentation.StageName(current, culture) : "—";
         NextStageText = run.NextStage is { } next ? ObservationUiPresentation.StageName(next, culture) : "—";
         // The coordinator may deliberately publish the same reason as both

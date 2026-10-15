@@ -81,7 +81,12 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             // but that is not permission to chase an unfinished lock shift.
             // Wait under the SAME deadline/return reserve before budgeting
             // another motion (including when a transient frame vetoed it).
-            var existingLockNotReached = !correctionWindow.CanContinue && Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(
+            // No local unfinished shift exists before initial placement (or
+            // after a settled handoff). Initial guide error is advisory, not
+            // a reason to burn the original budget waiting for a non-existent
+            // motion receipt. Real outstanding shifts still require this wait.
+            var existingLockNotReached = port.PendingMotion is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } &&
+                !correctionWindow.CanContinue && Phd2PlacementGuideWindowPolicy.MustWaitForExistingLock(
                 targetCompletionWindow.Select(item => PointDistance(
                     item.Measurement.GuideStar, ledger.CurrentLockPosition)).ToArray(),
                 preset.EffectiveGuideLockResidualPixels, measuredSupervisedGeometry,
@@ -94,9 +99,8 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 Phd2PlacementGuideWindowPolicy.AllWithinTolerance(completionResiduals,
                     completionTolerance + preset.MaximumResidualGrowthPixels);
             var slitApertureResiduals = targetCompletionWindow.Select(item =>
-                Phd2PlacementGuideWindowPolicy.ProjectOnMeasuredSlit(
-                    ToFrameLocal(item.Measurement.TargetCentroid, preset),
-                    item.RuntimeSlitLocal)).ToArray();
+                Phd2PlacementGuideWindowPolicy.ProjectMeasuredTarget(
+                    item, ToFrameLocal(item.Measurement.TargetCentroid, preset))).ToArray();
             var warningProbe = qualityPolicy.EvaluateSlitWarning(
                 measuredSupervisedGeometry, canWaitWithoutNewMotion, completionResiduals,
                 slitApertureResiduals, completionTolerance, preset.MaximumResidualGrowthPixels,
@@ -157,9 +161,21 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     : nativeCorrectionPending
                     ? "目标偏差与原生导星偏差相符，现有锁点无需重复移动；保持 PHD2 导星并有界补取新帧，等待实际纠偏。"
                     : "最后一帧已接近狭缝，但整组尚未稳定；保持导星补取新帧，必要时在原账本内继续精调，不提前宣布入缝完成。");
-                var rollingCorrectionWindow = Phd2PlacementGuideWindowPolicy.CanRollCorrectionWindow(
-                    measuredSupervisedGeometry, session.GuideMode, plan.IsAllowed, plan.IsComplete,
-                    existingLockNotReached && !transientResidualGrowthWarning && !nearSlitTrackingWarning,
+                var primaryRecovered = false;
+                if (ledger.AttemptsUsed > 0 && session.PrimaryStarSettleRecoveryStage < ledger.AttemptsUsed &&
+                    port.PendingMotion is { Phase: Phd2LockShiftPendingPhase.AwaitingFreshResidual } primaryPending &&
+                    primaryPending.AttemptsUsed == ledger.AttemptsUsed &&
+                    primaryPending.PrimaryStarSettleRecoveryStage < ledger.AttemptsUsed &&
+                    NeedsPrimaryStarRecovery(targetCompletionWindow, ledger.CurrentLockPosition, session.GuideMode) &&
+                    port.TryConsumePrimaryStarSettle(ledger.LineageId, ledger.AttemptsUsed))
+                {
+                    session = await RecoverPrimaryStarAsync(context, request, session, primaryPending,
+                        ledger.CurrentLockPosition, completionDeadline, cancellationToken).ConfigureAwait(false);
+                    primaryRecovered = true;
+                }
+                var rollingCorrectionWindow = !primaryRecovered && Phd2PlacementGuideWindowPolicy.CanRollCorrectionWindow(
+                    measuredSupervisedGeometry, session.GuideMode, canWaitWithoutNewMotion, plan.IsComplete,
+                    true,
                     targetCompletionWindow.Count, requiredCompletionFrames);
                 var previousCompletionWindow = targetCompletionWindow;
                 if (rollingCorrectionWindow)
@@ -172,12 +188,16 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     session.LastMeasurement.Measurement.TargetCentroid,
                     session.LastMeasurement.RuntimeSlitLocal, session.GuideMode,
                     requiredCompletionFrames, completionDeadline,
-                    cancellationToken, rollingCorrectionWindow ? previousCompletionWindow : null).ConfigureAwait(false);
+                    cancellationToken, rollingCorrectionWindow ? previousCompletionWindow : null,
+                    session.LastMeasurement.Measurement.GuideStar).ConfigureAwait(false);
                 if (rollingCorrectionWindow)
                 {
                     RequireSameCorrectionWindowEpoch(session, ledger.CurrentLockPosition, preset);
                 }
                 targetCompletionWindow = newCompletionMeasurements;
+                if (primaryRecovered)
+                    session = session with { ReadOnlyPostLockObservation = session.ReadOnlyPostLockObservation!.AcceptResiduals(
+                        targetCompletionWindow.Select(item => item.Frame).ToArray(), port.GuideSnapshot) };
                 var completionMeasurement = targetCompletionWindow[^1];
                 session = session with { LastMeasurement = completionMeasurement };
                 port.RecordSession(session);
@@ -250,6 +270,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                         session.SelectedGuide, session.Settle, priorResidual);
                     metrics["slitPrecisionWarning"] = 1;
                     metrics["preciseSlitPlacementProven"] = 0;
+                    metrics["measuredCoreOverlapProbe"] = slitApertureResiduals.Any(x => x?.TargetCoreRadiusPixels > 0) ? 1 : 0;
                     metrics["slitResidualWindowMaximumPixels"] = completionResiduals.Max();
                     metrics["phd2IsUnattendedScienceAuthority"] = 0;
                     await port.PublishRunJsonEvidenceAsync("phd2-supervised-slit-warning-probe-authorized",
@@ -535,9 +556,8 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             await port.PersistPendingAsync(request.PendingPath, pending, CancellationToken.None).ConfigureAwait(false);
             port.RecordPendingMotion(pending);
 
-            var expectedTargetAfter = AddPoint(
-                session.LastMeasurement.Measurement.TargetCentroid,
-                SubtractPoint(exact.Verified, stage.ExpectedCurrentLockPosition));
+            // Commanded lock displacement is not measured sky displacement.
+            var expectedTargetAfter = session.LastMeasurement.Measurement.TargetCentroid;
             IReadOnlyList<Phd2GuidingResidualState> measurements;
             try
             {
@@ -553,7 +573,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                         ? Math.Max(3, session.Quality.RequiredFreshResidualsPerLockShiftStage)
                         : session.Quality.RequiredFreshResidualsPerLockShiftStage,
                     exact.CompletedUtc.AddSeconds(preset.MaximumStageSeconds),
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken, referenceGuide: session.LastMeasurement.Measurement.GuideStar).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -624,15 +644,8 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 Phd2CalibrationEvaluationPhase.PostSettle,
                 stageReadOnlyObservation?.ToCalibrationEvidence(stageSettle, stageProofAfterFrame) ??
                     port.CreateCalibrationSettleEvidence(stageSettle, stageProofAfterFrame, stageWindSampledSettle, measurements.Count),
-                port.CreateCalibrationResidualEvidence(
-                    measured,
-                    stageGuideResidual,
-                    preset,
-                    topology,
-                    session.GuideMode,
-                    stageWindSampledSettle && session.GuideMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding
-                        ? Math.Sqrt((double)preset.SensorWidthPixels * preset.SensorWidthPixels + (double)preset.SensorHeightPixels * preset.SensorHeightPixels)
-                        : null),
+                Phd2PlacementGuideWindowPolicy.CalibrationResidualEvidence(
+                    measured, stageGuideResidual, topology, clock.GetUtcNow()),
                 Phd2CalibrationSelectionPurpose.LockShift).Selected;
             if (stageQuality?.IsLockShiftAuthority != true)
             {
@@ -667,6 +680,91 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             await port.PersistPendingAsync(request.PendingPath, pending, CancellationToken.None).ConfigureAwait(false);
             port.RecordPendingMotion(pending);
         }
+    }
+
+    // Three matched native-primary measurements disagree with the effective
+    // multi-star correction. Ordinary seeing, one outlier, direct-target mode
+    // and absent/ambiguous crops cannot authorize this single recovery.
+    internal static bool NeedsPrimaryStarRecovery(IReadOnlyList<Phd2GuidingResidualState> window,
+        Phd2Point currentLock, Phd2SlitGuideMode mode) => mode == Phd2SlitGuideMode.OffSlitGuideStar &&
+        window.Count >= 3 && window.All(item =>
+            item.Measurement.GuidePositionMeasuredInFrame && item.Measurement.TargetIdentityConfirmed &&
+            item.Frame.PrimaryStarImage?.Frame == item.Frame.TriggerGuideFrame &&
+            item.Frame.NativeEffectiveGuidePosition is { } effective &&
+            PointDistance(item.Measurement.GuideStar, currentLock) > 3 &&
+            PointDistance(item.Measurement.GuideStar, effective) > 3);
+
+    private async Task<Phd2SlitPlacementSession> RecoverPrimaryStarAsync(ObservationContext context,
+        Phd2SlitConvergenceRequest request, Phd2SlitPlacementSession session,
+        Phd2LockShiftPendingState pending, Phd2Point currentLock, DateTimeOffset completionDeadline,
+        CancellationToken token)
+    {
+        RequireSameCorrectionWindowEpoch(session, currentLock, request.Preset);
+        await port.RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+        var calibration = await port.ValidateCalibrationAsync(request.Preset, token).ConfigureAwait(false);
+        if (calibration.Status != Phd2ValidationStatus.Valid)
+            throw new Phd2Exception("PHD2_PRIMARY_RESET_CALIBRATION_CHANGED: Same-lock recovery cannot acquire a new calibration.");
+        RequireSameCorrectionWindowEpoch(session, currentLock, request.Preset);
+        // ADR-0040: precharge this already charged stage before dispatch. A
+        // new outbound stage can qualify again; a retry/restart of this one cannot.
+        pending = pending with { PrimaryStarSettleRecoveryAttempted = true,
+            PrimaryStarSettleRecoveryStage = pending.AttemptsUsed,
+            UpdatedUtc = clock.GetUtcNow(), LastReason = "ADR-0040 primary-star settle charged for this exact-lock stage; lock, attempts, distance and original clock unchanged." };
+        await port.PersistPendingAsync(request.PendingPath, pending, token).ConfigureAwait(false);
+        port.RecordPendingMotion(pending);
+        session = session with { PrimaryStarSettleRecoveryAttempted = true,
+            PrimaryStarSettleRecoveryStage = pending.AttemptsUsed };
+        port.RecordSession(session);
+        port.Report("多星综合偏差与主星实测位置不一致：保持锁点，本移锁阶段至多一次原生稳定恢复；不重校准、不追加位移，原预算和回程预留不变。");
+        var remaining = completionDeadline - clock.GetUtcNow();
+        if (remaining <= TimeSpan.Zero) throw new PhysicalActionGateException(GateResult.TargetQuality(
+            "PHD2_PRIMARY_RESET_TIME_EXHAUSTED", "No time remains before the original return reserve; no settle sent."));
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bounded.CancelAfter(remaining < TimeSpan.FromSeconds(request.Preset.MaximumStageSeconds)
+            ? remaining : TimeSpan.FromSeconds(request.Preset.MaximumStageSeconds));
+        Phd2SettleResult result;
+        try
+        {
+            await port.RequireImmediatePhysicalActionGatesAsync(context, bounded.Token).ConfigureAwait(false);
+            result = await port.ResettleAtCurrentLockAsync(new(session.ConnectionEpoch, session.GuideEpoch,
+                currentLock, request.Preset.LockVerificationTolerancePixels,
+                new(3, 1, (int)Math.Max(1, Math.Min(remaining.TotalSeconds - 5,
+                    request.Preset.MaximumStageSeconds - 5)))), bounded.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && bounded.IsCancellationRequested)
+        {
+            throw new PhysicalActionGateException(GateResult.TargetQuality("PHD2_PRIMARY_RESET_TIME_EXHAUSTED",
+                "Single native settle reached its original time allowance; retain debt for checked stop/skip. No extra lock shift authorized."));
+        }
+        catch (Phd2CommandTimeoutException) when (!token.IsCancellationRequested)
+        {
+            // The owner attempted stop, but a timeout is not a stop receipt.
+            // The ordinary target boundary must still confirm every owner idle
+            // before it may archive the debt and execute the next target.
+            throw new PhysicalActionGateException(GateResult.TargetQuality("PHD2_PRIMARY_RESET_TIME_EXHAUSTED",
+                "Single native settle did not receive its terminal receipt; checked stop/skip is required, not another guide or lock command."));
+        }
+        var snapshot = port.GuideSnapshot;
+        var proof = new Phd2PostLockGuidingObservation("primary-recovery-" + Guid.NewGuid().ToString("N"),
+            session.ConnectionEpoch, checked(session.GuideEpoch + 1), snapshot.EventSequence,
+            currentLock, request.Preset.LockVerificationTolerancePixels, clock.GetUtcNow(),
+            YieldedToFreshResiduals: true, MeasuredContinuation: true);
+        if (result.NativeCalibrationOccurred || !proof.IsCurrent(snapshot))
+            throw new Phd2Exception("PHD2_PRIMARY_RESET_OWNER_CHANGED: Recovery did not retain the same star/lock session.");
+        pending = pending.RebindAfterLocallyAttestedGuideEpoch(snapshot.ConnectionEpoch, snapshot.GuideEpoch,
+            currentLock, clock.GetUtcNow(), "Native single recovery ended; fresh primary/target/slit measurements still required.");
+        await port.PersistPendingAsync(request.PendingPath, pending, CancellationToken.None).ConfigureAwait(false);
+        port.RecordPendingMotion(pending);
+        await port.PublishRunJsonEvidenceAsync("phd2-primary-star-settle-recovery", "Single same-lock native recovery, not slit acceptance",
+            new { result, originalGuideEpoch = session.GuideEpoch, snapshot.GuideEpoch, currentLock,
+                pending.LineageId, pending.StartedUtc, pending.AttemptsUsed, pending.CumulativeCommandedPixels,
+                pending.PrimaryStarSettleRecoveryStage,
+                completionDeadline, nativeGuideCalls = 1, lockChanged = false, recalibrationRequested = false,
+                budgetReset = false, preciseSlitPlacementProven = false }, session.LastMeasurement.Frame.Path, token).ConfigureAwait(false);
+        session = session with { GuideEpoch = snapshot.GuideEpoch, Settle = result,
+            FreshGuidingWindowReplacedSettle = true, ReadOnlyPostLockObservation = proof };
+        port.RecordSession(session);
+        return session;
     }
 
     private bool IsUsefulBudgetLimitedApproach(IReadOnlyList<Phd2GuidingResidualState> window,

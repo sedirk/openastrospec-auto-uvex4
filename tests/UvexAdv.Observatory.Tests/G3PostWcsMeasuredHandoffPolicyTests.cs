@@ -5,6 +5,23 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3PostWcsMeasuredHandoffPolicyTests
 {
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(11, true)]
+    [InlineData(44, true)]
+    [InlineData(double.NaN, false)]
+    [InlineData(0, false)]
+    public void RecordedHd223554OriginalWindowDoesNotOverrideRemainingBudget(double remaining, bool accepted)
+    {
+        var measured = Measured(812.552, 420.257);
+        var predicted = new PixelPoint(816.445, 422.2);
+        var slit = new PixelPoint(817.567, 429.571);
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanHandOff(measured, predicted, 5.219, slit, 1920, 1080, 20));
+        Assert.Equal(accepted, G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(measured, slit, remaining));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(
+            measured with { CatalogPositionSpreadPixels = 2 }, slit, 11));
+    }
+
     private static readonly PixelPoint Predicted = new(821, 428);
     private static readonly PixelPoint Slit = new(817, 427);
 

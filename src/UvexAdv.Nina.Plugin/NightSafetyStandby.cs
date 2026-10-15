@@ -16,7 +16,8 @@ public sealed record NightSafetyStandbySnapshot(string Id, string Phase, string 
 internal sealed record NightSafetyStandbyRequest(bool Real, string ConfigurationKey,
     DateTimeOffset? DeadlineUtc, string ParentJournal, bool CanHandOver,
     Func<Action, IDisposable?> WatchSafety, Func<GateResult?> StopGate,
-    Func<CancellationToken, Task<IReadOnlyList<string>>> Closeout, string? Warning = null);
+    Func<CancellationToken, Task<IReadOnlyList<string>>> Closeout, string? Warning = null,
+    Func<CancellationToken, Task<bool>>? RecheckIdle = null);
 
 internal sealed class NightSafetyStandby
 {
@@ -67,15 +68,36 @@ internal sealed class NightSafetyStandby
     // The caller holds the host lock. The same standby lock serializes transfer
     // against weather/deadline closeout. The new watch is armed by commit before
     // this watch or the cross-process lease is released; no unprotected gap.
-    internal bool TryHandOver(bool real, string? configurationKey, Action commit)
+    internal async Task<bool> RecheckIdleAsync(bool real, string? configurationKey, CancellationToken token)
     {
         lock (sync)
         {
-            if (snapshot.Phase != "Waiting" || closeReason is not null || !request.CanHandOver ||
+            if (request.CanHandOver || request.RecheckIdle is null || snapshot.Phase != "Waiting" ||
+                closeReason is not null || request.Real != real ||
+                request.ConfigurationKey != (configurationKey ?? string.Empty)) return false;
+            if (ReadStopReason() is { } stop) { closeReason = stop; Wake(); return false; }
+        }
+        // Explicit new-night request only; no background recovery, device
+        // connections, motion or cached promotion of a failed boundary.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        try { return await request.RecheckIdle(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch { return false; }
+    }
+
+    internal bool TryHandOver(bool real, string? configurationKey, Action commit, bool freshIdleConfirmed = false)
+    {
+        lock (sync)
+        {
+            if (snapshot.Phase != "Waiting" || closeReason is not null ||
+                !(request.CanHandOver || (request.RecheckIdle is not null && freshIdleConfirmed)) ||
                 request.Real != real || request.ConfigurationKey != (configurationKey ?? string.Empty)) return false;
             if (ReadStopReason() is { } stop) { closeReason = stop; Wake(); return false; }
             commit();
-            snapshot = snapshot with { Phase = "Transferred", Message = "安全责任已交接给手动启动的新序列；没有开关顶或自动续跑。" };
+            snapshot = snapshot with { Phase = "Transferred", Message =
+                (freshIdleConfirmed ? "本次手动启动已重新确认设备空闲；历史失败记录保留。" : string.Empty) +
+                "安全责任已交接给手动启动的新序列；没有开关顶或自动续跑。" };
             Wake();
             return true;
         }

@@ -1,10 +1,65 @@
 using UvexAdv.Observatory;
 using Xunit;
+using System.Reflection;
+using NINA.Equipment.Equipment.MyTelescope;
+using NINA.Equipment.Interfaces.Mediator;
+using UvexAdv.Phd2;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2MountIdleWaitTests
 {
+    [Theory]
+    [InlineData("delayed-poll", true)]
+    [InlineData("pulse-stuck", false)]
+    [InlineData("disconnected", false)]
+    [InlineData("identity", false)]
+    [InlineData("slewing", false)]
+    [InlineData("guide-resumed", false)]
+    [InlineData("epoch", false)]
+    public async Task CompletedTargetWaitsForTheSameStoppedOwnerBeforeNextNativeTarget(string mode, bool expectedNext)
+    {
+        var waitCalls = 0;
+        await new NativeSequencePlanTests().AssertCompletedTargetPulseDrainBoundaryAsync(async token =>
+        {
+            waitCalls++;
+            var now = TimeSpan.Zero;
+            var snapshot = Phd2StateSnapshot.Disconnected with { IsConnected = true, AppState = Phd2AppState.Stopped,
+                ConnectionEpoch = 1, GuideEpoch = 2 };
+            var client = DispatchProxy.Create<IPhd2Client, ReadOnlyProxy>();
+            ((ReadOnlyProxy)(object)client).Read = name => name switch
+            {
+                "get_Snapshot" => snapshot,
+                "GetAppStateAsync" => ReadGuide(),
+                _ => throw new InvalidOperationException($"Unexpected owner action: {name}"),
+            };
+            Task<Phd2AppState> ReadGuide()
+            {
+                if (mode == "guide-resumed" && now.TotalSeconds >= 1) snapshot = snapshot with { AppState = Phd2AppState.Guiding };
+                if (mode == "epoch" && now.TotalSeconds >= 1) snapshot = snapshot with { GuideEpoch = 3 };
+                return Task.FromResult(snapshot.AppState);
+            }
+            var mount = DispatchProxy.Create<ITelescopeMediator, ReadOnlyProxy>();
+            ((ReadOnlyProxy)(object)mount).Read = name => name == "GetInfo"
+                ? new TelescopeInfo { Connected = mode != "disconnected", DeviceId = mode == "identity" ? "other" : "mount",
+                    Slewing = mode == "slewing", IsPulseGuiding = mode == "pulse-stuck" || now.TotalSeconds < 2.5 }
+                : throw new InvalidOperationException($"Unexpected mount action: {name}");
+            var result = await Phd2MountIdleWait.WaitAfterTargetStopAsync(client, mount, "mount", token,
+                () => now, (duration, ct) => { ct.ThrowIfCancellationRequested(); now += duration; return Task.CompletedTask; });
+            Assert.Equal(expectedNext, result.Disposition == GateDisposition.Passed);
+            if (expectedNext) Assert.Equal(5.5, now.TotalSeconds);
+            if (mode == "pulse-stuck") Assert.Equal(15, now.TotalSeconds);
+            if (result.Disposition != GateDisposition.Passed) throw new InvalidOperationException(result.Code);
+        }, expectedNext);
+        Assert.True(waitCalls > 0);
+    }
+
+    public class ReadOnlyProxy : DispatchProxy
+    {
+        public Func<string, object?> Read = null!;
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => Read(method!.Name);
+    }
+
     private static GateResult Idle => GateResult.Pass("G3_SEARCH_MOUNT_STATE_VALID", "idle");
     private static GateResult Pulse => GateResult.Unknown("G3_SEARCH_PULSE_GUIDING_ACTIVE", "pulse active");
 

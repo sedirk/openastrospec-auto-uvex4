@@ -57,7 +57,7 @@ public sealed class Phd2ReadOnlyFrameGraceBudgetTests
         Assert.Equal(1, source.Split("new Phd2ReadOnlyFrameGraceBudget()", StringSplitOptions.None).Length - 1);
         var preAtr = source.IndexOf("private async Task VerifyWindSampledGuidingBeforeAtrAsync(", StringComparison.Ordinal);
         Assert.True(source.IndexOf("new Phd2ReadOnlyFrameGraceBudget()", StringComparison.Ordinal) > preAtr);
-        Assert.Contains("cancellationToken, readoutGrace)", source[preAtr..]);
+        Assert.Contains("cancellationToken, readoutGrace, referenceGuide: session.LastMeasurement.Measurement.GuideStar)", source[preAtr..]);
         var start = source.IndexOf("catch (Phd2CommandTimeoutException ex) when (", StringComparison.Ordinal);
         var end = source.IndexOf("var residualMountReadback", start, StringComparison.Ordinal);
         var branch = source[start..end];

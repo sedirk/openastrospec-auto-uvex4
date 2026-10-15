@@ -71,7 +71,7 @@ internal static class G3GuidingRecoveryReturnPolicy
         // reserve every worst-case return segment before starting any of them.
         var requiredActions = charged.CorrectionAttempts + (long)returnActions;
         var requiredMotion = charged.CumulativeMotionArcseconds + returnActions * state.MaximumSingleCorrectionArcseconds;
-        var elapsed = (now - state.StartedUtc).TotalSeconds;
+        var elapsed = (now - state.MotionClockStartedUtc).TotalSeconds;
         var requiredSeconds = elapsed + (1d + returnActions) * state.WorstCaseActionSeconds;
         if (requiredActions > state.MaximumCorrectionAttempts ||
             requiredMotion > state.MaximumCumulativeMotionArcseconds || requiredSeconds > state.MaximumElapsedSeconds)
