@@ -4,11 +4,11 @@ namespace UvexAdv.Observatory;
 /// and associates it with an existing WCS/catalogue reference. No hardware APIs.</summary>
 public static class G3SepShortPositionPolicy
 {
-    public const string Version = "sep-short-position-v3-parent";
+    public const string Version = "sep-short-position-v4-parent-continuity";
 
     public static G3ShortPositionMeasurement Measure(SepImageMeasurements image, PixelPoint prediction,
         double radius, double minimumSnr = 8, double minimumUniqueness = 1.5,
-        bool requireResolvedPair = false)
+        bool requireResolvedPair = false, G3ShortPositionMeasurement? previousSameSetting = null)
     {
         if (!double.IsFinite(radius) || radius <= 0 || !double.IsFinite(prediction.X)
             || !double.IsFinite(prediction.Y) || !double.IsFinite(minimumSnr) || minimumSnr <= 0
@@ -52,6 +52,30 @@ public static class G3SepShortPositionPolicy
         if (candidates.Length == 0)
             return Reject("G3_SEP_UNMEASURED", "SEP found no sufficiently supported unsaturated whole parent inside the existing WCS window.");
         var identified = SlitTargetIdentifier.Identify(candidates,prediction,radius,minimumSnr,minimumUniqueness);
+        if (!requireResolvedPair && previousSameSetting?.Gate.Disposition == GateDisposition.Passed
+            && previousSameSetting.Identification.Target is { } anchor
+            && (IsSplitParent(previousSameSetting) || IsUnsplitParent(previousSameSetting)))
+        {
+            // Prefer the same measured region over a newly detected halo/noise
+            // patch or companion nearer the WCS prediction. The candidate list
+            // above still enforces the original WCS window.
+            var tracked = SlitTargetIdentifier.Identify(candidates, anchor.Centroid,
+                G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels, minimumSnr, minimumUniqueness);
+            metrics["sepPreviousParentX"] = anchor.Centroid.X;
+            metrics["sepPreviousParentY"] = anchor.Centroid.Y;
+            metrics["sepMaximumParentContinuityPixels"] = G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels;
+            if (tracked.Gate.Disposition == GateDisposition.Passed && tracked.Target is not null)
+                identified = tracked with { PredictedPoint = prediction,
+                    PredictionResidualPixels = Distance(tracked.Target.Centroid, prediction) };
+            else if (tracked.Gate.Code != "TARGET_NOT_FOUND"
+                || identified.Gate.Disposition != GateDisposition.Passed || identified.Target is null)
+                return Reject("G3_SEP_AMBIGUOUS", "No unique current SEP parent continues the prior same-setting position inside the unchanged repeat limit; another nearby region is not a substitute.");
+            // With no candidate inside the repeat radius, retain a unique WCS
+            // measurement only for the existing disagreement/re-probe policy.
+            // Its separation is necessarily >4 px: ConfirmRepeat cannot accept
+            // it as continuity. Ambiguous temporal matches never take this path.
+            metrics["sepParentContinuityPixels"] = Distance(identified.Target!.Centroid, anchor.Centroid);
+        }
         var matchedParents = identified.Target is null ? []
             : parents.Where(p => new PixelPoint(p.X,p.Y) == identified.Target.Centroid).ToArray();
         if (identified.Target is not null && matchedParents.Length != 1)

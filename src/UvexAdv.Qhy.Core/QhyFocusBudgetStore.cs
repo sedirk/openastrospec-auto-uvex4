@@ -11,6 +11,31 @@ public static class QhyFocusBudgetStore
     private sealed record Saved(int Version, string RunId, string ConfigurationSha256,
         QhyFocusRunPolicy Policy, QhyFocusBudgetState State);
 
+    public static bool HasPendingRecords(string directory)
+    {
+        if (!Directory.Exists(directory)) return false;
+        foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            var saved = Read(path);
+            if (saved.State.Pending) return true;
+        }
+        return false;
+    }
+
+    private static Saved Read(string path)
+    {
+        if (new FileInfo(path).Length > 65536) throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Oversized record.");
+        using var json = JsonDocument.Parse(File.ReadAllText(path));
+        if (!json.RootElement.TryGetProperty("State", out var state) || state.ValueKind != JsonValueKind.Object ||
+            !state.TryGetProperty("Pending", out var pending) || pending.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Missing pending-state proof.");
+        var saved = json.Deserialize<Saved>()
+            ?? throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Empty record.");
+        if (saved.Version != 1 || saved.State is null || saved.Policy is null)
+            throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Unknown record schema.");
+        return saved;
+    }
+
     public static QhyFocusBudget Open(string directory, string runId, string configurationSha256, QhyFocusRunPolicy policy)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(runId);
@@ -20,11 +45,7 @@ public static class QhyFocusBudgetStore
         {
             foreach (var existing in Directory.EnumerateFiles(directory, "*.json"))
             {
-                if (new FileInfo(existing).Length > 65536) throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Oversized record.");
-                var candidate = JsonSerializer.Deserialize<Saved>(File.ReadAllText(existing))
-                    ?? throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Empty record.");
-                if (candidate.Version != 1 || candidate.State is null || candidate.Policy is null)
-                    throw new InvalidDataException("PHOTOMETRY_FOCUS_LEDGER_INVALID: Unknown record schema.");
+                var candidate = Read(existing);
                 if (string.Equals(existing, path, StringComparison.OrdinalIgnoreCase)) saved = candidate;
                 else if (candidate.State.Pending)
                     throw new InvalidOperationException("PHOTOMETRY_FOCUS_PENDING: Another run has an unresolved focus endpoint; do not erase its obligation by starting a new run.");

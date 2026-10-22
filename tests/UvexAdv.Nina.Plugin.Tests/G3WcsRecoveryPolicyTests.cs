@@ -8,6 +8,44 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsRecoveryPolicyTests
 {
     [Theory]
+    [InlineData(2, 2, 1)]
+    [InlineData(20, 2, 0)]
+    [InlineData(44, 2, 0)]
+    [InlineData(3, 3, 1)]
+    public void ExistingResponseFailureExplainsSpentFineCapacityWithoutCreatingANewFailureRoute(
+        double remainingRadius, double readOnlyTolerance, double exhausted)
+    {
+        var result = G3WcsRecoveryPolicy.ResolvedResponseFailure(
+            18.350953572757913, 15.497077265677957, 1, remainingRadius, readOnlyTolerance);
+        Assert.Equal(G3WcsRecoveryPolicy.ResponseNotConvergedCode, result.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, result.FailureScope);
+        Assert.Equal(exhausted, result.Metrics!["fineBudgetUnavailable"]);
+        Assert.Equal(remainingRadius, result.Metrics["remainingFineHandoffRadiusPixels"]);
+        Assert.Equal(readOnlyTolerance, result.Metrics["readOnlyTolerancePixels"]);
+        Assert.Equal(1, result.Metrics["nearTargetResponseRetries"]);
+        Assert.Equal(exhausted == 1, result.Message.Contains("原 PHD2 出程及回程预算已不足", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ResponseClassificationDoesNotReplaceImprovingCoarseMotionOrOriginalBoundedRetry()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var method = source[source.IndexOf("private async Task<StageResult> RunG3WcsCenteringAsync", StringComparison.Ordinal)..];
+        method = method[..method.IndexOf("private async Task<StageResult> RunBoundedG3LocalSearchAsync", StringComparison.Ordinal)];
+        var progress = method.IndexOf("G3WcsRecoveryPolicy.HasMeasuredApproachProgress(", StringComparison.Ordinal);
+        var retry = method.IndexOf("G3WcsRecoveryPolicy.CanRetryNearTargetResponse(", StringComparison.Ordinal);
+        var classify = method.IndexOf("G3WcsRecoveryPolicy.ResolvedResponseFailure(", StringComparison.Ordinal);
+        var returned = method.IndexOf("var returned = await ReturnDurableG3AcquisitionToOriginAsync", StringComparison.Ordinal);
+        var unconfirmed = method.IndexOf("if (!returned.ReturnedToOrigin)", StringComparison.Ordinal);
+        var result = method.IndexOf("return new StageResult(nearTargetResponseStopGate with", StringComparison.Ordinal);
+        Assert.True(progress >= 0 && retry > progress && classify > retry && returned > classify &&
+            unconfirmed > returned && result > unconfirmed);
+        Assert.Equal(1, method.Split("G3WcsRecoveryPolicy.ResolvedResponseFailure(").Length - 1);
+        Assert.Contains("G3WcsRecoveryPolicy.UnreturnedCenteringGate(", method[unconfirmed..result]);
+        Assert.Contains("remainingFineHandoffRadiusPixels", G3WcsRecoveryPolicy.ResolvedResponseFailure(20, 15, 1, 2, 2).Metrics!.Keys);
+    }
+
+    [Theory]
     [InlineData(11548.37, 0, 0, 0, 100, 2, 21600, true)]
     [InlineData(10770.19, 0, 0, 0, 100, 2, 21600, false)]
     [InlineData(10902, 0, 0, 0, 100, 2, 21600, false)]

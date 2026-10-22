@@ -182,6 +182,23 @@ public sealed class ScreenshotRendererTests
             Assert.Contains(result.VisibleTexts, x => x.Contains("4 × 90 s", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("native-target-clock-partial")]
+    [InlineData("native-target-clock-partial-narrow")]
+    public void ClockContinuationFailureKeepsRetainedFramesAndIncompleteRemainderFullyVisible(string name)
+    {
+        var result = RenderPhotometry(name);
+        Assert.Contains(NativeTargetEditorFixture.ClockContinuationFailureOutcome, result.VisibleTexts);
+        Assert.True(result.NativeTargetOutcomeFullyVisible,
+            "The wrapped retained-frame outcome must fit completely, including its final incomplete-remainder line.");
+        Assert.Contains(result.VisibleTexts, text => text.Contains("HD 218393 · 2 × AUTO", StringComparison.Ordinal));
+        var target = Assert.IsType<UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer>(
+            ScenarioCatalog.Select(name).Single().AlternateViewModel);
+        Assert.Equal(2, target.ScienceFrames);
+        Assert.Equal(NativeTargetEditorFixture.ClockContinuationFailureOutcome, target.LastOutcomeLabel);
+        Assert.False(target.UseRealMode);
+    }
+
     [Fact]
     public void NativeNightInlineHeaderDoesNotContainPerTargetEditors()
     {

@@ -356,7 +356,8 @@ public sealed class G3SlitIlluminationPolicyTests
             "private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameForAcquisitionAsync(",
             "private GateResult ValidateCorrectionBudget(");
 
-        Assert.Contains("phd2.Snapshot.AppState is Phd2AppState.Looping or Phd2AppState.Selected", helper, StringComparison.Ordinal);
+        Assert.Contains("var previewState = phd2.Snapshot.AppState", helper, StringComparison.Ordinal);
+        Assert.Contains("previewState is Phd2AppState.Looping or Phd2AppState.Selected", helper, StringComparison.Ordinal);
         Assert.Contains("StopCaptureAndConfirmAsync", helper, StringComparison.Ordinal);
         Assert.Contains("ValidateConfirmedPhdStop", helper, StringComparison.Ordinal);
         Assert.Contains("catch (Phd2CaptureException ex)", helper, StringComparison.Ordinal);
@@ -365,6 +366,18 @@ public sealed class G3SlitIlluminationPolicyTests
         Assert.DoesNotContain("AppState == Phd2AppState.Guiding", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("AppState == Phd2AppState.Calibrating", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("AppState == Phd2AppState.LostLock", helper, StringComparison.Ordinal);
+        var takeoverGuard = helper.IndexOf("RequireClockCurrentFieldExistingPhdOwner(previewState)", StringComparison.Ordinal);
+        var takeover = helper.IndexOf("StopCaptureAndConfirmAsync", StringComparison.Ordinal);
+        var rejected = helper.IndexOf("catch (Phd2CaptureException ex)", StringComparison.Ordinal);
+        var retryGuard = helper.IndexOf("RequireClockCurrentFieldExistingPhdOwner(ex.RejectedBeforeMutationState)", StringComparison.Ordinal);
+        var retryStop = helper.IndexOf("StopCaptureAndConfirmAsync", rejected, StringComparison.Ordinal);
+        Assert.True(takeoverGuard >= 0 && takeover > takeoverGuard && rejected > takeover &&
+            retryGuard > rejected && retryStop > retryGuard);
+        var optionalGuard = Slice(source, "private void RequireClockCurrentFieldExistingPhdOwner(",
+            "private async Task<PlateSolveEvidence> SolveExternalFitsAsync(");
+        Assert.Contains("if (!clockCurrentFieldProbeActive) return", optionalGuard, StringComparison.Ordinal);
+        Assert.Contains("(rejectedBeforeMutationState ?? state.AppState) != Phd2AppState.Stopped", optionalGuard, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException", optionalGuard, StringComparison.Ordinal);
     }
 
     private static MonochromeFrame Frame(params ushort[] pixels) => new(3, 3, new ReadOnlyMemory<ushort>(pixels), ushort.MaxValue);

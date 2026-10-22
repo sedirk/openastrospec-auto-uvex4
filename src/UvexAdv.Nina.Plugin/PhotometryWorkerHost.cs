@@ -175,6 +175,14 @@ public sealed class PhotometryWorkerHost : IDisposable
             if (request.WorkerSessionId != identity.SessionId) return Reply(409, new { error = "PHOTOMETRY_WORKER_SESSION_CHANGED" });
             if (request.Method == "GET")
             {
+                if (path == "/api/v1/owner-idle")
+                {
+                    ValidateActiveConfiguration();
+                    if (adapter is null) return Reply(409, new { error = "PHOTOMETRY_OWNER_UNAVAILABLE" });
+                    var stopped = adapter.ReadOwnerIdle(coordinator.IsIdle,
+                        !QhyFocusBudgetStore.HasPendingRecords(focusLedgerDirectory));
+                    return Reply(200, stopped with { CoordinatorIdle = stopped.CoordinatorIdle && coordinator.IsIdle });
+                }
                 if (path == "/api/v1/camera") return Reply(200, coordinator.CameraStatus);
                 if (path == "/api/v1/jobs/lookup")
                 {

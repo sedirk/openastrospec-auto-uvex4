@@ -285,7 +285,8 @@ internal sealed partial class RealObservationStageRunner
                 windSampledSettle
                     ? Math.Max(3, policy.RequiredFreshResidualsPerLockShiftStage)
                     : policy.RequiredFreshResidualsPerLockShiftStage,
-                cancellationToken, referenceGuide: selected).ConfigureAwait(false);
+                cancellationToken, referenceGuide: selected,
+                referenceTargetMeasured: Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(choice.Field.TargetIdentification)).ConfigureAwait(false);
             var measurement = measurements[^1];
             var guideResidual = PointDistance(measurement.Measurement.GuideStar, lockPosition);
             var post = SelectPhd2CalibrationQuality(
@@ -931,7 +932,8 @@ internal sealed partial class RealObservationStageRunner
             windSampledSettle
                 ? Math.Max(3, preset.CalibrationQualityPolicy.RequiredFreshResidualsPerLockShiftStage)
                 : preset.CalibrationQualityPolicy.RequiredFreshResidualsPerLockShiftStage,
-            cancellationToken, referenceGuide: selectedGuide).ConfigureAwait(false);
+            cancellationToken, referenceGuide: selectedGuide,
+            referenceTargetMeasured: Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(lastG3Field.TargetIdentification)).ConfigureAwait(false);
         var initial = freshMeasurements[^1];
         // The accepted guiding residual is newer than the selection frame and
         // carries its own capture-time mount binding.  Promote it immediately
@@ -1751,7 +1753,8 @@ internal sealed partial class RealObservationStageRunner
                 guideChoice.Mode,
                 Math.Max(3, policy.RequiredFreshResidualsPerLockShiftStage),
                 DateTimeOffset.UtcNow.AddSeconds(preset.MaximumStageSeconds),
-                cancellationToken, referenceGuide: selectedGuide).ConfigureAwait(false);
+                cancellationToken, referenceGuide: selectedGuide,
+                referenceTargetMeasured: Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(lastG3Field.TargetIdentification)).ConfigureAwait(false);
             var first = firstMeasurements[^1];
             // Motion planning must be bound to the residual that actually
             // authorized it.  Keeping lastG3Field on the older guide-selection
@@ -2593,7 +2596,8 @@ internal sealed partial class RealObservationStageRunner
         CancellationToken cancellationToken,
         Phd2ReadOnlyFrameGraceBudget? readoutGrace = null,
         bool rollingSample = false,
-        Phd2Point? referenceGuide = null)
+        Phd2Point? referenceGuide = null,
+        bool referenceTargetMeasured = true)
     {
         if (count <= 0) throw new InvalidOperationException("The commissioned fresh-residual count must be positive.");
         using var uvex = new UvexServiceClient(configuration.UvexServiceUrl);
@@ -2826,7 +2830,8 @@ internal sealed partial class RealObservationStageRunner
             var continuityAllowance = Math.Max(6, preset.MaximumResidualGrowthPixels);
             if (continuityPrediction is not null &&
                 targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField &&
-                !Phd2TargetContinuityPolicy.IsContinuous(targetLocal, expectedTargetLocal, continuityAllowance))
+                Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
+                    referenceTargetMeasured, targetLocal, expectedTargetLocal, continuityAllowance))
             {
                 rejectedStellar ??= new TargetIdentification(GateResult.TargetQuality(
                     "PHD2_TARGET_POSITION_DISCONTINUITY", "Fresh target/primary geometry disagrees with the preceding measured field."),
@@ -2853,7 +2858,8 @@ internal sealed partial class RealObservationStageRunner
                 var evidence = await PublishRunJsonEvidenceAsync("phd2-fresh-target-rejected",
                     "Rejected fresh target position; bounded consecutive-window restart, no motion or setting change",
                     new { framePath = result.Path, frameSha256 = actualSha,
-                        expectedTargetLocal, continuityPrediction, referenceGuide, continuityAllowance,
+                        expectedTargetLocal, continuityPrediction, referenceGuide, referenceTargetMeasured, continuityAllowance,
+                        freshMeasuredTarget = targetLocal, matchedPrimary,
                         targetPositionAuthority, sourceTopology = rejectedTopology,
                         stellar = rejectedStellar, targetWindow.Captures, targetWindow.RejectedFrames,
                         targetWindow.MaximumCaptures, discardedAcceptedFrames, requiredConsecutiveFrames = count,
@@ -3031,7 +3037,7 @@ internal sealed partial class RealObservationStageRunner
                     measurement,
                     expectedCurrentLock = currentLock,
                     expectedTarget,
-                    continuityPrediction, referenceGuide, continuityAllowance,
+                    continuityPrediction, referenceGuide, referenceTargetMeasured, continuityAllowance,
                     targetSlitResidualPixels = targetResidual,
                     targetSlitMidpointResidualPixels = targetResidual,
                     guideLockResidualPixels = guideResidual,
@@ -3074,6 +3080,7 @@ internal sealed partial class RealObservationStageRunner
             runtimeSlitLocal = slitDetection.Geometry;
             expectedTarget = target;
             referenceGuide = guide;
+            referenceTargetMeasured = true;
         }
         if (measurements.Count != count)
         {
@@ -4028,7 +4035,8 @@ internal sealed partial class RealObservationStageRunner
         DateTimeOffset deadlineUtc,
         CancellationToken cancellationToken,
         IReadOnlyList<Phd2GuidingResidualState>? previousWindow = null,
-        Phd2Point? referenceGuide = null)
+        Phd2Point? referenceGuide = null,
+        bool referenceTargetMeasured = true)
     {
         var baseline = phd2.Snapshot;
         var remaining = deadlineUtc - DateTimeOffset.UtcNow;
@@ -4045,7 +4053,7 @@ internal sealed partial class RealObservationStageRunner
                 requested => CapturePhd2GuidingMeasurementsAsync(
                     context, preset, topology, currentLock, expectedTarget,
                     runtimeSlitLocal, guideMode, requested, bounded.Token, rollingSample: requested == 1,
-                    referenceGuide: referenceGuide),
+                    referenceGuide: referenceGuide, referenceTargetMeasured: referenceTargetMeasured),
                 item => item.Measurement).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -4289,7 +4297,7 @@ internal sealed partial class RealObservationStageRunner
         quality.IsUnattendedScienceAuthority &&
         guideMode != Phd2SlitGuideMode.DegradedDirectTargetGuiding;
 
-    private async Task<(bool RunIsTerminal, GateResult? Error)> ValidatePhd2LockManifestAsync(
+    internal static async Task<(bool RunIsTerminal, GateResult? Error)> ValidatePhd2LockManifestAsync(
         Phd2LockShiftPendingFileResult item,
         CancellationToken cancellationToken)
     {

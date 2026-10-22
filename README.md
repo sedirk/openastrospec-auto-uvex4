@@ -25,7 +25,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-15.md) ·
+[latest software/real-sky closeout](docs/closeout-2026-10-22.md) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +38,24 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 15 closeout](docs/closeout-2026-10-15.md) consolidates **0.4.0.290–300**.
+The [October 22 closeout](docs/closeout-2026-10-22.md) consolidates **0.4.0.301–308**:
+evening/dawn direction, bright-core and short-frame association, meridian recovery,
+terminal guide-state retirement and partial-science accounting. Owner-approved
+ADR-0041 adds one bounded severe-defocus recovery per native night; ADR-0042 checks
+fresh G3 target/slit evidence at the unchanged pointing after verified clock repair
+before falling back to full reacquisition. Neither replenishes original budgets,
+imports old images as fresh evidence nor relaxes the full safety/ownership chain.
+
+Installed **.308** passed 4,194 .NET tests, 75 reduction tests, Ruff, historical
+15-run/38-frame replay and 171 offline UI scenes. Its subsequent operator-started
+night completed five targets / ten accepted spectra; target six was cancelled by
+an AIWeather Unsafe result and verified roof closure. The single cloud estimate is
+disputed by adjacent images/model outputs, not proven false. That night exercised
+neither clock nor focus recovery, so those branches still need real-sky acceptance.
+Live observation/calibration-panel visibility and the mount UTC root cause remain
+open. This source closeout does not reinstall, restart or start/resume observing.
+
+The historical [October 15 closeout](docs/closeout-2026-10-15.md) consolidates **0.4.0.290–300**.
 Same-frame primary-star motion now carries target-position continuity; a commanded
 lock displacement or multi-star average cannot stand in for measured arrival.
 ADR-0040 permits one persisted same-lock settle recovery per already-charged stage,

@@ -128,6 +128,27 @@ public sealed class SepMainFocusViewModelTests
         Assert.Equal(50, current.GainPercent);
     }
 
+    [Fact]
+    public void AutomaticRecoveryChoiceSavesOnlyADraftAndLegacyOptionsKeepApprovedDefault()
+    {
+        var settings = Settings(valid: true);
+        using var vm = ViewModel(settings, () => "Night owns devices");
+        var original = vm.OptionsSnapshot;
+        Assert.True(vm.AutomaticRecoveryEnabled);
+        vm.AutomaticRecoveryEnabled = false;
+        Assert.True(JsonSerializer.Deserialize<SepMainFocusOptions>(settings.SepMainFocusOptionsJson)!.AutomaticRecoveryEnabled);
+        vm.SaveCommand.Execute(null);
+        Assert.Equal(original with { AutomaticRecoveryEnabled = false },
+            JsonSerializer.Deserialize<SepMainFocusOptions>(settings.SepMainFocusOptionsJson));
+        Assert.False(vm.IsBusy);
+        Assert.False(vm.StartCommand.CanExecute(null));
+        Assert.Contains("未启动", vm.Status);
+        vm.ReloadProfile();
+        Assert.False(vm.AutomaticRecoveryEnabled);
+        Assert.True(JsonSerializer.Deserialize<SepMainFocusOptions>("{}")!.AutomaticRecoveryEnabled);
+        Assert.NotNull(JsonSerializer.Deserialize<SepMainFocusOptions>("{}")!.ConfigurationIssue);
+    }
+
     private static SepMainFocusViewModel ViewModel(UvexPluginSettings settings, Func<string?> reason) =>
         new(settings, null!, null!, reason, () => "offline-test-profile", () => { }); // Invalid preflight must not dereference either hardware dependency.
 

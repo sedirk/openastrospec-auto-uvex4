@@ -39,11 +39,22 @@ internal sealed record RealRunConfiguration(
     PlateSolverRunConfiguration PlateSolver,
     CommissioningRunBinding Commissioning,
     NightSetupRunBinding NightSetup,
-    bool AllowSupervisedSlitQualityWarning = false)
+    bool AllowSupervisedSlitQualityWarning = false,
+    string MainFocusOptionsJson = "")
 {
     public NativeSequencePlan? SequencePlan { get; init; }
 
     public ScienceQualityPolicy ScienceQuality => ScienceQualityPolicy.From(this);
+
+    // Focus form edits are a saved draft for the next night, not live commands.
+    // Preserve the night-owned snapshot while still detecting every other drift.
+    internal RealRunConfiguration WithLockedMainFocusOptions(string json)
+    {
+        var configured = this with { MainFocusOptionsJson = json };
+        if (SequencePlan is { } sequence) return configured.WithSequencePlan(sequence);
+        return configured with { ActionConfigurationSha256 = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(configured.ToActionPayload())))) };
+    }
 
     public RealRunConfiguration WithSequencePlan(NativeSequencePlan plan)
     {
@@ -283,7 +294,8 @@ internal sealed record RealRunConfiguration(
                 settings.ObservationExpectedAtrCameraId,
                 settings.ObservationExpectedG3ProfileName,
                 settings.ObservationExpectedQhyCameraId),
-            settings.AllowSupervisedSlitQualityWarning);
+            settings.AllowSupervisedSlitQualityWarning,
+            settings.SepMainFocusOptionsJson);
         var json = JsonSerializer.Serialize(payload);
         var sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
         return new RealRunConfiguration(
@@ -310,7 +322,8 @@ internal sealed record RealRunConfiguration(
             payload.PlateSolver,
             payload.Commissioning,
             payload.NightSetup,
-            payload.AllowSupervisedSlitQualityWarning);
+            payload.AllowSupervisedSlitQualityWarning,
+            payload.MainFocusOptionsJson);
     }
 
     public bool MatchesCurrentProfile(
@@ -327,7 +340,8 @@ internal sealed record RealRunConfiguration(
     {
         try
         {
-            var current = Capture(settings, currentPlateSolver, currentNinaImageFilePattern);
+            var current = Capture(settings, currentPlateSolver, currentNinaImageFilePattern)
+                .WithLockedMainFocusOptions(MainFocusOptionsJson);
             actualSha256 = (SequencePlan is null ? current : current.WithSequencePlan(SequencePlan)).ActionConfigurationSha256;
         }
         catch { actualSha256 = string.Empty; return false; }
@@ -361,7 +375,7 @@ internal sealed record RealRunConfiguration(
                 settings,
                 currentPlateSolver,
                 currentNinaImageFilePattern,
-                currentEnvironmentDevices);
+                currentEnvironmentDevices).WithLockedMainFocusOptions(MainFocusOptionsJson);
             if (SequencePlan is not null) current = current.WithSequencePlan(SequencePlan);
             actualSha256 = current.ActionConfigurationSha256;
             differenceSummary = DescribeActionDifferences(current);
@@ -408,7 +422,8 @@ internal sealed record RealRunConfiguration(
         PlateSolver,
         Commissioning,
         NightSetup,
-        AllowSupervisedSlitQualityWarning);
+        AllowSupervisedSlitQualityWarning,
+        MainFocusOptionsJson);
 
     private static void CollectDifferences(
         JsonElement locked,
@@ -485,7 +500,8 @@ internal sealed record RealRunConfiguration(
         PlateSolverRunConfiguration PlateSolver,
         CommissioningRunBinding Commissioning,
         NightSetupRunBinding NightSetup,
-        bool AllowSupervisedSlitQualityWarning);
+        bool AllowSupervisedSlitQualityWarning,
+        string MainFocusOptionsJson);
 }
 
 /// <summary>

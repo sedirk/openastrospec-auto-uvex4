@@ -5,8 +5,8 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>
 /// Read-only binding and quality policy for the C11 focal plane seen by G3.
 /// This policy deliberately exposes no motion operation: only N.I.N.A.'s
-/// Star Focuser Pro/Gemini owner may change this focus, and an observation
-/// sequence pauses for operator intervention when the metric is not valid.
+/// Star Focuser Pro/Gemini owner may change this focus. ADR-0041 recovery belongs
+/// to a joined native-night boundary, never to this immutable run-lock policy.
 /// </summary>
 internal static class C11MainFocusPolicy
 {
@@ -96,7 +96,7 @@ internal static class C11MainFocusPolicy
                 MeasurementMetrics(measurement));
         }
 
-        return GateResult.Unknown(
+        return GateResult.TargetQuality(
             "G3_MAIN_FOCUS_UNVERIFIED",
             $"G3 cannot verify the C11 main focus ({measurement.Gate.Code}: {measurement.Gate.Message}). " +
             "Only N.I.N.A.'s Star Focuser Pro controlling the physical Gemini focuser on COM8 can correct these pre-slit stars; UVEX M2 and the GS350 ToupTek AAF are different optical paths and are prohibited substitutes.",

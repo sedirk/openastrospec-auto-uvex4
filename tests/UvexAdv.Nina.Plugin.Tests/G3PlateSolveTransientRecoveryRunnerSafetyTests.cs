@@ -78,7 +78,10 @@ public sealed class G3PlateSolveTransientRecoveryRunnerSafetyTests
             "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
             "private GateResult ValidateG3SolveProbeImage(");
 
-        Assert.Contains("for (var index = 0; index < preset.ExposureMilliseconds.Count; index++)", ladder, StringComparison.Ordinal);
+        Assert.Contains("bool currentPositionCheck = false", ladder, StringComparison.Ordinal);
+        Assert.Contains("var tierCount = currentPositionCheck ? 1 : preset.ExposureMilliseconds.Count", ladder, StringComparison.Ordinal);
+        Assert.Contains("for (var index = 0; index < tierCount; index++)", ladder, StringComparison.Ordinal);
+        Assert.Contains("exposureMilliseconds = preset.ExposureMilliseconds.Take(tierCount).ToArray()", ladder, StringComparison.Ordinal);
         Assert.Equal(4, Count(ladder, "ClassifyG3PlateSolveTransientFailure("));
         Assert.Equal(4, Count(ladder, "RecordG3PlateSolveTransientFailureAsync("));
         Assert.Contains("G3PlateSolveTransientOperation.Capture", ladder, StringComparison.Ordinal);

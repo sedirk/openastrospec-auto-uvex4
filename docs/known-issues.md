@@ -1,6 +1,36 @@
 # Known issues
 
-## Current closeout boundary (2026-10-15, installed 0.4.0.300)
+## Current closeout boundary (2026-10-22, installed 0.4.0.308)
+
+The [October 22 closeout](closeout-2026-10-22.md) consolidates .301–.308. Earlier
+records below retain their original versions, outcomes and installation snapshots.
+
+- The operator-started .308 night completed five targets / ten accepted spectra,
+  then cancelled HD 24479 on AIWeather Unsafe and confirmed cover/roof closure
+  and mount parking. It did not run clock repair or severe-defocus recovery;
+  their finite-port/native-engine regressions are not real-sky acceptance.
+- The triggering online cloud estimate jumped 10% → 75% → 5% over three checks;
+  the simultaneous local shadow estimate was 5.7%. Saved images make 75% suspect,
+  but do not prove absence of thin cloud or establish the shadow model as a safer
+  authority. No weather threshold, voting/debounce policy or automatic reopen was
+  changed. See [the read-only incident analysis](reports/2026-10-22-later0-weather-stop.md).
+- ADR-0041 retains persistent multi-lobe rejection and requires fresh multi-star
+  evidence before one durably charged focus attempt. ADR-0042 permits one new G3
+  current-field check after verified stopped clock repair, not old-frame reuse,
+  automatic restart/resume or a new movement/time allowance. Unknown stop/owner,
+  pending native tasks, weather, cancellation and cutoff still prohibit continuation.
+- The mount's observed two-day UTC error has a matching upstream software hypothesis,
+  not a proven installed-firmware root cause or a firmware fix. Sparse fields and
+  insufficient remaining budgets can still prevent a target completing.
+- All 41 .308 installed files and runtime loading were checked; 4,194 .NET tests,
+  75 reduction tests and 171 offline UI scenes passed. Observation/calibration
+  navigation still returned `PanelNotAvailable`, so actual live-panel visibility is
+  unverified. The five official-update SSL errors were distinct from plugin loading.
+- Installation/restart does not reconnect devices or restore an old safety watch.
+  The later night was explicitly started by the operator; its verified weather
+  closeout must not be attributed to the maintenance script or source publication.
+
+## Historical closeout boundary (2026-10-15, installed 0.4.0.300)
 
 The [October 15 closeout](closeout-2026-10-15.md) consolidates .290–.300. Earlier
 deployment and sky records retain their original versions and outcomes.

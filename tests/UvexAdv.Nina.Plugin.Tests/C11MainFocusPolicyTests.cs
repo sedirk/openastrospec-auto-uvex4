@@ -81,6 +81,7 @@ public sealed class C11MainFocusPolicyTests
 
         Assert.Equal(GateDisposition.Indeterminate, gate.Disposition);
         Assert.Equal("G3_MAIN_FOCUS_UNVERIFIED", gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
         Assert.Contains("Star Focuser Pro", gate.Message, StringComparison.Ordinal);
         Assert.Contains("Gemini", gate.Message, StringComparison.Ordinal);
         Assert.Contains("COM8", gate.Message, StringComparison.Ordinal);

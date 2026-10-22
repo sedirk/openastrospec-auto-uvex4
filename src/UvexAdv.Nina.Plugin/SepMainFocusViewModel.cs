@@ -92,6 +92,7 @@ public sealed partial class SepMainFocusViewModel : INotifyPropertyChanged, IDis
     public int SelectedTabIndex { get => selectedTabIndex; set { selectedTabIndex = value; Notify(); } }
     public string SamplingSummary => $"共 {HalfPoints * 2 + 1} 个焦位 · 每处 {Frames} 张 × {ExposureSeconds:0.##} 秒；另有基准帧与候选往返复测。";
     public string CurveCaption { get; private set; } = "暂无本次曲线；开始采样后逐点更新。";
+    public bool AutomaticRecoveryEnabled { get => options.AutomaticRecoveryEnabled; set { options = options with { AutomaticRecoveryEnabled = value }; ParameterChanged(); } }
     public int MinimumPosition { get => options.MinimumPosition; set { options = options with { MinimumPosition = value }; ParameterChanged(); } }
     public int MaximumPosition { get => options.MaximumPosition; set { options = options with { MaximumPosition = value }; ParameterChanged(); } }
     public int Step { get => options.Step; set { options = options with { Step = value }; ParameterChanged(); } }

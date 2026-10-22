@@ -20,6 +20,7 @@ public sealed record ScreenshotScenario(
     public bool ExercisePreparationScrolling { get; init; }
     public bool RenderNativeTargetPair { get; init; }
     public bool ShowAutomaticExposure { get; init; }
+    public bool ExerciseNativeTargetEditing { get; init; } = true;
 }
 
 public static class ScenarioCatalog
@@ -55,6 +56,8 @@ public static class ScenarioCatalog
         new("native-target-auto", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true },
         new("native-target-auto-narrow", 540, 800, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true },
         new("native-target-auto-en", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.Create("Synthetic A"), ShowAutomaticExposure=true, Culture=CultureInfo.GetCultureInfo("en-US") },
+        new("native-target-clock-partial", 960, 560, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.CreateClockContinuationFailure(), ExerciseNativeTargetEditing=false },
+        new("native-target-clock-partial-narrow", 540, 800, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=NativeTargetEditorFixture.CreateClockContinuationFailure(), ExerciseNativeTargetEditing=false },
         new("native-target-pair", 1100, 1000, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeSpectroscopyTargetPanel", AlternateViewModel=new NativeNightMock(), RenderNativeTargetPair=true },
         new("native-closeout", 820, 270, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeObservatoryCloseoutPanel", AlternateViewModel=NativeTargetEditorFixture.CreateCloseout(false) },
         new("native-real-startup", 820, 180, ObservationDockMockViewModel.Idle()) { TemplateKey="NativeRealStartupPanel", AlternateViewModel=new NativeNightMock() },

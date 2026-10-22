@@ -80,7 +80,8 @@ internal sealed partial class RealObservationStageRunner
                 (previousPath is not null && !SameHash(previousHash!, await ComputeFileSha256Async(previousPath, cancellationToken).ConfigureAwait(false))))
                 throw new InvalidOperationException("G3_SEP_INPUT_CHANGED: Frozen SEP/input changed during confirmation.");
             var measurement = G3SepShortPositionPolicy.Measure(sep, prediction.PredictedTargetPoint,
-                preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
+                preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
+                previousSameSetting: previous);
             var shortTarget = measurement.Identification;
             var probe = new G3PlateSolveProbeState(
                 GateResult.Unknown("G3_POST_WCS_MEASURED_TARGET_READY", "Independent SEP positions agree; fresh PHD2 proof is still required."),

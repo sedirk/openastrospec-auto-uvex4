@@ -70,6 +70,8 @@
    <TabItem Header="设置">
     <ScrollViewer x:Name="FocusSettingsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
      <StackPanel Margin="10" IsEnabled="{Binding CanEdit}" Validation.Error="OnValidationError">
+      <CheckBox x:Name="AutomaticFocusRecovery" Content="序列严重失焦时自动恢复一次" Foreground="#DDEAF4" IsChecked="{Binding AutomaticRecoveryEnabled, Mode=TwoWay}" Margin="0,0,0,5"/>
+      <TextBlock Text="取场失败并确认停止后，用连续新帧检查多颗星；满足严重失焦条件才扫焦，每夜最多一次。保留已拍帧、原预算与安全监控；成功后重新定位，不复用旧入缝证据。保存后用于下一轮，不会立即对焦。" Foreground="#AFC4D5" Margin="0,0,0,12"/>
       <TextBlock Text="1 · 允许移动的范围" FontWeight="SemiBold" Margin="0,0,0,5"/>
       <TextBlock Text="填写这台电调焦实际允许的最小、最大焦位。不是要求移动到这两个端点；采样只在当前焦位附近进行。" Foreground="#AFC4D5" Margin="0,0,0,8"/>
       <WrapPanel>

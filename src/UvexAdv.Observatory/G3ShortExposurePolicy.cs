@@ -13,17 +13,24 @@ public sealed record G3ShortExposurePolicy(int ExposureMilliseconds, int Maximum
     public const int MaximumReductions = 3;
     public const int MinimumExposureMilliseconds = 1;
     public const string SaturatedCode = "G3_SEP_SATURATED";
-    public const string Version = "sep-short-exposure-v4-repeat-reprobe";
+    public const string Version = "sep-short-exposure-v5-repeated-miss-reprobe";
 
     /// <summary>No measurement is not proof that the source is absent. Search
     /// exposure only, below both the attested solve exposure and a fixed cap.
     /// Identity/ambiguity/coverage failures cannot acquire this retry path.</summary>
     public G3ShortExposurePolicy AfterUnmeasured(G3ShortPositionMeasurement measurement, int attempt,
-        double rawRoiPeak, double saturationLevel, double sourceExposureMilliseconds)
+        double rawRoiPeak, double saturationLevel, double sourceExposureMilliseconds,
+        bool hasValidAnchor = false, int consecutiveUnmeasuredFrames = 0)
     {
         _ = AfterMeasurement("validate-only", attempt);
         if (SignalExposureIncreases is < 0 or > MaximumSignalExposureIncreases)
             throw new ArgumentOutOfRangeException(nameof(SignalExposureIncreases));
+        if (consecutiveUnmeasuredFrames is < 0 or > AbsoluteMaximumFrames)
+            throw new ArgumentOutOfRangeException(nameof(consecutiveUnmeasuredFrames));
+        // One missed frame may straddle two valid same-setting positions. Two
+        // misses are not confirmation: the old anchor must not freeze a weak
+        // exposure until exhaustion. A changed setting still needs a NEW pair.
+        if (hasValidAnchor && consecutiveUnmeasuredFrames < 2) return this;
         if (measurement.Gate.Code != "G3_SEP_UNMEASURED"
             || measurement.Gate.Disposition != GateDisposition.Indeterminate
             || measurement.Identification.Target is not null

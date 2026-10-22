@@ -6,6 +6,33 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3PostWcsMeasuredHandoffPolicyTests
 {
     [Theory]
+    [InlineData(40, false)]
+    [InlineData(44, false)]
+    [InlineData(48.1, true)]
+    [InlineData(101, false)]
+    public void RecognizedCandidateOutsideRemainingFineBudgetStaysOnCoarseRoute(double offset, bool expected)
+    {
+        var candidate = Measured(817 + offset, 427) with {
+            Gate = GateResult.Pass("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", "Filled core candidate"),
+            Authority = TargetIdentificationAuthority.BrightWingCentroid };
+        Assert.Equal(expected, G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(
+            candidate, Slit, 5, Slit, 1920, 1080, 20, 100, 44));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(candidate, Slit, 5, Slit, 1920, 1080, 20));
+    }
+
+    [Fact]
+    public void CoarseRoutingCannotPromotePredictionAmbiguityOrInvalidBounds()
+    {
+        var measured = Measured(865, 434);
+        foreach (var id in new[] { TargetIdentification.FromCatalogWcs(new(865,434),1920,1080,"Prediction"),
+            measured with { Gate = GateResult.Unknown("TARGET_AMBIGUOUS", "Two stars") },
+            measured with { Target = measured.Target! with { SaturatedFraction = .01 } } })
+            Assert.False(G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(id, Slit, 5, Slit,1920,1080,20,100,44));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(measured, Slit,21,Slit,1920,1080,20,100,44));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(measured, Slit,5,Slit,1920,1080,20,100,double.NaN));
+    }
+
+    [Theory]
     [InlineData(2, false)]
     [InlineData(11, true)]
     [InlineData(44, true)]

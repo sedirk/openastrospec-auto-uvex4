@@ -384,7 +384,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             if (authorization.Disposition != GateDisposition.Passed)
                 throw new InvalidOperationException($"{authorization.Code}: {authorization.Message}");
             var configuration = UseRealMode ? realRunnerFactory.CaptureConfiguration(settings) : null;
-            if (configuration is not null) night.CheckConfiguration(configuration);
+            if (configuration is not null) configuration = night.CheckConfiguration(configuration);
             var candidate = BuildPlan(configuration);
             if (NativeSequencePlan.PreflightHorizonSkip(candidate, FailurePolicy) is { } horizon)
             {
@@ -396,6 +396,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             }
         }
         night?.BeginTarget(TargetName);
+        NativeTargetSession? session = null;
         try
         {
             var scopeIssues = SpectroscopyMeridianFlipTrigger.ScopeIssues(this).ToArray();
@@ -417,7 +418,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
                 VerifyScope();
                 return flip.IsDue(seconds);
             }) { VerifyScope = VerifyScope } : null;
-            NativeTargetSession? session = meridian ?? (night is not null ? new NativeTargetSession(nativePlan) : null);
+            session = meridian ?? (night is not null ? new NativeTargetSession(nativePlan) : null);
             // The second segment is a new production runner with no old optical
             // state. The night retains the exclusive lease throughout the flip.
             while (await ExecuteTargetAsync(progress, token, night, session, meridian, flip, flipConfiguration).ConfigureAwait(false))
@@ -433,6 +434,8 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             // recorded by the night owner. Native child sequencing may proceed
             // only when that owner explicitly accepted the quality skip.
             LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" : "本目标未完成，已确认退出并跳过；查看本夜处理记录。";
+            if (session is { Accepted: > 0 })
+                LastOutcome += $" 已保留 {session.Accepted}/{session.Original.ScienceFrames} 张，累计 {session.AcceptedSeconds:0.##} 秒；剩余未完成。";
         }
         finally { RaisePropertyChanged(nameof(LastOutcome)); }
     }
@@ -473,7 +476,11 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         if (UseRealMode)
         {
             lockedConfiguration = realRunnerFactory.CaptureConfiguration(settings);
-            night?.CheckConfiguration(lockedConfiguration);
+            if (night is not null) lockedConfiguration = night.CheckConfiguration(lockedConfiguration);
+            // Remaining frames/attempts change the segment hash, not the locked
+            // shared setup to which the one-use clock receipt is bound.
+            if (session is not null)
+                session.SharedActionConfigurationSha256 = lockedConfiguration.ActionConfigurationSha256;
             lockedConfiguration = lockedConfiguration.WithSequencePlan(sequencePlan);
         }
         var plan = session?.TargetPlan is { } originalTarget
@@ -481,7 +488,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             : BuildPlan(lockedConfiguration);
         activeRunId = plan.ObservationRunId;
         if (session is not null) session.TargetPlan ??= plan;
-        if (session?.ClockContinuationUsed == true && sequencePlan.TargetDeadlineUtc is { } targetEnd)
+        if (session?.HasBudgetedContinuation == true && sequencePlan.TargetDeadlineUtc is { } targetEnd)
             plan = plan with { PlannedDuration = targetEnd > plan.PlannedStartUtc ? targetEnd - plan.PlannedStartUtc : TimeSpan.FromSeconds(1) };
         IObservationStageRunner inner = UseRealMode
             ? realRunner = realRunnerFactory.Create(host, settings, progress, lockedConfiguration)
@@ -495,7 +502,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         ApplyStageStatuses(host.Dashboard);
         var coordinatorRun = host.RunAsync(plan, bridge, token, night);
         var continueAfterFlip = false;
-        var continueAfterClock = false;
+        var continueAfterRecovery = false;
         string? boundaryFailure = null;
         try
         {
@@ -561,15 +568,15 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             ApplyStageStatuses(host.Dashboard);
             try
             {
-                if (night is not null && !continueAfterFlip) continueAfterClock = await night.RecordTargetAsync(TargetName, host.Dashboard, boundaryRunner,
+                if (night is not null && !continueAfterFlip) continueAfterRecovery = await night.RecordTargetAsync(TargetName, host.Dashboard, boundaryRunner,
                     FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure, plan, session).ConfigureAwait(false);
             }
             finally { if (realRunner is not null) await realRunner.DisposeAsync().ConfigureAwait(false); }
         }
         var final = host.Dashboard.Run;
-        if (continueAfterClock)
+        if (continueAfterRecovery)
         {
-            LastOutcome = $"校时已恢复 · 已接受 {session!.Accepted}/{session.Original.ScienceFrames} 张；按原剩余预算重新定位、入缝和导星。";
+            LastOutcome = $"边界恢复已验证 · 已接受 {session!.Accepted}/{session.Original.ScienceFrames} 张；按原剩余预算重新定位、入缝和导星。";
             RaisePropertyChanged(nameof(LastOutcome));
             Report(progress, LastOutcome);
             return true;

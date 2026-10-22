@@ -15,6 +15,7 @@ public sealed class MainFocusMock
     public int SelectedTabIndex { get; set; }
     public string AvailabilityMessage { get; set; } = "可开始：点击后复核已连接设备与实际焦位，再进行多焦位采样。";
     public bool CanStart { get; set; } = true;
+    public bool AutomaticRecoveryEnabled { get; set; } = true;
     public int MinimumPosition { get;set; }=4600;
     public int MaximumPosition { get;set; }=5500;
     public int Step { get;set; }=50;

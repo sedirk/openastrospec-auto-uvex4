@@ -8,6 +8,21 @@ namespace UvexAdv.Nina.Plugin.UiHarness;
 /// <summary>The production target model and XAML, with inert profile/clock dependencies.</summary>
 public static class NativeTargetEditorFixture
 {
+    public const string ClockContinuationFailureOutcome =
+        "本目标未完成，已确认退出并跳过；查看本夜处理记录。 已保留 1/2 张，累计 600 秒；剩余未完成。";
+
+    public static UvexTargetObservationContainer CreateClockContinuationFailure()
+    {
+        var target = Create("HD 218393");
+        target.FixedExposureSeconds = 0;
+        target.DurationMinutes = 35;
+        // Offline terminal-state fixture only. Do not execute the observing container
+        // or introduce a production setter solely to render retained-frame text.
+        typeof(UvexTargetObservationContainer).GetProperty(nameof(target.LastOutcome))!
+            .SetValue(target, ClockContinuationFailureOutcome);
+        return target;
+    }
+
     public static UvexObservatoryCloseoutItem CreateCloseout(bool close)
     {
         // Rendering only: no host, runner, physical device or Profile writes.

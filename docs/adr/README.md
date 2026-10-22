@@ -51,3 +51,5 @@ Current accepted decisions:
 - [ADR-0038: One initial catalogue GOTO after tracking timeout](0038-initial-catalogue-goto-tracking-recovery.md)
 - [ADR-0039: Rapid maintenance restart for an explicitly requested next round](0039-explicit-round-rapid-maintenance-restart.md)
 - [ADR-0040: Continuous target placement and budgeted coarse/fine handoff](0040-continuous-target-placement-and-budgeted-handoff.md)
+- [ADR-0041: Bounded severe-defocus recovery at a native target boundary](0041-bounded-severe-defocus-recovery.md)
+- [ADR-0042: Fresh current-field revalidation after verified clock repair](0042-clock-repair-current-field-revalidation.md)

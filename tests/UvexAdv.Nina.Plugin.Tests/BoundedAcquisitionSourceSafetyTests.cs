@@ -315,7 +315,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.DoesNotContain("G3_PLATE_SOLVE_LADDER_EXHAUSTED_ENVIRONMENT_ATTESTED_FIELD", wrapper, StringComparison.Ordinal);
         Assert.Contains("G3_CLOUD_OR_TRANSPARENCY_INVALID", Source, StringComparison.Ordinal);
         Assert.DoesNotContain("G3_CLOUD_OR_TRANSPARENCY_INVALID", recoverable, StringComparison.Ordinal);
-        Assert.Contains("mountMotionAuthorized = boundedSparseRecoveryAuthorized", ladder, StringComparison.Ordinal);
+        Assert.Contains("mountMotionAuthorized = !currentPositionCheck && boundedSparseRecoveryAuthorized", ladder, StringComparison.Ordinal);
         Assert.Contains("var hasStructuredContent = attempts.Any", ladder, StringComparison.Ordinal);
         Assert.Contains("UsesCatalogWcsTargetAuthority(context)", ladder, StringComparison.Ordinal);
         Assert.Contains("targetObservabilityAllowsInvisibleField", ladder, StringComparison.Ordinal);
@@ -1394,8 +1394,16 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("G3WcsMeasuredArrivalSearchHintOnly", body, StringComparison.Ordinal);
         Assert.Contains("formalSolveStillRequired = true", body, StringComparison.Ordinal);
         Assert.Contains("mountMotionAuthority = false", body, StringComparison.Ordinal);
-        Assert.Contains("CaptureG3PlateSolveLadderAsync(context, cancellationToken, motionPrediction)", Source, StringComparison.Ordinal);
-        Assert.Contains("SelectG3PlateSolveHintAsync(context, cancellationToken, motionPrediction)", Source, StringComparison.Ordinal);
+        var wrapper = MethodBody("private async Task<G3FieldState> CaptureAndAnalyzeG3WithSolveLadderAsync(",
+            "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(");
+        Assert.Contains("bool currentPositionCheck = false", wrapper, StringComparison.Ordinal);
+        Assert.Contains("CaptureG3PlateSolveLadderAsync(context, cancellationToken, motionPrediction,\n            currentPositionCheck)",
+            wrapper.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        var ladder = MethodBody("private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private GateResult ValidateG3SolveProbeImage(");
+        Assert.Contains("var solveHint = currentPositionCheck || clockCurrentFieldProbeActive", ladder, StringComparison.Ordinal);
+        Assert.Contains("ClockCurrentFieldCatalogHintOnly", ladder, StringComparison.Ordinal);
+        Assert.Contains(": await SelectG3PlateSolveHintAsync(context, cancellationToken, motionPrediction)", ladder, StringComparison.Ordinal);
     }
 
     [Fact]

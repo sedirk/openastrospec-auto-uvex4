@@ -5,6 +5,28 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3SignalExposureReprobeTests
 {
+    [Fact]
+    public void GoodAnchorSurvivesOneMissingFrameButCannotFreezeThreeFrameExposureSearch()
+    {
+        var policy = new G3ShortExposurePolicy(10);
+        Assert.Equal(policy, policy.AfterUnmeasured(Missing(), 2, 4320, 65520, 5000,
+            hasValidAnchor: true, consecutiveUnmeasuredFrames: 1));
+        var longer = policy.AfterUnmeasured(Missing(), 3, 4448, 65520, 5000,
+            hasValidAnchor: true, consecutiveUnmeasuredFrames: 2);
+        Assert.Equal(100, longer.ExposureMilliseconds);
+        Assert.Equal(6, longer.MaximumFrames);
+        Assert.Equal(1, longer.SignalExposureIncreases);
+        var gate = GateResult.Pass("G3_SEP_POSITION_MEASURED", "New exposure, new measurement");
+        var star = new StarCandidate(new(863, 403), 5000, 10000, 30, 0, .2, 0, 100);
+        var measured = new G3ShortPositionMeasurement(gate, new(gate, star, new(850, 400), 13.34, 2), true, .5);
+        Assert.False(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(null, measured, null,
+            new('a', 64), 4, 100, longer.MaximumFrames).Accepted);
+        Assert.True(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(measured, measured,
+            new('a', 64), new('b', 64), 5, 100, longer.MaximumFrames).Accepted);
+        Assert.Equal(longer, longer.AfterUnmeasured(Missing(), 5, 4320, 65520, 5000,
+            hasValidAnchor: true, consecutiveUnmeasuredFrames: 2));
+    }
+
     private static G3ShortPositionMeasurement Missing(string code = "G3_SEP_UNMEASURED") =>
         new(GateResult.Unknown(code, "No supported target", new Dictionary<string, double>
             { ["sepValidRoiParents"] = 0, ["sepSaturatedRoiComponents"] = 0 }),

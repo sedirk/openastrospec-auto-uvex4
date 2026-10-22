@@ -7,6 +7,13 @@ namespace UvexAdv.Nina.Plugin;
 // must come from a pixel-matched native crop in the same immutable fresh FITS.
 internal static class Phd2TargetContinuityPolicy
 {
+    // A catalogue forecast may guide the first bounded search, but is not a
+    // preceding measurement. Only after a real centroid exists does the tight
+    // inter-frame continuity allowance apply; identity/search gates remain.
+    internal static bool RejectMeasuredDiscontinuity(bool referenceTargetMeasured,
+        PixelPoint measured, PixelPoint predicted, double allowance) =>
+        referenceTargetMeasured && !IsContinuous(measured, predicted, allowance);
+
     internal static Phd2Point Predict(Phd2Point target, Phd2Point referenceGuide, Phd2Point freshGuide) =>
         new(target.X + freshGuide.X - referenceGuide.X, target.Y + freshGuide.Y - referenceGuide.Y);
 

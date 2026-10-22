@@ -8,6 +8,22 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 public sealed class ScenarioCatalogTests
 {
     [Theory]
+    [InlineData("native-target-clock-partial", 960)]
+    [InlineData("native-target-clock-partial-narrow", 540)]
+    public void ClockContinuationPartialOutcomeReusesNativeTargetLayoutWithoutExecutingOrEditingTarget(string name, int width)
+    {
+        var scenario = ScenarioCatalog.Select(name).Single();
+        Assert.Equal("NativeSpectroscopyTargetPanel", scenario.TemplateKey);
+        Assert.Equal(width, scenario.Width);
+        Assert.False(scenario.ExerciseNativeTargetEditing);
+        var target = Assert.IsType<UvexTargetObservationContainer>(scenario.AlternateViewModel);
+        Assert.False(target.UseRealMode);
+        Assert.Equal(2, target.ScienceFrames);
+        Assert.Equal(0, target.FixedExposureSeconds);
+        Assert.Equal(NativeTargetEditorFixture.ClockContinuationFailureOutcome, target.LastOutcomeLabel);
+    }
+
+    [Theory]
     [InlineData("native-night-unsettled-closeout", false)]
     [InlineData("native-night-cancel-stop-unconfirmed", true)]
     public void NativeNightCloseoutScenariosUseProductionTerminalTextWithoutClaimingFullSuccess(string name, bool cancelled)
@@ -171,6 +187,7 @@ public sealed class ScenarioCatalogTests
         var invalid = Assert.IsType<MainFocusMock>(ScenarioCatalog.Select("main-focus-invalid").Single().AlternateViewModel);
         Assert.False(invalid.StartCommand.CanExecute(null));
         Assert.Contains("最小、最大", invalid.AvailabilityMessage);
+        Assert.True(invalid.AutomaticRecoveryEnabled); // Eligibility does not invent missing travel bounds.
         var cancelling = Assert.IsType<MainFocusMock>(ScenarioCatalog.Select("main-focus-cancelling").Single().AlternateViewModel);
         Assert.False(cancelling.StartCommand.CanExecute(null));
         Assert.True(cancelling.CancelCommand.CanExecute(null));
@@ -250,6 +267,7 @@ public sealed class ScenarioCatalogTests
         expected = expected.Concat(new[] { "target-visibility-window", "target-visibility-window-narrow", "target-visibility-window-en" }).ToArray();
         expected = expected.Concat(new[] { "native-target-editor", "native-target-editor-narrow", "native-target-editor-en", "native-target-pair", "native-night-inline" }).ToArray();
         expected = expected.Concat(new[] { "native-target-auto", "native-target-auto-narrow", "native-target-auto-en" }).ToArray();
+        expected = expected.Concat(new[] { "native-target-clock-partial", "native-target-clock-partial-narrow" }).ToArray();
         expected = expected.Concat(new[] { "native-closeout", "native-closeout-en" }).ToArray();
         expected = expected.Concat(new[] { "phd2-return-settle-failure" }).ToArray();
         expected = expected.Concat(new[] { "native-real-startup", "native-real-startup-en", "native-safety-startup", "native-safety-startup-en" }).ToArray();

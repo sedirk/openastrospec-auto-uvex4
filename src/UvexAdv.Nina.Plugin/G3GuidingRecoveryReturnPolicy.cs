@@ -20,6 +20,23 @@ internal sealed record G3GuidingRecoveryReturnPlan(
 
 internal static class G3GuidingRecoveryReturnPolicy
 {
+    // The active native meridian boundary takes precedence in the mount adapter.
+    // Without that handoff, a KNOWN changed side invalidates this target's old
+    // geometry, not the whole night. This is only classification: the terminal
+    // boundary must still join every owner, confirm stop and retire old ledgers.
+    // Unknown side, motion, tracking, identity and weather failures stay hard.
+    internal static GateResult FailureGate(GateResult? failure, string detail)
+    {
+        var message = $"导星后回原点未确认；不开始搜索：{detail}";
+        return failure is { Code: "G3_SEARCH_PIER_SIDE_CHANGED", Disposition: GateDisposition.Failed }
+            ? GateResult.TargetQuality("G3_GUIDING_RECOVERY_PIER_CHANGED",
+                $"{message} 已知换侧使旧回程失效；停止与账本归档确认后按目标失败策略处理，不声称回位成功。",
+                new Dictionary<string, double> { ["returnedToOrigin"] = 0 })
+            : failure is { Disposition: not GateDisposition.Passed }
+                ? failure with { Message = message }
+                : GateResult.Unknown("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", message);
+    }
+
     internal static G3GuidingRecoveryReturnPlan Plan(
         G3AcquisitionMotionState state, string runId, double reportedRa, double reportedDec,
         string epoch, string pierSide, bool ownedGuideStopConfirmed,

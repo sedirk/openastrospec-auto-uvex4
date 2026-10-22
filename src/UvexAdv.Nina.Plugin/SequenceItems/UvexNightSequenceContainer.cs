@@ -49,6 +49,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private string? standbyJournalPath;
     private NightMountClockRecovery clockRecovery = new();
     private readonly List<object> clockContinuations = [];
+    private int focusScanReservation;
+    private readonly List<object> focusRecoveries = [];
 
     [ImportingConstructor]
     public UvexNightSequenceContainer(IProfileService profiles, ObservationCoordinatorHost host,
@@ -145,10 +147,13 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         InitialGuideTimeoutSeconds = lockedInitialTimeoutSeconds,
     };
 
-    internal void CheckConfiguration(RealRunConfiguration configuration)
+    internal RealRunConfiguration CheckConfiguration(RealRunConfiguration configuration)
     {
+        if (lockedConfiguration is not null)
+            configuration = configuration.WithLockedMainFocusOptions(lockedConfiguration.MainFocusOptionsJson);
         if (lockedConfiguration is null || configuration.ActionConfigurationSha256 != lockedConfiguration.ActionConfigurationSha256)
             throw new InvalidOperationException("本夜共享设备配置已改变；结束本夜，不沿用旧授权启动下一目标。");
+        return configuration;
     }
 
     internal void BeginTarget(string target)
@@ -191,11 +196,11 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         var completed = result.Run.State == ObservationRunState.Completed && boundaryFailure is null;
         if (result.Run.State == ObservationRunState.Cancelled && !endRequested && !unsafeTripped) operatorCancelled = true;
         GateResult? clockRepair = null;
-        var clockBoundaryEligible = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
+        var recoveryBoundaryEligible = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
             qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
             !unsafeTripped && !endRequested && runner is not null && failedPlan is not null && lifetime is { IsCancellationRequested: false } &&
             result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && standbyPlan is not null && standbyPlan.StopGateNow() is null;
-        if (clockBoundaryEligible && NightMountClockRecovery.IsClockFailure(failedGate))
+        if (recoveryBoundaryEligible && NightMountClockRecovery.IsClockFailure(failedGate))
         {
             using var recoveryTimeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime!.Token);
             recoveryTimeout.CancelAfter(TimeSpan.FromSeconds(90));
@@ -209,6 +214,25 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             {
                 clockRepair = GateResult.Unknown("NIGHT_MOUNT_CLOCK_RECOVERY_CANCELLED", "校时取消或超时，未批准后续目标。");
             }
+            // The earlier idle proof predates native disconnect/connect. Even
+            // a timeout must rejoin those operations before standby or a new
+            // target can own the mount; never reuse the pre-reconnect witness.
+            using var clockStopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
+            try
+            {
+                idleErrors = (await runner!.ConfirmSequenceIdleAsync(clockStopTimeout.Token, false).ConfigureAwait(false)).ToArray();
+                targetsIdle = idleErrors.Length == 0;
+                settledErrors = !targetsIdle ? idleErrors :
+                    (await runner.ConfirmSequenceIdleAsync(clockStopTimeout.Token).ConfigureAwait(false)).ToArray();
+            }
+            catch (Exception ex)
+            {
+                targetsIdle = false;
+                idleErrors = settledErrors = [$"NIGHT_MOUNT_CLOCK_RECOVERY_NOT_IDLE: {ex.Message}"];
+            }
+            RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors, runner!.CanRecheckSequenceIdle);
+            if (!targetsIdle || settledErrors.Length != 0)
+                clockRepair = GateResult.Unknown("NIGHT_MOUNT_CLOCK_RECOVERY_NOT_IDLE", string.Join("; ", settledErrors));
         }
         var clockRecovered = clockRepair?.Disposition == GateDisposition.Passed &&
             !unsafeTripped && !endRequested && !operatorCancelled && lifetime?.IsCancellationRequested != true &&
@@ -220,13 +244,90 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             clockContinuations.Add(new { target, runId = result.Run.ObservationRunId, result.ManifestPath,
                 clockRepair, session.Accepted, session.Attempts, session.ReusedProbes, session.AcceptedSeconds,
                 remaining = session.RemainingPlan(), budget = session.ClockBudget,
+                currentFieldReceipt = session.ClockPositionCheck is { } check ? new
+                { check.SourceRunId, check.Before, check.After, check.IssuedUtc,
+                    check.OriginalRecoveryDeadlineUtc, check.MaximumSeparationArcseconds } : null,
                 outcome = "ReacquireSameTargetAfterClockRecovery", oldOpticalAuthorityReused = false });
-            NightState = $"{target} · 校时恢复，保留已接受帧和原预算，重新定位后续拍；失败再跳过。";
+            NightState = $"{target} · 校时恢复，保留已接受帧和原预算，先尝试当前位置新图复核，必要时重新定位；失败再跳过。";
             await SaveJournalAsync("ClockContinuationIntent").ConfigureAwait(false);
             return true; // Not a terminal target outcome; do not increment/skip the native card.
         }
+        GateResult? focusRepair = null;
+        var focusCandidate = recoveryBoundaryEligible && IsSevereDefocusCandidate(result.Run.CurrentStage, failedGate);
+        if (focusCandidate && !FocusBoundarySafe())
+            focusRepair = GateResult.Unknown("NATIVE_FOCUS_SAFETY_CHANGED", "取场失败后的实时安全边界不再有效；不启动对焦或后续目标。");
+        else if (focusCandidate && Volatile.Read(ref focusScanReservation) == 0 && session is not null && runner is not null &&
+            session.SegmentRunIds.Contains(result.Run.ObservationRunId, StringComparer.Ordinal))
+        {
+            var budget = runner.CaptureClockContinuationBudget();
+            if (session.TryBeginFocusRecovery(budget, DateTimeOffset.UtcNow))
+            {
+                var scanReservedHere = false;
+                using var recoveryTimeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime!.Token);
+                var remaining = session.RecoveryDeadline(budget) - DateTimeOffset.UtcNow;
+                recoveryTimeout.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                try
+                {
+                    NightState = $"{target} · 严重失焦复核：先检查两张同星新帧，不移动；仍受原预算和安全链约束。";
+                    await SaveJournalAsync("FocusDiagnosticIntent").ConfigureAwait(false);
+                    focusRepair = await runner.TryRecoverSevereDefocusAtIdleBoundaryAsync(failedPlan!, async ct =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (!FocusBoundarySafe() ||
+                            !session.CanRecoverWithinOriginalBudget(budget, DateTimeOffset.UtcNow)) return false;
+                        // Precharge before movement. A failed/ambiguous write never refunds it.
+                        if (Interlocked.CompareExchange(ref focusScanReservation, 1, 0) != 0) return false;
+                        scanReservedHere = true;
+                        focusRecoveries.Add(new { target, runId = result.Run.ObservationRunId,
+                            outcome = "FocusScanReserved", budget, deadlineUtc = session.RecoveryDeadline(budget) });
+                        NightState = $"{target} · 原预算内自动对焦：本夜至多一次扫描；验证通过后重新取场，不沿用旧光学状态。";
+                        await SaveJournalAsync("FocusRecoveryIntent").ConfigureAwait(false);
+                        ct.ThrowIfCancellationRequested();
+                        return FocusBoundarySafe() && session.CanRecoverWithinOriginalBudget(budget, DateTimeOffset.UtcNow);
+                    }, recoveryTimeout.Token).ConfigureAwait(false);
+                    if (focusRepair?.Disposition == GateDisposition.Passed && !scanReservedHere)
+                        focusRepair = GateResult.Unknown("NATIVE_FOCUS_SCAN_RESERVATION_MISSING", "对焦恢复未经过整夜唯一扫描预约，未批准重新取场。");
+                }
+                catch (Exception ex)
+                {
+                    focusRepair = GateResult.Unknown("NATIVE_FOCUS_RECOVERY_UNCONFIRMED", $"对焦恢复取消或发生异常，未批准后续目标：{ex.Message}");
+                }
+                // The old run's stop proof predates diagnostic exposures/focus motion.
+                // Obtain a new owner proof even after cancel; never reuse the old one.
+                using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
+                try
+                {
+                    idleErrors = (await runner.ConfirmSequenceIdleAsync(stopTimeout.Token, false).ConfigureAwait(false)).ToArray();
+                    targetsIdle = idleErrors.Length == 0;
+                    settledErrors = !targetsIdle ? idleErrors :
+                        (await runner.ConfirmSequenceIdleAsync(stopTimeout.Token).ConfigureAwait(false)).ToArray();
+                }
+                catch (Exception ex)
+                {
+                    targetsIdle = false;
+                    idleErrors = settledErrors = [$"NATIVE_FOCUS_STOP_UNCONFIRMED: {ex.Message}"];
+                }
+                RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors, runner.CanRecheckSequenceIdle);
+                if (!targetsIdle || settledErrors.Length != 0)
+                    focusRepair = GateResult.Unknown("NATIVE_FOCUS_STOP_UNCONFIRMED", $"对焦复核后的停止未确认，未批准后续目标：{string.Join("; ", settledErrors)}");
+                else if (!FocusBoundarySafe())
+                    focusRepair = GateResult.Unknown("NATIVE_FOCUS_SAFETY_CHANGED", "对焦恢复后的安全、截止或取消状态已改变，未批准后续目标。");
+                focusRecoveries.Add(new { target, runId = result.Run.ObservationRunId, focusRepair,
+                    scanReservedHere, session.FocusAttempted, session.Accepted, session.Attempts,
+                    session.ReusedProbes, session.AcceptedSeconds, budget, idleErrors, settledErrors,
+                    oldOpticalAuthorityReused = false });
+                if (focusRepair?.Disposition == GateDisposition.Passed && targetsIdle && settledErrors.Length == 0 &&
+                    session.TryContinueAfterFocusRepair(runner.CaptureClockContinuationBudget(), DateTimeOffset.UtcNow))
+                {
+                    NightState = $"{target} · 失焦恢复已验证，保留已接受帧和原预算，重新取场、入缝和导星；失败再跳过。";
+                    await SaveJournalAsync("FocusContinuationIntent").ConfigureAwait(false);
+                    return true;
+                }
+            }
+        }
+        var focusHardStop = focusRepair is { Disposition: not GateDisposition.Passed, FailureScope: not GateFailureScope.TargetQuality };
         var skip = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
-            qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
+            qualitySkipRequested && !focusHardStop && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
             (NativeSequencePlan.IsSkippableQualityFailure(failedGate) || clockRecovered) &&
             result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && !unsafeTripped && !endRequested &&
             lifetime is { IsCancellationRequested: false } && standbyPlan?.StopGateNow() is null;
@@ -235,19 +336,50 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         outcomes.Add(new { target, runId = result.Run.ObservationRunId, result.ManifestPath,
             outcome = completed ? "Completed" : clockRecovered ? "SkippedClockContinuationBudgetExhausted" : skip ? "SkippedQualityFailure" : "Stopped",
             clockRepair, clockRecoveryAttempted = clockRecovery.Attempted,
+            focusRepair, focusAttempted = session?.FocusAttempted, focusContinuationUsed = session?.FocusContinuationUsed,
             gate = failedGate?.Code, failureScope = failedGate?.FailureScope.ToString(), boundaryFailure, idleErrors, settledErrors,
             qualitySkipRequested, endRequested, unsafeTripped, operatorCancelled,
-            terminalCode = result.Run.RecentEvents.LastOrDefault()?.Code, result.AcquisitionProgress });
+            terminalCode = result.Run.RecentEvents.LastOrDefault()?.Code, result.AcquisitionProgress,
+            // The final segment may fail during reacquisition, before it has a
+            // local ATR progress object. Record already-counted logical totals,
+            // not Aggregate(local), which would count this segment twice.
+            retainedScience = session is null ? null : new
+            {
+                requestedFrames = session.Original.ScienceFrames,
+                acceptedFrames = session.Accepted, attemptedFrames = session.Attempts,
+                reusedProbeFrames = session.ReusedProbes, acceptedExposureSeconds = session.AcceptedSeconds,
+                segmentRunIds = session.SegmentRunIds.ToArray(),
+            } });
         NightState = $"目标 {attemptedTargets}/{Items.OfType<UvexTargetObservationContainer>().Count()}：{target} · " +
-            (completed ? "完成" : clockRecovered ? "校时已恢复，但本目标无剩余恢复预算，保留原帧并跳过。" : skip ? $"质量失败，已确认停止并跳过（{failedGate?.Code}）" : $"停止（{boundaryFailure ?? failedGate?.Code ?? result.Run.State.ToString()}）");
+            (completed ? "完成" : focusHardStop ? $"对焦恢复停止（{focusRepair!.Code}）：{focusRepair.Message}" :
+                clockRecovered ? "校时已恢复，但本目标无剩余恢复预算，保留原帧并跳过。" : skip ? $"质量失败，已确认停止并跳过（{failedGate?.Code}）" : $"停止（{boundaryFailure ?? failedGate?.Code ?? result.Run.State.ToString()}）");
+        if (!completed && session is { Accepted: > 0 })
+            NightState += $" · 已保留 {session.Accepted}/{session.Original.ScienceFrames} 张，累计 {session.AcceptedSeconds:0.##} 秒；剩余未完成。";
         await SaveJournalAsync("Targets").ConfigureAwait(false);
         if (!completed && (result.Run.State == ObservationRunState.Faulted ||
             boundaryFailure is not null || idleErrors.Length > 0 || settledErrors.Length > 0))
             host.NotifyNativeTargetBoundary(this, result.Run.ObservationRunId, target,
                 failedGate?.Code ?? result.Run.State.ToString(), skip,
-                boundaryFailure ?? (settledErrors.Length > 0 ? string.Join("; ", settledErrors) : null));
+                boundaryFailure ?? (settledErrors.Length > 0 ? string.Join("; ", settledErrors) : focusHardStop ? focusRepair!.Code : null));
         return false;
     }
+
+    private bool FocusBoundarySafe()
+    {
+        try
+        {
+            return !StopFollowingTargets && standbyPlan is not null && standbyPlan.StopGateNow() is null &&
+                (lockedConfiguration is null || !settings.WeakSupervisionEnabled && factory.IsNightSafetyCurrent(lockedConfiguration));
+        }
+        catch { return false; } // An unreadable safety monitor cannot authorize focus movement.
+    }
+
+    internal static bool IsSevereDefocusCandidate(ObservationStage? stage, GateResult? gate) =>
+        stage is ObservationStage.AcquireG3SlitField or ObservationStage.PlaceTargetOnSlit &&
+        NativeSequencePlan.IsSkippableQualityFailure(gate) && gate!.Code is
+            "G3_MAIN_FOCUS_UNVERIFIED" or "G3_CATALOG_SHORT_POSITION_UNCONFIRMED" or
+            "G3_POST_WCS_SHORT_UNCONFIRMED" or "G3_POST_WCS_TARGET_NOT_MEASURED" or
+            "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED";
 
     internal void RecordUnsettledTargetBoundary(string target, string? runId, IReadOnlyList<string> errors,
         bool canRecheckIdle = false)
@@ -286,6 +418,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             attemptedTargets = 0; targetsIdle = targetResponsibilitiesSettled = true; outcomes.Clear(); targetBoundaryFailures.Clear();
             clockRecovery = new();
             clockContinuations.Clear();
+            focusScanReservation = 0; focusRecoveries.Clear();
             RefreshPlanEditability();
             JournalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "UVEX-ADV", "nights", $"night-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}.json");
@@ -463,6 +596,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             initialGuideTimeoutSeconds = lockedInitialTimeoutSeconds,
             targetBoundaryFailures = targetBoundaryFailures.ToArray(),
             clockRecoveryAttempted = clockRecovery.Attempted, clockContinuations,
+            focusScanReserved = Volatile.Read(ref focusScanReservation) != 0, focusRecoveries,
             outcomes }, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(JournalPath + ".tmp", json).ConfigureAwait(false);
         File.Move(JournalPath + ".tmp", JournalPath, overwrite: true);

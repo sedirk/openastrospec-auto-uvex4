@@ -7,6 +7,44 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3GuidingRecoveryReturnPolicyTests
 {
     [Fact]
+    public async Task RecordedOctober21Hd219937ReturnRetainsItsAcceptedFrameAndDebitsThenExecutesNextTarget()
+    {
+        var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(root)) return; // Opt-in, immutable local replay; CI has no raw observations.
+        var directory = Path.Combine(root, "UVEX-20261021T124816Z-703ba90f12da429");
+        using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "manifest.json")));
+        var frames = manifest.RootElement.GetProperty("evidence").EnumerateArray()
+            .Where(x => x.GetProperty("kind").GetString() == "atr-science-fits").ToArray();
+        Assert.Equal(2, frames.Length);
+        Assert.Equal("True", frames[0].GetProperty("metadata").GetProperty("qualityAccepted").GetString());
+        Assert.Equal("300", frames[0].GetProperty("metadata").GetProperty("exposureSeconds").GetString());
+        Assert.Equal("GUIDING_UNSTABLE", frames[1].GetProperty("metadata").GetProperty("qualityCode").GetString());
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        using var reserved = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Directory.GetFiles(
+            Path.Combine(directory, "evidence"), "*-g3-guiding-recovery-return-reserved.json").Single()));
+        using var returned = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Directory.GetFiles(
+            Path.Combine(directory, "evidence"), "*-g3-guiding-recovery-return-result.json").Single()));
+        var before = System.Text.Json.JsonSerializer.Deserialize<G3AcquisitionMotionState>(
+            reserved.RootElement.GetProperty("payload").GetProperty("charged"), options)!;
+        var result = returned.RootElement.GetProperty("payload");
+        var after = System.Text.Json.JsonSerializer.Deserialize<G3AcquisitionMotionState>(result.GetProperty("state"), options)!;
+        Assert.False(result.GetProperty("returnedToOrigin").GetBoolean());
+        Assert.Equal(before.StartedUtc, after.StartedUtc);
+        Assert.Equal(before.ExcludedAtrExposureSeconds, after.ExcludedAtrExposureSeconds);
+        Assert.Equal(before.CorrectionAttempts + 1, after.CorrectionAttempts);
+        Assert.Equal(before.CumulativeMotionArcseconds + before.MaximumSingleCorrectionArcseconds, after.CumulativeMotionArcseconds, 8);
+        Assert.Equal(before.MaximumElapsedSeconds, after.MaximumElapsedSeconds);
+        var recorded = manifest.RootElement.GetProperty("gates").GetProperty("RunScienceBlock");
+        Assert.Equal("G3_SEARCH_PIER_SIDE_CHANGED", recorded.GetProperty("code").GetString());
+        var classified = G3GuidingRecoveryReturnPolicy.FailureGate(
+            GateResult.Fail(recorded.GetProperty("code").GetString()!, recorded.GetProperty("message").GetString()!),
+            result.GetProperty("message").GetString()!);
+        // Use the production native containers, not just a classifier assertion.
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip", classified.Code, classified,
+            ObservationStage.RunScienceBlock);
+    }
+
+    [Fact]
     public void Hd18552Completed600SecondProbeDoesNotConsumeTheOriginalReturnClock()
     {
         var started = DateTimeOffset.Parse("2026-10-13T16:03:04.5499177Z");

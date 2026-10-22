@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using UvexAdv.Qhy.Core;
+using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -14,6 +15,7 @@ internal sealed class QhyServiceClient : IDisposable
     private const string AutomationActor = "uvex-adv-nina-plugin";
     private static readonly TimeSpan AmbiguousStartRecoveryTimeout = TimeSpan.FromSeconds(25);
     private readonly HttpClient http;
+    private readonly bool nativeWorker;
     private readonly ConcurrentDictionary<Guid, QhyOwnerSession> ownerSessions = new();
     private readonly SemaphoreSlim jobStartGate = new(1, 1);
     internal TimeSpan AcquisitionPriorityTimeout { get; init; } = TimeSpan.FromMinutes(3);
@@ -42,7 +44,7 @@ internal sealed class QhyServiceClient : IDisposable
         NinaInstancePolicy.TryWorkerEndpoint(value, out _) ||
         (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.IsLoopback);
 
-    internal QhyServiceClient(string serviceUrl, HttpMessageHandler? handler)
+    internal QhyServiceClient(string serviceUrl, HttpMessageHandler? handler, bool nativeWorker = false)
     {
         var uri = new Uri(serviceUrl, UriKind.Absolute);
         if (!uri.IsLoopback)
@@ -53,6 +55,7 @@ internal sealed class QhyServiceClient : IDisposable
         http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: true);
         http.BaseAddress = uri;
         http.Timeout = TimeSpan.FromSeconds(15);
+        this.nativeWorker = nativeWorker || handler is PhotometryPipeHttpHandler;
     }
 
     public bool HasOwnerSession(Guid jobId) => ownerSessions.ContainsKey(jobId);
@@ -63,6 +66,44 @@ internal sealed class QhyServiceClient : IDisposable
     public async Task<QhyServiceHealth> GetHealthAsync(CancellationToken cancellationToken) =>
         await http.GetFromJsonAsync<QhyServiceHealth>("/api/v1/health", cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidOperationException("QHY service returned an empty health/configuration proof.");
+
+    // A new master's empty session dictionary says nothing about the physical
+    // owner's earlier work. Read that same owner's global state, without taking
+    // over, connecting, cancelling or issuing any device command.
+    public async Task<GateResult> ReadGlobalIdleAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                nativeWorker ? "/api/v1/owner-idle" : "/api/v1/jobs?count=200");
+            request.Headers.CacheControl = new() { NoCache = true, NoStore = true };
+            using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+            if (nativeWorker)
+            {
+                var proof = await response.Content.ReadFromJsonAsync<PhotometryOwnerIdleProof>(cancellationToken: cancellationToken).ConfigureAwait(false);
+                return PhotometryOwnerIdleProof.Evaluate(proof, DateTimeOffset.UtcNow);
+            }
+            // Read the existing service route, not a new service capability.
+            // A full capped list is ambiguous: the legacy service uses UTC sort
+            // order, so a clock correction could hide an active job below it.
+            var jobs = await response.Content.ReadFromJsonAsync<QhyJobSnapshot[]>(cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (jobs is null || jobs.Any(j => j is null || j.Id == Guid.Empty || j.CreatedUtc == default))
+                return GateResult.Unknown("QHY_OWNER_IDLE_UNAVAILABLE", "QHY owner returned incomplete global job state.");
+            if (jobs.Length >= 200)
+                return GateResult.Unknown("QHY_OWNER_IDLE_UNAVAILABLE", "Legacy QHY global job list reached its response cap; absence of an active job is not proven.");
+            var pending = jobs.Count(j => !IsTerminal(j.State) || j.CompletedUtc is null);
+            var metrics = new Dictionary<string, double> { ["ownerJobsRead"] = jobs.Length, ["ownerJobsNotStopped"] = pending };
+            return pending == 0
+                ? GateResult.Pass("QHY_OWNER_IDLE_CONFIRMED", "Legacy QHY owner freshly reports all jobs terminal; no owner command was issued.", metrics)
+                : GateResult.Unknown("QHY_OWNER_STOP_UNCONFIRMED", "QHY owner still has non-terminal or unconfirmed jobs; no takeover was attempted.", metrics);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or InvalidOperationException or OperationCanceledException)
+        {
+            return GateResult.Unknown("QHY_OWNER_IDLE_UNAVAILABLE", $"Cannot confirm physical QHY owner idle ({ex.GetType().Name}); missing support or failed reads are not a stopped boundary.");
+        }
+    }
 
     public async Task<QhyCameraStatus> EnsureCameraConnectedAsync(CancellationToken cancellationToken)
     {

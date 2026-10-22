@@ -37,6 +37,7 @@ public sealed record ScreenshotRenderResult(
     public bool NativeTargetEditsRoundTrip { get; init; }
     public string? NativeTargetDiagnostics { get; init; }
     public NativeTargetLayoutDiagnostics? NativeTargetLayout { get; init; }
+    public bool NativeTargetOutcomeFullyVisible { get; init; }
     public bool NativeNightHasNoTargetEditor { get; init; }
 }
 
@@ -185,6 +186,7 @@ public static class ScreenshotRenderer
         bool nativeTargetEditsRoundTrip = false;
         string? nativeTargetDiagnostics = null;
         NativeTargetLayoutDiagnostics? nativeTargetLayout = null;
+        bool nativeTargetOutcomeFullyVisible = false;
         bool nativeNightHasNoTargetEditor = false;
         var window = new Window
         {
@@ -233,7 +235,9 @@ public static class ScreenshotRenderer
             planScroll = InspectPlanScrolling(host, scenario);
             if (scenario.TemplateKey == "NativeSpectroscopyTargetPanel")
             {
-                (nativeTargetEditsRoundTrip, nativeTargetLayout, nativeTargetDiagnostics) = InspectNativeTargetEditors(host, scenario);
+                if (scenario.ExerciseNativeTargetEditing)
+                    (nativeTargetEditsRoundTrip, nativeTargetLayout, nativeTargetDiagnostics) = InspectNativeTargetEditors(host, scenario);
+                nativeTargetOutcomeFullyVisible = InspectNativeTargetOutcome(host);
             }
             if (scenario.TemplateKey == "NativeSpectroscopyNightPanel")
             {
@@ -324,8 +328,35 @@ public static class ScreenshotRenderer
             NativeTargetEditsRoundTrip = nativeTargetEditsRoundTrip,
             NativeTargetDiagnostics = nativeTargetDiagnostics,
             NativeTargetLayout = nativeTargetLayout,
+            NativeTargetOutcomeFullyVisible = nativeTargetOutcomeFullyVisible,
             NativeNightHasNoTargetEditor = nativeNightHasNoTargetEditor,
         };
+    }
+
+    private static bool InspectNativeTargetOutcome(FrameworkElement host)
+    {
+        var outcomes = Descendants<TextBlock>(host).Where(text =>
+            BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path?.Path ==
+                nameof(SequenceItems.UvexTargetObservationContainer.LastOutcomeLabel)).ToArray();
+        return outcomes.Length > 0 && outcomes.All(text =>
+        {
+            if (!IsFullyInside(text, host) || string.IsNullOrWhiteSpace(text.Text) ||
+                text.TextWrapping != TextWrapping.Wrap || text.TextTrimming != TextTrimming.None)
+                return false;
+            // IsVisible and even the arranged rectangle can hide a clipped last line.
+            // Measure the complete text at the actual width without a height limit.
+            var fullText = new TextBlock
+            {
+                Text = text.Text, FontFamily = text.FontFamily, FontSize = text.FontSize,
+                FontStyle = text.FontStyle, FontWeight = text.FontWeight, FontStretch = text.FontStretch,
+                TextWrapping = text.TextWrapping, Padding = text.Padding,
+                LineHeight = text.LineHeight, LineStackingStrategy = text.LineStackingStrategy,
+                FlowDirection = text.FlowDirection, Language = text.Language,
+            };
+            TextOptions.SetTextFormattingMode(fullText, TextOptions.GetTextFormattingMode(text));
+            fullText.Measure(new Size(text.ActualWidth, double.PositiveInfinity));
+            return fullText.DesiredSize.Height <= text.ActualHeight + 0.5;
+        });
     }
 
     private static (bool Passed, NativeTargetLayoutDiagnostics Layout, string Diagnostic) InspectNativeTargetEditors(

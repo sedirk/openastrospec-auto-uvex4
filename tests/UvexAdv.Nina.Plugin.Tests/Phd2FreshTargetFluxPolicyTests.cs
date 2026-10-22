@@ -6,6 +6,33 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2FreshTargetFluxPolicyTests
 {
     [Fact]
+    public void FirstMeasuredCentroidIsNotRejectedAsDiscontinuousFromAnUnmeasuredPrediction()
+    {
+        var predicted = new PixelPoint(819.263, 422.308);
+        var firstMeasured = new PixelPoint(897.624, 498.039);
+        var forecast = TargetIdentification.FromCatalogWcs(predicted, 1920,1080,"Neighbour WCS prediction");
+        Assert.False(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(forecast));
+        Assert.False(Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
+            Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(forecast), firstMeasured, predicted, 6));
+        // This removes only an invalid continuity comparison, NOT the 100px
+        // search gate. The recorded 109px mismatch is still not selectable.
+        Assert.False(Phd2TargetContinuityPolicy.IsContinuous(firstMeasured, predicted, 100));
+        Assert.True(Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(true, firstMeasured, predicted, 6));
+        Assert.False(Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(true, new(900,499), firstMeasured, 6));
+        Assert.True(Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(true, new(920,499), firstMeasured, 6));
+    }
+
+    [Fact]
+    public void AllThreeInitialPathsCarryReferenceAuthorityAndAcceptedFrameActivatesContinuity()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        Assert.Equal(3, source.Split("referenceTargetMeasured: Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(").Length - 1);
+        Assert.Contains("referenceGuide: referenceGuide, referenceTargetMeasured: referenceTargetMeasured)", source);
+        Assert.Contains("referenceTargetMeasured, targetLocal, expectedTargetLocal, continuityAllowance)", source);
+        Assert.Contains("referenceTargetMeasured = true;", source);
+    }
+
+    [Fact]
     public void ConfirmedNeighbourIdentitySurvivesExposureFramesWithoutInventingTargetFieldSolve()
     {
         var id = new TargetIdentification(GateResult.Pass("TARGET_IDENTIFIED", "short measured"),

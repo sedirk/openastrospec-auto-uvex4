@@ -14,18 +14,21 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
     bool INativeTargetBoundary.CanRecheckSequenceIdle => canRecheckSequenceIdle;
     private bool canRecheckSequenceIdle;
     private ClockContinuationBudget? retiredClockBudget;
+    private ClockRecoveryFieldWorkflow? clockRecoveryField;
 
     internal void AttachNativeTarget(NativeTargetSession? session)
     {
         NativeTarget = session;
         NativeMeridian = session as NativeMeridianSession;
+        clockRecoveryField = session?.ClockContinuationUsed == true
+            ? new(session.ClockPositionCheck, CreateClockRecoveryFieldPort()) : null;
         if (session?.ClockBudget is not { } spent) return;
         fineAcquisitionStartedUtc = spent.FineStartedUtc;
         correctionAttempts = spent.CorrectionAttempts;
         cumulativeCorrectionDegrees = spent.CorrectionDegrees;
         phd2CoarseHandoffRecoveryAttempts = spent.CoarseHandoffAttempts;
         qhyMountCoordinateSyncPerformed = spent.CoordinateSyncAttempts;
-        mountClockRecoveryAttempted = 1; // No second reconnect hidden in startup.
+        if (session.ClockContinuationUsed) mountClockRecoveryAttempted = 1; // Focus continuation is not a clock reconnect.
         atrProbe.InheritedAttempts = spent.ProbeAttempts;
     }
 
@@ -57,9 +60,25 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         if (idle.Count != 0) return GateResult.Unknown("NIGHT_MOUNT_CLOCK_RECOVERY_NOT_IDLE", string.Join("; ", idle));
         // The old runner will be disposed. A permitted continuation creates fresh
         // optical state through the same production route with retained debits.
-        Report("目标已停止：由 N.I.N.A. 有界重连校时；成功后按原剩余预算重新定位本目标。");
-        return await EnsureMountClockSynchronizedAsync(new ObservationContext(failedPlan), token,
+        Report("目标已停止：由 N.I.N.A. 有界重连校时；成功且指向保持时先以新图复核，否则按原剩余预算重新定位。");
+        var before = ReadClockRecoveryPositionSnapshot(ownersStoppedAndJoined: true);
+        var repair = await EnsureMountClockSynchronizedAsync(new ObservationContext(failedPlan), token,
             verifiedIdleBoundary: true).ConfigureAwait(false);
+        if (repair.Disposition != GateDisposition.Passed || NativeTarget is not { } session) return repair;
+        // Independently confirm the post-reconnect owners/tasks, not just the
+        // repaired UTC. This cleanup has no mechanical recovery authority.
+        var afterIdle = await ConfirmSequenceIdleAsync(token).ConfigureAwait(false);
+        if (afterIdle.Count != 0)
+            return GateResult.Unknown("NIGHT_MOUNT_CLOCK_RECOVERY_NOT_IDLE", string.Join("; ", afterIdle));
+        var after = ReadClockRecoveryPositionSnapshot(ownersStoppedAndJoined: true);
+        session.ClockPositionCheck = ClockRecoveryPositionCheck.TryCreate(failedPlan.ObservationRunId,
+            repair, before, after, DateTimeOffset.UtcNow, session.RecoveryDeadline(CaptureClockContinuationBudget()),
+            MountCommandArrivalToleranceArcseconds, out var reason);
+        await PublishRunJsonEvidenceAsync("clock-current-field-eligibility", "Clock repair current-field eligibility",
+            new { reason, eligible = session.ClockPositionCheck is not null, before, after,
+                recoveryDeadlineUtc = session.RecoveryDeadline(CaptureClockContinuationBudget()),
+                reusedOpticalEvidence = false, motionIssued = false }, null, token).ConfigureAwait(false);
+        return repair;
     }
 
     private GateResult? SequenceStopGate() => configuration.SequencePlan?.StopGate(DateTimeOffset.UtcNow,
@@ -85,7 +104,8 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         if (requireSettledMotion && NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is { } flipGate)
             errors.Add(flipGate.Message);
         var camera = cameraMediator.GetInfo();
-        if (!camera.Connected || camera.IsExposing) errors.Add("ATR 未确认连接且曝光空闲。");
+        if (!camera.Connected) errors.Add("ATR 未连接，无法核验实际曝光状态；不代表已确认正在曝光。");
+        else if (camera.IsExposing) errors.Add("ATR 仍报告正在曝光，尚未确认停止。");
         if (errors.Count == 0 && phd2.IsConnected)
         {
             var quiet = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd2, telescopeMediator,
@@ -98,12 +118,21 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
             if (quiet.Disposition != GateDisposition.Passed) errors.Add($"{quiet.Code}: {quiet.Message}");
         }
         var telescope = telescopeMediator.GetInfo();
-        if (!telescope.Connected || telescope.Slewing || telescope.IsPulseGuiding) errors.Add("赤道仪未确认连接、停止运动且无导星脉冲。");
+        if (!telescope.Connected) errors.Add("赤道仪未连接，无法核验实际运动状态；不代表已确认正在运动。");
+        else if (telescope.Slewing || telescope.IsPulseGuiding) errors.Add("赤道仪仍报告转向或导星脉冲，尚未确认停止。");
+        if (focuserMediator.GetInfo().IsMoving || focuserMediator.GetInfo().IsSettling)
+            errors.Add("主镜调焦尚未确认停止。");
+        if ((requireSettledMotion || automaticFocusStopUnconfirmed) && automaticFocusBoundaryIssue is { } focusIssue)
+            errors.Add("AUTO_FOCUS_BOUNDARY_UNSETTLED: " + focusIssue);
+        if (startupGuideBoundaryIssue is { } startupIssue)
+            errors.Add("GUIDE_STARTUP_STOP_UNCONFIRMED: " + startupIssue);
         if (activeQhyJobs.Count != 0 || pendingQhyRequests.Count != 0) errors.Add("测光作业尚未确认结束。");
         if (requireSettledMotion && (pendingSlitPlacement is { Phase: not SlitPlacementPendingPhase.SettledBudgetLedger } ||
             pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger } ||
             durableG3AcquisitionMotion is { Phase: not G3AcquisitionMotionPhase.SettledBudgetLedger }))
             errors.Add("运动回程责任未结清，禁止跳目标或声称收口成功。");
+        canRecheckSequenceIdle = canRecheckSequenceIdle && automaticFocusBoundaryIssue is null && startupGuideBoundaryIssue is null &&
+            mountClockReconnectBoundary.BoundaryGate is null;
         return errors;
     }
 
@@ -113,6 +142,8 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
     internal async Task<IReadOnlyList<string>> CloseSequenceNightAsync(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (mountClockReconnectBoundary.BoundaryGate is { } clockOwnerGate)
+            return new[] { $"{clockOwnerGate.Code}: {clockOwnerGate.Message}" };
         var errors = new List<string>();
         if (!cameraMediator.GetInfo().Connected || cameraMediator.GetInfo().IsExposing ||
             !telescopeMediator.GetInfo().Connected || telescopeMediator.GetInfo().Slewing || telescopeMediator.GetInfo().IsPulseGuiding)

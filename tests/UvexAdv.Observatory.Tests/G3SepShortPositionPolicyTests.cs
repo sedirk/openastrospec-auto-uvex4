@@ -15,6 +15,87 @@ public sealed class G3SepShortPositionPolicyTests
         };
     private static readonly PixelPoint Prediction = new(510,400);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SameSettingParentContinuityDoesNotJumpToACloserCataloguePatchOrBrighterCompanion(bool brighterPatch)
+    {
+        var prediction = new PixelPoint(816.094, 428.781);
+        var previous = G3SepShortPositionPolicy.Measure(Image(Component(828.184, 445.047)), prediction, 100);
+        var target = Component(827.997, 444.430);
+        var patch = Component(827.642, 425.517) with { Flux = brighterPatch ? 1_000_000 : 100 };
+        var current = G3SepShortPositionPolicy.Measure(Image(target, patch), prediction, 100, previousSameSetting: previous);
+        Assert.Equal(target.X, current.Identification.Target!.Centroid.X);
+        Assert.Equal(target.Y, current.Identification.Target.Centroid.Y);
+        Assert.Equal(prediction, current.Identification.PredictedPoint);
+        Assert.InRange(current.Gate.Metrics!["sepParentContinuityPixels"], .64, .65);
+        Assert.True(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(previous, current,
+            new('a', 64), new('b', 64), 6, 100, 6).Accepted);
+    }
+
+    [Fact]
+    public void SameSettingParentContinuityCannotSubstituteOrIgnoreAmbiguousOrOutsideSources()
+    {
+        var previous = G3SepShortPositionPolicy.Measure(Image(Component(500, 390)), Prediction, 100);
+        Assert.Null(G3SepShortPositionPolicy.Measure(Image(Component(499, 390), Component(501, 390)), Prediction, 100,
+            previousSameSetting: previous).Identification.Target);
+        Assert.Null(G3SepShortPositionPolicy.Measure(Image(Component(507, 400), Component(513, 400)), Prediction, 100,
+            previousSameSetting: previous).Identification.Target);
+        var nearBoundary = G3SepShortPositionPolicy.Measure(Image(Component(608, 400)), Prediction, 100);
+        Assert.Null(G3SepShortPositionPolicy.Measure(Image(Component(611, 400)), Prediction, 100,
+            previousSameSetting: nearBoundary).Identification.Target);
+        Assert.Null(G3SepShortPositionPolicy.Measure(Image(Component(500, 390)) with { ComponentsTruncated = true },
+            Prediction, 100, previousSameSetting: previous).Identification.Target);
+        Assert.Equal(G3ShortExposurePolicy.SaturatedCode, G3SepShortPositionPolicy.Measure(
+            Image(Component(500, 390) with { SaturatedFraction = .01 }), Prediction, 100,
+            previousSameSetting: previous).Gate.Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LostContinuityKeepsAUniqueWcsMeasurementOnlyForFailedRepeatNotHandoff(bool split)
+    {
+        SepImageMeasurements Frame(double x) => split ? SplitImage(x, 390) : Image(Component(x, 390));
+        var previous = G3SepShortPositionPolicy.Measure(Frame(500), Prediction, 100);
+        var current = G3SepShortPositionPolicy.Measure(Frame(510), Prediction, 100, previousSameSetting: previous);
+        Assert.Equal(GateDisposition.Passed, current.Gate.Disposition);
+        Assert.Equal(10, current.Gate.Metrics!["sepParentContinuityPixels"]);
+        Assert.True(current.RequiresIndependentRepeat);
+        var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(previous, current,
+            new('a', 64), new('b', 64), 3, 100);
+        Assert.False(confirmation.Accepted);
+        Assert.Equal(split ? "G3_SEP_PARENT_BLEND_UNRESOLVED" : "G3_SHORT_REPEAT_DISAGREES", confirmation.Gate.Code);
+        var policy = new G3ShortExposurePolicy(10);
+        var next = policy.AfterConfirmation(confirmation, current, 3, 65520);
+        if (split)
+            Assert.Equal(policy, next);
+        else
+        {
+            Assert.Equal(40, next.ExposureMilliseconds);
+            Assert.Equal(6, next.MaximumFrames);
+            Assert.Equal(1, next.BlendExposureIncreases);
+            // Increasing exposure discards the old anchor. One new measurement
+            // cannot become handoff proof without a second independent frame.
+            Assert.False(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(null, current,
+                null, new('c', 64), 4, 100, next.MaximumFrames).Accepted);
+            Assert.Equal(next, next.AfterConfirmation(confirmation, current, 4, 65520));
+        }
+    }
+
+    [Fact]
+    public void CorrectParentContinuityDoesNotItselfResolvePersistentSplitMorphology()
+    {
+        var previous = G3SepShortPositionPolicy.Measure(SplitImage(500, 390), Prediction, 100);
+        var current = G3SepShortPositionPolicy.Measure(SplitImage(501, 391), Prediction, 100,
+            previousSameSetting: previous);
+        var decision = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(previous, current,
+            new('a', 64), new('b', 64), 6, 100, 6);
+        Assert.Equal("G3_SEP_PARENT_BLEND_UNRESOLVED", decision.Gate.Code);
+        Assert.False(decision.Accepted);
+        Assert.False(decision.RetryAllowed);
+    }
+
     [Fact]
     public void ElongatedPsfUsesSepPositionButAlwaysRequiresIndependentFrame()
     {

@@ -118,8 +118,29 @@ internal sealed record NativeSequencePlan(
     {
         if (DeadlineUtc is { } end && now >= end)
             return GateResult.Unknown("NIGHT_DEADLINE_REACHED", "本夜截止时间已到；保留已保存帧，结束本夜并执行已配置收口。");
-        if (StopAtDawn && sunAltitude(now) >= DawnSunAltitudeDegrees)
-            return GateResult.Unknown("NIGHT_DAWN_REACHED", "太阳已达到本夜晨光停止高度；保留已保存帧，结束本夜并执行已配置收口。");
+        if (StopAtDawn)
+        {
+            var altitude = sunAltitude(now);
+            if (!double.IsFinite(altitude))
+                return GateResult.Unknown("NIGHT_SAFETY_READ_FAILED", "无法计算当前太阳高度；未放行新动作，请检查站点和时间后重新核验。");
+            if (altitude >= DawnSunAltitudeDegrees)
+            {
+                // Dawn is the rising crossing, not the descending evening
+                // twilight. Use two ephemeris times, not wall-clock hour or a
+                // first-run 'saw darkness' flag (which misses a post-dawn start).
+                // Daylight remains stopped even after solar culmination.
+                var previousAltitude = sunAltitude(now.AddMinutes(-1));
+                if (!double.IsFinite(previousAltitude))
+                    return GateResult.Unknown("NIGHT_SAFETY_READ_FAILED", "无法确认太阳升降方向；未放行新动作，请检查站点和时间后重新核验。");
+                if (altitude >= 0 || altitude >= previousAltitude)
+                    return GateResult.Unknown("NIGHT_DAWN_REACHED", altitude >= 0
+                        ? "太阳已在地平线上；保留已保存帧，结束夜间观测并执行已配置收口。"
+                        : "太阳正在上升且已达到本夜晨光停止高度；保留已保存帧，结束本夜并执行已配置收口。",
+                        new Dictionary<string, double> { ["sunAltitudeDegrees"] = altitude,
+                            ["sunAltitudeOneMinuteEarlierDegrees"] = previousAltitude,
+                            ["dawnSunAltitudeDegrees"] = DawnSunAltitudeDegrees });
+            }
+        }
         if (TargetDeadlineUtc is { } targetEnd && now >= targetEnd)
             return GateResult.TargetQuality("TARGET_CONTINUATION_TIME_LIMIT", "本目标原时间预算已耗尽；保留已保存帧，停止确认后跳过。");
         return null;

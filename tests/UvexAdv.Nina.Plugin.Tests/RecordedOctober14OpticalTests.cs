@@ -14,7 +14,7 @@ public sealed class RecordedOctober14OpticalTests(ITestOutputHelper output)
     [InlineData("00075-", false)]
     [InlineData("00077-", true)]
     [InlineData("00079-", true)]
-    public void Hd21455NeighbourHandoffRetainsActualMixedCoreFluxAuthority(string prefix, bool saturated)
+    public void Hd21455NeighbourHandoffKeepsCoreFluxAuthorityInsteadOfTheRecordedHaloPeak(string prefix, bool saturated)
     {
         var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
         if (string.IsNullOrWhiteSpace(root)) return;
@@ -33,11 +33,22 @@ public sealed class RecordedOctober14OpticalTests(ITestOutputHelper output)
             G3FrameInputPolicy.ResolveEffectiveSaturationAdu(fits.Pixels, 4095));
         var id = SlitTargetIdentifier.Identify(frame, StarFieldDetector.Detect(frame), point, 100, 8, 1.5);
         output.WriteLine($"{prefix}: {id.Gate.Code}, {id.Authority}; flux={id.Target?.FluxAdu}; raw={before}");
-        Assert.Equal(saturated ? "TARGET_IDENTIFIED_SATURATED_TOPOLOGY" : "TARGET_IDENTIFIED", id.Gate.Code);
-        Assert.Equal(saturated, Phd2FreshTargetFluxPolicy.UsesSaturatedTopologyFluxNotApplicable(id, true));
-        Assert.Equal(p.GetProperty("measurement").GetProperty("fluxMetric").GetDouble(), id.Target!.FluxAdu);
+        Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", id.Gate.Code);
+        Assert.True(Phd2FreshTargetFluxPolicy.UsesSaturatedTopologyFluxNotApplicable(id, true));
         var m = p.GetProperty("measurement").Deserialize<Phd2SlitFieldMeasurement>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        if (saturated) Assert.Equal(m.FluxMetric, id.Target!.FluxAdu);
+        else
+        {
+            // The old first-frame assertion preserved a noise maximum at
+            // (831.83,450.96), not an independent source. Its raw local core
+            // median is 9664 ADU, below its surrounding halo (Q75=14936 ADU).
+            // The same immutable image contains this filled stellar core.
+            Assert.InRange(id.Target!.Centroid.X, 849.5, 849.8);
+            Assert.InRange(id.Target.Centroid.Y, 466.1, 466.5);
+            Assert.False(Phd2TargetContinuityPolicy.IsContinuous(id.Target.Centroid,
+                new(m.TargetCentroid.X, m.TargetCentroid.Y), 6));
+        }
         Assert.True(m.GuidePositionMeasuredInFrame && m.TargetIdentityConfirmed);
         var f = new Phd2ConvergenceFixture();
         var request = f.Request([1, 1, 1]);
@@ -48,10 +59,11 @@ public sealed class RecordedOctober14OpticalTests(ITestOutputHelper output)
         var ledger = actual.GetProperty("ledger").Deserialize<Phd2LockShiftLedger>(options)!;
         Assert.True(m.FluxMetric > limits.MaximumFluxMetric);
         Assert.True(Phd2SlitLockShiftPlanner.IsMeasuredTargetFluxWarning(m, limits));
-        if (saturated) m = m with { FluxMetric = 0,
+        m = m with { TargetCentroid = new(id.Target!.Centroid.X, id.Target.Centroid.Y), FluxMetric = 0,
             FluxEvidenceLabel = "SATURATED_TARGET_TOPOLOGY_FLUX_NOT_APPLICABLE",
             TargetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid };
-        // Exercise the production planner with measured positions intact. The
+        // Exercise the planner with the core remeasured above. Original files
+        // and the prior bad measurement remain unchanged. The
         // original >50px displacement may still need bounded coarse recovery;
         // fixing the flux interpretation is not arrival or extra movement credit.
         var now = m.CapturedUtc.AddSeconds(1);
@@ -110,7 +122,7 @@ public sealed class RecordedOctober14OpticalTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Hd223554RecoveryRetainsRealCentroidAndUsesRemainingEnvelopeInsteadOfRepeatingSearch()
+    public void Hd223554RecoveryUsesTheCoreForBoundedShortConfirmationNotTheRecordedHaloPeak()
     {
         var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
         if (string.IsNullOrWhiteSpace(root)) return;
@@ -124,13 +136,19 @@ public sealed class RecordedOctober14OpticalTests(ITestOutputHelper output)
         var slit = new PixelPoint(817.567, 429.571);
         var content = G3SolveProbeContentAnalyzer.Analyze(frame);
         var id = SlitTargetIdentifier.Identify(frame, content.StellarMeasurement.Stars, prediction, 100, 8, 1.5);
-        Assert.Equal("TARGET_IDENTIFIED", id.Gate.Code);
-        Assert.InRange(id.Target!.Centroid.X, 812.5, 812.6);
-        Assert.InRange(id.Target.Centroid.Y, 420.2, 420.3);
+        Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", id.Gate.Code);
+        // The old (812.55,420.25) noise aperture lies below its surrounding
+        // halo, not on a resolved companion. Do not fossilize that wrong match.
+        Assert.InRange(id.Target!.Centroid.X, 797.8, 798.1);
+        Assert.InRange(id.Target.Centroid.Y, 404.1, 404.5);
+        Assert.False(Phd2TargetContinuityPolicy.IsContinuous(id.Target.Centroid, new(812.55, 420.25), 6));
         var retained = Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(
             TargetIdentification.FromCatalogWcs(prediction, fits.Width, fits.Height, "prediction"), id, false);
         Assert.True(Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(retained));
-        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanHandOff(id, prediction, 5.219, slit, fits.Width, fits.Height, 20));
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(
+            id, prediction, 5.219, slit, fits.Width, fits.Height, 20, 100, 44));
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.NeedsShortExposureConfirmation(id));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(id, prediction, 5.219, slit, fits.Width, fits.Height, 44));
         Assert.False(G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(retained, slit, 2));
         Assert.True(G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(retained, slit, 44));
         Assert.Equal(before, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));

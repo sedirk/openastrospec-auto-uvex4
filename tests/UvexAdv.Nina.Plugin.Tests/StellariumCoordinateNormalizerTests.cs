@@ -1,8 +1,6 @@
 using System.Text.Json;
 using UvexAdv.Observatory;
 using Xunit;
-using System.Reflection;
-using System.Runtime.InteropServices;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
@@ -13,21 +11,7 @@ public sealed class StellariumCoordinateNormalizerTests
     {
         // A recorded RemoteControl coordinate and independently published SIMBAD
         // astrometry, not a forward/inverse test with the same injected vector.
-        const string nina = @"C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy";
-        var native = NativeLibrary.Load(Path.Combine(nina,"External","x64","NOVAS","NOVAS31lib.dll"));
-        var assembly=typeof(NINA.Astrometry.NOVAS).Assembly;
-        try { NativeLibrary.SetDllImportResolver(assembly,(name,_,_)=>name switch
-        {
-            "NOVAS31lib.dll"=>native,
-            "SOFAlib.dll"=>NativeLibrary.Load(Path.Combine(nina,"External","x64","SOFA","SOFAlib.dll")),
-            _=>IntPtr.Zero
-        }); }
-        catch(InvalidOperationException) { /* Existing native astrometry fixture owns the resolver. */ }
-        // Initialization may have occurred earlier without a test-host ephemeris.
-        // Open NINA's existing read-only ephemeris in this TEST process only.
-        var method=typeof(NINA.Astrometry.NOVAS).GetMethod("EphemOpen",BindingFlags.NonPublic|BindingFlags.Static)!;
-        object[] args=[Path.Combine(nina,"External","JPLEPH"),0d,0d,(short)0];
-        Assert.Equal((short)0,(short)method.Invoke(null,args)!);
+        ReadOnlyNinaAstrometry.Initialize();
         var state=State with {JulianDay=2461298.1927,DeltaTDays=.00078943};
         var result=StellariumCoordinateNormalizer.Normalize(new(334.1089122226066,55.629439466874345),state,"CustomObject","SIMBAD; WR*");
         var distance=UvexAdv.Observatory.G3AcquisitionMotionPlanner.AngularSeparationArcseconds(

@@ -15,7 +15,8 @@ public sealed class G3ShortHandoffSourceTests
         // transient solve exits before a longer tier; no second acquisition loop.
         Assert.Equal(2, runner.Split("if (outsideShortHandoff is not null) return outsideShortHandoff;").Length - 1);
         Assert.Contains("G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(measuredTarget", runner);
-        Assert.Contains("GateResult.TargetQuality(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode", runner);
+        Assert.Contains("G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(measuredTarget", runner);
+        Assert.Contains("G3PostWcsMeasuredHandoffPolicy.OutsideRemainingGate(measuredTarget", runner);
         Assert.Contains("Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(", runner);
         Assert.Contains("Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification)", runner);
         var source=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.ShortHandoff.cs"));

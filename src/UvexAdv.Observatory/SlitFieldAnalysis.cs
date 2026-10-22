@@ -352,12 +352,17 @@ public static class SlitTargetIdentifier
         {
             // A saturated primary anywhere in the search window must not
             // pre-empt a separately resolved faint component at the catalogue
-            // prediction. Require the prediction inside its measured core;
-            // nearby halo fragments/rings remain excluded above.
+            // prediction. A global-background aperture SNR/FWHM alone cannot
+            // prove that component: noise maxima on the primary's rising halo
+            // have plausible values too. Require an independent local peak in
+            // that halo; isolated components keep the existing identity rule.
             if (measured.Gate.Disposition == GateDisposition.Passed &&
                 measured.Target is { SaturatedFraction: 0, FwhmPixels: >= 1 and <= 20 } resolved &&
                 measured.PredictionResidualPixels <= Math.Max(2, resolved.FwhmPixels / 2) &&
-                saturatedTarget.DistanceToPredictionPixels > Math.Max(2, resolved.FwhmPixels) * minimumUniquenessRatio)
+                saturatedTarget.DistanceToPredictionPixels > Math.Max(2, resolved.FwhmPixels) * minimumUniquenessRatio &&
+                (Distance(resolved.Centroid, saturatedTarget.Centroid) >
+                    saturatedTarget.ExclusionRadiusPixels + 2 * resolved.FwhmPixels ||
+                 HasIndependentLocalPeak(frame, resolved, topology.BackgroundSigmaAdu)))
                 return measured;
             return new TargetIdentification(
                 GateResult.Pass(
@@ -372,6 +377,34 @@ public static class SlitTargetIdentifier
         }
 
         return measured;
+    }
+
+    private static bool HasIndependentLocalPeak(MonochromeFrame frame, StarCandidate candidate, double noise)
+    {
+        var x = (int)Math.Round(candidate.Centroid.X);
+        var y = (int)Math.Round(candidate.Centroid.Y);
+        var radius = (int)Math.Ceiling(Math.Clamp(candidate.FwhmPixels, 3, 12));
+        if (x < radius || y < radius || x + radius >= frame.Width || y + radius >= frame.Height)
+            return false;
+        var core = new List<double>(9);
+        var boundary = new List<double>(8 * radius);
+        for (var dy = -1; dy <= 1; dy++)
+        for (var dx = -1; dx <= 1; dx++) core.Add(frame[x + dx, y + dy]);
+        for (var offset = -radius; offset <= radius; offset++)
+        {
+            boundary.Add(frame[x + offset, y - radius]);
+            boundary.Add(frame[x + offset, y + radius]);
+            if (Math.Abs(offset) == radius) continue;
+            boundary.Add(frame[x - radius, y + offset]);
+            boundary.Add(frame[x + radius, y + offset]);
+        }
+        core.Sort();
+        boundary.Sort();
+        // The upper-quartile local boundary sees the rising primary halo.
+        // Median core support suppresses one-pixel noise/hot pixels. This only
+        // decides whether a peak can pre-empt an already identified filled
+        // core; it adds no motion authority, search radius or quality blocker.
+        return core[4] > boundary[(int)(.75 * (boundary.Count - 1))] + 2 * Math.Max(1, noise);
     }
 
     public static TargetIdentification Identify(

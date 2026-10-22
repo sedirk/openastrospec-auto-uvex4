@@ -152,6 +152,19 @@ internal sealed class ObservationAttentionNotificationTracker
             $"阶段：{stageLabel}\n代码：{code}\n{presentation.Summary}\n下一步：打开“诊断与证据”查看影响、自动处理和证据。",
             $"Stage: {stageLabel}\nCode: {code}\n{presentation.Summary}\nNext: open Diagnostics and evidence for impact, recovery and evidence.",
             uiCulture);
+        if (nativeTarget && snapshot.State == ObservationRunState.Faulted &&
+            NightMountClockRecovery.IsClockFailure(diagnosticGate) &&
+            snapshot.RecentEvents.LastOrDefault()?.Code != "FAULT_CLEANUP_FAILED")
+        {
+            // This segment has stopped, but the night has not yet decided the
+            // same target's recovery/skip outcome. Do not announce target loss.
+            // Keep the error visible; this text does not authorize recovery.
+            title = ObservationUiPresentation.Text("OpenAstroSpec 观测段因时钟异常停止",
+                "OpenAstroSpec segment stopped by mount clock fault", uiCulture);
+            body += ObservationUiPresentation.Text(
+                "\n本目标最终结果尚未确定：整夜边界将核验停止状态及是否可校时恢复；已保存的帧保留。",
+                "\nThe target outcome is pending: the night boundary will verify stop and clock-recovery eligibility. Saved frames are retained.", uiCulture);
+        }
         return new ObservationAttentionNotificationEvaluation(
             new ObservationAttentionNotification(severity, title, body, fingerprint),
             false);

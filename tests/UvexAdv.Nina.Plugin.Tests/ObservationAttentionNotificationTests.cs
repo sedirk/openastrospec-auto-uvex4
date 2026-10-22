@@ -7,6 +7,46 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class ObservationAttentionNotificationTests
 {
     [Theory]
+    [InlineData("zh-CN")]
+    [InlineData("en-US")]
+    public void NativeClockFaultReportsStoppedSegmentNotFinalTargetFailure(string language)
+    {
+        var tracker = new ObservationAttentionNotificationTracker();
+        var code = "MOUNT_CLOCK_RECHECK_REQUIRED";
+        var snapshot = Snapshot(ObservationRunState.Faulted, ObservationStage.RunScienceBlock, "clock", code);
+        var culture = CultureInfo.GetCultureInfo(language);
+        var notification = tracker.Evaluate(snapshot, GateResult.Unknown(code, "clock"), culture,
+            nativeTargetRunId: snapshot.ObservationRunId).Notification!;
+        Assert.Equal(ObservationAttentionSeverity.Error, notification.Severity);
+        Assert.Contains(language == "zh-CN" ? "观测段" : "segment", notification.Title);
+        Assert.Contains(language == "zh-CN" ? "最终结果尚未确定" : "outcome is pending", notification.Body);
+        Assert.Null(tracker.Evaluate(snapshot, GateResult.Unknown(code, "clock"), culture,
+            nativeTargetRunId: snapshot.ObservationRunId).Notification);
+        var boundary = tracker.NativeBoundary(snapshot.ObservationRunId!, "HD 218393", code, false,
+            "NIGHT_MOUNT_CLOCK_RECOVERY_FAILED", culture)!;
+        Assert.Equal(ObservationAttentionSeverity.Error, boundary.Severity);
+        Assert.Contains("NIGHT_MOUNT_CLOCK_RECOVERY_FAILED", boundary.Body);
+    }
+
+    [Fact]
+    public void ClockFaultWithFailedCleanupDoesNotSuggestPendingRecovery()
+    {
+        var code = "MOUNT_CLOCK_RECHECK_REQUIRED";
+        var snapshot = Snapshot(ObservationRunState.Faulted, ObservationStage.RunScienceBlock, "clock", code);
+        snapshot = snapshot with
+        {
+            RecentEvents = snapshot.RecentEvents.Concat([
+                new ObservationEvent(DateTimeOffset.UtcNow, ObservationRunState.Faulted,
+                    ObservationStage.RunScienceBlock, "FAULT_CLEANUP_FAILED", "stop unknown")]).ToArray(),
+        };
+        var notice = new ObservationAttentionNotificationTracker().Evaluate(snapshot,
+            GateResult.Unknown(code, "clock"), CultureInfo.GetCultureInfo("zh-CN"),
+            nativeTargetRunId: snapshot.ObservationRunId).Notification!;
+        Assert.Equal(ObservationAttentionSeverity.Error, notice.Severity);
+        Assert.DoesNotContain("最终结果尚未确定", notice.Body);
+    }
+
+    [Theory]
     [InlineData("NIGHT_DEADLINE_REACHED")]
     [InlineData("NIGHT_DAWN_REACHED")]
     public void ScheduledStopWaitsForBoundaryThenExplainsCloseoutWithoutClaimingSuccess(string code)

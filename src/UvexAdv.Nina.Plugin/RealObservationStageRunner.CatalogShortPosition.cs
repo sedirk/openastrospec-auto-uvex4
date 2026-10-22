@@ -7,6 +7,10 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed partial class RealObservationStageRunner
 {
+    internal static GateResult CreateCatalogShortPositionFailure(string reason,
+        IReadOnlyDictionary<string, double>? metrics = null) =>
+        GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", reason, metrics);
+
     private async Task<G3FieldState> RefineClippedCatalogPositionAsync(
         ObservationContext context, G3FieldState field, CancellationToken cancellationToken)
     {
@@ -21,13 +25,14 @@ internal sealed partial class RealObservationStageRunner
 
         G3FieldState Unconfirmed(string reason, IReadOnlyDictionary<string, double>? metrics = null) => field with
         {
-            Gate = GateResult.Unknown("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", reason, metrics),
+            Gate = CreateCatalogShortPositionFailure(reason, metrics),
         };
         var exposure = preset.DirectTargetGuidingExposureMilliseconds;
         if (exposure is not > 0)
             return Unconfirmed("The clipped formal-WCS frame requires the commissioned short target exposure; none is configured. No new motion was sent.");
         var exposurePolicy = new G3ShortExposurePolicy(exposure.Value);
         var handoffBoundaryRecheckUsed = false;
+        var consecutiveUnmeasuredFrames = 0;
         var sourceExposureMilliseconds = field.Image?.MetaData.Image.ExposureTime * 1000 ?? double.NaN;
 
         await PublishTargetBranchAsync(context, TargetAcquisitionBranch.ShortExposureSep,
@@ -173,18 +178,21 @@ internal sealed partial class RealObservationStageRunner
                 ? G3SepCatalogPrimaryPolicy.Measure(sepMeasurements, astrometricPrimaryPrediction, companionVector,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise)
                 : G3SepShortPositionPolicy.Measure(sepMeasurements, field.TargetIdentification.PredictedPoint,
-                    preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
+                    preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
+                    previousSameSetting: previous);
             // A boundary recheck is exactly one same-setting fresh pair, not
             // another exposure search or a reset of the six-frame ceiling.
             var nextExposurePolicy = handoffBoundaryRecheckUsed ? exposurePolicy :
                 exposurePolicy.AfterMeasurement(measurement.Gate.Code, attempt);
             var rawRoiPeak = G3ShortExposurePolicy.RecognitionPeak(frame,
                 field.TargetIdentification.PredictedPoint, preset.TargetSearchRadiusPixels);
-            // Keep a good same-exposure anchor across a transient missed frame.
-            // Exposure search is needed only while there is NO valid position.
-            if (!handoffBoundaryRecheckUsed && previous?.Gate.Disposition != GateDisposition.Passed)
+            consecutiveUnmeasuredFrames = measurement.Gate.Code == "G3_SEP_UNMEASURED"
+                ? consecutiveUnmeasuredFrames + 1 : 0;
+            // Preserve one transient miss, not an indefinitely stale anchor.
+            if (!handoffBoundaryRecheckUsed)
                 nextExposurePolicy = nextExposurePolicy.AfterUnmeasured(measurement, attempt,
-                    rawRoiPeak, frame.SaturationLevel, sourceExposureMilliseconds);
+                    rawRoiPeak, frame.SaturationLevel, sourceExposureMilliseconds,
+                    previous?.Gate.Disposition == GateDisposition.Passed, consecutiveUnmeasuredFrames);
             var signalExposureIncreased = nextExposurePolicy.SignalExposureIncreases > exposurePolicy.SignalExposureIncreases;
             var exposureChanged = nextExposurePolicy.ExposureMilliseconds != exposurePolicy.ExposureMilliseconds;
             var measurementMetrics = measurement.Gate.Metrics is null ? new Dictionary<string, double>()
@@ -193,6 +201,7 @@ internal sealed partial class RealObservationStageRunner
             measurementMetrics["nextShortExposureMilliseconds"] = nextExposurePolicy.ExposureMilliseconds;
             measurementMetrics["shortExposureReductions"] = nextExposurePolicy.Reductions;
             measurementMetrics["shortSignalExposureIncreases"] = nextExposurePolicy.SignalExposureIncreases;
+            measurementMetrics["shortConsecutiveUnmeasuredFrames"] = consecutiveUnmeasuredFrames;
             measurementMetrics["shortRecognitionPeakAdu"] = double.IsFinite(rawRoiPeak) ? rawRoiPeak : -1;
             measurementMetrics["shortSignalExposureCeilingMilliseconds"] = double.IsFinite(sourceExposureMilliseconds)
                 ? Math.Min(sourceExposureMilliseconds, G3ShortExposurePolicy.MaximumSignalExposureMilliseconds) : -1;
@@ -304,6 +313,7 @@ internal sealed partial class RealObservationStageRunner
                     // Reconfirm at the SAME new exposure. Never pair centroids
                     // across exposure settings; all consumed frames stay logged.
                     previous = null;
+                    consecutiveUnmeasuredFrames = 0;
                     previousHash = previousFramePath = previousReceipt = null;
                     Report(signalExposureIncreased ? ObservationUiPresentation.Text(
                         $"SEP 短帧未检出目标且未饱和：{exposure} → {exposurePolicy.ExposureMilliseconds} ms，增益保持 0%；仅增曝光寻找信号，仍须两张独立新帧确认，总上限 {exposurePolicy.MaximumFrames} 帧；不移动。",

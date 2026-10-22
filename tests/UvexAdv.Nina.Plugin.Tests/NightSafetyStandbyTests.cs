@@ -6,6 +6,45 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NightSafetyStandbyTests
 {
+    [Theory]
+    [InlineData("dawn")]
+    [InlineData("deadline")]
+    [InlineData("unsafe")]
+    [InlineData("unavailable")]
+    public async Task EveningWaitDoesNotCloseButMorningDeadlineAndUnsafeStillCloseExactlyOnce(string reason)
+    {
+        using var f = new Fixture();
+        using var reservation = await f.Reserve();
+        var evening = DateTimeOffset.Parse("2026-10-21T18:00:31+08:00");
+        var morning = evening.AddHours(11.5);
+        var plan = new NativeSequencePlan(1, 1, 0, StopAtDawn: true,
+            DeadlineUtc: reason == "deadline" ? evening.AddHours(6.5) : null);
+        var phase = 0;
+        var firstRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = f.Request with { StopGate = () =>
+        {
+            var later = Volatile.Read(ref phase) != 0;
+            var now = later ? morning : evening;
+            var gate = plan.StopGate(now, t => later && reason == "unavailable" ? double.NaN :
+                t == now ? -10 : later ? -10.2 : -9.8);
+            if (!later) firstRead.TrySetResult();
+            return gate;
+        } };
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, request);
+        await firstRead.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("Waiting", guard.Snapshot.Phase);
+        Assert.Equal(0, f.Closes);
+        if (reason == "unsafe") f.Unsafe!();
+        else Volatile.Write(ref phase, 1);
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("Closed", guard.Snapshot.Phase);
+        Assert.Equal(reason switch { "dawn" => "NIGHT_DAWN_REACHED", "deadline" => "NIGHT_DEADLINE_REACHED",
+            "unsafe" => "NIGHT_UNSAFE", _ => "NIGHT_SAFETY_READ_FAILED" }, guard.Snapshot.Reason);
+        Assert.Equal(1, f.Closes);
+        guard.RequestCloseout();
+        Assert.Equal(1, f.Closes);
+    }
+
     [Fact]
     public async Task FailedConnectionBoundaryCanBeRecheckedOnlyOnExplicitNewNight()
     {

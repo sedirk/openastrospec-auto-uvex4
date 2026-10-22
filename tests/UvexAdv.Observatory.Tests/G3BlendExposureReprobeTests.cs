@@ -5,7 +5,8 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3BlendExposureReprobeTests
 {
-    private static G3ShortPositionMeasurement Measure(double x, double y, int children, double peak = 4736)
+    private static G3ShortPositionMeasurement Measure(double x, double y, int children, double peak = 4736,
+        G3ShortPositionMeasurement? previous = null)
     {
         var parent = new SepPositionComponent(x, y, 6.97, 4.76, 44718, peak, 77, 0, 178, 487,
             [(int)x - 20, (int)y - 15, 34, 28], 0, 2597);
@@ -14,14 +15,15 @@ public sealed class G3BlendExposureReprobeTests
             ParentComponents = [parent],
             Components = Enumerable.Range(0, children).Select(i => parent with { X = x + i, SepFlags = children > 1 ? 1 : 0 }).ToArray()
         };
-        return G3SepShortPositionPolicy.Measure(image, new(804.1290557991694, 417.92319895753445), 100);
+        return G3SepShortPositionPolicy.Measure(image, new(804.1290557991694, 417.92319895753445), 100,
+            previousSameSetting: previous);
     }
 
     [Fact]
     public void RecordedHd21455UnsplitJitterGetsOneLongerPairNotAPositionBypass()
     {
         var first = Measure(803, 420, 1, 4320);
-        var second = Measure(812.8616, 420, 1, 4320);
+        var second = Measure(812.8616, 420, 1, 4320, first);
         var decision = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(first, second, new('a',64), new('b',64), 3, 100);
         Assert.Equal("G3_SHORT_REPEAT_DISAGREES", decision.Gate.Code);
         var next = new G3ShortExposurePolicy(10).AfterConfirmation(decision, second, 3, 65520);

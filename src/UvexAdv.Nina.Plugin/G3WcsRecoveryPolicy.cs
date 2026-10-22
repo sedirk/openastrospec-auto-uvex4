@@ -28,6 +28,31 @@ public static class G3WcsRecoveryPolicy
     public const string ResponseNotConvergedCode = "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED";
     public const string PierChangedCode = "G3_WCS_CENTERING_PIER_CHANGED";
 
+    // Only called at the existing non-converging response boundary, AFTER
+    // useful coarse progress and the bounded near-target retry were considered.
+    // Missing fine capacity alone never vetoes useful coarse motion. The runner
+    // returns this result only after its original return has been verified.
+    internal static GateResult ResolvedResponseFailure(double priorResidualPixels, double freshResidualPixels,
+        int nearTargetResponseRetries, double remainingFineHandoffRadiusPixels, double readOnlyTolerancePixels)
+    {
+        var fineBudgetUnavailable = double.IsFinite(remainingFineHandoffRadiusPixels) &&
+            double.IsFinite(readOnlyTolerancePixels) && readOnlyTolerancePixels > 0 &&
+            remainingFineHandoffRadiusPixels <= readOnlyTolerancePixels + 1e-9 &&
+            freshResidualPixels > readOnlyTolerancePixels;
+        var budgetExplanation = fineBudgetUnavailable
+            ? $" 原 PHD2 出程及回程预算已不足，剩余交接范围仅为 {readOnlyTolerancePixels:F2}px 只读容差；" +
+              "并非没有识别到目标，也不是新要求 WCS 达到该精度。原计数、时限及已保存科学帧保留。"
+            : string.Empty;
+        return GateResult.TargetQuality(ResponseNotConvergedCode,
+            "Fresh WCS and measured target identity are valid, but the optical correction did not converge. " +
+            "Return using the original ledger; do not restart blind neighbour search." + budgetExplanation,
+            new Dictionary<string, double> { ["priorResidualPixels"] = priorResidualPixels,
+                ["freshResidualPixels"] = freshResidualPixels, ["nearTargetResponseRetries"] = nearTargetResponseRetries,
+                ["remainingFineHandoffRadiusPixels"] = remainingFineHandoffRadiusPixels,
+                ["readOnlyTolerancePixels"] = readOnlyTolerancePixels,
+                ["fineBudgetUnavailable"] = fineBudgetUnavailable ? 1 : 0 });
+    }
+
     internal static GateResult ReturnedBudgetGate(GateResult reserve, bool unreachableAtOrigin,
         IReadOnlyDictionary<string, double> metrics) =>
         GateResult.TargetQuality(unreachableAtOrigin ? UnreachableAtOriginCode : ExhaustedReturnedCode,

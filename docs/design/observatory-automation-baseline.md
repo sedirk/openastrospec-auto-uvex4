@@ -122,6 +122,19 @@ quality is not transferred to the new position. A position change during a run
 still stops continuation; Resume cannot rebase this lock. This narrow exception
 does not apply to UVEX M2, the grating, slit, camera geometry or GS350 focus.
 
+Owner-approved [ADR-0041](../adr/0041-bounded-severe-defocus-recovery.md) permits
+one durably precharged C11 main-focus recovery per native night at a joined,
+stopped and settled target-quality boundary. A fresh multi-star diagnostic pair
+must nominate severe defocus; low SNR, one split star or failed solving alone
+cannot trigger motion. Reuse the existing SEP/native-focus implementation within
+saved and commissioned travel limits, with the night lease, full live safety,
+cancellation and original time/motion/exposure budgets retained. Verified focus
+creates a new runner/optical segment for the same target, preserving accepted
+frames and requiring fresh target/slit/guide evidence. It never rebases the old
+run lock, relaxes multi-lobe identity, resumes after restart, or moves UVEX/GS350.
+Unimproved but confirmed stopped/original-position outcomes follow target skip;
+unknown physical state and weather remain independent hard stops.
+
 Bias and dark masters may be reused across nights when camera identity, gain, offset, readout mode, binning, ROI, temperature tolerance, exposure policy, and provenance are compatible. “Cooled camera” permits cross-night reuse; it does not permit incompatible calibration frames.
 
 ## 5. Canonical per-target workflow
@@ -300,6 +313,23 @@ budget or target-local reacquisition failure follows checked skip, while unsafe,
 unknown stop, ownership errors, cancellation and an unrepaired clock still stop.
 This is the narrow same-target terminal-archive exception, not a generic retry
 or restart/resume authority; meridian and clock segments share target accounting.
+
+Owner-approved [ADR-0042](../adr/0042-clock-repair-current-field-revalidation.md)
+narrowly supersedes ADR-0035's mandatory catalogue GOTO/QHY reacquisition order.
+After the same stopped, joined and verified clock repair, a one-use, durably
+consumed receipt may bind the same logical target, owners, setup, known unchanged
+pier side and fresh pre/post mount readbacks to one current-pointing G3 probe.
+The new segment must obtain fresh target/WCS and slit evidence, using shared
+normal slit geometry preparation once; no old image, target pixels, dynamic slit
+result or guide lock is imported. The probe performs no mount/focus motion,
+guide recovery/calibration or QHY fast-pair acquisition. Accepted fresh evidence
+within the original handoff capacity may replace redundant catalogue pointing
+and the QHY coarse witness, then use existing guiding, placement and ATR stages.
+An optical miss falls back once to full canonical acquisition, spending the same
+original time/attempt/motion budgets. Unknown stop/owner, unsafe, invalid clock,
+cancellation and night boundaries never become optical fallback permission.
+Normal starts, meridian/focus continuation, raw provenance, exclusive ownership,
+return reserve and installation/no-auto-start semantics are unchanged.
 
 Under owner-requested [ADR-0027](../adr/0027-terminal-target-guide-state-retirement.md),
 a completed/failed/cancelled logical target may retire its G3/PHD2 recovery

@@ -173,9 +173,12 @@ public sealed class ProductionRouteParitySourceTests
         Assert.Contains("OpenAstroSpec.SlitQualityPolicy", template, StringComparison.Ordinal);
         Assert.True(template.IndexOf("OpenAstroSpec.SlitQualityPolicy", StringComparison.Ordinal) <
             template.IndexOf("Command=\"{Binding StartSelectedModeCommand}\"", StringComparison.Ordinal));
-        Assert.Contains("bool AllowSupervisedSlitQualityWarning = false)", configuration, StringComparison.Ordinal);
-        Assert.Contains("settings.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);
-        Assert.Contains("payload.AllowSupervisedSlitQualityWarning);", configuration, StringComparison.Ordinal);
+        // The warning choice need not be the final constructor field: the
+        // immutable focus-options snapshot now follows it. Keep checking the
+        // opt-in default and both production copies, not argument ordering.
+        Assert.Matches(@"bool\s+AllowSupervisedSlitQualityWarning\s*=\s*false\s*[,)]", configuration);
+        Assert.Matches(@"settings\.AllowSupervisedSlitQualityWarning\s*[,)]", configuration);
+        Assert.Matches(@"payload\.AllowSupervisedSlitQualityWarning\s*[,)]", configuration);
         Assert.Contains("new(\"arm-slit-quality-warning\", armSlitQualityWarningCommand, false, true, true, false", DockableSource, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding ArmSlitQualityWarningCommand}\"", template, StringComparison.Ordinal);
         Assert.Contains("() => !IsControllable && !SupervisedSlitQualityWarningAuthorized", DockableSource, StringComparison.Ordinal);

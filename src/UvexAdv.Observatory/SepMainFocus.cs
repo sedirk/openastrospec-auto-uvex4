@@ -3,7 +3,8 @@ using System.Text.Json;
 namespace UvexAdv.Observatory;
 
 public sealed record SepFocusReference(double X, double Y);
-public sealed record SepFocusStar(int Id, double X, double Y, double R50, double R80, double Flux, double Snr);
+public sealed record SepFocusStar(int Id, double X, double Y, double R50, double R80, double Flux, double Snr,
+    double? AxisRatio = null, double? ApertureRadius = null);
 public sealed record SepFocusFrame(SepFocusReference[] Reference, SepFocusStar[] Stars, string? Error = null)
 {
     public void Validate(int width, int height)
@@ -14,13 +15,18 @@ public sealed record SepFocusFrame(SepFocusReference[] Reference, SepFocusStar[]
             || Stars.Any(s => s.Id < 0 || s.Id >= Reference.Length || !double.IsFinite(s.X) || !double.IsFinite(s.Y)
                 || s.X < 0 || s.Y < 0 || s.X >= width || s.Y >= height
                 || !double.IsFinite(s.R50) || !double.IsFinite(s.R80) || s.R50 <= 0 || s.R80 < s.R50
-                || !double.IsFinite(s.Flux) || s.Flux <= 0 || !double.IsFinite(s.Snr) || s.Snr < 15))
+                || !double.IsFinite(s.Flux) || s.Flux <= 0 || !double.IsFinite(s.Snr) || s.Snr < 15
+                || s.AxisRatio is { } ratio && (!double.IsFinite(ratio) || ratio is <= 0 or > 1)
+                || s.ApertureRadius is { } radius && (!double.IsFinite(radius) || radius <= 0 || s.R80 >= .85 * radius)))
             throw new InvalidDataException("Invalid SEP fixed-aperture focus measurements");
     }
 }
 
 public sealed record SepMainFocusOptions
 {
+    // ADR-0041: only a fully supervised native night may use this at a joined
+    // target boundary. Saving/loading options never starts acquisition/motion.
+    public bool AutomaticRecoveryEnabled { get; init; } = true;
     public int MinimumPosition { get; init; }
     public int MaximumPosition { get; init; }
     public int Step { get; init; } = 50;

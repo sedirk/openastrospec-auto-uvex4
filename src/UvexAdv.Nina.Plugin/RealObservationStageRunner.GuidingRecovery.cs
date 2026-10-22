@@ -28,7 +28,8 @@ internal sealed partial class RealObservationStageRunner
             return GateResult.Unknown("G3_GUIDING_RECOVERY_OWNER_CHANGED", "回程前 PHD2 设备身份已改变；未发送运动。");
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         var mount = ValidateG3SearchMountState(state.PierSide);
-        if (mount.Disposition != GateDisposition.Passed) return mount;
+        if (mount.Disposition != GateDisposition.Passed)
+            return G3GuidingRecoveryReturnPolicy.FailureGate(mount, mount.Message);
         var reported = telescopeMediator.GetCurrentPosition();
         var nearTolerance = G3AcquisitionMotionPlanner.ComputeStableNearOriginToleranceArcseconds(
             state, configuration.G3.WcsFreshSolveAuthorizationResidualArcseconds);
@@ -74,8 +75,6 @@ internal sealed partial class RealObservationStageRunner
             proof.EvidencePath, cancellationToken).ConfigureAwait(false);
         return returned.ReturnedToOrigin
             ? GateResult.Pass("G3_GUIDING_RECOVERY_ORIGIN_CONFIRMED", "已实测返回原搜索起点；下一步重拍定位，旧目标证据不复用。")
-            : returned.FailureGate is { Disposition: not GateDisposition.Passed } failure
-                ? failure with { Message = $"导星后回原点未确认；不开始搜索：{returned.Message} {failure.Message}" }
-                : GateResult.Unknown("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", $"导星后回原点未确认；不开始搜索：{returned.Message}");
+            : G3GuidingRecoveryReturnPolicy.FailureGate(returned.FailureGate, returned.Message);
     }
 }

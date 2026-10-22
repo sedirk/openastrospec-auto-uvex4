@@ -10,6 +10,100 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class RecordedPlacementContinuityTests(ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    public async Task Hd220526MeasuredCandidateCannotBeReplacedByAStaleFineHandoff(string boundary)
+    {
+        var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(root)) return;
+        var dir = Path.Combine(root,"UVEX-20261021T104802Z-7f19f79b05d64fd","evidence");
+        var path = Assert.Single(Directory.GetFiles(dir,"00033-*.fit"));
+        const string sha = "0A419FA85D7FDB946F19CD1652E498DAFCF3DE2F5BC71412A5D68FD4F6072B1E";
+        Assert.Equal(sha, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        var raw = QhyFitsCodec.Read(path);
+        var frame = new MonochromeFrame(raw.Width,raw.Height,raw.Pixels,
+            G3FrameInputPolicy.ResolveEffectiveSaturationAdu(raw.Pixels,4095));
+        var predicted = new PixelPoint(816.3728,415.6175);
+        var slit = new PixelPoint(817.640,431.660);
+        var measured = SlitTargetIdentifier.Identify(frame,StarFieldDetector.Detect(frame),predicted,100,8,1.5);
+        Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", measured.Gate.Code);
+        Assert.InRange(measured.Target!.Centroid.X,865,867);
+        Assert.InRange(measured.Target.Centroid.Y,434,436);
+        Assert.True(G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(measured,predicted,5.2331,slit,1920,1080,20,100,44));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation(measured,predicted,5.2331,slit,1920,1080,20,100,44));
+        Assert.False(G3PostWcsMeasuredHandoffPolicy.CanHandOff(measured,predicted,5.2331,slit,1920,1080,20));
+        var gate = G3PostWcsMeasuredHandoffPolicy.OutsideRemainingGate(measured,slit,44);
+        Assert.InRange(gate.Metrics!["measuredTargetResidualPixels"],48,49);
+        // The existing-frame formal solve may still recover coarse placement.
+        // If it fails, this production gate must run the NEXT native target only
+        // after checked stop; it must not become an all-night quality blocker.
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary,gate.Code,gate,ObservationStage.AcquireG3SlitField);
+        Assert.Equal(sha, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        output.WriteLine($"HD 220526 {measured.Target.Centroid}: coarse existing-frame solve retained, no stale prediction/PHD2 promotion, boundary={boundary}.");
+    }
+
+    [Fact]
+    public void Hd219937ShortToGuideHandoffKeepsTheFilledCoreAcrossFreshPrimaryMeasurements()
+    {
+        var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(root)) return;
+        var dir = Path.Combine(root, "UVEX-20261021T103936Z-4b73b3e23af4412", "evidence");
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        var hashes = new Dictionary<string, string>();
+        using var shortDoc = ReadRecord("00067-");
+        var shortTarget = shortDoc.RootElement.GetProperty("payload").GetProperty("measurement")
+            .GetProperty("identification").GetProperty("target").GetProperty("centroid")
+            .Deserialize<PixelPoint>(options)!;
+        var selection = ReadFrame("00070-");
+        var selected = SlitTargetIdentifier.Identify(selection, G3StellarFocusAnalyzer.Analyze(selection).Stars,
+            shortTarget, 100, 8, 1.5);
+        Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", selected.Gate.Code);
+        Assert.InRange(selected.Target!.Centroid.X, 831, 834);
+        Assert.InRange(selected.Target.Centroid.Y, 457, 460);
+        using var handoffDoc = ReadRecord("00073-");
+        var guide = handoffDoc.RootElement.GetProperty("payload").GetProperty("selectedGuidePosition")
+            .Deserialize<Phd2Point>(options)!;
+        var target = new Phd2Point(selected.Target.Centroid.X, selected.Target.Centroid.Y);
+        // These five immutable frames have recorded pixel-matched native primary
+        // measurements. Replay the actual shared identifier and continuity policy,
+        // not commanded lock deltas or multi-star dx/dy. No new motion is simulated.
+        foreach (var prefix in new[] { "00076-", "00080-", "00084-", "00086-", "00088-" })
+        {
+            using var doc = ReadRecord(prefix);
+            var measurement = doc.RootElement.GetProperty("payload").GetProperty("measurement")
+                .Deserialize<Phd2SlitFieldMeasurement>(options)!;
+            Assert.True(measurement.GuidePositionMeasuredInFrame);
+            var predicted = Phd2TargetContinuityPolicy.Predict(target, guide, measurement.GuideStar);
+            var point = new PixelPoint(predicted.X, predicted.Y);
+            var raw = doc.RootElement.GetProperty("source").GetProperty("absolutePath").GetString()!;
+            var frame = ReadPath(raw);
+            var id = SlitTargetIdentifier.Identify(frame, StarFieldDetector.Detect(frame), point, 100, 8, 1.5);
+            var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(frame, point, 100);
+            Assert.Equal("TARGET_IDENTIFIED_SATURATED_TOPOLOGY", id.Gate.Code);
+            Assert.Equal(topology.Target!.Centroid, id.Target!.Centroid);
+            Assert.True(Phd2TargetContinuityPolicy.IsContinuous(id.Target.Centroid, point, 6));
+            Assert.False(Phd2TargetContinuityPolicy.IsContinuous(
+                new(measurement.TargetCentroid.X, measurement.TargetCentroid.Y), point, 6));
+            output.WriteLine($"{prefix}: measured core {id.Target.Centroid}, primary-shift prediction {point}; original 6px continuity bound retained.");
+            target = new(id.Target.Centroid.X, id.Target.Centroid.Y);
+            guide = measurement.GuideStar;
+        }
+        foreach (var (path, sha) in hashes)
+            Assert.Equal(sha, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+
+        JsonDocument ReadRecord(string prefix) => JsonDocument.Parse(File.ReadAllText(
+            Assert.Single(Directory.GetFiles(dir, prefix + "*.json"))));
+        MonochromeFrame ReadFrame(string prefix) => ReadPath(Assert.Single(Directory.GetFiles(dir, prefix + "*.fit")));
+        MonochromeFrame ReadPath(string path)
+        {
+            hashes[path] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+            var fits = QhyFitsCodec.Read(path);
+            return new(fits.Width, fits.Height, fits.Pixels,
+                G3FrameInputPolicy.ResolveEffectiveSaturationAdu(fits.Pixels, 4095));
+        }
+    }
+
     [Fact]
     public async Task Hd21641ArchivedLedgerRetainsItsActualBudgetAcrossMeasuredHandoff()
     {

@@ -6,6 +6,43 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class SlitFieldAnalysisTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALocalHaloMaximumNeedsAnIndependentPeakBeforePreemptingTheFilledCore(bool realCompanion)
+    {
+        const int width = 300, height = 220;
+        var pixels = Enumerable.Repeat((ushort)1000, width * height).ToArray();
+        AddGaussian(pixels, width, height, 150, 130, 10, 120_000);
+        var primaryPixels = pixels.ToArray();
+        var point = new PixelPoint(144, 106);
+        if (realCompanion)
+        {
+            AddGaussian(pixels, width, height, point.X, point.Y, 2, 20_000);
+            for (var i = 0; i < pixels.Length; i++) pixels[i] = Math.Max(pixels[i], primaryPixels[i]);
+        }
+        else
+        {
+            // A small noise maximum has a plausible global-background aperture
+            // SNR/FWHM, but its surrounding light rises towards the primary.
+            pixels[106 * width + 144] += 2000;
+        }
+        var frame = new MonochromeFrame(width, height, pixels, 65520);
+        var candidate = new StarCandidate(point, 21000, 200000, 40, 5.8, .1, 0, 100);
+        var result = SlitTargetIdentifier.Identify(frame, [candidate], point, 80);
+        Assert.Equal(GateDisposition.Passed, result.Gate.Disposition);
+        if (realCompanion)
+        {
+            Assert.Same(candidate, result.Target);
+            Assert.Equal(TargetIdentificationAuthority.StellarCentroid, result.Authority);
+        }
+        else
+        {
+            Assert.Equal(TargetIdentificationAuthority.BrightWingCentroid, result.Authority);
+            Assert.InRange(result.Target!.Centroid.Y, 129, 131);
+        }
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void ResolvedFaintComponentAtCataloguePositionIsNotPreemptedByNearbyClippedPrimary(bool faintIsTarget)

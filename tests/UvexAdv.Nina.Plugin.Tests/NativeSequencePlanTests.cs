@@ -9,7 +9,7 @@ using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
-public sealed class NativeSequencePlanTests
+public sealed partial class NativeSequencePlanTests
 {
     [Fact]
     public void ExposureSelectorUsesLegacySecondsContractAndSurvivesCloneAndNativeSave()
@@ -1141,13 +1141,15 @@ public sealed class NativeSequencePlanTests
 
     internal async Task AssertNativeFailureBoundaryAsync(string mode, string failureCode,
         GateResult? producedGate = null, ObservationStage failureStage = ObservationStage.AcquireG3SlitField,
-        bool nativeEndArea = false)
+        bool nativeEndArea = false, bool eveningTwilight = false)
     {
         var typedQuality = mode.StartsWith("typed-", StringComparison.Ordinal);
         if (typedQuality) mode = mode[6..];
         var freshWindow = mode.StartsWith("fresh-window-", StringComparison.Ordinal);
         if (freshWindow) mode = mode[13..];
         InitializeAstrometry();
+        var longitude = eveningTwilight ? NightDawnBoundaryTests.EveningLongitude(DateTimeOffset.UtcNow) : 120;
+        var latitude = eveningTwilight ? 0 : 33;
         var settings = Settings();
         var astrometry = Proxy<IAstrometrySettings>();
         var profile = Proxy<IProfile>((m, _) => m.Name == "get_AstrometrySettings" ? astrometry : Default(m.ReturnType));
@@ -1158,7 +1160,7 @@ public sealed class NativeSequencePlanTests
         // Quality notifications now wait for the saved native boundary, so make
         // the original race repeatable from the snapshot event, not the toast.
         var delayed = 0;
-        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
+        var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = eveningTwilight };
         using var cancel = new CancellationTokenSource();
         host.DashboardChanged += (_, d) => {
             if (d.Run.State != ObservationRunState.Faulted || Interlocked.Exchange(ref delayed, 1) != 0) return;
@@ -1176,8 +1178,9 @@ public sealed class NativeSequencePlanTests
                 else
                 {
                     var now = DateTime.UtcNow;
-                    var longitude = NINA.Astrometry.AstroUtil.GetSunAltitude(now, new NINA.Astrometry.ObserverInfo { Latitude = 0, Longitude = 0 }) >= -12 ? 0 : 180;
-                    plan = plan with { StopAtDawn = true, DawnSunAltitudeDegrees = -12, LatitudeDegrees = 0, LongitudeDegrees = longitude };
+                    var daylightLongitude = Enumerable.Range(-180, 360).First(lon =>
+                        NINA.Astrometry.AstroUtil.GetSunAltitude(now, new NINA.Astrometry.ObserverInfo { Latitude = 0, Longitude = lon }) > 10);
+                    plan = plan with { StopAtDawn = true, DawnSunAltitudeDegrees = -12, LatitudeDegrees = 0, LongitudeDegrees = daylightLongitude };
                 }
                 Assert.Equal(mode == "late-deadline" ? "NIGHT_DEADLINE_REACHED" : "NIGHT_DAWN_REACHED", plan.StopGateNow()!.Code);
                 field.SetValue(night, plan);
@@ -1187,12 +1190,12 @@ public sealed class NativeSequencePlanTests
         var first = new TerminalGateRunner(failureCode, mode == "cleanup-failure", typedQuality, freshWindow, producedGate, failureStage);
         var second = new TerminalGateRunner(null, false);
         var jd = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 86400000d + 2440587.5;
-        var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + 120) % 360 + 360) % 360;
+        var ra = ((280.46061837 + 360.98564736629 * (jd - 2451545) + longitude) % 360 + 360) % 360;
         foreach (var (runner, index) in new[] { (first, 0), (second, 1) })
             night.Add(new UvexTargetObservationContainer(profiles, Proxy<INighttimeCalculator>(), host, null!, settings, () => runner)
             {
                 TargetName = $"Quality boundary {index}", CatalogId = $"SIM-{index}", NightSetupId = "SIM-NIGHT",
-                UseRealMode = false, SiteLatitudeDegrees = 33, SiteLongitudeDegreesEast = 120,
+                UseRealMode = false, SiteLatitudeDegrees = latitude, SiteLongitudeDegreesEast = longitude,
                 RightAscensionDegrees = ra, DeclinationDegrees = 33, DurationMinutes = 1,
                 HorizonMinimumDegrees = 0, HorizonStartMarginDegrees = 0, HorizonContinueMarginDegrees = 0,
                 ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
@@ -1473,18 +1476,7 @@ public sealed class NativeSequencePlanTests
         Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
     }
 
-    private static void InitializeAstrometry()
-    {
-        const string nina = @"C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy";
-        try { System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(NINA.Astrometry.NOVAS).Assembly,
-            (name, _, _) => name switch
-            {
-                "NOVAS31lib.dll" => System.Runtime.InteropServices.NativeLibrary.Load(Path.Combine(nina, "External", "x64", "NOVAS", name)),
-                "SOFAlib.dll" => System.Runtime.InteropServices.NativeLibrary.Load(Path.Combine(nina, "External", "x64", "SOFA", name)),
-                _ => IntPtr.Zero
-            }); }
-        catch (InvalidOperationException) { /* Another read-only astrometry fixture owns this resolver. */ }
-    }
+    private static void InitializeAstrometry() => ReadOnlyNinaAstrometry.Initialize();
 
     [Fact]
     public void RecoveredPriorRunIsClosedBeforeReleasingItsInMemoryBudget()

@@ -41,8 +41,15 @@ public sealed class QhyG3SolvePairRunnerSafetyTests
 
         var validate = wrapper.IndexOf("ValidateG3ProbeMountBindingForMotionAsync", StringComparison.Ordinal);
         var pair = wrapper.IndexOf("TryCollectQhyG3FastSolvePairAsync", StringComparison.Ordinal);
-        var targetOutside = wrapper.IndexOf("probe.Gate.Disposition", StringComparison.Ordinal);
-        Assert.True(validate >= 0 && pair > validate && targetOutside > pair);
+        var pairGuard = wrapper.IndexOf("if (!currentPositionCheck && probe.Solve?.Result.Success == true &&", StringComparison.Ordinal);
+        // The new read-only clock probe may decline early. Ordinary capture
+        // still collects its validated pair before evaluating target centering.
+        var targetOutside = wrapper.IndexOf("if (probe.Gate.Disposition != GateDisposition.Passed)", pair, StringComparison.Ordinal);
+        Assert.True(validate >= 0 && pairGuard > validate && pair > pairGuard && targetOutside > pair);
+        Assert.Contains("bool currentPositionCheck = false", wrapper, StringComparison.Ordinal);
+        var probeOnlyMiss = wrapper.IndexOf("if (currentPositionCheck && (probe.Gate.Disposition", StringComparison.Ordinal);
+        Assert.True(probeOnlyMiss >= 0 && probeOnlyMiss < validate);
+        Assert.Equal(1, wrapper.Split("TryCollectQhyG3FastSolvePairAsync").Length - 1);
     }
 
     [Fact]

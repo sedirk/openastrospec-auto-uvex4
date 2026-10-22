@@ -38,6 +38,19 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
 
     public QhyCameraStatus CameraStatus => adapter.Status;
 
+    // Native-owner readback also covers the brief terminal-publication/finally
+    // interval. Never equate a caller's empty job dictionary with this boundary.
+    public bool IsIdle
+    {
+        get
+        {
+            lock (activeGate)
+                return activeJobId is null && cameraGate.CurrentCount == 1 &&
+                    jobs.Values.All(e => e.Worker?.IsCompleted != false &&
+                        e.GetSnapshot().State is QhyJobState.Completed or QhyJobState.Cancelled or QhyJobState.Faulted or QhyJobState.TakenOver);
+        }
+    }
+
     private DateTimeOffset UtcNow => options.TimeProvider.GetUtcNow();
 
     public IReadOnlyList<QhyJobSnapshot> RecentJobs(int count = 50) =>

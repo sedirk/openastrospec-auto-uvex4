@@ -179,13 +179,70 @@ public sealed class GuideStateBoundaryRetirementTests
     }
 
     [Theory]
+    [InlineData(G3AcquisitionMotionPhase.OutboundIntent)]
+    [InlineData(G3AcquisitionMotionPhase.AwaitingFreshSolve)]
+    [InlineData(G3AcquisitionMotionPhase.ReturnIntent)]
+    public async Task DifferentNewTargetPresetCannotInvalidateAnAuthenticatedHistoricalG3Archive(
+        G3AcquisitionMotionPhase phase)
+    {
+        await WithState(ObservationRunState.Cancelled, async (root, phdPath, store) =>
+        {
+            var originalManifest = (await store.ReadAsync(default))!;
+            var phd = (await Phd2LockShiftPendingStore.LoadAsync(phdPath, default)).State!;
+            var now = DateTimeOffset.UtcNow;
+            var state = new G3AcquisitionMotionState(2, G3AcquisitionMotionState.CurrentTangentProjectionId,
+                "old-run", Guid.NewGuid().ToString("N"), phd.ActionConfigurationSha256, new string('B', 64),
+                phd.CommissioningPresetSha256, G3AcquisitionMotionKind.WcsCentering, phase,
+                "pierEast", "J2000", 1.97, 64.35, 1.33, 64.28, 1.07, 64.24, -1413.24, -400.37,
+                427.51, 5400, 18000, 21600, 8, 2, 90, 1200, 1474.403043, 2,
+                now.AddHours(-1), now.AddHours(-1), now, "evidence/old-declaration.json");
+            var path = Path.Combine(root, "old-run", "control", "g3-acquisition-motion.json");
+            await G3AcquisitionMotionStore.WriteAtomicAsync(path, state, default);
+            // A new acquisition snapshot legitimately differs. Authenticate
+            // against the original manifest, never amend the old envelope to
+            // today's target/preset and never manufacture a successful return.
+            var newMetadata = originalManifest.LockedMetadata with
+            {
+                CommissioningPresetSha256 = new string('E', 64),
+                AdditionalHashes = new Dictionary<string, string> { ["actionConfigurationSha256"] = new string('F', 64) },
+                Labels = new Dictionary<string, string> { ["nativeTargetRootRunId"] = "new-hd218393" },
+            };
+            Assert.True(GuideStateBoundaryRetirement.IsDifferentLogicalTarget(originalManifest, "new-hd218393", newMetadata));
+            Assert.NotEqual(state.ActionConfigurationSha256, newMetadata.AdditionalHashes["actionConfigurationSha256"]);
+            Assert.NotEqual(state.CommissioningPresetSha256, newMetadata.CommissioningPresetSha256);
+            var bytes = await File.ReadAllBytesAsync(path);
+            var manifestBytes = await File.ReadAllBytesAsync(store.ManifestPath);
+            var archives = await GuideStateBoundaryRetirement.RetireAsync(root, "old-run", _ => Task.FromResult(Witness()), default);
+            var archive = Assert.Single(archives, x => x.Contains("g3-acquisition-motion", StringComparison.Ordinal));
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(archive));
+            Assert.Equal(manifestBytes, await File.ReadAllBytesAsync(store.ManifestPath));
+            var archived = (await G3AcquisitionMotionStore.LoadAsync(archive, default)).State!;
+            Assert.Equal(state, archived);
+            Assert.Equal(2, archived.CorrectionAttempts);
+            Assert.Equal(1474.403043, archived.CumulativeMotionArcseconds);
+            Assert.Equal(phase, archived.Phase);
+            using var audit = JsonDocument.Parse(await File.ReadAllTextAsync(archive + ".audit.json"));
+            foreach (var key in new[] { "returnVerified", "targetOnSlitVerified", "motionSent", "countersReset" })
+                Assert.False(audit.RootElement.GetProperty(key).GetBoolean());
+            Assert.Empty(await G3AcquisitionMotionStore.DiscoverAsync(root, default));
+        });
+    }
+
+    [Theory]
     [InlineData("owners")][InlineData("lease")][InlineData("camera")][InlineData("motion")]
     [InlineData("mount")][InlineData("guideCamera")][InlineData("guiding")][InlineData("identity")]
-    [InlineData("stale")][InlineData("future")][InlineData("active")][InlineData("corrupt")]
+    [InlineData("stale")][InlineData("future")][InlineData("active")][InlineData("paused")]
+    [InlineData("paused-attention")][InlineData("corrupt")]
     [InlineData("binding")][InlineData("changedAfterProof")]
     public async Task UncertainOrChangedStatePreservesDiscoveryHandle(string condition)
     {
-        await WithState(condition == "active" ? ObservationRunState.RunningAuto : ObservationRunState.Faulted,
+        await WithState(condition switch
+            {
+                "active" => ObservationRunState.RunningAuto,
+                "paused" => ObservationRunState.Paused,
+                "paused-attention" => ObservationRunState.PausedNeedsAttention,
+                _ => ObservationRunState.Faulted,
+            },
             async (root, path, store) =>
         {
             var witness = condition switch

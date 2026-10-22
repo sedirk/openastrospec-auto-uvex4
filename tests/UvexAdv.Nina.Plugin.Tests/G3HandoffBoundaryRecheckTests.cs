@@ -87,7 +87,16 @@ public sealed class G3HandoffBoundaryRecheckTests
         Assert.Contains("continue;", branch);
         Assert.Contains("handoffBoundaryRecheckUsed ? exposurePolicy", source);
         Assert.Contains("handoffBoundaryRecheckUsed ? nextExposurePolicy", source);
-        Assert.Contains("!handoffBoundaryRecheckUsed && previous?.Gate.Disposition", source);
+        // Signal recovery now preserves one missed frame but may lengthen the
+        // exposure after two misses. It must STILL be entirely disabled during
+        // the final same-setting boundary pair, regardless of anchor state.
+        var signalRecovery = System.Text.RegularExpressions.Regex.Match(source,
+            @"if\s*\(!handoffBoundaryRecheckUsed\)\s+nextExposurePolicy\s*=\s*nextExposurePolicy\.AfterUnmeasured\((?<arguments>[^;]+)\);");
+        Assert.True(signalRecovery.Success, "The complete signal-recovery call must remain guarded by !handoffBoundaryRecheckUsed.");
+        Assert.Contains("measurement, attempt", signalRecovery.Groups["arguments"].Value);
+        Assert.Contains("rawRoiPeak, frame.SaturationLevel, sourceExposureMilliseconds", signalRecovery.Groups["arguments"].Value);
+        Assert.Contains("previous?.Gate.Disposition == GateDisposition.Passed, consecutiveUnmeasuredFrames", signalRecovery.Groups["arguments"].Value);
+        Assert.Equal(1, source.Split(".AfterUnmeasured(", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("RefineClippedCatalogPositionAsync(", branch); // No recursive fresh budget.
         Assert.DoesNotContain("return field", branch);
         Assert.DoesNotContain("SlewTo", source);

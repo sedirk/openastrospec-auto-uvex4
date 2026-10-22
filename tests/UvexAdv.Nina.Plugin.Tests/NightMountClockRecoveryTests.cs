@@ -19,8 +19,16 @@ public sealed class NightMountClockRecoveryTests
         Assert.Contains("phd2.Snapshot.AppState != Phd2AppState.Stopped", body);
         Assert.Contains("ValidateNinaProfileOwnerSelections", body);
         Assert.Contains("TelescopeSettings.TimeSync", body);
-        Assert.Contains("Disconnect().WaitAsync(TimeSpan.FromSeconds(20)", body);
-        Assert.Contains("Connect().WaitAsync(TimeSpan.FromSeconds(30)", body);
+        var normalized = body.Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains("mountClockReconnectBoundary.RunAsync(\"disconnect\", () => telescopeMediator.Disconnect(),\n                TimeSpan.FromSeconds(20), cancellationToken)", normalized);
+        Assert.Contains("mountClockReconnectBoundary.RunAsync(\"connect\", () => telescopeMediator.Connect(),\n                TimeSpan.FromSeconds(30), cancellationToken)", normalized);
+        var pendingOwner = body.IndexOf("mountClockReconnectBoundary.BoundaryGate", StringComparison.Ordinal);
+        var initialClock = body.IndexOf("var initial = ValidateMountClock()", StringComparison.Ordinal);
+        var disconnect = body.IndexOf("mountClockReconnectBoundary.RunAsync(\"disconnect\"", StringComparison.Ordinal);
+        var connect = body.IndexOf("mountClockReconnectBoundary.RunAsync(\"connect\"", StringComparison.Ordinal);
+        Assert.True(pendingOwner >= 0 && initialClock > pendingOwner && disconnect > initialClock && connect > disconnect);
+        Assert.Equal(1, body.Split("() => telescopeMediator.Disconnect()").Length - 1);
+        Assert.Equal(1, body.Split("() => telescopeMediator.Connect()").Length - 1);
         Assert.Contains("postConfirmation.Observe(afterClock)", body);
         Assert.Contains("after.SideOfPier != beforePier", body);
         Assert.Contains("after.TrackingEnabled != beforeTracking", body);

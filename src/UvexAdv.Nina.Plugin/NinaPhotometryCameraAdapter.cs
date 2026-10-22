@@ -28,6 +28,23 @@ internal sealed class NinaPhotometryCameraAdapter(
     private readonly Dictionary<string, QhyFocusBudget> focusBudgets = new(StringComparer.Ordinal);
     private string? focusRunId;
     private QhyFocusBudget? focusBudget;
+
+    internal PhotometryOwnerIdleProof ReadOwnerIdle(bool coordinatorIdle, bool durableFocusIdle)
+    {
+        validateConfiguration();
+        var c = camera.GetInfo();
+        var w = wheel.GetInfo();
+        var f = focuser.GetInfo();
+        // A validated, idle receiver may own its capture block while waiting.
+        // We ask with that same owner, never register/release or borrow a block.
+        var captureOwner = sequenceCaptureOwner?.Invoke() ?? this;
+        return new(1, DateTimeOffset.UtcNow, coordinatorIdle,
+            c.Connected && c.DeviceId == settings.PhotometryCameraId && !c.IsExposing && !c.LiveViewEnabled &&
+                c.CameraState is NINA.Core.Enum.CameraStates.Idle or NINA.Core.Enum.CameraStates.NoState && camera.IsFreeToCapture(captureOwner),
+            w.Connected && w.DeviceId == settings.PhotometryFilterWheelId && !w.IsMoving,
+            f.Connected && f.DeviceId == settings.PhotometryFocuserId && !f.IsMoving && !f.IsSettling,
+            pending.IsEmpty && focusBudget?.Pending != true && durableFocusIdle);
+    }
     internal void BindFocusPolicy(string runId, QhyFocusRunPolicy policy, Func<QhyFocusBudget> createBudget)
     {
         if (policy.DeviceId != settings.PhotometryFocuserId || policy.MinimumPositionSteps >= policy.MaximumPositionSteps ||

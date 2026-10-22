@@ -5,6 +5,32 @@ public static class G3PostWcsMeasuredHandoffPolicy
 {
     public const string OutsideRemainingCode = "G3_POST_WCS_MEASURED_HANDOFF_OUTSIDE";
 
+    // An identifiable source outside the fine-motion envelope must stay on the
+    // coarse route. Do not discard it after failed solve tiers and hand a stale
+    // prediction to PHD2. This routes ONE existing-frame solve, not a move or a
+    // claim that a clipped component has independent short-frame identity.
+    public static bool RequiresCoarseSolve(TargetIdentification identification,
+        PixelPoint predictedTarget, double maximumUncertaintyPixels, PixelPoint slit,
+        int width, int height, double predictionRadiusPixels, double targetSearchRadiusPixels,
+        double remainingHandoffRadiusPixels) =>
+        double.IsFinite(targetSearchRadiusPixels) && targetSearchRadiusPixels > 0 &&
+        double.IsFinite(remainingHandoffRadiusPixels) && remainingHandoffRadiusPixels > 0 &&
+        G3PostWcsPredictionPolicy.Evaluate(predictedTarget, maximumUncertaintyPixels,
+            slit, width, height, predictionRadiusPixels).Authorized &&
+        HasMeasuredSource(identification, width, height) &&
+        Distance(identification.Target!.Centroid, predictedTarget) <= targetSearchRadiusPixels &&
+        !FitsRemainingHandoff(identification, slit, remainingHandoffRadiusPixels);
+
+    public static GateResult OutsideRemainingGate(TargetIdentification identification,
+        PixelPoint slit, double remainingRadiusPixels) =>
+        GateResult.TargetQuality(OutsideRemainingCode,
+            "A fresh source lies outside the remaining fine-motion envelope. Try one formal solve of this existing frame for the original charged coarse route; if unavailable, retain the candidate and return/skip. A clipped candidate is not confirmed identity or authority to move.",
+            new Dictionary<string, double>
+            {
+                ["measuredTargetResidualPixels"] = identification.Target is { } target ? Distance(target.Centroid, slit) : double.NaN,
+                ["remainingHandoffRadiusPixels"] = remainingRadiusPixels,
+            });
+
     // The recognition window and the remaining round-trip motion envelope are
     // independent. A valid centroid does not replenish the inherited ledger.
     public static bool FitsRemainingHandoff(TargetIdentification identification, PixelPoint slit,

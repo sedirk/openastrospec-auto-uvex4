@@ -1,4 +1,5 @@
 using NINA.Astrometry;
+using NINA.Core.Enum;
 using UvexAdv.Observatory;
 using Xunit;
 
@@ -141,6 +142,119 @@ public sealed class G3WorkflowTests
     }
 
     private static GateResult Pass => GateResult.Pass("pass", "fixture");
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task RecoveryReturnObservedFlipJoinsNativeSegmentWithoutOldSideMotionOrBudgetRefund(bool beforeCommand)
+    {
+        var f = new ReturnFixture();
+        var session = new NativeMeridianSession(new(2, 4, 300), _ => throw new Exception("Observed change needs no timed flip"));
+        using var boundary = new NativeMeridianStageBoundary(default);
+        var currentSide = beforeCommand ? PierSide.pierWest : PierSide.pierEast;
+        var commandCompleted = false;
+        var joined = false;
+        f.Trace.Handlers["ValidateG3SearchMountState"] = _ =>
+        {
+            if (currentSide != PierSide.pierEast &&
+                session.RequestAtOperationBoundary(currentSide, savedSide: PierSide.pierEast, allowScheduled: false))
+                boundary.Interrupt();
+            return Pass;
+        };
+        f.Trace.Handlers["WaitForSlew"] = _ =>
+        {
+            commandCompleted = true;
+            currentSide = PierSide.pierWest;
+            return Task.CompletedTask;
+        };
+        var result = await boundary.ExecuteAsync(async token =>
+        {
+            try
+            {
+                var returned = await f.Workflow.ReturnAsync(f.Context, f.State, "original.json", token);
+                return new StageResult(G3GuidingRecoveryReturnPolicy.FailureGate(returned.FailureGate, returned.Message));
+            }
+            finally { joined = true; }
+        }, () =>
+        {
+            Assert.True(joined);
+            return new StageResult(GateResult.Pass("NATIVE_MERIDIAN_SEGMENT_BOUNDARY", "joined"));
+        });
+        Assert.Equal("NATIVE_MERIDIAN_SEGMENT_BOUNDARY", result.Gate.Code);
+        Assert.True(session.ObservedSideChange);
+        Assert.Equal(!beforeCommand, commandCompleted);
+        Assert.Equal(beforeCommand ? 0 : 1, f.Trace.Calls.Count(x => x == "SlewToCoordinatesAsync"));
+        Assert.DoesNotContain("WaitForG3PostSlewStabilityAsync", f.Trace.Calls);
+        Assert.DoesNotContain(f.Persisted, x => x.Phase == G3AcquisitionMotionPhase.SettledBudgetLedger);
+        if (!beforeCommand)
+        {
+            var debit = Assert.Single(f.Persisted);
+            Assert.Equal(f.State.CorrectionAttempts + 1, debit.CorrectionAttempts);
+            Assert.Equal(f.State.CumulativeMotionArcseconds + f.State.MaximumSingleCorrectionArcseconds, debit.CumulativeMotionArcseconds);
+            Assert.Equal(f.State.StartedUtc, debit.StartedUtc);
+        }
+        // Recorded HD 219937 counts: keep its accepted 300s probe and failed
+        // second attempt; observed-side verification sends no second slew.
+        session.RecordSegment("hd219937-before", 1, 2, 1, 300);
+        var verified = await NativeMeridianMountOperation.VerifyObservedChangeAsync(PierSide.pierEast, PierSide.pierWest,
+            () => new(true, false, true, false, false, currentSide), () => { }, _ => Task.CompletedTask, default);
+        Assert.Equal(PierSide.pierWest, verified);
+        session.ConfirmFlip();
+        Assert.Equal(1, session.RemainingPlan().ScienceFrames);
+        Assert.Equal(2, session.RemainingPlan().MaximumAttempts);
+        Assert.Equal(300, session.AcceptedSeconds);
+        Assert.Throws<InvalidOperationException>(() => session.RequestAtOperationBoundary(PierSide.pierEast));
+    }
+
+    [Theory]
+    [InlineData("skip")] [InlineData("cleanup-failure")] [InlineData("end-policy")]
+    [InlineData("late-cancel")] [InlineData("late-unsafe")] [InlineData("late-deadline")] [InlineData("late-dawn")]
+    public async Task UnhandledRecoverySideChangeReachesActualNextTargetOnlyAfterStoppedBoundary(string mode)
+    {
+        var f = new ReturnFixture();
+        f.Trace.Handlers["ValidateG3SearchMountState"] = _ =>
+            GateResult.Fail("G3_SEARCH_PIER_SIDE_CHANGED", "known changed side; no native trigger");
+        var returned = await f.Workflow.ReturnAsync(f.Context, f.State, "original.json", default);
+        var gate = G3GuidingRecoveryReturnPolicy.FailureGate(returned.FailureGate, returned.Message);
+        Assert.Equal("G3_GUIDING_RECOVERY_PIER_CHANGED", gate.Code);
+        Assert.Equal(0, gate.Metrics!["returnedToOrigin"]);
+        Assert.False(returned.ReturnedToOrigin);
+        Assert.Empty(f.Persisted);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", f.Trace.Calls);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(mode, gate.Code, gate,
+            ObservationStage.RunScienceBlock);
+    }
+
+    [Fact]
+    public void G3ReadbackRequestsMeridianBeforeReturningFailureEvenInsideDependencyRebuild()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
+        var start = source.IndexOf("private GateResult ValidateG3SearchMountState", StringComparison.Ordinal);
+        var body = source[start..source.IndexOf("private GateResult ValidateG3SearchMoveAndReturnReserve", start, StringComparison.Ordinal)];
+        var checkpoint = body.IndexOf("CheckNativeMeridianOperationBoundary", StringComparison.Ordinal);
+        Assert.True(checkpoint > body.IndexOf("G3_SEARCH_PULSE_GUIDING_ACTIVE", StringComparison.Ordinal));
+        Assert.True(checkpoint > body.IndexOf("G3_SEARCH_PIER_SIDE_UNKNOWN", StringComparison.Ordinal));
+        Assert.True(checkpoint < body.IndexOf("\"G3_SEARCH_PIER_SIDE_CHANGED\"", StringComparison.Ordinal));
+        Assert.Contains("savedSide: savedSide, allowScheduled: false", body);
+    }
+
+    [Theory]
+    [InlineData("G3_SEARCH_PIER_SIDE_UNKNOWN")] [InlineData("G3_SEARCH_MOUNT_SLEWING")]
+    [InlineData("G3_SEARCH_MOUNT_DISCONNECTED")] [InlineData("G3_SEARCH_PULSE_GUIDING_ACTIVE")]
+    [InlineData("G3_SEARCH_TRACKING_DISABLED")] [InlineData("WEATHER_UNSAFE")]
+    [InlineData("G3_GUIDING_RECOVERY_OWNER_CHANGED")]
+    public void RecoverySideClassificationDoesNotDowngradeActualUncertaintyOrDanger(string code)
+    {
+        var original = GateResult.Unknown(code, "fixture");
+        var gate = G3GuidingRecoveryReturnPolicy.FailureGate(original, original.Message);
+        Assert.Equal(original.Code, gate.Code);
+        Assert.Equal(original.Disposition, gate.Disposition);
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(gate));
+        var textOnly = G3GuidingRecoveryReturnPolicy.FailureGate(null, "G3_SEARCH_PIER_SIDE_CHANGED");
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(textOnly));
+        var uncertainSide = G3GuidingRecoveryReturnPolicy.FailureGate(
+            GateResult.Unknown("G3_SEARCH_PIER_SIDE_CHANGED", "no confirmed side"), "fixture");
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(uncertainSide));
+    }
     [Theory]
     [InlineData("G3_SEARCH_PIER_SIDE_CHANGED", true)]
     [InlineData("G3_SEARCH_PIER_SIDE_UNKNOWN", false)]

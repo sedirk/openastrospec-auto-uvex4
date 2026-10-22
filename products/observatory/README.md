@@ -18,10 +18,10 @@ must have exactly one owner:
 The recorded sky tests still used the legacy QHY service, not the native photometry
 worker. Never run both owners against the same physical camera. See the
 [dual-instance implementation](../../docs/dual-nina-implementation.md) and
-[latest software/sky closeout](../../docs/closeout-2026-10-15.md) for deployment
+[latest software/sky closeout](../../docs/closeout-2026-10-22.md) for deployment
 and acceptance boundaries.
 
-Installed **0.4.0.300** keeps standalone and native-sequence observations on one
+Installed **0.4.0.308** keeps standalone and native-sequence observations on one
 production route. Acquisition/return, PHD2 slit convergence, ATR probing and science
 accounting now own distinct decisions/state through finite ports to the existing
 device owners. See the [workflow boundaries and remaining debt](../../docs/reports/2026-10-11-observation-workflow-boundaries.md).
@@ -41,8 +41,14 @@ ATR quality checks; they are not claims of exact slit arrival.
 Distributed templates default to automatic exposure and a 35-minute per-target
 visibility estimate, not a forced exposure cutoff; per-target calibration retains
 its bounded spectroscopy acquisition contract rather than duplicating Start Guiding.
-Software/historical replay and exact-package/runtime checks pass; live .300 panel
-visibility and new-version real-sky recovery remain unverified.
+ADR-0041 reuses bounded SEP focus recovery once per native night after fresh
+multi-star evidence and a joined/stopped boundary. ADR-0042 permits one fresh G3
+current-field check after verified clock repair, before full reacquisition; old
+optical evidence and original budgets are never renewed by that shortcut.
+Software/historical replay and exact-package/runtime checks pass. A subsequent
+operator-started .308 night completed five targets before weather-triggered closure;
+neither new recovery branch ran. Live panel visibility and those recovery branches'
+real-sky acceptance remain separate, unverified items.
 
 ## Human entry points
 
