@@ -290,7 +290,9 @@ def test_unknown_raw_and_missing_references_are_retained(library, tmp_path):
     assert library.get_file(result["id"])["references"][0]["status"] == "not-indexed"
 
 
-def test_missing_file_keeps_review_and_reappears_with_same_id(library, tmp_path):
+def test_missing_file_keeps_review_and_reappears_with_same_id(library, tmp_path, monkeypatch):
+    # Rapid scans may share a Windows clock tick; identity must not depend on time.
+    monkeypatch.setattr("uvex_reduce.library_catalog.time.time_ns", lambda: 123456789)
     root = tmp_path / "raw"
     frame = raw(root / "one.fits")
     original = frame.read_bytes()

@@ -15,6 +15,7 @@ import sqlite3
 import stat
 import time
 from typing import Any, Callable, Iterable
+from uuid import uuid4
 
 
 FITS_SUFFIXES = {".fit", ".fits", ".fts"}
@@ -586,7 +587,8 @@ class LibraryCatalog:
             roots = [root for root in roots if root["id"] in wanted]
         result = {"files_seen": 0, "files_parsed": 0, "roots_scanned": 0,
                   "cancelled": False, "warnings": []}
-        generation = f"{time.time_ns()}"
+        # Clock resolution (or rollback) must not merge consecutive scan batches.
+        generation = uuid4().hex
         last_progress = 0.0
         for root in roots:
             root_path = Path(root["path"])
