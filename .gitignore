@@ -49,6 +49,8 @@ logs/
 *.db-wal
 *.sqlite
 *.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 *.astroproj
 
 # Machine-local configuration and credentials

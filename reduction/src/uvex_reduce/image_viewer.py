@@ -90,11 +90,13 @@ class InteractiveImageViewer(ttk.Frame):
         placeholder: str,
         background: str = "#070a0f",
         foreground: str = "#93a4b8",
+        compact: bool = False,
     ) -> None:
         super().__init__(parent)
         self._background = background
         self._foreground = foreground
         self._placeholder = placeholder
+        self._compact = compact
         self._image: Image.Image | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self._image_item: int | None = None
@@ -121,7 +123,12 @@ class InteractiveImageViewer(ttk.Frame):
         )
         self._zoom_label = ttk.Label(toolbar, text="适配")
         self._zoom_label.pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Label(toolbar, text="滚轮缩放 · 左键拖动 · 双击适配").pack(side=tk.RIGHT)
+        if not compact:
+            ttk.Label(toolbar, text="滚轮缩放 · 左键拖动 · 双击适配").pack(side=tk.RIGHT)
+        else:
+            for child in toolbar.winfo_children():
+                if isinstance(child, ttk.Button):
+                    child.configure(style="Small.TButton")
 
         self.canvas = tk.Canvas(
             self,
@@ -317,6 +324,8 @@ class InteractiveImageViewer(ttk.Frame):
         self.canvas.configure(cursor="arrow")
 
     def _on_configure(self, _event: tk.Event) -> None:
+        if self._compact:
+            self._status.configure(wraplength=max(self.canvas.winfo_width() - 12, 120))
         if self._resize_job is not None:
             self.after_cancel(self._resize_job)
         self._resize_job = self.after(80, self._finish_resize)

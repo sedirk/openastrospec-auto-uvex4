@@ -168,7 +168,9 @@ class ReductionPipeline:
             "arc": self.config.inputs.arc,
         }
         resolved = {
-            frame_type: expand_patterns(self.config.inputs.root, frame_patterns)
+            frame_type: expand_patterns(
+                self.config.inputs.root, frame_patterns, exact=self.config.inputs.exact_files
+            )
             for frame_type, frame_patterns in patterns.items()
         }
         if not resolved["science"]:

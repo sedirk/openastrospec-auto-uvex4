@@ -20,7 +20,8 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [Spectral Studio](products/spectral-studio/README.md) ·
 [构建与模拟器](#构建并运行模拟器) ·
 [真实硬件 commissioning](docs/commissioning.md) ·
-[最新软件/实机收口](docs/closeout-2026-10-22.md) ·
+[最新软件/验证收口](docs/closeout-2026-10-24.md) ·
+[光谱项目资料库](reduction/README.md#光谱项目库采集筛片后期与存储之间的桥梁) ·
 [原生光谱整夜序列](docs/native-spectroscopy-night-sequence.md) ·
 [可导入的光谱多目标模板](docs/spectroscopy-multi-target-template.md) ·
 [光谱中天翻转](docs/native-spectroscopy-meridian-flip.md) ·
@@ -33,7 +34,17 @@ OpenAstroSpec 是一个开源天文光谱项目家族。本仓库包含 **OpenAs
 [大模型前端闭环接口](docs/model-frontend-closed-loop.md) ·
 [参与贡献](CONTRIBUTING.md)
 
-[2026-10-22 收口](docs/closeout-2026-10-22.md)汇总 **0.4.0.301–308**：修正傍晚/
+[2026-10-24 收口](docs/closeout-2026-10-24.md)汇总 **0.4.0.309–312** 与离线资料库。
+ADR-0043/0044 将重叠拼图、局部双镜模型、曝光时序连续性和有界广域流接入原取场路线，
+不补充预算、不放宽设备所有权、天气或停止确认。历史回放与已安装 .312 的空闲验收，
+不代表新版已经完成实天恢复验证。
+
+资料库原地关联观测日志、精确科学帧选片和既有后期成果；按项目预览占用及可清理项，
+明确区分仅标记、Windows 回收站和永久删除。原始 FITS 与科学依赖保持保护，具体清单
+经一个明确确认按钮才执行。普通 Python 回归默认不弹窗口；`--run-ui-tests` 才在
+专用测试桌面启用完整视觉回归，CI 保留该覆盖。归档盘未选，不自动迁移原片。
+
+历史[2026-10-22 收口](docs/closeout-2026-10-22.md)汇总 **0.4.0.301–308**：修正傍晚/
 晨光方向、亮核与短帧主体关联、换侧恢复、旧终态导星记录及跨段已接受帧显示。
 经用户授权，ADR-0041 增加每夜至多一次的严重失焦有界恢复；ADR-0042 在校时成功、
 指向未变时先用新的 G3 目标/狭缝证据复核，失败才回退完整定位。原帧、原预算、

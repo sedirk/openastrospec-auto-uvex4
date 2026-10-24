@@ -110,4 +110,5 @@ jobs:
 
       - name: Pytest
         shell: pwsh
-        run: pytest -q
+        # Hosted Windows desktop, not the operator's observing workstation.
+        run: pytest -q --run-ui-tests

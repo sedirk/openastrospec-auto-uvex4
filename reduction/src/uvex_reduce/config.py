@@ -17,6 +17,7 @@ class InputConfig:
     dark: list[str] = field(default_factory=list)
     bias: list[str] = field(default_factory=list)
     output_dir: Path = Path("output")
+    exact_files: bool = False
 
 
 @dataclass(slots=True)
@@ -161,6 +162,9 @@ def load_config(path: str | Path) -> PipelineConfig:
         raise ValueError(f"Unknown InputConfig option(s): {', '.join(unknown_inputs)}")
     root = _resolve_path(base, input_raw.get("root", "."))
     output_dir = _resolve_path(base, input_raw.get("output_dir", "output"))
+    exact_files = input_raw.get("exact_files", False)
+    if not isinstance(exact_files, bool):
+        raise TypeError("[inputs].exact_files must be a boolean.")
     inputs = InputConfig(
         root=root,
         science=_string_list(input_raw.get("science", [])),
@@ -170,6 +174,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         dark=_string_list(input_raw.get("dark", [])),
         bias=_string_list(input_raw.get("bias", [])),
         output_dir=output_dir,
+        exact_files=exact_files,
     )
     if not inputs.science:
         raise ValueError("[inputs].science must contain at least one FITS path or glob.")
@@ -194,11 +199,16 @@ def load_config(path: str | Path) -> PipelineConfig:
     return config
 
 
-def expand_patterns(root: Path, patterns: list[str]) -> list[Path]:
+def expand_patterns(root: Path, patterns: list[str], *, exact: bool = False) -> list[Path]:
     paths: set[Path] = set()
     for pattern in patterns:
         candidate = Path(pattern).expanduser()
-        if candidate.is_absolute():
+        if exact:
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            if not candidate.is_file():
+                raise FileNotFoundError(f"Explicitly selected input is missing: {candidate}")
+            matches = [candidate]
+        elif candidate.is_absolute():
             matches = (
                 (Path(match) for match in glob.glob(str(candidate), recursive=True))
                 if any(char in pattern for char in "*?[")

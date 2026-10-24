@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import traceback
 
 from .config import load_config
 from .inspector import infer_object_from_filename
+from .library_selection import LibrarySelection
 from .pipeline import ReductionPipeline
 from .workflow import run_full_workflow
 
@@ -43,6 +45,7 @@ class ObservationGroup:
     target: str
     files: list[Path]
     relative_directory: str
+    role: str | None = None
 
     @property
     def label(self) -> str:
@@ -96,7 +99,7 @@ WORKFLOW_PRESETS = (
 
 
 class UvexReductionApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, *, scan_on_start: bool = True):
         self.root = root
         self.root.title("OpenAstroSpec Spectral Studio — UVEX4")
         self.root.geometry("1100x800")
@@ -106,6 +109,7 @@ class UvexReductionApp:
         self.target_choices: list[ObservationGroup | None] = [None]
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.last_output: Path | None = None
+        self.library_selection: LibrarySelection | None = None
 
         self.data_root = tk.StringVar(value=DEFAULT_DATA_ROOT)
         self.template_directory = tk.StringVar(
@@ -121,7 +125,8 @@ class UvexReductionApp:
         self.status = tk.StringVar(value="请选择标准星组，然后点击“开始处理”。")
         self._build_ui()
         self.root.after(100, self._drain_events)
-        self.scan()
+        if scan_on_start:
+            self.scan()
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, padding=14)
@@ -279,7 +284,22 @@ class UvexReductionApp:
 
     def scan(self) -> None:
         root_text = self.data_root.get().strip()
-        if not root_text:
+        if self.library_selection is not None:
+            try:
+                self.library_selection.validate_files()
+                self.groups = selected_observation_groups(self.library_selection, {"standard"})
+                self.science_groups = selected_observation_groups(
+                    self.library_selection, {"science", "standard"}
+                )
+            except Exception as error:
+                self.groups = []
+                self.science_groups = []
+                self.group_list.delete(0, tk.END)
+                self.target_choices = [None]
+                self.target_combo["values"] = ["选择失效；不会扫描目录替代"]
+                self.target_combo.current(0)
+                raise ValueError(f"资料库选片验证失败：{error}") from error
+        elif not root_text:
             self.groups = []
             self.science_groups = []
             self.group_list.delete(0, tk.END)
@@ -288,12 +308,13 @@ class UvexReductionApp:
                 "未配置数据目录；可浏览选择，或在启动前设置 UVEX_ADV_DATA_ROOT。"
             )
             return
-        root = Path(root_text).expanduser()
-        if not root.is_dir():
-            messagebox.showerror("目录不存在", f"找不到数据目录：\n{root}")
-            return
-        self.groups = discover_standard_groups(root)
-        self.science_groups = discover_science_groups(root)
+        else:
+            root = Path(root_text).expanduser()
+            if not root.is_dir():
+                messagebox.showerror("目录不存在", f"找不到数据目录：\n{root}")
+                return
+            self.groups = discover_standard_groups(root)
+            self.science_groups = discover_science_groups(root)
         self.group_list.delete(0, tk.END)
         for group in self.groups:
             self.group_list.insert(tk.END, group.label)
@@ -311,8 +332,12 @@ class UvexReductionApp:
             self._show_selection()
             self.status.set(f"发现 {len(self.groups)} 个可做 Balmer/模板标定的标准星组。")
         else:
-            self.details.configure(text="未找到 Regulus、Castor、Procyon 等热标准星序列。")
-            self.status.set("没有可用标准星组。")
+            self.details.configure(text=(
+                "资料库选片中没有指定 standard 角色；可检查媒体，处理前请在资料库选择匹配的标准星。"
+                if self.library_selection is not None else
+                "未找到 Regulus、Castor、Procyon 等热标准星序列。"
+            ))
+            self.status.set("没有可用标准星组；不会自动补入未选帧。" if self.library_selection is not None else "没有可用标准星组。")
 
     def _show_selection(self, _event=None) -> None:
         group = self._selected_group()
@@ -331,13 +356,18 @@ class UvexReductionApp:
         candidates = [
             candidate
             for candidate in self.science_groups
-            if (
+            if (self.library_selection is not None or (
                 candidate.directory == group.directory
                 or group.directory in candidate.directory.parents
-            )
+            ))
             and not (
                 candidate.target.casefold() == group.target.casefold()
                 and candidate.files == group.files
+            )
+            and (
+                self.library_selection is None
+                or all(str(path) in self.library_selection.paths("science", candidate.target)
+                       for path in candidate.files)
             )
         ]
         self.target_choices = [None, *candidates]
@@ -391,6 +421,7 @@ class UvexReductionApp:
                 template_directory,
                 bool(self.cosmic_ray_clean.get()),
                 self.combine_method.get(),
+                self.library_selection,
             ),
             daemon=True,
         )
@@ -408,6 +439,14 @@ class UvexReductionApp:
         if preset is None:
             messagebox.showwarning("尚未选择", "请先选择一个完整流程预设。")
             return
+        if self.library_selection is not None:
+            if not self.library_selection.paths("standard", preset.standard_name) or not self.library_selection.paths("science", preset.target_name):
+                messagebox.showwarning(
+                    "预设与资料库选片不匹配",
+                    "本预设的标准星和科学目标未同时包含在精确选片中；不会使用预设目录通配符补帧。"
+                    "请使用匹配的预设或高级快速提取入口。",
+                )
+                return
         data_root_text = self.data_root.get().strip()
         if not data_root_text:
             messagebox.showerror(
@@ -461,6 +500,7 @@ class UvexReductionApp:
                 bool(self.use_flat.get()),
                 bool(self.cosmic_ray_clean.get()),
                 self.combine_method.get(),
+                self.library_selection,
             ),
             daemon=True,
         ).start()
@@ -474,6 +514,7 @@ class UvexReductionApp:
         evaluate_flat: bool,
         cosmic_ray_clean: bool,
         combine_method: str,
+        library_selection: LibrarySelection | None = None,
     ) -> None:
         try:
             run = run_full_workflow(
@@ -488,6 +529,7 @@ class UvexReductionApp:
                 refine_emission=preset.refine_emission,
                 cosmic_ray_clean=cosmic_ray_clean,
                 combine_method=combine_method,
+                library_selection=library_selection,
             )
             solution = run.standard_run.result.wavelength
             accepted = len(run.science_run.result.source_files)
@@ -544,14 +586,24 @@ class UvexReductionApp:
         template_directory: Path,
         cosmic_ray_clean: bool,
         combine_method: str,
+        library_selection: LibrarySelection | None = None,
     ) -> None:
         try:
+            if library_selection is not None:
+                library_selection.validate_files()
+                if science_group is not None and not library_selection.paths("science", science_group.target):
+                    raise ValueError("Selected science target is outside the library allowlist; no directory fallback.")
             config = load_config(BASE_CONFIG)
             config.inputs.root = data_root
             config.inputs.science = [str(path) for path in group.files]
             config.inputs.target_name = group.target
-            flat_files = sorted(group.directory.glob("LED-*.fit"))
+            flat_files = (
+                [Path(path) for path in library_selection.paths("flat")]
+                if library_selection is not None else sorted(group.directory.glob("LED-*.fit"))
+            )
             config.inputs.flat = [str(path) for path in flat_files]
+            if library_selection is not None:
+                library_selection.apply_to_config(config, target=group.target, role="standard")
             config.preprocess.use_flat = False
             config.preprocess.cosmic_ray_clean = cosmic_ray_clean
             config.preprocess.combine_method = combine_method
@@ -600,6 +652,10 @@ class UvexReductionApp:
                 science_config.inputs.science = [str(path) for path in science_group.files]
                 science_config.inputs.target_name = science_group.target
                 science_config.inputs.flat = [str(path) for path in flat_files]
+                if library_selection is not None:
+                    library_selection.apply_to_config(
+                        science_config, target=science_group.target, role="science"
+                    )
                 science_config.preprocess.use_flat = False
                 science_config.preprocess.cosmic_ray_clean = cosmic_ray_clean
                 science_config.preprocess.combine_method = combine_method
@@ -733,13 +789,35 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "standard"
 
 
-def main() -> int:
+def selected_observation_groups(
+    selection: LibrarySelection, roles: set[str]
+) -> list[ObservationGroup]:
+    """Build only selected groups, including targets not identifiable from filenames."""
+    grouped: dict[tuple[str, str], list[Path]] = {}
+    for frame in selection.frames:
+        if frame.role in roles:
+            path = Path(frame.path)
+            grouped.setdefault((frame.target, frame.role), []).append(path)
+    return [
+        ObservationGroup(files[0].parent, target, files, target, role=_role)
+        for (target, _role), files in sorted(
+            grouped.items(), key=lambda item: (item[0][0].casefold(), item[0][1])
+        )
+    ]
+
+
+def main(argv: list[str] | None = None) -> int:
     # Imported lazily to keep the proven worker/controller code in this module
     # reusable while the staged workbench subclasses it without an import cycle.
     from .studio import UvexStudioApp
 
+    parser = argparse.ArgumentParser(description="OpenAstroSpec Spectral Studio")
+    parser.add_argument("--project", type=Path, help="Open an existing .astroproj without starting processing")
+    arguments = parser.parse_args(argv)
     root = tk.Tk()
-    UvexStudioApp(root)
+    app = UvexStudioApp(root, scan_on_start=arguments.project is None)
+    if arguments.project is not None:
+        app.load_project(arguments.project)
     root.mainloop()
     return 0
 

@@ -25,7 +25,8 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [Spectral Studio](products/spectral-studio/README.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
-[latest software/real-sky closeout](docs/closeout-2026-10-22.md) ·
+[latest software/validation closeout](docs/closeout-2026-10-24.md) ·
+[observation project library](reduction/README.md#光谱项目库采集筛片后期与存储之间的桥梁) ·
 [native spectroscopy night sequences](docs/native-spectroscopy-night-sequence.md) ·
 [importable multi-target template](docs/spectroscopy-multi-target-template.md) ·
 [spectroscopy meridian flip](docs/native-spectroscopy-meridian-flip.md) ·
@@ -38,7 +39,21 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 [model-to-frontend closed-loop interface](docs/model-frontend-closed-loop.md) ·
 [contributing](CONTRIBUTING.md)
 
-The [October 22 closeout](docs/closeout-2026-10-22.md) consolidates **0.4.0.301–308**:
+The [October 24 closeout](docs/closeout-2026-10-24.md) consolidates **0.4.0.309–312**
+and the offline observation library. ADR-0043/0044 connect overlap mosaics, local
+wide/narrow models, exposure-aware continuity and a bounded wide-field stream to
+the existing acquisition route without replenishing budgets or weakening ownership,
+weather and stop checks. Historical replays and installed .312 idle checks are not
+new real-sky recovery acceptance.
+
+The library links observing journals, exact science selections and existing reduction
+products in place. Project storage previews distinguish labels, Windows recycling
+and permanent deletion; raw FITS and scientific dependencies remain protected.
+Cleanup requires a reviewed file list and one clearly labelled confirmation button.
+Normal Python tests no longer open desktop windows; full visual regression is an
+explicit `--run-ui-tests` operation on a test desktop and remains enabled in CI.
+
+The historical [October 22 closeout](docs/closeout-2026-10-22.md) consolidates **0.4.0.301–308**:
 evening/dawn direction, bright-core and short-frame association, meridian recovery,
 terminal guide-state retirement and partial-science accounting. Owner-approved
 ADR-0041 adds one bounded severe-defocus recovery per native night; ADR-0042 checks

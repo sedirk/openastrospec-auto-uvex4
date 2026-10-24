@@ -39,6 +39,7 @@ gui = [
 [project.scripts]
 uvex-reduce = "uvex_reduce.cli:main"
 uvex-reduce-gui = "uvex_reduce.gui:main"
+uvex-library = "uvex_reduce.library_ui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

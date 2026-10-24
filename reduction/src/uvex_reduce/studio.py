@@ -22,6 +22,7 @@ import numpy as np
 
 from .gui import PROJECT_ROOT, WORKFLOW_PRESETS, UvexReductionApp
 from .image_viewer import InteractiveImageViewer, make_neutral_fits_preview
+from .library_selection import LibrarySelection
 from .project import (
     AstroProject,
     EquipmentPreset,
@@ -114,12 +115,13 @@ def artifact_is_quarantined(path: Path, root: Path) -> bool:
 class UvexStudioApp(UvexReductionApp):
     """Staged operator interface backed by :class:`UvexReductionApp` workers."""
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, *, scan_on_start: bool = True):
         self.stage_frames: dict[str, ttk.Frame] = {}
         self.stage_buttons: dict[str, ttk.Button] = {}
         self.stage_state_labels: dict[str, ttk.Label] = {}
         self.current_stage = "media"
         self.project_path: Path | None = None
+        self.project_parameters: dict[str, object] = {}
         self.approved_stages: set[str] = set()
         self.active_run_kind: str | None = None
         self.media_items: dict[str, object] = {}
@@ -140,11 +142,11 @@ class UvexStudioApp(UvexReductionApp):
             master=root,
             value=default_equipment.raw_dispersion_direction,
         )
-        super().__init__(root)
+        super().__init__(root, scan_on_start=scan_on_start)
         self.root.geometry("1440x900")
         self.root.minsize(1180, 720)
         self.root.protocol("WM_DELETE_WINDOW", self._close_project)
-        if KNOWN_3C273_OUTPUT.is_dir():
+        if scan_on_start and KNOWN_3C273_OUTPUT.is_dir():
             self.last_output = KNOWN_3C273_OUTPUT
             self.open_button.configure(state=tk.NORMAL)
             self.refresh_artifacts(KNOWN_3C273_OUTPUT)
@@ -1124,7 +1126,11 @@ class UvexStudioApp(UvexReductionApp):
             self._update_document_cards()
 
     def scan(self) -> None:
-        super().scan()
+        try:
+            super().scan()
+        except Exception:
+            self._populate_media_tree()
+            raise
         self._populate_media_tree()
         self._update_calibration_gate()
         group_count = len(self.science_groups)
@@ -1132,8 +1138,13 @@ class UvexStudioApp(UvexReductionApp):
         self.media_summary.configure(
             text=(
                 f"发现 {group_count} 个观测组、{frame_count} 个候选 FITS。\n\n"
-                "Inspector 仍会以目录/文件名优先于不可信 OBJECT Header；"
-                "最终是否纳入处理由配置和质量门决定。"
+                + (
+                    "资料库精确选片：只使用清单内的帧、角色与目标；"
+                    "重新扫描不会导入同目录的弃片。处理前重新核对 SHA-256。"
+                    if self.library_selection is not None else
+                    "Inspector 仍会以目录/文件名优先于不可信 OBJECT Header；"
+                    "最终是否纳入处理由配置和质量门决定。"
+                )
             )
         )
         self._set_stage_state("media", f"已扫描 {group_count} 组", done=True)
@@ -1147,7 +1158,9 @@ class UvexStudioApp(UvexReductionApp):
         for index, group in enumerate(self.science_groups):
             role = (
                 "标准星"
-                if (group.directory, group.target.casefold()) in standard_keys
+                if group.role == "standard" or (
+                    group.role is None and (group.directory, group.target.casefold()) in standard_keys
+                )
                 else "科学/校准"
             )
             parts = Path(group.relative_directory).parts
@@ -1319,6 +1332,7 @@ class UvexStudioApp(UvexReductionApp):
                 last_output=str(self.last_output) if self.last_output is not None else None,
                 approved_stages=sorted(self.approved_stages),
                 parameters={
+                    **self.project_parameters,
                     "selectedStandardIndex": (
                         int(self.group_list.curselection()[0])
                         if self.group_list.curselection()
@@ -1334,13 +1348,14 @@ class UvexStudioApp(UvexReductionApp):
                 notes="Manual calibration points and future algorithm controls are schema-stable fields.",
             )
             self.project_path = project.save(destination)
+            self.project_parameters = dict(project.parameters)
             self.project_name.set(project.name)
             self.status.set(f"工程已保存：{self.project_path.name}")
         except Exception as error:
             messagebox.showerror("无法保存工程", str(error), parent=self.root)
 
-    def load_project(self) -> None:
-        selected = filedialog.askopenfilename(
+    def load_project(self, path: str | Path | None = None) -> None:
+        selected = path or filedialog.askopenfilename(
             title="打开 UVEX 工程",
             filetypes=(("UVEX Astro Project", "*.astroproj"), ("All files", "*.*")),
         )
@@ -1348,7 +1363,12 @@ class UvexStudioApp(UvexReductionApp):
             return
         try:
             project = AstroProject.load(selected)
+            selection = LibrarySelection.from_parameters(project.parameters)
+            if selection is not None:
+                selection.validate_files()
             self.project_path = Path(selected).resolve()
+            self.project_parameters = dict(project.parameters)
+            self.library_selection = selection
             self.project_name.set(project.name)
             self.data_root.set(project.data_root)
             self.output_root.set(project.output_root)

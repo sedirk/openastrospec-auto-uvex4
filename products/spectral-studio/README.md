@@ -15,6 +15,21 @@ visualizations. Image viewers support mouse-wheel zoom around the cursor, left-b
 pan, scrollbars, fit-to-window, and 1:1 display; these display operations never rewrite
 the source FITS.
 
+The companion **OpenAstroSpec 观测资料库 (Library)** is a separate offline window
+in the same Python runtime: in-place catalogue, metadata/log/product preview,
+independent pick/reject/rating/notes, storage summaries and exact-frame handoff
+to Studio. It does not duplicate raw files or start reduction automatically.
+Projects are linked from acquisition/night journals and existing reduction manifests,
+with explicit source paths, scientific roles and product dependencies. Cleanup has
+separate mark-only, Windows Recycle Bin and permanent-delete modes: preview the exact
+eligible files, then confirm once with a clearly labelled button. Raw FITS, scientific
+products and dependencies remain protected; only proven redundant previews from
+terminated runs are currently eligible for physical cleanup. Recycling is not counted
+as immediately freed disk space. Archive export remains planning-only; no archive
+drive is selected or moved to automatically. See the
+[library usage guide](../../reduction/README.md) and
+[data-lifecycle design](../../docs/design/observation-library-and-data-lifecycle.md).
+
 ## Source boundary
 
 - Python package and GUI: `reduction/src/uvex_reduce/`;

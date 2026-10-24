@@ -1,6 +1,33 @@
 # Known issues
 
-## Current closeout boundary (2026-10-22, installed 0.4.0.308)
+## Current closeout boundary (2026-10-24, installed 0.4.0.312)
+
+See the [October 24 closeout](closeout-2026-10-24.md) for the acquisition and library
+source publication. The .312 plugin and explicitly authorized QHY service were
+installed and verified earlier; publishing this source does not reconnect devices,
+restart applications or start/resume observing.
+
+- Historical wide/narrow and mosaic replays do not establish a new live-sky success
+  rate. Rolling PHD2 frames without authenticated shutter timing cannot authorize
+  time-graph propagation or motion; they retain the narrower same-frame uses.
+- Sparse independent field support, persistent multi-lobe targets and original
+  time/motion reserves can still prevent completion. Failure continuation requires
+  independent physical-stop and ledger checks; it is not a blanket skip bypass.
+- QHY acquisition-stream capability must be explicitly provided by the current
+  owner. Neither library browsing nor deployment switches physical camera owners.
+- The library protects all raw FITS and scientific dependencies. Current physical
+  cleanup candidates are proven redundant previews of terminated runs, not failed
+  observations wholesale. The historical preview found 5.64 GiB of candidates in
+  a 236.67 GiB index; this alone does not solve long-term raw-data capacity.
+- Archive execution/drive selection remains outstanding. Recycle Bin actions do
+  not immediately free disk space, and the library never empties that bin.
+- Ordinary Python regression does not open windows. Full Tk/layout checks need
+  explicit `--run-ui-tests`; a quiet run is not visual acceptance. Existing screenshot
+  coverage is limited to the documented sizes and 100%/125% scaling.
+- Mount UTC root cause and actual N.I.N.A. observation/calibration dock visibility
+  remain open as documented below; library UI acceptance does not close those items.
+
+## Historical closeout boundary (2026-10-22, installed 0.4.0.308)
 
 The [October 22 closeout](closeout-2026-10-22.md) consolidates .301–.308. Earlier
 records below retain their original versions, outcomes and installation snapshots.

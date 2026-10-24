@@ -24,6 +24,7 @@ from .config import load_config
 from .order2 import SecondOrderAssessment, load_second_order_assessment
 from .pipeline import PipelineRun, ReductionPipeline
 from .line_analysis import measure_nebular_lines, write_nebular_line_products
+from .library_selection import LibrarySelection
 
 
 @dataclass(slots=True)
@@ -68,6 +69,7 @@ def run_full_workflow(
     second_order_assessment_path: str | Path | None = None,
     cosmic_ray_clean: bool | None = None,
     combine_method: str | None = None,
+    library_selection: LibrarySelection | None = None,
 ) -> FullWorkflowRun:
     """Run standard, flat trial, science stack, response and normalization.
 
@@ -77,6 +79,11 @@ def run_full_workflow(
     roughness.  Both trials remain on disk for inspection.
     """
 
+    if library_selection is not None:
+        library_selection.validate_files()
+        for role, name in (("standard", standard_name), ("science", target_name)):
+            if not library_selection.paths(role, name):
+                raise ValueError(f"No explicitly selected {role} frames for {name}; no directory fallback.")
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     template = Path(template_path).expanduser().resolve()
@@ -93,6 +100,8 @@ def run_full_workflow(
         )
     if input_root is not None:
         base_standard.inputs.root = Path(input_root).expanduser().resolve()
+    if library_selection is not None:
+        library_selection.apply_to_config(base_standard, target=standard_name, role="standard")
     if base_standard.wavelength.mode == "stellar_template":
         base_standard.wavelength.template_directory = template.parent
         base_standard.wavelength.template_path = template
@@ -157,6 +166,8 @@ def run_full_workflow(
         raise RuntimeError("Selected standard-star run has no usable response curve.")
 
     science_config = load_config(science_config_path)
+    if library_selection is not None:
+        library_selection.apply_to_config(science_config, target=target_name, role="science")
     if input_root is None and "<local-data-root>" in str(science_config.inputs.root):
         raise ValueError(
             "The published science config contains <local-data-root>; supply input_root "
