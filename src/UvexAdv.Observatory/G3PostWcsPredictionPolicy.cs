@@ -15,6 +15,14 @@ public sealed record G3PostWcsPredictionAssessment(
 
 public static class G3PostWcsPredictionPolicy
 {
+    public const string OutsideAcquisitionWindowCode = "G3_POST_WCS_PREDICTION_OUTSIDE_ACQUISITION_WINDOW";
+
+    // An optical prediction misses this target's acquisition window; it does
+    // not establish an equipment/owner failure. The native terminal boundary
+    // must still prove stopped owners and settle/retire all motion obligations.
+    public static GateResult RejectedTargetGate(string message) =>
+        GateResult.TargetQuality(OutsideAcquisitionWindowCode, message);
+
     public static G3PostWcsPredictionAssessment Evaluate(
         PixelPoint predictedTarget,
         double maximumUncertaintyPixels,

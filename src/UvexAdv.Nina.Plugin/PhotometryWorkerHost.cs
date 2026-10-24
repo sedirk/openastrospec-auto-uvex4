@@ -170,7 +170,8 @@ public sealed class PhotometryWorkerHost : IDisposable
             if (request.Method == "GET" && path == "/api/v1/health")
             {
                 ValidateActiveConfiguration();
-                return Reply(200, new QhyServiceHealth("UVEX-ADV-QHY", "ok", true, proof!, DateTimeOffset.UtcNow, identity));
+                return Reply(200, new QhyServiceHealth("UVEX-ADV-QHY", "ok", true, proof!, DateTimeOffset.UtcNow, identity,
+                    [QhyControlProtocol.WideFieldStreamCapability]));
             }
             if (request.WorkerSessionId != identity.SessionId) return Reply(409, new { error = "PHOTOMETRY_WORKER_SESSION_CHANGED" });
             if (request.Method == "GET")

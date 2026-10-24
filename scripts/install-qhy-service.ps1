@@ -35,6 +35,48 @@ function Invoke-ServiceControl {
     $output
 }
 
+function Wait-QhyOwnerExit {
+    param([Parameter(Mandatory)]$Process, [ValidateRange(1, 30000)][int]$TimeoutMilliseconds = 30000)
+
+    # SCM Stopped can precede native/runtime DLL unloading. Never kill an owner.
+    if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
+        throw 'QHY service process has not exited; installed files and registration are preserved.'
+    }
+}
+
+function Switch-QhyBinaryDirectory {
+    param([string]$InstallRoot, [string]$InstallDirectory, [string]$StagingDirectory, [string]$BackupDirectory)
+
+    $rootPath = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\', '/')
+    $paths = @($InstallDirectory, $StagingDirectory, $BackupDirectory) | ForEach-Object { [IO.Path]::GetFullPath($_) }
+    if (@($paths | Select-Object -Unique).Count -ne 3) { throw 'Deployment paths must be distinct.' }
+    foreach ($path in $paths) {
+        if (-not [IO.Path]::GetDirectoryName($path).Equals($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing deployment path outside the direct install root: $path"
+        }
+        if ((Test-Path -LiteralPath $path) -and
+            ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Refusing deployment through a reparse point: $path"
+        }
+    }
+    if (Test-Path -LiteralPath $BackupDirectory) { throw 'Deployment backup already exists.' }
+    if (-not (Test-Path -LiteralPath $StagingDirectory -PathType Container)) { throw 'Staged deployment is absent.' }
+
+    # Rename the old tree intact, rather than deleting individual DLLs before commit.
+    if (Test-Path -LiteralPath $InstallDirectory) {
+        Move-Item -LiteralPath $InstallDirectory -Destination $BackupDirectory -ErrorAction Stop
+    }
+    try {
+        Move-Item -LiteralPath $StagingDirectory -Destination $InstallDirectory -ErrorAction Stop
+    }
+    catch {
+        if (-not (Test-Path -LiteralPath $InstallDirectory) -and (Test-Path -LiteralPath $BackupDirectory)) {
+            Move-Item -LiteralPath $BackupDirectory -Destination $InstallDirectory -ErrorAction Stop
+        }
+        throw
+    }
+}
+
 $installRoot = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'UVEX-ADV'))
 $installDirectory = [IO.Path]::GetFullPath((Join-Path $installRoot 'QhyService'))
 if (-not $installDirectory.StartsWith($installRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -58,7 +100,7 @@ if (-not (Test-Path -LiteralPath $sourceConfiguration)) {
     throw "Missing QHY configuration '$sourceConfiguration'."
 }
 
-$selectedConfiguration = Get-Content -LiteralPath $sourceConfiguration -Raw | ConvertFrom-Json
+$selectedConfiguration = Get-Content -LiteralPath $sourceConfiguration -Encoding UTF8 -Raw | ConvertFrom-Json
 if ($null -eq $selectedConfiguration.Qhy) {
     throw "QHY configuration '$sourceConfiguration' has no Qhy section."
 }
@@ -99,7 +141,9 @@ if ($PreflightOnly) {
 }
 
 # Prepare and verify the entire binary tree before stopping an existing owner.
-$stagingDirectory = [IO.Path]::GetFullPath((Join-Path $installRoot ('.QhyService.installing-' + [Guid]::NewGuid().ToString('N'))))
+$deploymentId = [Guid]::NewGuid().ToString('N')
+$stagingDirectory = [IO.Path]::GetFullPath((Join-Path $installRoot ('.QhyService.installing-' + $deploymentId)))
+$backupDirectory = [IO.Path]::GetFullPath((Join-Path $installRoot ('.QhyService.backup-' + $deploymentId)))
 if (-not $stagingDirectory.StartsWith($installRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to stage the QHY service outside the UVEX-ADV install root: $stagingDirectory"
 }
@@ -120,25 +164,33 @@ try {
 
     $existing = Get-Service $serviceName -ErrorAction SilentlyContinue
     if ($existing) {
-        if ($existing.Status -ne 'Stopped') {
-            Stop-Service $serviceName -Force
-            $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        $owner = $null
+        try {
+            $serviceInfo = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
+            if ($serviceInfo.ProcessId) {
+                $owner = Get-Process -Id $serviceInfo.ProcessId -ErrorAction Stop
+                if (-not ([IO.Path]::GetFullPath($owner.Path)).Equals(
+                    (Join-Path $installDirectory $executableName), [StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'QHY service process path does not match the installed owner.'
+                }
+            }
+            if ($existing.Status -ne 'Stopped') {
+                Stop-Service $serviceName -ErrorAction Stop
+                $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+            }
+            if ($null -ne $owner) { Wait-QhyOwnerExit -Process $owner }
         }
-        Invoke-ServiceControl -Arguments @('delete', $serviceName) | Out-Null
-        $existing.Dispose()
-        $deadline = [DateTime]::UtcNow.AddSeconds(30)
-        while ((Get-Service $serviceName -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) {
-            Start-Sleep -Milliseconds 250
-        }
-        if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
-            throw "Timed out waiting for $serviceName deletion."
+        finally {
+            if ($null -ne $owner) { $owner.Dispose() }
+            $existing.Dispose()
         }
     }
-
-    if (Test-Path -LiteralPath $installDirectory) {
-        Remove-Item -LiteralPath $installDirectory -Recurse -Force
+    # Also covers an unregistered native owner left by an interrupted old installer.
+    if (Get-Process -Name 'UvexAdv.Qhy.Service' -ErrorAction SilentlyContinue) {
+        throw 'QHY owner is still running; refusing to replace its files.'
     }
-    Move-Item -LiteralPath $stagingDirectory -Destination $installDirectory
+    Switch-QhyBinaryDirectory -InstallRoot $installRoot -InstallDirectory $installDirectory `
+        -StagingDirectory $stagingDirectory -BackupDirectory $backupDirectory
 }
 finally {
     if (Test-Path -LiteralPath $stagingDirectory) {
@@ -165,7 +217,7 @@ if ($LASTEXITCODE -ne 0) {
 $executable = Join-Path $installDirectory $executableName
 $quotedExecutable = '"' + $executable + '"'
 Invoke-ServiceControl -Arguments @(
-    'create', $serviceName,
+    $(if (Get-Service $serviceName -ErrorAction SilentlyContinue) { 'config' } else { 'create' }), $serviceName,
     'binPath=', $quotedExecutable,
     'start=', 'auto',
     'obj=', 'LocalSystem',
@@ -177,6 +229,9 @@ Start-Service $serviceName
 $installed = Get-Service $serviceName
 $installed.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 
+if (Test-Path -LiteralPath $backupDirectory) {
+    Write-Host "Previous service files retained at: $backupDirectory"
+}
 Write-Host "Installed $serviceName in $(if ($EnableHardware) { 'hardware' } else { 'simulator' }) mode with automatic Windows startup."
 Write-Host "Configuration: $configurationPath"
 Write-Host 'Health endpoint: http://127.0.0.1:47845/api/v1/health'

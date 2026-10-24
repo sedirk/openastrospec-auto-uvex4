@@ -60,13 +60,17 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             .Take(Math.Clamp(count, 1, 200))
             .ToArray();
 
-    public QhyJobSnapshot? GetJob(Guid id) => jobs.TryGetValue(id, out var execution) ? execution.GetSnapshot() : null;
+    public QhyJobSnapshot? GetJob(Guid id) => jobs.TryGetValue(id, out var execution)
+        ? execution.GetSnapshot() with { ExecutionJoined = execution.Worker?.IsCompleted == true } : null;
 
     public QhyPreview? GetLatestPreview(Guid id) => latestPreviews.GetValueOrDefault(id);
 
     public QhyJobControlResponse StartAcquisition(AcquisitionJobRequest request)
     {
         Validate(request);
+        if (request.WideFieldStream is { } stream &&
+            (stream.DeadlineUtc <= UtcNow || stream.DeadlineUtc - UtcNow > TimeSpan.FromHours(2)))
+            throw new ArgumentOutOfRangeException(nameof(request), "Wide-field deadline must be future and within the existing two-hour acquisition envelope.");
         var (execution, created) = CreateExecution(
             request.ObservationRunId,
             request.RequestedTarget,
@@ -77,7 +81,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
             request.TargetDeclinationDegrees,
             request.CoordinateEpoch,
             request.ControlLeaseSeconds,
-            request.NightSetupId);
+            request.NightSetupId,
+            request.WideFieldStream);
         if (created)
         {
             execution.Worker = RunJobAsync(execution, cancellationToken => RunAcquisitionAsync(execution, request, cancellationToken));
@@ -417,7 +422,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         double? targetDeclinationDegrees,
         string coordinateEpoch,
         int controlLeaseSeconds,
-        string? nightSetupId)
+        string? nightSetupId,
+        QhyWideFieldStreamOptions? wideFieldStream = null)
     {
         lock (activeGate)
         {
@@ -472,7 +478,8 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
                 ControlLeaseId: null,
                 LeaseExpiresUtc: createdUtc.AddSeconds(controlLeaseSeconds),
                 ControlLeaseSeconds: controlLeaseSeconds,
-                NightSetupId: nightSetupId);
+                NightSetupId: nightSetupId,
+                WideFieldStream: wideFieldStream);
             var execution = new JobExecution(snapshot, ownerToken);
             jobs[id] = execution;
             if (requestKey is not null) requestIndex[requestKey] = id;
@@ -547,6 +554,11 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         AcquisitionJobRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.WideFieldStream is not null)
+        {
+            await RunWideFieldStreamAsync(execution, request, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         var thresholds = request.QualityThresholds ?? options.DefaultQualityThresholds;
         var sequence = 0;
         while (true)
@@ -576,6 +588,45 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
                 execution,
                 $"Acquisition quality gate failed after {request.MaximumAttempts} bounded attempts; no mount command was issued.",
                 cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunWideFieldStreamAsync(JobExecution execution, AcquisitionJobRequest request, CancellationToken token)
+    {
+        var stream = request.WideFieldStream!;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var remaining = stream.DeadlineUtc - UtcNow;
+        if (remaining <= TimeSpan.Zero) return;
+        deadline.CancelAfter(remaining);
+        var thresholds = request.QualityThresholds ?? options.DefaultQualityThresholds;
+        // The settings are locked for this stream; optical-quality rejection is
+        // retained on each raw frame, not a reason to kill the frame producer.
+        var exposure = request.ExposureLadderSeconds[0];
+        var settings = CreateSettings(request, exposure);
+        try
+        {
+            for (var sequence = 1; sequence <= stream.MaximumFrames; sequence++)
+            {
+                await CheckpointAsync(execution, deadline.Token).ConfigureAwait(false);
+                if (UtcNow.AddSeconds(exposure) > stream.DeadlineUtc) return;
+                var (frame, metrics) = await CaptureWithRecoveryAsync(execution, settings, thresholds, null, deadline.Token).ConfigureAwait(false);
+                var stored = await StoreFrameAsync(execution, frame, metrics, sequence, "ACQUISITION-WIDE-STREAM", deadline.Token).ConfigureAwait(false);
+                if (QhyFrameAnalyzer.PassesAcquisitionGate(metrics, thresholds))
+                {
+                    var accepted = execution.Mutate(current => WithEvent(current with { AcceptedFrameId = stored.FrameId },
+                        "acquisition.stream-frame-accepted", "Latest immutable acquisition witness; not accepted scientific photometry."));
+                    await PersistAndPublishAsync(accepted, CancellationToken.None).ConfigureAwait(false);
+                }
+                await CheckpointAsync(execution, deadline.Token).ConfigureAwait(false);
+                var pause = frame.ExposureStartedUtc.AddSeconds(stream.CadenceSeconds) - UtcNow;
+                if (pause > TimeSpan.Zero && sequence < stream.MaximumFrames)
+                    await DelayWithCheckpointsAsync(execution, pause, deadline.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            // The awaited native capture/cleanup has returned; normal RunJob
+            // completion still publishes the terminal state and joins its worker.
         }
     }
 
@@ -961,6 +1012,11 @@ public sealed class QhyJobCoordinator : IAsyncDisposable
         }
 
         if (request.MaximumAttempts is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(request.MaximumAttempts));
+        if (request.WideFieldStream is { } stream &&
+            (stream.MaximumFrames is < 2 or > 4096 || stream.DeadlineUtc == default ||
+             !double.IsFinite(stream.CadenceSeconds) || stream.CadenceSeconds is < 0 or > 60 ||
+             request.ExposureLadderSeconds.Count != 1))
+            throw new ArgumentOutOfRangeException(nameof(request), "A stream requires one locked exposure, 2..4096 subordinate frames and a finite 0..60 second cadence.");
         ValidateFrameConfiguration(
             request.RoiX,
             request.RoiY,

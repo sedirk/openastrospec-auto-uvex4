@@ -346,8 +346,27 @@ public static class SlitTargetIdentifier
             ? candidates
             : candidates.Where(candidate => excludedFeatures.All(ghost =>
                 Distance(candidate.Centroid, ghost.Centroid) > ghost.ExclusionRadiusPixels)).ToArray();
-        var measured = Identify(ghostFiltered, predictedPoint, maximumPredictionResidualPixels,
+        // A global-background aperture can collect positive halo/noise pixels
+        // around a centroid whose own core is below the background. Reject only
+        // that explicit pixel contradiction, even if the real bright source is
+        // OUTSIDE the recognition window. It must not be pulled in as a target.
+        // This is not the stronger +2-sigma local-peak preference used below to
+        // distinguish a real companion from a halo beside an identified core.
+        var unsupported = new List<LocalPeakSupport>();
+        var pixelSupported = ghostFiltered.Where(candidate =>
+        {
+            if (candidate.SaturatedFraction != 0 || candidate.SignalToNoise < minimumSignalToNoise ||
+                Distance(candidate.Centroid, predictedPoint) > maximumPredictionResidualPixels ||
+                MeasureLocalPeakSupport(frame, candidate) is not { } support ||
+                support.CoreMedianAdu > topology.BackgroundAdu ||
+                support.CoreMedianAdu > support.BoundaryUpperQuartileAdu)
+                return true;
+            unsupported.Add(support);
+            return false;
+        }).ToArray();
+        var measured = Identify(pixelSupported, predictedPoint, maximumPredictionResidualPixels,
             minimumSignalToNoise, minimumUniquenessRatio);
+        measured = WithPixelSupportDiagnostics(measured);
         if (topology.Gate.Disposition == GateDisposition.Passed && topology.Target is { } saturatedTarget)
         {
             // A saturated primary anywhere in the search window must not
@@ -364,7 +383,7 @@ public static class SlitTargetIdentifier
                     saturatedTarget.ExclusionRadiusPixels + 2 * resolved.FwhmPixels ||
                  HasIndependentLocalPeak(frame, resolved, topology.BackgroundSigmaAdu)))
                 return measured;
-            return new TargetIdentification(
+            return WithPixelSupportDiagnostics(new TargetIdentification(
                 GateResult.Pass(
                     "TARGET_IDENTIFIED_SATURATED_TOPOLOGY",
                     $"Formal WCS proximity and filled-core topology identify the target at ({saturatedTarget.Centroid.X:F2}, {saturatedTarget.Centroid.Y:F2}) px; {topology.Ghosts.Count} hollow annular ghost(s) were excluded.",
@@ -373,19 +392,39 @@ public static class SlitTargetIdentifier
                 predictedPoint,
                 saturatedTarget.DistanceToPredictionPixels,
                 topology.UniquenessRatio,
-                TargetIdentificationAuthority.BrightWingCentroid);
+                TargetIdentificationAuthority.BrightWingCentroid));
         }
 
         return measured;
+
+        TargetIdentification WithPixelSupportDiagnostics(TargetIdentification identification)
+        {
+            if (unsupported.Count == 0) return identification;
+            var metrics = identification.Gate.Metrics is { } existing
+                ? new Dictionary<string, double>(existing) : new Dictionary<string, double>();
+            metrics["unsupportedOrdinaryCandidateCount"] = unsupported.Count;
+            metrics["unsupportedCoreMedianAdu"] = unsupported[0].CoreMedianAdu;
+            metrics["unsupportedBoundaryUpperQuartileAdu"] = unsupported[0].BoundaryUpperQuartileAdu;
+            metrics["unsupportedBackgroundAdu"] = topology.BackgroundAdu;
+            return identification with { Gate = identification.Gate with { Metrics = metrics } };
+        }
     }
 
-    private static bool HasIndependentLocalPeak(MonochromeFrame frame, StarCandidate candidate, double noise)
+    private sealed record LocalPeakSupport(double CoreMedianAdu, double BoundaryUpperQuartileAdu);
+
+    private static bool HasIndependentLocalPeak(MonochromeFrame frame, StarCandidate candidate, double noise) =>
+        MeasureLocalPeakSupport(frame, candidate) is { } support &&
+        support.CoreMedianAdu > support.BoundaryUpperQuartileAdu + 2 * Math.Max(1, noise);
+
+    private static LocalPeakSupport? MeasureLocalPeakSupport(MonochromeFrame frame, StarCandidate candidate)
     {
+        if (!double.IsFinite(candidate.Centroid.X) || !double.IsFinite(candidate.Centroid.Y) ||
+            !double.IsFinite(candidate.FwhmPixels)) return null;
         var x = (int)Math.Round(candidate.Centroid.X);
         var y = (int)Math.Round(candidate.Centroid.Y);
         var radius = (int)Math.Ceiling(Math.Clamp(candidate.FwhmPixels, 3, 12));
         if (x < radius || y < radius || x + radius >= frame.Width || y + radius >= frame.Height)
-            return false;
+            return null;
         var core = new List<double>(9);
         var boundary = new List<double>(8 * radius);
         for (var dy = -1; dy <= 1; dy++)
@@ -401,10 +440,10 @@ public static class SlitTargetIdentifier
         core.Sort();
         boundary.Sort();
         // The upper-quartile local boundary sees the rising primary halo.
-        // Median core support suppresses one-pixel noise/hot pixels. This only
-        // decides whether a peak can pre-empt an already identified filled
-        // core; it adds no motion authority, search radius or quality blocker.
-        return core[4] > boundary[(int)(.75 * (boundary.Count - 1))] + 2 * Math.Max(1, noise);
+        // Median core support suppresses one-pixel noise/hot pixels. Consumers
+        // distinguish the narrow non-source contradiction from the existing
+        // independent-companion preference; neither expands catalogue identity.
+        return new LocalPeakSupport(core[4], boundary[(int)(.75 * (boundary.Count - 1))]);
     }
 
     public static TargetIdentification Identify(

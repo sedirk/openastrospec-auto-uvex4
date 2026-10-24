@@ -8,13 +8,16 @@ public sealed class G3ShortHandoffSourceTests
     {
         var runner=File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Sources","RealObservationStageRunner.cs"));
         Assert.Contains("shortHandoffConfirmationAttempted = true",runner);
-        Assert.Contains("shortExposure < exposureMilliseconds",runner);
+        Assert.Contains("shortExposure <= exposureMilliseconds",runner);
         Assert.Contains("handoffPreset.DirectTargetGuidingExposureMilliseconds",runner);
         Assert.Contains("G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)", runner);
         // The same image proceeds to the existing formal solver. A failed or
         // transient solve exits before a longer tier; no second acquisition loop.
         Assert.Equal(2, runner.Split("if (outsideShortHandoff is not null) return outsideShortHandoff;").Length - 1);
-        Assert.Contains("G3PostWcsMeasuredHandoffPolicy.FitsRemainingHandoff(measuredTarget", runner);
+        Assert.Contains("RequireIndependentTargetPair = true", runner);
+        Assert.Contains("G3MotionPredictionTimingPolicy.Evaluate", runner);
+        Assert.Contains("temporal.SearchHintUsable && measuredGeometry", runner);
+        Assert.DoesNotContain("if (!handoffPrediction.RequireIndependentTargetPair", runner);
         Assert.Contains("G3PostWcsMeasuredHandoffPolicy.RequiresCoarseSolve(measuredTarget", runner);
         Assert.Contains("G3PostWcsMeasuredHandoffPolicy.OutsideRemainingGate(measuredTarget", runner);
         Assert.Contains("Phd2FreshTargetFluxPolicy.PreserveMeasuredHandoff(", runner);

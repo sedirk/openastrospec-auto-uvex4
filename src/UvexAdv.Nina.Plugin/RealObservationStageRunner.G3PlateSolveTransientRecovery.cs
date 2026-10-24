@@ -17,6 +17,45 @@ internal enum G3PlateSolveTransientOperation
 
 internal sealed partial class RealObservationStageRunner
 {
+    internal static GateResult ClassifyG3OverexposedLadder(
+        IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, GateResult? contentGate)
+    {
+        // Clipping ends this acquisition, not the night. Classify only a
+        // completed, validated optical ladder: a clipped image must not hide
+        // a capture/solver fault, missing provenance or a changed owner.
+        // The independent terminal stop/return/retirement checks still decide
+        // whether the saved native policy may execute another target.
+        var validClipping = contentGate is { Code: G3SolveProbeContentAnalyzer.OverexposedGateCode,
+                Disposition: GateDisposition.Indeterminate } && attempts.Count > 0 &&
+            attempts.Select(a => a.LadderIndex).SequenceEqual(Enumerable.Range(1, attempts.Count)) &&
+            attempts.All(a => !a.SolveSucceeded && a.Disposition == GateDisposition.Indeterminate &&
+                a.ExposureMilliseconds > 0 && !string.IsNullOrWhiteSpace(a.FramePath) &&
+                !string.IsNullOrWhiteSpace(a.AttemptEvidencePath) && a.MountBinding is { } binding &&
+                binding.FramePath == a.FramePath && !string.IsNullOrWhiteSpace(binding.FrameSha256) &&
+                (a.GateCode == "G3_PLATE_SOLVE_TIER_FAILED" && a.ContentGateCode is
+                    "G3_SOLVE_PROBE_STRUCTURED_FIELD" or "G3_CLOUD_OR_TRANSPARENCY_INVALID" ||
+                 a.GateCode == G3SolveProbeContentAnalyzer.OverexposedGateCode &&
+                 a.ContentGateCode == G3SolveProbeContentAnalyzer.OverexposedGateCode)) &&
+            attempts[^1].GateCode == G3SolveProbeContentAnalyzer.OverexposedGateCode;
+        return validClipping
+            ? GateResult.TargetQuality(G3SolveProbeContentAnalyzer.OverexposedGateCode,
+                "The validated G3 solve ladder reached widespread detector clipping without a formal solve. " +
+                "Stop longer exposures and neighbouring-field search; this target-local optical failure may " +
+                "follow the saved skip policy only after independent stopped/return reconciliation. " +
+                "The clipped frame grants no target identity, search motion or additional budget.", contentGate!.Metrics)
+            : GateResult.Unknown(G3SolveProbeContentAnalyzer.OverexposedGateCode,
+                "The G3 solve ladder included clipping but lacks complete validated optical-failure evidence. " +
+                "Capture, solver or binding uncertainty cannot be converted to a target-quality skip. " +
+                "Longer exposures and neighbouring-field search remain prohibited.", contentGate?.Metrics);
+    }
+
+    internal static GateResult PreserveG3OverexposureFallbackFailure(GateResult fallbackGate) =>
+        // A deterministic short-frame fallback can itself discover a real
+        // safety/owner failure. Keep its original code, scope and metrics;
+        // an earlier optical failure cannot launder it into a skippable one.
+        fallbackGate with { Message = "The G3 solve probe was overexposed; fresh deterministic analysis also failed. " +
+            "No neighbouring-field search or motion prediction is authorized from the clipped probe. " + fallbackGate.Message };
+
     internal static GateResult ClassifyG3EmptyLadder(
         IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, int expectedTiers)
     {

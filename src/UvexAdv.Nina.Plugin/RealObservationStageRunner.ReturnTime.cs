@@ -12,6 +12,16 @@ internal sealed partial class RealObservationStageRunner
         if (state is { Phase: G3AcquisitionMotionPhase.AwaitingFreshSolve })
             state = ReanchorG3AcquisitionMotionFromReportedPosition(state, telescopeMediator.GetCurrentPosition());
         var plan = G3AcquisitionReturnTimePolicy.Plan(state, DateTimeOffset.UtcNow);
+        if (g3StoppedHandoff is { } handoff)
+        {
+            if (state is not { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger } ||
+                handoff.Run != state.ObservationRunId || handoff.Lineage != state.BudgetLineageId ||
+                !handoff.Proof.IsCurrent(phd2.Snapshot))
+                throw new PhysicalActionGateException(GateResult.Unknown("G3_GUIDING_RECOVERY_STOP_CHANGED",
+                    "Stopped handoff ownership or ledger changed before bounded acquisition work."));
+            var reported = ReanchorG3AcquisitionMotionFromReportedPosition(state, telescopeMediator.GetCurrentPosition());
+            plan = G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(state, reported.CurrentRadiusArcseconds, DateTimeOffset.UtcNow);
+        }
         try
         {
             return await G3AcquisitionReturnTimePolicy.ExecuteAsync(plan, work, cancellationToken).ConfigureAwait(false);

@@ -43,6 +43,18 @@ internal sealed partial class RealObservationStageRunner
     {
         if (commissioning is null)
             return GateResult.Unknown("COMMISSIONING_PRESET_REQUIRED", "Commissioning is unavailable while validating a G3 field mount binding.");
+        if (field.Solve is { IsFormal: false } inferred)
+        {
+            if (inferred.Authority == "LocalDualOpticsPrediction")
+            {
+                var optical = await ValidateLocalDualOpticalStateForInferenceAsync(context, inferred,
+                    cancellationToken).ConfigureAwait(false);
+                if (optical.Disposition != GateDisposition.Passed) return optical;
+            }
+            var provenance = await ValidateSparseInferenceSourcesAsync(inferred, ComputeFileSha256Async,
+                cancellationToken).ConfigureAwait(false);
+            if (provenance.Disposition != GateDisposition.Passed) return provenance;
+        }
         if (string.IsNullOrWhiteSpace(field.FramePath) || !File.Exists(field.FramePath))
             return GateResult.Unknown("G3_FIELD_MOUNT_BINDING_FRAME_MISSING", "The G3 field FITS is missing; slit-placement motion is prohibited.");
         string frameSha256;

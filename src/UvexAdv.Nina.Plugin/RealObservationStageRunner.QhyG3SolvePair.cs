@@ -640,23 +640,24 @@ internal sealed partial class RealObservationStageRunner
         G3PlateSolveProbeState probe,
         CancellationToken cancellationToken)
     {
+        // Inference must never train/validate itself as a new formal source pair.
+        if (probe.Solve is not { IsFormal: true }) return;
         var policy = configuration.G3.EffectiveFastSolvePair;
         if (!policy.Enabled)
         {
             qhyG3FastPairOutcome = "Disabled";
             return;
         }
-        // Paired QHY/G3 WCS is optional calibration telemetry, never a
-        // prerequisite for G3 centering or PHD2 slit placement. Collect at most
-        // one pair per observation run. Retrying it after every successful G3
-        // solve put a slow QHY exposure/solve inside the WCS correction loop and
-        // allowed an already-near-slit target to drift before PHD2 takeover.
-        if (string.Equals(qhyG3FastPairCollectionRunId, context.Plan.ObservationRunId, StringComparison.Ordinal))
+        // New independent G3 formal frames may pair with existing formal stream
+        // keyframes without any new exposure. Only the legacy temporary capture
+        // retains its one-per-run allowance; a registered pose never trains itself.
+        var streamPair = await TryGetWideFieldPairSourceAsync(context, probe, cancellationToken, requireFormal: true).ConfigureAwait(false);
+        if (streamPair is null && string.Equals(qhyG3FastPairCollectionRunId, context.Plan.ObservationRunId, StringComparison.Ordinal))
         {
             qhyG3FastPairOutcome = "AlreadyAttemptedForRun";
             return;
         }
-        qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId;
+        if (streamPair is null) qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId;
         if (!attemptedQhyG3SolvePairFrames.TryAdd(probe.FramePath, 0)) return;
         latestQhyG3TransferCandidate = null;
         latestQhyG3TransferCandidateEvidencePath = null;
@@ -701,7 +702,7 @@ internal sealed partial class RealObservationStageRunner
                 probe.MountBinding is null || probe.BeforeExposureMountReadback is null)
                 throw new InvalidOperationException("The successful G3 solve lacks its immutable frame or dual-ended mount bracket.");
 
-            qhySource = await TryPrepareCachedQhyPairSourceAsync(
+            qhySource = streamPair ?? await TryPrepareCachedQhyPairSourceAsync(
                 context,
                 probe,
                 policy,
@@ -783,11 +784,13 @@ internal sealed partial class RealObservationStageRunner
                 automaticCalibrationPath = await PersistQhyG3CandidateCalibrationAsync(
                     build.Candidate,
                     cancellationToken).ConfigureAwait(false);
+                await PersistFocusBoundLocalPairAsync(context, build.Candidate, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
+            catch (PhysicalActionGateException) { throw; }
             catch (Exception ex)
             {
                 // The immutable run evidence above is already complete.  A
@@ -844,6 +847,7 @@ internal sealed partial class RealObservationStageRunner
                 $"The optional pair did not finish within {policy.MaximumPairWallClock.TotalSeconds:F1}s; the normal direct-G3 workflow continues.",
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (PhysicalActionGateException) { throw; }
         catch (Exception ex)
         {
             if ((quickJobId ?? activeQhyG3FastPairJobId) is { } failedJob)
@@ -1009,7 +1013,7 @@ internal sealed partial class RealObservationStageRunner
         cancellationToken.ThrowIfCancellationRequested();
         var camera = await ConnectQhyAtCheckpointAsync(context, cancellationToken).ConfigureAwait(false);
         if (camera.Identity is null || !string.Equals(camera.Identity.StableId, context.Plan.ExpectedQhyCameraId, StringComparison.Ordinal))
-            throw new InvalidOperationException("QHY identity changed before the immediate solve-pair exposure.");
+            throw new PhysicalActionGateException(GateResult.Unknown("QHY_G3_PAIR_IDENTITY_CHANGED", "QHY identity changed before the immediate solve-pair exposure."));
         await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
         var before = CaptureG3FrameMountReadback();
@@ -1067,12 +1071,16 @@ internal sealed partial class RealObservationStageRunner
         if (job.State != QhyJobState.Completed || job.AcceptedFrameId is not { } frameId)
         {
             await CancelQhyFastPairJobBestEffortAsync(job.Id).ConfigureAwait(false);
-            throw new InvalidOperationException(job.AttentionReason ?? job.Error ?? $"QHY fast-pair job ended in {job.State} without an accepted frame.");
+            var checkedJob = await qhy.GetJobAsync(job.Id, cancellationToken).ConfigureAwait(false);
+            if (checkedJob?.State is not (QhyJobState.Completed or QhyJobState.Cancelled or QhyJobState.Faulted or QhyJobState.TakenOver) || checkedJob.CompletedUtc is null)
+                throw new PhysicalActionGateException(GateResult.Unknown("QHY_G3_PAIR_STOP_UNCONFIRMED", "The immediate QHY pair job did not confirm its terminal stop."));
+            throw new QhyG3OptionalOpticalException(job.AttentionReason ?? job.Error ?? $"QHY fast-pair job ended in {job.State} without an accepted frame.");
         }
+        if (job.CompletedUtc is null) throw new PhysicalActionGateException(GateResult.Unknown("QHY_G3_PAIR_STOP_UNCONFIRMED", "QHY Completed state lacks its terminal completion receipt."));
         activeQhyJobs.TryRemove(job.Id, out _);
         activeQhyG3FastPairJobId = null;
         var accepted = job.Frames.SingleOrDefault(frame => frame.FrameId == frameId)
-            ?? throw new InvalidOperationException("QHY fast-pair AcceptedFrameId is absent from the immutable job frame list.");
+            ?? throw new PhysicalActionGateException(GateResult.Unknown("QHY_G3_PAIR_FRAME_MANIFEST_INVALID", "QHY fast-pair AcceptedFrameId is absent from the immutable job frame list."));
         var binding = CreateQhyAcceptedFrameMountBinding(context, job, accepted, before, after);
         var bindingGate = binding.Validate(
             context.Plan.ObservationRunId,
@@ -1083,7 +1091,7 @@ internal sealed partial class RealObservationStageRunner
             accepted.Sha256,
             policy.MaximumMountSpanArcseconds);
         if (bindingGate.Disposition != GateDisposition.Passed)
-            throw new InvalidOperationException($"{bindingGate.Code}: {bindingGate.Message}");
+            throw new PhysicalActionGateException(bindingGate);
         var requested = probe.Solve?.Result.Coordinates ?? TargetCoordinates(context.Plan);
         var solve = await SolveExternalFitsAsync(
             accepted.FitsPath,
@@ -1095,7 +1103,7 @@ internal sealed partial class RealObservationStageRunner
             "QHY/GS350 immediate G3 solve-pair field",
             cancellationToken).ConfigureAwait(false);
         if (!solve.Result.Success || solve.Result.Coordinates is null)
-            throw new InvalidOperationException("The single immediate QHY pairing frame did not plate-solve; no additional exposure tier is attempted.");
+            throw new QhyG3OptionalOpticalException("The single immediate QHY pairing frame did not plate-solve; no additional exposure tier is attempted.");
         return (new QhyG3PairQhySource(job, accepted, solve, binding, QhyG3SolvePairSource.ImmediateSingleQhyExposure), job.Id);
     }
 
@@ -1243,6 +1251,8 @@ internal sealed partial class RealObservationStageRunner
 
     private static DateTimeOffset G3ProbeMidpointUtc(G3PlateSolveProbeState probe)
     {
+        if (probe.ExposureStartedUtc != default && probe.ExposureEndedUtc >= probe.ExposureStartedUtc && probe.ExposureMillisecondsActual > 0)
+            return probe.ExposureStartedUtc + (probe.ExposureEndedUtc - probe.ExposureStartedUtc) / 2;
         var start = G3ProbeStartUtc(probe);
         var exposure = probe.Attempts.LastOrDefault(attempt => string.Equals(
             Path.GetFullPath(attempt.FramePath),
@@ -1253,6 +1263,7 @@ internal sealed partial class RealObservationStageRunner
 
     private static DateTimeOffset G3ProbeStartUtc(G3PlateSolveProbeState probe)
     {
+        if (probe.ExposureStartedUtc != default && probe.ExposureMillisecondsActual > 0) return probe.ExposureStartedUtc;
         var exposure = probe.Attempts.LastOrDefault(attempt => string.Equals(
             Path.GetFullPath(attempt.FramePath),
             Path.GetFullPath(probe.FramePath),
@@ -1341,6 +1352,8 @@ internal sealed record QhyG3PairQhySource(
     PlateSolveEvidence Solve,
     QhyAcceptedFrameMountBinding Binding,
     QhyG3SolvePairSource Source);
+
+internal sealed class QhyG3OptionalOpticalException(string message) : InvalidOperationException(message);
 
 internal sealed record G3PlateSolveHintSelection(
     Coordinates Coordinates,

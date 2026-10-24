@@ -312,7 +312,7 @@ public sealed class G3GuidingRecoveryReturnPolicyTests
         Assert.True(stop.IndexOf("automaticRebuildStopProof?.IsCurrent", StringComparison.Ordinal) <
             stop.IndexOf("automaticRebuildStopProof = null", StringComparison.Ordinal));
         var helper = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.GuidingRecovery.cs"));
-        Assert.True(helper.IndexOf("PersistG3AcquisitionMotionAsync(plan.ChargedLedger", StringComparison.Ordinal) <
+        Assert.True(helper.IndexOf("PersistG3AcquisitionMotionAsync(chargedLedger", StringComparison.Ordinal) <
             helper.IndexOf("ReturnDurableG3AcquisitionToOriginAsync", StringComparison.Ordinal));
         Assert.Contains("loaded.State != state", helper, StringComparison.Ordinal);
         Assert.Contains("ValidateIdentityAsync", helper, StringComparison.Ordinal);

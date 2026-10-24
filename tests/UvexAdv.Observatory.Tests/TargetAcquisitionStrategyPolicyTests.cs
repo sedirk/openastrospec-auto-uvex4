@@ -7,7 +7,15 @@ public sealed class TargetAcquisitionStrategyPolicyTests
 {
     private static readonly EquatorialTarget Target = new("test target", "catalog-1", 30, 40);
     private static readonly PixelPoint Prediction = new(100, 100);
-    private static MonochromeFrame Frame() => new(240, 240, new ushort[240 * 240], 65520);
+    private static MonochromeFrame Frame(params StarCandidate[] sources)
+    {
+        var pixels = new ushort[240 * 240];
+        foreach (var source in sources)
+        for (var dy = -1; dy <= 1; dy++)
+        for (var dx = -1; dx <= 1; dx++)
+            pixels[((int)source.Centroid.Y + dy) * 240 + (int)source.Centroid.X + dx] = 5000;
+        return new(240, 240, pixels, 65520);
+    }
     private static TargetCatalogMetadata Metadata(string type, string? subtype = null) => new(
         Target.Name, Target.CatalogId, Target.RightAscensionDegrees, Target.DeclinationDegrees,
         "Stellarium", type, 5, DateTimeOffset.Parse("2026-09-13T17:00:00Z"), subtype);
@@ -72,7 +80,8 @@ public sealed class TargetAcquisitionStrategyPolicyTests
     public void DirectStarUsesUniqueMeasuredPosition()
     {
         var strategy = TargetAcquisitionStrategyPolicy.Resolve(TargetObservabilityClass.DirectStellar, Target, null);
-        var decision = TargetAcquisitionStrategyPolicy.IdentifyFromVerifiedWcs(strategy, Frame(), [Star(105, 100)], Prediction, 50);
+        var source = Star(105, 100);
+        var decision = TargetAcquisitionStrategyPolicy.IdentifyFromVerifiedWcs(strategy, Frame(source), [source], Prediction, 50);
         Assert.Equal(TargetAcquisitionBranch.DirectStellarPosition, decision.Branch);
         Assert.False(decision.IsFallback);
         Assert.True(decision.Identification.CatalogPositionRefinedFromSameFrame);
@@ -96,8 +105,9 @@ public sealed class TargetAcquisitionStrategyPolicyTests
     public void AmbiguousLocalPeaksAreNotChosenOrAppliedAsAnOffset()
     {
         var strategy = TargetAcquisitionStrategyPolicy.Resolve(TargetObservabilityClass.DirectStellar, Target, null);
-        var decision = TargetAcquisitionStrategyPolicy.IdentifyFromVerifiedWcs(strategy, Frame(),
-            [Star(105, 100), Star(94, 100)], Prediction, 50);
+        var sources = new[] { Star(105, 100), Star(94, 100) };
+        var decision = TargetAcquisitionStrategyPolicy.IdentifyFromVerifiedWcs(strategy, Frame(sources),
+            sources, Prediction, 50);
         Assert.True(decision.IsFallback);
         Assert.Equal(TargetAcquisitionBranch.CatalogWcsGeometry, decision.Branch);
         Assert.Equal(Prediction, decision.Identification.Target!.Centroid);

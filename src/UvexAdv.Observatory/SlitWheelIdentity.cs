@@ -309,13 +309,6 @@ public static class SlitWheelIdentityMatcher
                 matched,
                 candidates ?? Array.Empty<SlitIdentityCandidate>());
 
-        if (measurement.Gate.Disposition != GateDisposition.Passed)
-        {
-            return Result(GateResult.Unknown(
-                "SLIT_LED_IDENTITY_GEOMETRY_UNAVAILABLE",
-                $"HDR dark-aperture gate {measurement.Gate.Code} did not pass, so optical slit identity cannot be determined."));
-        }
-
         var calibrationIssues = calibration.Validate();
         if (calibrationIssues.Count > 0)
         {
@@ -331,6 +324,26 @@ public static class SlitWheelIdentityMatcher
             return Result(GateResult.Unknown(
                 "SLIT_LED_IDENTITY_DETECTOR_MISMATCH",
                 "The fresh LED frame camera/binning/image geometry does not match the commissioned slit-width fingerprint library."));
+        }
+
+        var reported = calibration.Fingerprints.SingleOrDefault(item => item.WheelPosition == reportedWheelPosition);
+        if (reported is null || !double.IsFinite(reportedNominalWidthMicrometers) ||
+            Math.Abs(reported.NominalWidthMicrometers - reportedNominalWidthMicrometers) > 1e-6)
+            return Result(GateResult.Fail("SLIT_LED_IDENTITY_DECLARATION_INVALID",
+                $"Reported slit position {reportedWheelPosition} / {reportedNominalWidthMicrometers:F1}µm does not match the commissioned wheel declaration."));
+
+        if (measurement.Gate.Disposition != GateDisposition.Passed)
+        {
+            // Preserve the optical cause and metrics instead of laundering a
+            // failed image into an equipment-identity failure. Exact known
+            // image insufficiency is target-local; configuration, physical
+            // direction, owner and unknown failures remain independent hard stops.
+            var gate = GateResult.Unknown("SLIT_LED_IDENTITY_GEOMETRY_UNAVAILABLE",
+                $"HDR dark-aperture gate {measurement.Gate.Code} did not pass, so optical slit identity cannot be determined.",
+                measurement.Gate.Metrics);
+            if (IsTargetQualityGeometryMiss(measurement.Gate))
+                gate = gate with { FailureScope = GateFailureScope.TargetQuality };
+            return Result(gate);
         }
 
         if (!double.IsFinite(measuredWidth) || measuredWidth <= 0 ||
@@ -400,17 +413,6 @@ public static class SlitWheelIdentityMatcher
                 metrics), best, candidates);
         }
 
-        var reported = calibration.Fingerprints.SingleOrDefault(item => item.WheelPosition == reportedWheelPosition);
-        if (reported is null ||
-            !double.IsFinite(reportedNominalWidthMicrometers) ||
-            Math.Abs(reported.NominalWidthMicrometers - reportedNominalWidthMicrometers) > 1e-6)
-        {
-            return Result(GateResult.Fail(
-                "SLIT_LED_IDENTITY_DECLARATION_INVALID",
-                $"Reported slit position {reportedWheelPosition} / {reportedNominalWidthMicrometers:F1}µm does not match the commissioned wheel declaration.",
-                metrics), best, candidates);
-        }
-
         if (best.WheelPosition != reportedWheelPosition ||
             Math.Abs(best.NominalWidthMicrometers - reportedNominalWidthMicrometers) > 1e-6)
         {
@@ -441,4 +443,10 @@ public static class SlitWheelIdentityMatcher
             $"({best.SlitLabel}, {best.NominalWidthMicrometers:F1}µm).",
             metrics), best, candidates);
     }
+
+    private static bool IsTargetQualityGeometryMiss(GateResult gate) =>
+        gate.Code is "SLIT_DARK_APERTURE_LONG_EXPOSURE_CLIPPED" or
+            "SLIT_DARK_APERTURE_SECOND_EDGE_NOT_FOUND" or
+            "SLIT_LED_PAIR_LOW_CONTRAST" or "SLIT_LED_PAIR_NOT_THROUGHGOING" or
+            "SLIT_LOCUS_LOW_CONFIDENCE" or "SLIT_LOCUS_LOCAL_BACKGROUND_LOW_CONFIDENCE";
 }

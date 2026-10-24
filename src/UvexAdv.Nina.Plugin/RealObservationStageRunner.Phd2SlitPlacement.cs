@@ -2616,6 +2616,7 @@ internal sealed partial class RealObservationStageRunner
                 ReserveRunEvidencePath("g3-phd2-lock-residual", ".fit"),
                 TimeSpan.FromSeconds(preset.FreshGuidingFrameTimeoutSeconds));
             var beforeFrameWait = phd2.Snapshot;
+            var residualBeforeExposure = CaptureG3FrameMountReadback();
             Phd2GuidingFrameResult result;
             try
             {
@@ -2696,6 +2697,21 @@ internal sealed partial class RealObservationStageRunner
                     ? Phd2TargetContinuityPolicy.Predict(expectedTarget, referenceGuide,
                         ToPhd2Domain(new(matchedPrimary.X, matchedPrimary.Y), preset)) : null;
             var expectedTargetLocal = ToFrameLocal(continuityPrediction ?? expectedTarget, preset);
+            // A fresh native frame number/primary crop proves a new in-session
+            // measurement, NOT its shutter start. Driver readout may already
+            // have been in flight before this wait; preserve exact time unknown.
+            var targetFrameTiming = new G3SparseExposureTiming(
+                default, result.CompletedUtc,
+                image.MetaData.Image.ExposureTime, DateTimeOffset.UtcNow);
+            await RetainSparseG3FrameAsync(context, image, result.Path, actualSha, residualMountBinding,
+                residualBeforeExposure, exposureMilliseconds, expectedTargetLocal, cancellationToken,
+                captureTimingKnown: false).ConfigureAwait(false);
+            var trackedTarget = await PredictStellarTargetTrackAsync(context, lastG3Field, frame, raw,
+                expectedTargetLocal, runtimeSlitLocal, preset, result.Path, actualSha, targetFrameTiming,
+                cancellationToken).ConfigureAwait(false);
+            if (trackedTarget is not null) expectedTargetLocal = trackedTarget.Point;
+            var targetRecognitionRadius = trackedTarget is null ? preset.TargetSearchRadiusPixels :
+                Math.Min(preset.TargetSearchRadiusPixels, Math.Max(6, preset.MaximumResidualGrowthPixels));
             PixelPoint targetLocal;
             double targetFlux;
             string targetEvidence;
@@ -2738,7 +2754,7 @@ internal sealed partial class RealObservationStageRunner
                 var sourceTopologyAnalysis = SaturatedTargetGhostTopologyAnalyzer.Analyze(
                     frame,
                     expectedTargetLocal,
-                    preset.TargetSearchRadiusPixels);
+                    targetRecognitionRadius);
                 if (sourceTopologyAnalysis.Gate.Disposition == GateDisposition.Passed &&
                     sourceTopologyAnalysis.Target is { } topologyTarget)
                 {
@@ -2764,7 +2780,7 @@ internal sealed partial class RealObservationStageRunner
                     // retain its real flux and the ordinary hard flux envelope.
                     var freshStellar = SlitTargetIdentifier.Identify(
                         frame, candidates, expectedTargetLocal,
-                        preset.TargetSearchRadiusPixels,
+                        targetRecognitionRadius,
                         preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
                     if (Phd2FreshTargetFluxPolicy.CanRefineCatalogPositionWithStellarCentroid(
                         freshStellar, preset.TargetSearchRadiusPixels))
@@ -2792,7 +2808,7 @@ internal sealed partial class RealObservationStageRunner
                     frame,
                     candidates,
                     expectedTargetLocal,
-                    preset.TargetSearchRadiusPixels,
+                    targetRecognitionRadius,
                     preset.MinimumTargetSignalToNoise,
                     preset.MinimumTargetUniquenessRatio);
                 targetLocal = targetId.Target?.Centroid ?? expectedTargetLocal;
@@ -2823,15 +2839,51 @@ internal sealed partial class RealObservationStageRunner
                 }
             }
 
+            if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection && trackedTarget is null &&
+                targetFrameTiming.CaptureRequestedUtc != default)
+            {
+                var trackProbe = new G3PlateSolveProbeState(GateResult.Warn("G3_TRACK_SEARCH_ONLY", "Current pixels, not motion authority"),
+                    result.Path, image, null, null, Array.Empty<G3PlateSolveAttemptEvidence>(),
+                    MountBinding: residualMountBinding, BeforeExposureMountReadback: residualBeforeExposure)
+                { ExposureStartedUtc = targetFrameTiming.CaptureRequestedUtc, ExposureEndedUtc = targetFrameTiming.CaptureCompletedUtc,
+                    ExposureMillisecondsActual = exposureMilliseconds };
+                var recovered = await TryWideFieldStellarMeasurementAsync(context, trackProbe, frame, candidates,
+                    expectedTargetLocal, preset, cancellationToken).ConfigureAwait(false);
+                if (recovered?.Target is { } measuredTarget)
+                {
+                    targetLocal = measuredTarget.Centroid;
+                    targetFlux = measuredTarget.FluxAdu;
+                    targetPositionAuthority = Phd2TargetPositionAuthority.DetectedTargetCentroid;
+                    targetEvidence += ";wide-search-only:fresh-G3-measured";
+                    if (Phd2FreshTargetFluxPolicy.UsesSaturatedTopologyFluxNotApplicable(recovered,
+                        !string.IsNullOrWhiteSpace(Phd2FreshTargetFluxPolicy.CatalogIdentityEvidence(lastG3Field))))
+                    {
+                        saturatedIntegratedFluxDiagnostic = targetFlux; targetFlux = 0;
+                        targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsIdentityWithSaturatedTopologyCentroid;
+                    }
+                }
+            }
+
             // An estimator/nearby-peak switch is not sky motion. Keep the last
             // measured target/primary separation until a fresh consistent core
             // is observed. A rejection uses the existing bounded optical window,
             // never the prediction itself, another solve or extra motion credit.
             var continuityAllowance = Math.Max(6, preset.MaximumResidualGrowthPixels);
+            if (targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection &&
+                RejectStellarTargetTrackCandidate(trackedTarget, frame, targetLocal,
+                    image.MetaData.Image.ExposureTime, continuityAllowance, out _))
+            {
+                rejectedStellar = new TargetIdentification(GateResult.TargetQuality(
+                    "PHD2_TARGET_TRACK_COMPONENT_DISAGREEMENT", "Fresh candidate does not match the last-trusted target component after independent field registration."),
+                    null, expectedTargetLocal, PixelDistance(targetLocal, expectedTargetLocal), 0);
+                targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsProjection;
+            }
             if (continuityPrediction is not null &&
                 targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField &&
-                Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
-                    referenceTargetMeasured, targetLocal, expectedTargetLocal, continuityAllowance))
+                (Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
+                    referenceTargetMeasured, targetLocal, expectedTargetLocal, continuityAllowance) ||
+                 (trackedTarget is not null && Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
+                     referenceTargetMeasured, targetLocal, ToFrameLocal(continuityPrediction,preset), continuityAllowance))))
             {
                 rejectedStellar ??= new TargetIdentification(GateResult.TargetQuality(
                     "PHD2_TARGET_POSITION_DISCONTINUITY", "Fresh target/primary geometry disagrees with the preceding measured field."),
@@ -3011,6 +3063,9 @@ internal sealed partial class RealObservationStageRunner
             if (fluxWarning)
                 Report("目标通量警告：本帧积分亮度超出参考范围，保留真实数值；已确认的同帧目标/主星位置继续用于有界精调，不把积分亮度当成运动安全限位。");
             var state = new Phd2GuidingResidualState(gate, result, image, frame, candidates, slitDetection.Geometry, measurement, residualMountBinding);
+            if (targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField)
+                await RememberStellarTargetTrackAsync(context, frame, raw, targetLocal, result.Path, actualSha,
+                    targetFrameTiming, image.MetaData.Image.ExposureTime, trackedTarget, cancellationToken).ConfigureAwait(false);
             var acceptedOrdinal = measurements.Count + 1;
             measurements.Add(state);
             targetWindow.Observe(measured: true);
@@ -3462,6 +3517,8 @@ internal sealed partial class RealObservationStageRunner
         }
 
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+        var targetCaptureRequestedUtc = DateTimeOffset.UtcNow;
+        var selectionBeforeExposure = CaptureG3FrameMountReadback();
         var capture = await CaptureG3FullFrameForAcquisitionAsync(
             new Phd2SingleFrameRequest(
                 exposureMilliseconds,
@@ -3519,6 +3576,23 @@ internal sealed partial class RealObservationStageRunner
         BrightTargetCentroidAnalysis? brightAnalysis = null;
         BrightTargetAuthorityEvidence? brightAuthority = null;
         G3CatalogRegistrationReference? catalogReference = seedField.CatalogRegistrationReference;
+        var targetFrameTiming = new G3SparseExposureTiming(targetCaptureRequestedUtc, capture.CompletedUtc,
+            image.MetaData.Image.ExposureTime, DateTimeOffset.UtcNow);
+        var selectionTargetPrediction = seedField.TargetIdentification.Target?.Centroid ?? seedField.TargetIdentification.PredictedPoint;
+        await RetainSparseG3FrameAsync(context, image, capture.Path, frameSha256, selectionMountBinding,
+            selectionBeforeExposure, exposureMilliseconds, selectionTargetPrediction, cancellationToken,
+            captureTiming: targetFrameTiming).ConfigureAwait(false);
+        var trackedTarget = await PredictStellarTargetTrackAsync(context, seedField, frame, raw,
+            selectionTargetPrediction, seedField.SlitDetection.Geometry, preset, capture.Path, frameSha256,
+            targetFrameTiming, cancellationToken).ConfigureAwait(false);
+        if (trackedTarget is not null) selectionTargetPrediction = trackedTarget.Point;
+        var targetRecognitionRadius = trackedTarget is null ? preset.TargetSearchRadiusPixels :
+            Math.Min(preset.TargetSearchRadiusPixels, Math.Max(6, preset.MaximumResidualGrowthPixels));
+        var selectionTrackProbe = new G3PlateSolveProbeState(GateResult.Warn("G3_TRACK_SEARCH_ONLY", "Current pixels, not motion authority"),
+            capture.Path, image, null, null, Array.Empty<G3PlateSolveAttemptEvidence>(),
+            MountBinding: selectionMountBinding, BeforeExposureMountReadback: selectionBeforeExposure)
+        { ExposureStartedUtc = targetFrameTiming.CaptureRequestedUtc, ExposureEndedUtc = targetFrameTiming.CaptureCompletedUtc,
+            ExposureMillisecondsActual = exposureMilliseconds };
         if (UsesCatalogWcsTargetAuthority(context))
         {
             if (resolvedMode != Phd2SlitGuideMode.OffSlitGuideStar)
@@ -3572,12 +3646,11 @@ internal sealed partial class RealObservationStageRunner
         }
         else if (seedField.TargetIdentification.Authority == TargetIdentificationAuthority.CatalogWcsProjection)
         {
-            var predictedTarget = seedField.TargetIdentification.Target?.Centroid
-                ?? seedField.TargetIdentification.PredictedPoint;
+            var predictedTarget = selectionTargetPrediction;
             var topology = SaturatedTargetGhostTopologyAnalyzer.Analyze(
                 frame,
                 predictedTarget,
-                preset.TargetSearchRadiusPixels);
+                targetRecognitionRadius);
             // A long selection frame must not replace the independently checked
             // short-exposure centre with a clipped core/ghost blend. Fresh fine
             // residuals are still mandatory before any lock movement or science.
@@ -3603,13 +3676,16 @@ internal sealed partial class RealObservationStageRunner
                 !G3CatalogTargetPositionPolicy.NeedsShortPositionCheck(frame, predictedTarget, preset.TargetSearchRadiusPixels))
             {
                 var stellar = SlitTargetIdentifier.Identify(frame, candidates, predictedTarget,
-                    preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
+                    targetRecognitionRadius, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio);
                 if (stellar.Gate.Disposition == GateDisposition.Passed) identification = stellar;
             }
             // Off-slit guiding can wait for fresh target evidence, but direct
             // selection must not pretend an old catalogue cursor is a new core.
             // A split/ambiguous source exhausts this local alternative; the
             // checked-stop target-quality route can continue the native night.
+            if (!Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(identification) && trackedTarget is null)
+                identification = await TryWideFieldStellarMeasurementAsync(context, selectionTrackProbe, frame, candidates,
+                    selectionTargetPrediction, preset, cancellationToken).ConfigureAwait(false) ?? identification;
             if (resolvedMode == Phd2SlitGuideMode.DegradedDirectTargetGuiding &&
                 !Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(identification))
             {
@@ -3622,15 +3698,17 @@ internal sealed partial class RealObservationStageRunner
         }
         else
         {
-            var predictedTarget = seedField.TargetIdentification.Target?.Centroid
-                ?? seedField.TargetIdentification.PredictedPoint;
+            var predictedTarget = selectionTargetPrediction;
             identification = SlitTargetIdentifier.Identify(
                 frame,
                 candidates,
                 predictedTarget,
-                preset.TargetSearchRadiusPixels,
+                targetRecognitionRadius,
                 preset.MinimumTargetSignalToNoise,
                 preset.MinimumTargetUniquenessRatio);
+            if (identification.Gate.Disposition != GateDisposition.Passed && trackedTarget is null)
+                identification = await TryWideFieldStellarMeasurementAsync(context, selectionTrackProbe, frame, candidates,
+                    selectionTargetPrediction, preset, cancellationToken).ConfigureAwait(false) ?? identification;
             if (identification.Gate.Disposition != GateDisposition.Passed || identification.Target is null)
             {
                 var gate = GateResult.Unknown(
@@ -3640,6 +3718,20 @@ internal sealed partial class RealObservationStageRunner
                 return Phd2PlacementGuideChoice.Failed(failedField, gate, resolvedMode, gate.Message, capture);
             }
         }
+
+        if (Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(identification) &&
+            RejectStellarTargetTrackCandidate(trackedTarget, frame, identification.Target!.Centroid,
+                image.MetaData.Image.ExposureTime, Math.Max(6, preset.MaximumResidualGrowthPixels), out _))
+        {
+            var gate = GateResult.TargetQuality("PHD2_GUIDE_FRAME_TARGET_CONTINUITY_FAILED",
+                "Fresh selection disagrees with the last-trusted component after independent field registration; retained the trusted trajectory, not this tentative peak.");
+            return Phd2PlacementGuideChoice.Failed(seedField with { Gate = gate, FramePath = capture.Path,
+                Image = image, Frame = frame, TargetIdentification = identification }, gate, resolvedMode, gate.Message, capture);
+        }
+        if (Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(identification))
+            await RememberStellarTargetTrackAsync(context, frame, raw, identification.Target!.Centroid,
+                capture.Path, frameSha256, targetFrameTiming, image.MetaData.Image.ExposureTime,
+                trackedTarget, cancellationToken).ConfigureAwait(false);
 
         var field = seedField with
         {
@@ -3655,6 +3747,8 @@ internal sealed partial class RealObservationStageRunner
             BrightTargetEvidencePath = brightAuthority is null ? seedField.BrightTargetEvidencePath : capture.Path,
             MountBinding = selectionMountBinding,
             CatalogRegistrationReference = catalogReference,
+            ExposureTiming = targetFrameTiming,
+            TargetTrackSource = null,
         };
         var target = identification.Target!;
         if (resolvedMode == Phd2SlitGuideMode.OffSlitGuideStar)

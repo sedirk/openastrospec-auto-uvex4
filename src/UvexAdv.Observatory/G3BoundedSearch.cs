@@ -143,8 +143,15 @@ public static class G3LocalSearchPlanner
     private static IReadOnlyList<(int X, int Y)> BuildDesiredSpiralCells(G3LocalSearchLimits limits)
     {
         var cells = new List<(int X, int Y)>();
-        var gridRadius = (int)Math.Floor(limits.MaximumRadiusArcseconds / limits.StepArcseconds + 1e-12);
-        var maximumNominalSteps = checked((2 * gridRadius + 1) * (2 * gridRadius + 1) - 1);
+        // A tighter overlap-preserving step can make radius / step enormous.
+        // No more than MaximumAttempts distinct desired cells can influence the
+        // output: bridges only ADD visits, so those cells already require at
+        // least that many output visits. Cap construction, not the run budget.
+        var sufficientGridRadius = Math.Ceiling(Math.Sqrt(limits.MaximumAttempts)) + 1;
+        var gridRadius = (int)Math.Min(sufficientGridRadius,
+            Math.Floor(limits.MaximumRadiusArcseconds / limits.StepArcseconds + 1e-12));
+        var gridDiameter = 2L * gridRadius + 1;
+        var maximumNominalSteps = gridDiameter * gridDiameter - 1;
         var x = 0;
         var y = 0;
         var directionX = 1;
@@ -153,7 +160,7 @@ public static class G3LocalSearchPlanner
         var legProgress = 0;
         var completedLegsAtLength = 0;
 
-        for (var nominalStep = 0; nominalStep < maximumNominalSteps; nominalStep++)
+        for (long nominalStep = 0; nominalStep < maximumNominalSteps; nominalStep++)
         {
             var nextX = x + directionX;
             var nextY = y + directionY;
@@ -162,7 +169,11 @@ public static class G3LocalSearchPlanner
             var radius = Math.Sqrt(raOffset * raOffset + decOffset * decOffset);
             x = nextX;
             y = nextY;
-            if (radius <= limits.MaximumRadiusArcseconds + 1e-9) cells.Add((x, y));
+            if (radius <= limits.MaximumRadiusArcseconds + 1e-9)
+            {
+                cells.Add((x, y));
+                if (cells.Count >= limits.MaximumAttempts) break;
+            }
 
             legProgress++;
             if (legProgress != legLength) continue;

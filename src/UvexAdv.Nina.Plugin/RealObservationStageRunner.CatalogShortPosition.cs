@@ -17,10 +17,10 @@ internal sealed partial class RealObservationStageRunner
         if (field.Gate.Disposition != GateDisposition.Passed || field.Frame is null ||
             field.Solve?.Result.Success != true || field.MountBinding is null ||
             field.TargetIdentification.Authority != TargetIdentificationAuthority.CatalogWcsProjection ||
-            UsesCatalogWcsTargetAuthority(context) ||
+            (field.Solve.IsFormal && UsesCatalogWcsTargetAuthority(context)) ||
             commissioning?.Value.Phd2SlitPlacement is not { } preset ||
-            !G3CatalogTargetPositionPolicy.NeedsShortPositionCheck(field.Frame,
-                field.TargetIdentification.PredictedPoint, preset.TargetSearchRadiusPixels))
+            (field.Solve.IsFormal && !G3CatalogTargetPositionPolicy.NeedsShortPositionCheck(field.Frame,
+                field.TargetIdentification.PredictedPoint, preset.TargetSearchRadiusPixels)))
             return field;
 
         G3FieldState Unconfirmed(string reason, IReadOnlyDictionary<string, double>? metrics = null) => field with
@@ -263,6 +263,9 @@ internal sealed partial class RealObservationStageRunner
                     previousHash,
                     previousReceipt,
                     sourceWcsFrame = field.FramePath,
+                    astrometryAuthority = field.Solve.Authority,
+                    nativeCurrentFrameSolveSucceeded = field.Solve.IsFormal,
+                    field.Solve.PredictionUncertaintyPixels,
                     sourceWcsEvidence = field.Solve.EvidencePath,
                     sourceWcsBinding = field.MountBinding,
                     shortFramePath = capture.Path,
@@ -344,7 +347,7 @@ internal sealed partial class RealObservationStageRunner
                 BoundShortPositionEvidencePath = receipt,
                 CatalogPositionSpreadPixels = positionSpread,
                 Gate = GateResult.Pass("TARGET_CATALOG_WCS_SHORT_REFINED",
-                    "Formal WCS retains identity; separately hash-bound, unchanged-pointing short evidence supplies a measured coarse centre and its empirical spread. Not exact placement or focus.", measured.Gate.Metrics),
+                    $"{field.Solve.Authority} supplies catalogue association; separately hash-bound, unchanged-pointing short evidence supplies a measured coarse centre and its empirical spread. Not exact placement or focus.", measured.Gate.Metrics),
             };
             var residual = PixelDistance(identification.Target!.Centroid, field.SlitDetection.Geometry.AcquisitionPoint);
             var handoffRadius = Phd2HandoffResidualPixels(field with { TargetIdentification = identification }, preset);
@@ -382,7 +385,11 @@ internal sealed partial class RealObservationStageRunner
                 field.SlitDetection.Geometry, identification.Target.Centroid);
             return field with
             {
+                SparseInferenceConfirmed = !field.Solve.IsFormal,
                 TargetIdentification = identification,
+                TargetTrackSource = new(capture.Path, sha, image, frame, binding,
+                    new G3SparseExposureTiming(before.ReportedUtc, capture.CompletedUtc,
+                        image.MetaData.Image.ExposureTime, DateTimeOffset.UtcNow), identification.Target.Centroid),
                 Gate = GateResult.Pass("G3_CATALOG_SHORT_POSITION_CONFIRMED", identification.Gate.Message,
                     new Dictionary<string, double>
                     {

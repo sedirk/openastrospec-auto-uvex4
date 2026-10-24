@@ -1,10 +1,25 @@
 # Faint-target, sparse-field and adaptive-spectrum acquisition design
 
-Status: implemented in stages and partly validated on sky. The 2026-08-25/26
+Status: historical design, implemented in stages and partly validated on sky.
+The 2026-08-25/26
 M76 run validated one-node neighbouring-field recovery, formal PlateSolve3
 trust, catalogue-WCS placement for a non-stellar target, off-slit PHD2 guiding
-and adaptive 600 s ATR acquisition. A connected multi-node overlap graph is
-still future work.
+and adaptive 600 s ATR acquisition. The connected overlap graph and local
+dual-optics fallback are now implemented under
+[ADR-0043](../adr/0043-local-dual-optics-and-overlap-mosaic-recovery.md); this
+does not mean every historical or live path can reach them. See the
+[2026-10-24 reachability and fusion audit](../reports/2026-10-24-wide-narrow-fusion-audit.md)
+for measured cold-start, timing and frame-ingestion limitations. Historical
+on-sky results below are not validation of those newer branches.
+
+The owner-approved follow-up [ADR-0044](../adr/0044-continuous-wide-narrow-acquisition-state.md)
+implements reachable pre-solve registration/mosaic, a bounded early wide-field
+stream, time-qualified handoff and one last-trusted stellar track. Its current
+verification and deployment status is recorded in the
+[implementation report](../reports/2026-10-24-continuous-wide-narrow-production.md).
+Quality misses may skip only at a checked stopped boundary. Continuous wide-field
+relative registration is not an absolute encoder, differential-flexure proof or
+measured narrow-field target; unavailable evidence retains the existing fallback.
 
 This document extends the ordinary-star route without changing the device
 ownership or raw-data invariants in the frozen observatory baseline. It is
@@ -46,7 +61,11 @@ minimum-star veto.
 - PHD2 remains the only G3M2210M camera owner and provides native guide-star
   selection. The coordinator validates PHD2's returned star; it does not rank a
   replacement catalogue of its own.
-- The QHY service remains the only QHYminiCam8M owner.
+- The historical runs below used the QHY service. The accepted ownership target
+  follows [ADR-0014](../adr/0014-dual-nina-coordinated-acquisition.md): a dedicated
+  photometry N.I.N.A. worker owns QHYminiCam8M. Design acceptance does not prove
+  deployment; migration/rollback is explicit and idle-boundary only, never two
+  concurrent owners or an in-run hot switch.
 - Every G3/QHY/ATR FITS is immutable. Failed, clipped and low-match frames remain
   evidence and never get overwritten by a later success.
 - N.I.N.A.'s native centring machinery is preferred for ordinary wide-field

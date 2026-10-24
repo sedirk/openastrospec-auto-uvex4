@@ -86,7 +86,12 @@ internal sealed partial class RealObservationStageRunner
             var probe = new G3PlateSolveProbeState(
                 GateResult.Unknown("G3_POST_WCS_MEASURED_TARGET_READY", "Independent SEP positions agree; fresh PHD2 proof is still required."),
                 captured.Path, image, null, content, attempts, MountBinding: binding,
-                BeforeExposureMountReadback: before, MeasuredPostWcsTarget: shortTarget);
+                BeforeExposureMountReadback: before, MeasuredPostWcsTarget: shortTarget)
+            {
+                ExposureStartedUtc = before.ReportedUtc,
+                ExposureEndedUtc = captured.CompletedUtc,
+                ExposureMillisecondsActual = exposureMilliseconds,
+            };
             var mountGate = await ValidateG3ProbeMountBindingForMotionAsync(context, probe, cancellationToken).ConfigureAwait(false);
             if (mountGate.Disposition != GateDisposition.Passed)
                 throw new InvalidOperationException($"{mountGate.Code}: {mountGate.Message}");

@@ -256,4 +256,5 @@ public sealed record QhyServiceHealth(
     bool LoopbackOnly,
     QhyServiceConfigurationProof Configuration,
     DateTimeOffset TimestampUtc,
-    QhyNinaWorkerIdentity? NinaWorker = null);
+    QhyNinaWorkerIdentity? NinaWorker = null,
+    IReadOnlyList<string>? Capabilities = null);

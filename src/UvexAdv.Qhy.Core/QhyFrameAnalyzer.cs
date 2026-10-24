@@ -86,7 +86,9 @@ public static class QhyFrameAnalyzer
             MedianNullable(stars.Select(static star => star.Ellipticity)),
             medianFlux,
             transparency,
-            flags);
+            flags,
+            stars.Select(s => new QhyAstrometricStar(s.X, s.Y, s.Flux, s.Fwhm, s.Ellipticity)).ToArray(),
+            frame.Width, frame.Height);
     }
 
     public static bool PassesAcquisitionGate(QhyFrameMetrics metrics, QhyQualityThresholds thresholds) =>
@@ -302,7 +304,7 @@ public static class QhyFrameAnalyzer
         var ellipticity = 1 - Math.Sqrt(minor / major);
         if (!double.IsFinite(fwhm) || fwhm < MinimumFwhmPixels || fwhm > MaximumFwhmPixels) return null;
         if (!double.IsFinite(ellipticity) || ellipticity > MaximumEllipticity) return null;
-        return new StarMeasurement(signedFlux, fwhm, Math.Clamp(ellipticity, 0, 1));
+        return new StarMeasurement(signedFlux, fwhm, Math.Clamp(ellipticity, 0, 1), centerX + centroidX, centerY + centroidY);
     }
 
     private static bool HasPsfConnectivity(
@@ -389,5 +391,5 @@ public static class QhyFrameAnalyzer
         return values.Length % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
     }
 
-    private sealed record StarMeasurement(double Flux, double Fwhm, double Ellipticity);
+    private sealed record StarMeasurement(double Flux, double Fwhm, double Ellipticity, double X, double Y);
 }

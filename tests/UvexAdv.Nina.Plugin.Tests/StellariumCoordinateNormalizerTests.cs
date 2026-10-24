@@ -4,6 +4,7 @@ using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
+[Collection("Read-only NINA ephemeris boundary")]
 public sealed class StellariumCoordinateNormalizerTests
 {
     [Fact]

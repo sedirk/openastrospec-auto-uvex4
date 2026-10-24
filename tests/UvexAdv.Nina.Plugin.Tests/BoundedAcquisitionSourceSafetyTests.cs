@@ -28,7 +28,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private GateResult ValidateG3SearchMountState(");
         Assert.Contains("G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(", search);
         Assert.Contains("durableG3AcquisitionMotion, limits.MaximumRadiusArcseconds)", search);
-        Assert.Contains("G3LocalSearchPlanner.Build(limits)", search);
+        Assert.Contains("G3FieldOverlapPolicy.PlanSearch", search);
+        Assert.Contains("overlapPlan.Waypoints", search);
         var begin = search.IndexOf("var durableSearch = await BeginG3AcquisitionMotionAsync(", StringComparison.Ordinal);
         var persist = search.IndexOf("await PersistG3AcquisitionMotionAsync(durableSearch", begin, StringComparison.Ordinal);
         Assert.Contains("durableMaximumRadiusArcseconds,", search[begin..persist]);
@@ -104,7 +105,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("maximumCommandResidualArcseconds", settle, StringComparison.Ordinal);
         Assert.Contains("drift > MountCommandArrivalToleranceArcseconds", settle, StringComparison.Ordinal);
         Assert.Contains("G3SearchStableEndpointToleranceArcseconds,", search, StringComparison.Ordinal);
-        Assert.Contains("limits.StepArcseconds + 2 * G3SearchStableEndpointToleranceArcseconds", search, StringComparison.Ordinal);
+        Assert.Contains("originalLimits.StepArcseconds + 2 * G3SearchStableEndpointToleranceArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("var durableWaypointOffset = G3AcquisitionMotionPlanner.SignedTangentOffsetArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("durableWaypointOffset.RaArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("attestedLineageMaximumAttempts: commissioning.MotionLimits.MaximumCorrectionAttempts", search, StringComparison.Ordinal);
@@ -153,7 +154,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(",
             "private GateResult ValidateG3SearchMountState(");
 
-        Assert.Contains("G3LocalSearchPlanner.Build", body, StringComparison.Ordinal);
+        Assert.Contains("G3FieldOverlapPolicy.PlanSearch", body, StringComparison.Ordinal);
         Assert.Contains("ValidateG3SearchMoveAndReturnReserve", body, StringComparison.Ordinal);
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", body, StringComparison.Ordinal);
         Assert.Contains("CaptureAndAnalyzeG3WithSolveLadderAsync", body, StringComparison.Ordinal);
@@ -559,7 +560,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var load = body.IndexOf("imageDataFactory.CreateFromFile", StringComparison.Ordinal);
         var preview = body.IndexOf("PublishG3Preview", load, StringComparison.Ordinal);
         var content = body.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
-        var solve = body.IndexOf("SolveImageAsync", StringComparison.Ordinal);
+        var solve = body.IndexOf("SolveG3HandoffFrameWithResolutionRecoveryAsync", StringComparison.Ordinal);
 
         Assert.True(load >= 0 && preview > load && content > preview && solve > content);
         Assert.Contains("已拍摄，正在检测星场并解算", body, StringComparison.Ordinal);
@@ -575,7 +576,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private GateResult ValidateG3SolveProbeImage(");
 
         var content = body.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
-        var solve = body.IndexOf("SolveImageAsync", content, StringComparison.Ordinal);
+        var solve = body.IndexOf("SolveG3HandoffFrameWithResolutionRecoveryAsync", content, StringComparison.Ordinal);
         var preSolveBranch = body[content..solve];
 
         Assert.True(content >= 0 && solve > content);
@@ -608,11 +609,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("configuration.G3.EffectiveBrightTarget.Enabled", wrapper, StringComparison.Ordinal);
         Assert.Contains("configuration.G3.GhostAssistanceMode != GhostAssistanceMode.Skip", wrapper, StringComparison.Ordinal);
         Assert.Contains("motionPrediction: null", wrapper, StringComparison.Ordinal);
-        Assert.Contains("No neighbouring-field search or motion prediction is authorized", wrapper, StringComparison.Ordinal);
+        Assert.Contains("PreserveG3OverexposureFallbackFailure(deterministicField.Gate)", wrapper, StringComparison.Ordinal);
+        Assert.Contains("ClassifyG3OverexposedLadder(attempts, latest?.ContentAssessment?.Gate)", ladder, StringComparison.Ordinal);
         Assert.Contains("!solveLadderWasOverexposed && IsRecoverableSparseG3Field", analysis, StringComparison.Ordinal);
 
         var analyze = ladder.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
-        var solve = ladder.IndexOf("SolveImageAsync", analyze, StringComparison.Ordinal);
+        var solve = ladder.IndexOf("SolveG3HandoffFrameWithResolutionRecoveryAsync", analyze, StringComparison.Ordinal);
         var stop = ladder.IndexOf("if (contentIsOverexposed) break;", solve, StringComparison.Ordinal);
         Assert.True(analyze >= 0 && solve > analyze && stop > solve);
     }
@@ -1289,7 +1291,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("G3_FIELD_ANALYZED_MOTION_PREDICTED", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("freshTargetFieldSolveRequired", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("repeatedHdrRequired = false", cachedAnalysis, StringComparison.Ordinal);
-        Assert.Contains("must not restart generic neighbouring-field search", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("G3PostWcsPredictionPolicy.RejectedTargetGate(", cachedAnalysis, StringComparison.Ordinal);
+        Assert.Contains("temporal.SearchHintUsable && measuredGeometry", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("configuration.G3.EffectiveBrightTarget.Enabled", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("configuration.G3.GhostAssistanceMode != GhostAssistanceMode.Skip", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("return null;", cachedAnalysis, StringComparison.Ordinal);
@@ -1305,14 +1308,15 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         var ladder = MethodBody(
             "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
             "private GateResult ValidateG3SolveProbeImage(");
-        var shortcut = ladder.IndexOf("G3PostWcsMeasuredHandoffPolicy.CanHandOff", StringComparison.Ordinal);
-        var solver = ladder.IndexOf("solve = await SolveImageAsync(", StringComparison.Ordinal);
+        var shortcut = ladder.IndexOf("G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation", StringComparison.Ordinal);
+        var solver = ladder.IndexOf("await SolveG3HandoffFrameWithResolutionRecoveryAsync(", StringComparison.Ordinal);
         Assert.True(shortcut >= 0 && solver > shortcut);
         Assert.Contains("!contentIsOverexposed && content.HasCoherentSource", ladder, StringComparison.Ordinal);
         Assert.Contains("AllowUnsolvedTargetHandoff: true", ladder, StringComparison.Ordinal);
         Assert.Contains("SlitTargetIdentifier.Identify(", ladder, StringComparison.Ordinal);
         Assert.Contains("scienceOrLockShiftAuthorized = false", ladder, StringComparison.Ordinal);
-        Assert.Contains("freshPhd2TargetAndSlitMeasurementStillRequired = true", ladder, StringComparison.Ordinal);
+        Assert.Contains("RequireIndependentTargetPair = true", ladder, StringComparison.Ordinal);
+        Assert.Contains("predictionTiming?.SearchHintUsable == true", ladder, StringComparison.Ordinal);
         Assert.Contains("G3_POST_WCS_MEASURED_TARGET_READY", Source, StringComparison.Ordinal);
         Assert.Contains("probe.MeasuredPostWcsTarget?.Target?.Centroid ?? predictedTarget", Source, StringComparison.Ordinal);
     }
@@ -1325,7 +1329,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private GateResult ValidateG3SolveProbeImage(");
         var candidate = ladder.IndexOf("G3PostWcsMeasuredHandoffPolicy.CanProposeBoundedShortConfirmation", StringComparison.Ordinal);
         var shortFrames = ladder.IndexOf("await ConfirmSaturatedG3HandoffWithShortExposureAsync(", StringComparison.Ordinal);
-        var solver = ladder.IndexOf("solve = await SolveImageAsync(", StringComparison.Ordinal);
+        var solver = ladder.IndexOf("await SolveG3HandoffFrameWithResolutionRecoveryAsync(", StringComparison.Ordinal);
         Assert.True(candidate >= 0 && shortFrames > candidate && solver > shortFrames);
         Assert.Contains("RemainingPhd2HandoffRadius(handoffPreset, measuredTargetConfirmed: true)", ladder);
         Assert.Contains("handoffPreset.TargetSearchRadiusPixels, boundedCandidateRadius", ladder);

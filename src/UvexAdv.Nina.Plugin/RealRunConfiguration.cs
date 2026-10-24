@@ -659,6 +659,8 @@ internal sealed record G3RunConfiguration(
 {
     public BrightTargetRunConfiguration EffectiveBrightTarget => BrightTarget ?? BrightTargetRunConfiguration.Disabled;
     public QhyG3FastPairPolicy EffectiveFastSolvePair => FastSolvePair ?? QhyG3FastPairPolicy.Disabled;
+    // Included in the locked action payload; never hot-replace a running policy.
+    public string SparseRecoveryPolicyVersion => G3SparseRecoveryWorkflow.Version;
 }
 
 internal sealed record BrightTargetRunConfiguration(

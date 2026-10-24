@@ -91,7 +91,7 @@ public sealed class ClockRecoveryFieldSourceTests
             "if (currentPositionCheck && (probe.Gate.Disposition != GateDisposition.Passed || probe.Solve?.Result.Success != true))",
             "return G3FieldState.Failed(probe.Gate, probe.FramePath, probe.Image, probe.Solve, probe.MountBinding)",
             "await ValidateG3ProbeMountBindingForMotionAsync(",
-            "if (!currentPositionCheck && probe.Solve?.Result.Success == true &&",
+            "if (!currentPositionCheck && probe.Solve is { IsFormal: true, Result.Success: true } &&",
             "await TryCollectQhyG3FastSolvePairAsync(");
         Assert.Contains("trustedSolveProbe: probe", capture);
         Assert.Contains("return await RefineClippedCatalogPositionAsync(context, solvedField, cancellationToken)", capture);

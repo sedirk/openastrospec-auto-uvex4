@@ -865,6 +865,49 @@ public sealed class G3AcquisitionRecoveryTests
         Assert.Equal(now, state.StartedUtc);
     }
 
+    [Fact]
+    public async Task StoppedFreshHandoffUsesReportedRadiusAndOriginalClockWithoutAdoptingPosition()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = State(now) with { CorrectionAttempts = 3, CumulativeMotionArcseconds = 70 };
+        var before = state;
+        var allowed = G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(state, 60, now.AddSeconds(229));
+        Assert.Equal(GateDisposition.Passed, allowed.Gate.Disposition);
+        Assert.Equal(3, allowed.Gate.Metrics!["returnSegments"]);
+        Assert.Equal(TimeSpan.FromSeconds(10), allowed.OperationTimeout);
+        var denied = G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(state, 60, now.AddSeconds(231));
+        Assert.Equal(G3AcquisitionReturnTimePolicy.ReserveCode, denied.Gate.Code);
+        var calls = 0;
+        await Assert.ThrowsAsync<G3ReturnTimeReserveException>(() => G3AcquisitionReturnTimePolicy.ExecuteAsync(
+            denied, _ => { calls++; return Task.FromResult(1); }, CancellationToken.None));
+        Assert.Equal(0, calls);
+        Assert.Equal(before, state);
+        Assert.Equal(G3AcquisitionMotionPhase.SettledBudgetLedger, state.Phase);
+        Assert.Equal(0, state.CurrentRadiusArcseconds);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(-1)]
+    [InlineData(100000)]
+    public void StoppedHandoffDoesNotAcceptUnboundedGeometry(double radius)
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal("G3_WORK_RETURN_STATE_INVALID",
+            G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(State(now), radius, now).Gate.Code);
+    }
+
+    [Fact]
+    public void StoppedHandoffDoesNotTurnUnconfirmedMotionOrReversedClockIntoWorkAuthority()
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal("G3_WORK_RETURN_STATE_INVALID", G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(
+            State(now) with { Phase = G3AcquisitionMotionPhase.OutboundIntent }, 5, now).Gate.Code);
+        Assert.Equal("G3_WORK_RETURN_STATE_INVALID", G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(
+            State(now.AddSeconds(1)), 5, now).Gate.Code);
+    }
+
     [Theory]
     [InlineData(G3AcquisitionMotionPhase.OutboundIntent)]
     [InlineData(G3AcquisitionMotionPhase.ReturnIntent)]

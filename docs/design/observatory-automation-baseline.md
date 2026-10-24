@@ -152,6 +152,53 @@ Random unbounded mount nudging is not an automated strategy.
 
 ### 5.2 Slit-field acquisition with G3/PHD2
 
+Owner-approved [ADR-0044](../adr/0044-continuous-wide-narrow-acquisition-state.md)
+refines the following recovery design with a single timestamped measurement path.
+The already configured sole QHY owner may supply a bounded acquisition-only stream
+before G3 placement, with immutable raw retention, latest-wins analysis, formal WCS
+keyframes and independently validated relative registration. It is joined before
+role changes/cleanup, never hot-switches owners and remains within original live
+permission, target/night time and return constraints. Local dual-model samples are
+selected by applicability before fit; independent same-run exposures are allowed.
+A single formal pair is only a coarse search prior, not validated motion or science
+authority. Fresh wide-field pose does not refresh old calibration. Last-trusted G3
+target tracks, including ordinary stars, share independent field registration and
+preserve component identity; predictions, signal and actual centroids stay distinct.
+Recent formal anchors may re-root bounded graphs, and unusable anchors do not
+suppress a formal solve of useful real overlapping pixels. Exposure/solve timing
+also applies to the older neighbour/mount prediction route. Explicit optical misses
+retain target-quality scope through wrappers and require checked stop/ledger/LED
+boundaries before the saved native next-target policy. Actual safety, cancellation,
+identity/integrity, unknown stop, multi-lobe rejection and all budgets are unchanged.
+The detailed ADR supersedes the temporary two-witness/different-run cold-start
+restrictions below only for this bounded continuous route; installation is not
+on-sky validation and never starts observation.
+
+Owner-approved [ADR-0043](../adr/0043-local-dual-optics-and-overlap-mosaic-recovery.md)
+adds locally validated dual-optics prediction and independently registered
+overlapping-field/mosaic recovery to the same production acquisition workflow.
+Only immutable past samples with matching optical/focus/owner context and an
+independent holdout may support a local model. New G3 frames, bounded uncertainty
+and independent short-frame target confirmation remain required. Real overlapping
+pixels, distributed fit stars and independent holdouts may transfer a formal WCS
+or support a new formal solve of a derived mosaic; inferred current-frame WCS is
+labelled separately from a native solve. Adjacent search/correction steps are
+limited by measured field geometry and uncertainty, without increasing original
+actions, distance, time or return allowance. Qualified inference may use the
+existing durable coarse-motion controller, not a second QHY motion engine or a
+fine-motion calibration. Unavailable models/registration fall back; ownership,
+integrity, safety, unknown physical stop and terminal skip rules remain unchanged.
+Exposure/capture intervals and solver latency are part of the inference, not
+replaced by processing completion timestamps. Recent registered pixels may carry
+an anchor before another whole-frame solve. Two fresh stationary wide-field QHY
+formal solutions may measure actual sky drift even without G3 stars, through the
+validated local optical relation; mount tracking/readback alone is not a zero-drift
+measurement or a physical encoder. Retain optical/flexure/timing uncertainty,
+expire at the earliest applicable freshness bound, and use at most two precharged
+native QHY witnesses within the same original budget. Full parent hashes and new
+target/slit measurements remain required; unavailable timing invalidates the
+optional inference, not the entire night.
+
 1. PHD2 remains the only G3 owner.
 2. A full slit-field frame is retained and solved. At an unchanged pointing, the most recent fresh QHY/PL3 WCS is the preferred G3 solver hint and may first repair a grossly incorrect mount coordinate under the one-Sync rule above. A formal, physically plausible fresh G3 WCS remains the authority for a large acquisition correction through the N.I.N.A. telescope mediator; the commanded endpoint is not optical success evidence.
 3. After every large correction, the coordinator waits for stable mount readback and captures another immutable G3 frame. Fresh post-move G3 WCS normally proves response and arrival. Under owner-requested [ADR-0030](../adr/0030-exploratory-neighbour-field-continuity.md), a final approach from a formally solved neighbouring field may instead use its measured-arrival prediction followed by fresh, consistent short-frame target measurements before PHD2 fine placement; a new whole-target-field solve is not mandatory. A candidate need not already be within the old 20-pixel coarse circle to enter that confirmation: use the configured recognition area and remaining fine-motion envelope. Predictions remain labelled and are not measured slit arrival. If direct G3 solving fails, use the bounded overlapping neighbouring-field search and retain every attempt and confidence score. A same-run, geometry/pier-compatible QHY/G3 pair may adjust a fresh QHY-derived G3 search hint, without becoming an Active global transfer or granting movement authority.

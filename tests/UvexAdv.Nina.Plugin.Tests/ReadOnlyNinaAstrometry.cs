@@ -4,6 +4,12 @@ using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
+// NOVAS and AstroUtil expose process-wide native/cache state. These ephemeris
+// boundary tests pass in isolation but must not overlap other native consumers
+// in the full suite. This changes test scheduling only, never production gates.
+[CollectionDefinition("Read-only NINA ephemeris boundary", DisableParallelization = true)]
+public sealed class ReadOnlyNinaEphemerisCollection { }
+
 /// <summary>Initialize NINA's existing ephemeris once in the test process only.</summary>
 internal static class ReadOnlyNinaAstrometry
 {

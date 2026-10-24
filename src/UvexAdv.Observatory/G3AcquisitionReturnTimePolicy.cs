@@ -17,11 +17,33 @@ public static class G3AcquisitionReturnTimePolicy
             return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
                 "Acquisition work requires a valid, arrived acquisition ledger and a non-reversed clock. " + string.Join(" ", issues)), null);
 
+        return PlanDuration(state, state.CurrentRadiusArcseconds, now);
+    }
+
+    // A stopped guide handoff has not adopted a fresh image position yet. Its
+    // settled ledger must remain unchanged, but work must still reserve the
+    // return from the CURRENT reported pointing on the ORIGINAL motion clock.
+    // This is a time reservation only, never position or movement authority.
+    public static G3AcquisitionWorkTimePlan PlanStoppedHandoff(
+        G3AcquisitionMotionState state, double reportedRadiusArcseconds, DateTimeOffset now)
+    {
+        if (state.Validate().Count != 0 || state.Phase != G3AcquisitionMotionPhase.SettledBudgetLedger ||
+            now < state.UpdatedUtc || !double.IsFinite(reportedRadiusArcseconds) || reportedRadiusArcseconds < 0 ||
+            reportedRadiusArcseconds > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds)
+            return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
+                "Stopped handoff work requires its unchanged settled ledger, current bounded geometry and a non-reversed clock."), null);
+        return PlanDuration(state, reportedRadiusArcseconds, now);
+    }
+
+    private static G3AcquisitionWorkTimePlan PlanDuration(
+        G3AcquisitionMotionState state, double radiusArcseconds, DateTimeOffset now)
+    {
+
         // Use the same worst-case endpoint allowance as the segmented return.
         // Include one extra endpoint tolerance before rounding; never assume
         // that the most recent reported coordinate is an exact physical point.
         var progress = state.MaximumSingleCorrectionArcseconds - 2 * state.ArrivalToleranceArcseconds;
-        var segments = Math.Max(1, Math.Ceiling((state.CurrentRadiusArcseconds + 2 * state.ArrivalToleranceArcseconds) / progress));
+        var segments = Math.Max(1, Math.Ceiling((radiusArcseconds + 2 * state.ArrivalToleranceArcseconds) / progress));
         var returnSeconds = segments * state.WorstCaseActionSeconds;
         var remainingSeconds = state.MaximumElapsedSeconds - (now - state.MotionClockStartedUtc).TotalSeconds;
         var requiredSeconds = state.WorstCaseActionSeconds + returnSeconds + CleanupReserveSeconds;

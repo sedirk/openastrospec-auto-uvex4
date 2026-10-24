@@ -85,7 +85,8 @@ app.MapGet("/api/v1/health", (QhyServiceConfigurationProof proof) => Results.Ok(
     "ok",
     LoopbackOnly: true,
     proof,
-    DateTimeOffset.UtcNow)));
+    DateTimeOffset.UtcNow,
+    Capabilities: [QhyControlProtocol.WideFieldStreamCapability])));
 app.MapGet("/api/v1/camera", (QhyJobCoordinator coordinator) => Results.Ok(coordinator.CameraStatus));
 app.MapPost("/api/v1/camera/connect", async (QhyJobCoordinator coordinator, CancellationToken cancellationToken) =>
     Results.Ok(await coordinator.ConnectCameraAsync(cancellationToken).ConfigureAwait(false)));

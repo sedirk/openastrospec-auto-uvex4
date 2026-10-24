@@ -6,6 +6,7 @@ public static class QhyControlProtocol
 {
     public const string OwnerTokenHeaderName = "X-QHY-Owner-Token";
     public const string LeaseExpiresUtcHeaderName = "X-QHY-Lease-Expires-Utc";
+    public const string WideFieldStreamCapability = "bounded-wide-field-acquisition-v1";
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -93,6 +94,8 @@ public sealed record QhyQualityThresholds(
     double SaturationAdu = 65_520,
     double DetectionSigma = 5.0);
 
+public sealed record QhyAstrometricStar(double X, double Y, double Flux, double FwhmPixels, double Ellipticity);
+
 public sealed record QhyFrameMetrics(
     double MinimumAdu,
     double MaximumAdu,
@@ -109,7 +112,10 @@ public sealed record QhyFrameMetrics(
     double? MedianEllipticity,
     double? MedianStarFlux,
     double? Transparency,
-    IReadOnlyList<string> QualityFlags);
+    IReadOnlyList<string> QualityFlags,
+    IReadOnlyList<QhyAstrometricStar>? AstrometricStars = null,
+    int SourceWidthPixels = 0,
+    int SourceHeightPixels = 0);
 
 public sealed record QhyFrameRecord(
     Guid FrameId,
@@ -166,7 +172,14 @@ public sealed record QhyJobSnapshot(
     bool? LastFramePassedQualityGate = null,
     string? NightSetupId = null,
     bool OperatorInterventionRequired = false,
-    string? YieldedToAcquisitionRequestId = null);
+    string? YieldedToAcquisitionRequestId = null,
+    QhyWideFieldStreamOptions? WideFieldStream = null,
+    bool ExecutionJoined = false);
+
+/// <summary>Subordinate bounds supplied by the master's existing acquisition/return/night budget.
+/// This is acquisition evidence, never a scientific-photometry role or a new owner.</summary>
+public sealed record QhyWideFieldStreamOptions(DateTimeOffset DeadlineUtc, int MaximumFrames,
+    double CadenceSeconds = 0);
 
 public sealed record AcquisitionJobRequest(
     string ObservationRunId,
@@ -193,7 +206,8 @@ public sealed record AcquisitionJobRequest(
     string CoordinateEpoch = "ICRS",
     int ControlLeaseSeconds = 120,
     string? NightSetupId = null,
-    QhyFocusRunPolicy? FocusPolicy = null);
+    QhyFocusRunPolicy? FocusPolicy = null,
+    QhyWideFieldStreamOptions? WideFieldStream = null);
 
 public sealed record PhotometryJobRequest(
     string ObservationRunId,

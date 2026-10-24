@@ -48,7 +48,9 @@ public sealed class G3CatalogTargetPositionPolicyTests
     [InlineData(101, false)]
     public void RefinementNeverExpandsTheCommissionedRecognitionWindow(double distance, bool accepted)
     {
-        var frame = new MonochromeFrame(400, 200, new ushort[400 * 200], 65520);
+        var pixels = new ushort[400 * 200];
+        AddSupportedCore(pixels, 400, (int)(100 + distance), 100);
+        var frame = new MonochromeFrame(400, 200, pixels, 65520);
         var point = new PixelPoint(100, 100);
         var candidate = new StarCandidate(new(100 + distance, 100), 5000, 10000, 30, 3, 0, 0, 50);
         var result = G3CatalogTargetPositionPolicy.Identify(frame, [candidate], point, false, 100);
@@ -58,7 +60,10 @@ public sealed class G3CatalogTargetPositionPolicyTests
     [Fact]
     public void AmbiguousCandidatesRemainCatalogOnlyAndCannotProvideACorrectionOffset()
     {
-        var frame = new MonochromeFrame(200, 200, new ushort[40000], 65520);
+        var pixels = new ushort[40000];
+        AddSupportedCore(pixels, 200, 105, 100);
+        AddSupportedCore(pixels, 200, 94, 100);
+        var frame = new MonochromeFrame(200, 200, pixels, 65520);
         var a = new StarCandidate(new(105, 100), 5000, 10000, 30, 3, 0, 0, 50);
         var result = G3CatalogTargetPositionPolicy.Identify(frame, [a, a with { Centroid = new(94, 100) }], new(100, 100), false, 100);
         Assert.False(result.CatalogPositionRefinedFromSameFrame);
@@ -87,7 +92,9 @@ public sealed class G3CatalogTargetPositionPolicyTests
     [Fact]
     public void SeparatelyAttestedShortPositionUsesMeasuredOffsetButDoesNotClaimSameFrame()
     {
-        var frame = new MonochromeFrame(400, 400, new ushort[160000], 65520);
+        var pixels = new ushort[160000];
+        AddSupportedCore(pixels, 400, 150, 210);
+        var frame = new MonochromeFrame(400, 400, pixels, 65520);
         var projection = new PixelPoint(200, 200);
         var candidate = new StarCandidate(new(150, 210), 40000, 100000, 80, 4, 0, 0, 100);
         var measured = SlitTargetIdentifier.Identify(frame, [candidate], projection, 100);
@@ -122,5 +129,11 @@ public sealed class G3CatalogTargetPositionPolicyTests
         var fragment = new StarCandidate(new(309,191),65520,10000,50,3,0,.5,100);
         var identified = SlitTargetIdentifier.Identify(frame,[fragment],prediction,100);
         Assert.NotEqual(GateDisposition.Passed,identified.Gate.Disposition);
+    }
+
+    private static void AddSupportedCore(ushort[] pixels, int width, int x, int y)
+    {
+        for (var dy = -1; dy <= 1; dy++)
+        for (var dx = -1; dx <= 1; dx++) pixels[(y + dy) * width + x + dx] = 5000;
     }
 }
