@@ -8,6 +8,80 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class QhyWideFieldStreamSessionTests
 {
+    [Fact]
+    public async Task MissingContinuousPoseDoesNotDispatchSecondJobOrDiscardG3Frame()
+    {
+        using var transport = new OwnerTransport { ProduceFrames = true };
+        using var client = new QhyServiceClient("http://127.0.0.1", transport);
+        var session = await QhyWideFieldStreamSession.StartAsync(client, Request(), _ => Task.CompletedTask,
+            (_, _) => Task.CompletedTask, (_, _, _) => Task.CompletedTask, CancellationToken.None);
+        var dualCaptures = 0;
+        var nativeSolves = 0;
+        var existingG3 = new object();
+        var optional = await G3SparseRecoveryWorkflow.TryAvailableBeforeSolveAsync<object>(
+            _ => Task.CompletedTask, _ => Task.CompletedTask,
+            _ => Task.FromResult<object?>(null),
+            t => G3SparseRecoveryWorkflow.WithoutContinuousOwnerAsync(session is not null,
+                _ => { dualCaptures++; return Task.FromException<object?>(new InvalidOperationException("409: already active")); }, t),
+            _ => Task.FromResult<object?>(null), default);
+        if (optional is null) { nativeSolves++; Assert.NotNull(existingG3); }
+        Assert.Equal(0, dualCaptures); Assert.Equal(1, nativeSolves); Assert.Equal(1, transport.Starts);
+        Assert.Equal(GateDisposition.Passed, (await session!.StopAsync(default)).Disposition);
+    }
+
+    [Fact]
+    public async Task PrechargedMotionDefersAFrameButSameOwnerMeasuresNextArrivedFrames()
+    {
+        using var transport = new OwnerTransport { ProduceFrames = true };
+        using var client = new QhyServiceClient("http://127.0.0.1", transport);
+        var now = DateTimeOffset.UtcNow;
+        var state = MotionState(now);
+        var measured = new List<int>();
+        var session = await QhyWideFieldStreamSession.StartAsync(client, Request(), _ => Task.CompletedTask,
+            (_, _) => Task.CompletedTask, async (_, frame, token) =>
+            {
+                var phase = frame.SequenceNumber == 1 ? G3AcquisitionMotionPhase.OutboundIntent : G3AcquisitionMotionPhase.AwaitingFreshSolve;
+                await RealObservationStageRunner.RunWideFieldKeyframeWhenStationaryAsync(state with { Phase = phase }, now,
+                    _ => { measured.Add(frame.SequenceNumber); return Task.FromResult("measured"); }, token);
+            }, CancellationToken.None);
+        Assert.NotNull(session);
+        for (var i = 0; i < 100 && !session.IsJoined; i++) await Task.Delay(20);
+        Assert.True(session.IsJoined);
+        Assert.Null(session.AnalysisFailure);
+        Assert.Null(session.ProducerFailure);
+        Assert.Equal(new[] { 2, 3, 4 }, measured);
+        Assert.Equal(1, transport.Starts); Assert.Equal(0, transport.Cancels);
+        Assert.Equal(1, state.CorrectionAttempts); // policy never resets/writes the immutable ledger
+        Assert.Equal(GateDisposition.Passed, (await session.StopAsync(CancellationToken.None)).Disposition);
+    }
+
+    [Theory]
+    [InlineData("return")] [InlineData("invalid")] [InlineData("clock")] [InlineData("reserve")] [InlineData("cancel")]
+    public async Task BackgroundDeferralDoesNotWaiveIntegrityClockReserveOrCancellation(string scenario)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = MotionState(now) with { Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve };
+        using var stop = new CancellationTokenSource();
+        if (scenario == "return") state = state with { Phase = G3AcquisitionMotionPhase.ReturnIntent };
+        if (scenario == "invalid") state = state with { Phase = G3AcquisitionMotionPhase.OutboundIntent, RecoveryContextSha256 = "bad" };
+        if (scenario == "clock") state = state with { Phase = G3AcquisitionMotionPhase.OutboundIntent, UpdatedUtc = now.AddSeconds(1) };
+        if (scenario == "reserve") now = now.AddSeconds(280);
+        if (scenario == "cancel") stop.Cancel();
+        var called = false;
+        Task<string?> Work() => RealObservationStageRunner.RunWideFieldKeyframeWhenStationaryAsync(state, now,
+            _ => { called = true; return Task.FromResult("not allowed"); }, stop.Token);
+        if (scenario == "return") Assert.Null(await Work());
+        else if (scenario == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(Work);
+        else await Assert.ThrowsAsync<G3ReturnTimeReserveException>(Work);
+        Assert.False(called);
+    }
+
+    private static G3AcquisitionMotionState MotionState(DateTimeOffset now) => new(
+        G3AcquisitionMotionState.CurrentSchemaVersion, G3AcquisitionMotionState.CurrentTangentProjectionId,
+        "finite-stream-run", Guid.NewGuid().ToString("N"), new string('A',64), new string('B',64), new string('C',64),
+        G3AcquisitionMotionKind.LocalSearch, G3AcquisitionMotionPhase.SettledBudgetLedger, "pierEast", "J2000",
+        10,20,10,20,10,20,0,0,5,30,100,500,20,2,10,300,5,1,now,now,now,"finite-evidence","finite test");
+
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task UnsupportedOrUnavailableHealthDoesNotDispatchAnyJob(bool unavailable)
@@ -46,16 +120,26 @@ public sealed class QhyWideFieldStreamSessionTests
         using var client = new QhyServiceClient("http://127.0.0.1", transport);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminalObservations = 0;
         var measured = new System.Collections.Concurrent.ConcurrentQueue<int>();
         var session = await QhyWideFieldStreamSession.StartAsync(client, Request(), _ => Task.CompletedTask,
-            (_, _) => Task.CompletedTask, async (_, frame, token) =>
+            (job, _) =>
+            {
+                // The first terminal observation precedes publication to the queue;
+                // retirement observes it again after the producer has closed that queue.
+                // A transport read count alone can release analysis before frame 4 is published.
+                if (job.State == QhyJobState.Completed && Interlocked.Increment(ref terminalObservations) == 2)
+                    retired.TrySetResult();
+                return Task.CompletedTask;
+            }, async (_, frame, token) =>
             {
                 measured.Enqueue(frame.SequenceNumber);
                 if (frame.SequenceNumber == 1) { entered.TrySetResult(); await release.Task.WaitAsync(token); }
             }, CancellationToken.None);
         Assert.NotNull(session);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        for (var i = 0; i < 100 && transport.FrameReads < 4; i++) await Task.Delay(20);
+        await retired.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(transport.FrameReads >= 4);
         release.TrySetResult();
         for (var i = 0; i < 100 && !session.IsJoined; i++) await Task.Delay(20);

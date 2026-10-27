@@ -35,6 +35,10 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     private readonly Func<IObservationStageRunner>? simulationRunnerFactory;
     private SequencerStageBridge? activeBridge;
     private CancellationTokenSource? targetLifetime;
+    private CancellationToken parentExecutionToken;
+    private TaskCompletionSource? targetJoined;
+    private int operatorSkipRequested;
+    private bool endedByNativeCondition;
     private bool useRealMode;
     private InputTarget target;
     private bool loadingTarget = true;
@@ -360,9 +364,18 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         if (Interlocked.CompareExchange(ref targetLifetime, lifetime, null) is not null)
             throw new InvalidOperationException("该光谱目标已有执行中的任务。");
+        parentExecutionToken = token;
+        operatorSkipRequested = 0;
+        endedByNativeCondition = false;
+        var joined = targetJoined = new(TaskCreationOptions.RunContinuationsAsynchronously);
         RefreshPlanEditability();
         try { await ExecuteOwnedAsync(progress, lifetime.Token).ConfigureAwait(false); }
-        finally { Interlocked.CompareExchange(ref targetLifetime, null, lifetime); RefreshPlanEditability(); }
+        finally
+        {
+            Interlocked.CompareExchange(ref targetLifetime, null, lifetime);
+            joined.TrySetResult();
+            RefreshPlanEditability();
+        }
     }
 
     private async Task ExecuteOwnedAsync(IProgress<ApplicationStatus> progress, CancellationToken token)
@@ -433,11 +446,19 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             // The original manifest/gate and stop readbacks have already been
             // recorded by the night owner. Native child sequencing may proceed
             // only when that owner explicitly accepted the quality skip.
-            LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" : "本目标未完成，已确认退出并跳过；查看本夜处理记录。";
+            LastOutcome = night.StopFollowingTargets ? "已停止：查看原始质量门与本夜记录。" :
+                Volatile.Read(ref operatorSkipRequested) != 0 ?
+                    endedByNativeCondition ? "原生条件已结束本目标；已确认停止，保留已有帧。" : "操作员已跳过本目标；已确认停止，保留已有帧。" :
+                "本目标未完成，已确认退出并跳过；查看本夜处理记录。";
             if (session is { Accepted: > 0 })
                 LastOutcome += $" 已保留 {session.Accepted}/{session.Original.ScienceFrames} 张，累计 {session.AcceptedSeconds:0.##} 秒；剩余未完成。";
         }
-        finally { RaisePropertyChanged(nameof(LastOutcome)); }
+        finally
+        {
+            if (Volatile.Read(ref operatorSkipRequested) != 0)
+                foreach (var item in Items.Where(x => x.Status is SequenceEntityStatus.CREATED or SequenceEntityStatus.RUNNING)) item.Skip();
+            RaisePropertyChanged(nameof(LastOutcome));
+        }
     }
 
     private async Task<bool> ExecuteTargetAsync(IProgress<ApplicationStatus> progress, CancellationToken token,
@@ -490,6 +511,11 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         if (session is not null) session.TargetPlan ??= plan;
         if (session?.HasBudgetedContinuation == true && sequencePlan.TargetDeadlineUtc is { } targetEnd)
             plan = plan with { PlannedDuration = targetEnd > plan.PlannedStartUtc ? targetEnd - plan.PlannedStartUtc : TimeSpan.FromSeconds(1) };
+        var originalPlan = session?.TargetPlan ?? plan;
+        var originalTargetEnd = originalPlan.PlannedStartUtc + originalPlan.PlannedDuration;
+        if (sequencePlan.TargetDeadlineUtc is null || originalTargetEnd < sequencePlan.TargetDeadlineUtc)
+            sequencePlan = sequencePlan with { TargetDeadlineUtc = originalTargetEnd };
+        lockedConfiguration = lockedConfiguration?.WithSequencePlan(sequencePlan);
         IObservationStageRunner inner = UseRealMode
             ? realRunner = realRunnerFactory.Create(host, settings, progress, lockedConfiguration)
             : simulationRunnerFactory?.Invoke() ?? new SimulatedObservationStageRunner(host, Math.Clamp(SimulationStageMilliseconds, 250, 30_000), progress);
@@ -523,9 +549,8 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             {
                 // A native condition may end its block without executing every
                 // marker. Join the coordinator; never leave it waiting forever.
-                night?.StopAtNativeConditionBoundary();
-                host.Cancel();
-                bridge.Abort(new OperationCanceledException("Native sequence conditions ended the target block."));
+                endedByNativeCondition = true;
+                RequestTargetSkip();
             }
             await coordinatorRun.ConfigureAwait(false);
             if (session is not null && boundaryRunner is not null)
@@ -555,7 +580,10 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         }
         catch (Exception ex)
         {
-            boundaryFailure ??= $"NATIVE_TARGET_EXECUTION_FAILED: {ex.Message}";
+            // Native local interruption is intent, not an execution fault. The
+            // independent stop verifier below still decides whether to continue.
+            if (ex is not OperationCanceledException)
+                boundaryFailure ??= $"NATIVE_TARGET_EXECUTION_FAILED: {ex.Message}";
             bridge.Abort(ex);
             host.Cancel();
             try { await coordinatorRun.ConfigureAwait(false); } catch { }
@@ -563,13 +591,20 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         }
         finally
         {
+            // SequenceItem.Skip() is non-virtual. Its local token is cancelled,
+            // but the containing night remains live; distinguish it from root abort.
+            if (Status == SequenceEntityStatus.SKIPPED && night is { StopFollowingTargets: false })
+                Interlocked.Exchange(ref operatorSkipRequested, 1);
             activeBridge = null;
             host.DashboardChanged -= dashboardHandler;
             ApplyStageStatuses(host.Dashboard);
             try
             {
                 if (night is not null && !continueAfterFlip) continueAfterRecovery = await night.RecordTargetAsync(TargetName, host.Dashboard, boundaryRunner,
-                    FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure, plan, session).ConfigureAwait(false);
+                    FailurePolicy == SpectroscopyTargetFailurePolicy.SkipQualityFailure, boundaryFailure, plan, session,
+                    Volatile.Read(ref operatorSkipRequested) != 0 &&
+                    (!parentExecutionToken.IsCancellationRequested ||
+                        Status == SequenceEntityStatus.SKIPPED && !night.StopFollowingTargets), endedByNativeCondition).ConfigureAwait(false);
             }
             finally { if (realRunner is not null) await realRunner.DisposeAsync().ConfigureAwait(false); }
         }
@@ -590,16 +625,23 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         return continueAfterFlip;
     }
 
-    public override Task Interrupt()
+    private void RequestTargetSkip()
     {
+        if (targetLifetime is null) return;
+        Interlocked.Exchange(ref operatorSkipRequested, 1);
         try { Volatile.Read(ref targetLifetime)?.Cancel(); }
         catch (ObjectDisposedException) { /* The same target just completed. */ }
         activeBridge?.Abort(new OperationCanceledException("N.I.N.A. interrupted UVEX Target Observation."));
         host.Cancel();
-        // During the flip the segment dashboard is already Completed. Tell
-        // the night explicitly this is ordinary cancel, not normal closeout.
-        if (Parent is UvexNightSequenceContainer { IsActive: true } night) return night.Interrupt();
-        return Task.CompletedTask;
+        RefreshPlanEditability();
+    }
+
+    public override Task Interrupt()
+    {
+        if (targetLifetime is null) return Task.CompletedTask;
+        var joined = targetJoined?.Task ?? Task.CompletedTask;
+        RequestTargetSkip();
+        return joined;
     }
 
     public override bool Validate()
@@ -626,7 +668,9 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
             settings.RealModeCommissioned);
         if (authorization.Disposition != GateDisposition.Passed)
         {
-            Issues.Add($"{authorization.Code}: {authorization.Message}");
+            Issues.Add(UseRealMode && !settings.RealModeCommissioned
+                ? host.CommissioningFailureMessage(profileService.ActiveProfile.Id)
+                : $"{authorization.Code}: {authorization.Message}");
         }
         if (UseRealMode)
         {
@@ -864,11 +908,30 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     private static void Report(IProgress<ApplicationStatus> progress, string message, double value = -1) =>
         progress.Report(new ApplicationStatus { Source = "OpenAstroSpec Auto", Status = message, Progress = value });
 
-    internal Task ExecuteStageMarkerAsync(
+    internal async Task ExecuteStageMarkerAsync(
         ObservationStage stage,
         IProgress<ApplicationStatus> progress,
-        CancellationToken token) => activeBridge?.ExecuteMarkerAsync(stage, progress, token)
-        ?? throw new InvalidOperationException("OpenAstroSpec stage item is not attached to an active coordinator bridge.");
+        CancellationToken token)
+    {
+        try
+        {
+            await (activeBridge?.ExecuteMarkerAsync(stage, progress, token)
+                ?? throw new InvalidOperationException("OpenAstroSpec stage item is not attached to an active coordinator bridge.")).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested &&
+            targetLifetime is { IsCancellationRequested: false } &&
+            Items.OfType<ObservationStageMarkerItem>().Any(x => x.Stage == stage && x.Status == SequenceEntityStatus.SKIPPED))
+        {
+            // Native leaf Skip cancels only its own token. Never advance a
+            // dependent optical stage or promote it to whole-night cancellation.
+            // Native SkipCurrentRunningItems enumerates a locked live list.
+            // Cancellation can unwind inline and remove this leaf reentrantly;
+            // yield before returning so native removal happens after enumeration.
+            await Task.Yield();
+            RequestTargetSkip();
+            throw;
+        }
+    }
 }
 
 [ExportMetadata("Name", "OpenAstroSpec 自动观测阶段（内部）")]

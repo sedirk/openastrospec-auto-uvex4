@@ -771,9 +771,12 @@ internal static class Phd2LockShiftPendingStore
         var root = Path.GetFullPath(observationsRoot);
         if (!Directory.Exists(root)) return Array.Empty<Phd2LockShiftPendingFileResult>();
         var results = new List<Phd2LockShiftPendingFileResult>();
-        foreach (var path in Directory
-                     .EnumerateFiles(root, "phd2-lock-shift-pending.json", SearchOption.AllDirectories)
-                     .OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
+        // Keep the complete recursive search (including misplaced/forked
+        // ledgers), but do not serialize tens of thousands of historical runs
+        // between a fresh target measurement and native guide takeover.
+        var paths = await PendingLedgerFileDiscovery.FindAsync(root,
+            "phd2-lock-shift-pending.json", cancellationToken).ConfigureAwait(false);
+        foreach (var path in paths)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var loaded = await LoadAsync(path, cancellationToken).ConfigureAwait(false);

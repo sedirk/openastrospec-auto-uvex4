@@ -815,6 +815,8 @@
                   <Button Content="目标与定位策略" Command="{Binding ShowObservationPlanCommand}" />
                   <Button Content="采集计划（曝光预算）" Command="{Binding ShowAcquisitionPlanCommand}" />
                   <Button Content="观测准备" Command="{Binding ShowStartupRequirementsCommand}" />
+                  <Button Content="设备变更检查…" Command="{Binding ResolveDeviceChangeCommand}"
+                          ToolTip="更换驱动后点这里：查看变化、确认同一物理屋顶并重新校验。不会连接设备或开始观测。" />
                 </WrapPanel>
                 <TextBlock Text="{Binding RealModeStatusSummary}" Foreground="#FBBF24" TextWrapping="Wrap" Margin="4,3,4,0">
                   <TextBlock.Style>
@@ -1151,6 +1153,7 @@
                                    TextWrapping="Wrap" Foreground="{StaticResource PreparationMutedTextBrush}" Margin="0,4,0,3" />
                         <WrapPanel>
                           <Button Style="{StaticResource PreparationSecondaryButton}" Content="更换安装标定…" Command="{Binding ShowDeviceBindingsSettingsCommand}" />
+                          <Button Style="{StaticResource PreparationSecondaryButton}" Content="设备变更检查…" Command="{Binding ResolveDeviceChangeCommand}" />
                           <Button Style="{StaticResource PreparationSecondaryButton}" Content="核对本夜配置" Command="{Binding ShowNightSetupPreparationCommand}" />
                         </WrapPanel>
                       </StackPanel>

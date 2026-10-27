@@ -17,6 +17,20 @@ internal static class G3RegisteredWcs
             throw new ArgumentException("A formal/registered anchor and validated image transform are required.");
         var origin = anchorToCurrent.Inverse().Apply(new(currentWidth / 2d, currentHeight / 2d));
         var center = PixelToSky(anchor, anchorWidth, anchorHeight, solverIdentity, origin);
+        if (anchor is DetectorWcsResult detectorWcs)
+        {
+            // Compose the measured image transform with the full CD matrix.
+            // Retain skew/parity instead of fitting a scalar angle and losing
+            // the raw-verified astrometry when this frame becomes an anchor.
+            var inverse = anchorToCurrent.Inverse();
+            var cd = detectorWcs.Cd;
+            var reference = anchorToCurrent.Apply(new(detectorWcs.ReferencePixel[0], detectorWcs.ReferencePixel[1]));
+            return new DetectorWcsResult(detectorWcs.ReferenceSky.RADegrees, detectorWcs.ReferenceSky.Dec,
+                [reference.X, reference.Y],
+                [[cd[0][0]*inverse.A+cd[0][1]*inverse.B, -cd[0][0]*inverse.B+cd[0][1]*inverse.A],
+                 [cd[1][0]*inverse.A+cd[1][1]*inverse.B, -cd[1][0]*inverse.B+cd[1][1]*inverse.A]], currentWidth, currentHeight)
+            { Coordinates = center };
+        }
         var result = new PlateSolveResult(anchor.SolveTime)
         {
             Success = true, Coordinates = center, Pixscale = anchor.Pixscale / anchorToCurrent.Scale,

@@ -211,7 +211,7 @@ internal sealed partial class RealObservationStageRunner
             reservedFramePath,
             attemptPath,
             ContentGateCode: content?.Gate.Code,
-            CoherentSourceCount: content?.StellarMeasurement.DetectedStarCount ?? 0,
+            CoherentSourceCount: content?.CoherentSourceCount ?? 0,
             MountBinding: mountBinding));
         await WriteAuditBestEffortAsync("g3-plate-solve-tier-transient-skipped", new
         {

@@ -292,6 +292,8 @@ public sealed record Phd2StateSnapshot(
     public bool PendingOwnerCalibrationAllowed { get; init; }
     // PHD2 can enter settle before the first good centroid starts guiding.
     public bool PendingInitialLockConfirmationAllowed { get; init; }
+    public Phd2GuideEpochChange? LastGuideEpochChange { get; init; }
+    public IReadOnlyList<Phd2GuideEpochChange> RecentGuideEpochChanges { get; init; } = [];
 
     public bool HasCurrentSuccessfulSettle =>
         IsConnected &&
@@ -342,3 +344,6 @@ public sealed record Phd2StateSnapshot(
         EventSequence: 0,
         LastEventUtc: null);
 }
+
+public sealed record Phd2GuideEpochChange(long PreviousEpoch, long Epoch, string Cause,
+    long EventSequence, DateTimeOffset ObservedUtc, Phd2AppState PreviousState, Phd2AppState State);

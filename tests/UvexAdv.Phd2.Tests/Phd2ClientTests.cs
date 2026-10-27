@@ -5,6 +5,35 @@ namespace UvexAdv.Phd2.Tests;
 
 public sealed class Phd2ClientTests
 {
+    [Fact]
+    public async Task EpochDiagnosticsRetainTheInvalidatingEventBeforeGuidingResumesWithoutReauthorizingIt()
+    {
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await session.SendEventAsync(new { Event = "AppState", State = "Guiding" }, token);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 58 }, token);
+            await session.SendEventAsync(new { Event = "GuideStep", Frame = 59, dx = -5.37, dy = -3.1,
+                SNR = 228.5, ErrorCode = 1 }, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        var updated = new TaskCompletionSource<Phd2StateSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.SnapshotChanged += (_, s) => { if (s.LastGuideStep?.Frame == 59) updated.TrySetResult(s); };
+        await client.ConnectAsync(default);
+        var snapshot = await updated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(Phd2AppState.Guiding, snapshot.AppState);
+        Assert.False(snapshot.HasCurrentSuccessfulSettle);
+        Assert.Equal("event:GuideStep", snapshot.LastGuideEpochChange!.Cause);
+        Assert.Contains(snapshot.RecentGuideEpochChanges, c => c.Cause == "event:LoopingExposures" &&
+            c.PreviousState == Phd2AppState.Guiding && c.State == Phd2AppState.Looping);
+        var before = snapshot.GuideEpoch;
+        for (var i = 0; i < 12; i++) client.PauseAutomation();
+        Assert.Equal(8, client.Snapshot.RecentGuideEpochChanges.Count);
+        Assert.True(client.Snapshot.GuideEpoch > before);
+        Assert.Equal("PauseAutomation", client.Snapshot.LastGuideEpochChange!.Cause);
+        Assert.False(client.Snapshot.HasCurrentSuccessfulSettle);
+    }
+
     [Theory]
     [InlineData("success")] [InlineData("native-timeout")] [InlineData("lost")]
     [InlineData("lock-changed")] [InlineData("external-epoch")]
@@ -509,11 +538,13 @@ public sealed class Phd2ClientTests
         // The old formula allowed only 2 * (10 ms + 20 ms) = 60 ms and
         // timed out before these realistic short-exposure full-frame events.
         // The per-frame readout/event floor allows both frames without adding
-        // delay when PHD2 publishes them earlier.
+        // delay when PHD2 publishes them earlier. Leave scheduler headroom in
+        // the test floor: 120 ms/frame races the two 80 ms timers under the full
+        // parallel suite; the rejected old formula is still only 60 ms.
         await using var client = CreateClient(
             server,
             eventTimeoutMargin: TimeSpan.FromMilliseconds(20),
-            minimumLoopingFrameEventTimeout: TimeSpan.FromMilliseconds(120));
+            minimumLoopingFrameEventTimeout: TimeSpan.FromSeconds(1));
         await client.ConnectAsync(CancellationToken.None);
 
         var result = await client.CaptureFullFrameAsync(

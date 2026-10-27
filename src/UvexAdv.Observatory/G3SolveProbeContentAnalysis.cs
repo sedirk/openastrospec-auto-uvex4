@@ -14,7 +14,12 @@ public sealed record G3SolveProbeContentAssessment(
     double RobustDynamicRangeSigma,
     double SaturatedPixelFraction)
 {
-    public bool HasCoherentSource => StellarMeasurement.DetectedStarCount > 0;
+    // Local background witnesses authorize only the existing failed-solve
+    // recovery branch. They are NOT a target centroid, focus metric or WCS.
+    public int LocalBackgroundSourceCount { get; init; }
+    public int CoherentSourceCount => Math.Max(StellarMeasurement.DetectedStarCount, LocalBackgroundSourceCount);
+    public bool HasCoherentSource => CoherentSourceCount > 0;
+    public double UpperBackgroundAdu { get; init; }
 }
 
 public static class G3SolveProbeContentAnalyzer
@@ -53,9 +58,15 @@ public static class G3SolveProbeContentAnalyzer
         var dynamicRangeSigma = Math.Max(0, (high - background) / sigma);
         var saturatedFraction = sampled == 0 ? 0 : saturated / (double)sampled;
         var stellar = G3StellarFocusAnalyzer.Analyze(frame);
+        var localCount = stellar.DetectedStarCount == 0 &&
+            saturatedFraction < MaximumSearchAuthorizingSaturatedPixelFraction
+            ? CountLocalSources(frame) : 0;
+        var coherentCount = Math.Max(stellar.DetectedStarCount, localCount);
         var metrics = new Dictionary<string, double>
         {
-            ["coherentSourceCount"] = stellar.DetectedStarCount,
+            ["coherentSourceCount"] = coherentCount,
+            ["globalBackgroundSourceCount"] = stellar.DetectedStarCount,
+            ["localBackgroundSourceCount"] = localCount,
             ["usableSourceCount"] = stellar.StarCount,
             ["medianSignalToNoise"] = FiniteOrZero(stellar.MedianSignalToNoise),
             ["backgroundMedianAdu"] = background,
@@ -73,10 +84,10 @@ public static class G3SolveProbeContentAnalyzer
                 OverexposedGateCode,
                 $"The solve-only G3 frame is overexposed: {saturatedFraction:P1} of sampled pixels reached the detector plateau, at or above the {MaximumSearchAuthorizingSaturatedPixelFraction:P0} no-motion limit. The frame cannot authorize a longer exposure or neighbouring-field mount search.",
                 metrics)
-            : stellar.DetectedStarCount > 0
+            : coherentCount > 0
             ? GateResult.Pass(
                 "G3_SOLVE_PROBE_STRUCTURED_FIELD",
-                $"The solve-only G3 frame contains {stellar.DetectedStarCount} spatially coherent source(s); a failed WCS may use only the configured bounded recovery path.",
+                $"The solve-only G3 frame contains spatially coherent sources (global {stellar.DetectedStarCount}, local-background {localCount}); a failed WCS may use only the configured bounded recovery path. This is not target identification or a focus measurement.",
                 metrics)
             : GateResult.Unknown(
                 "G3_CLOUD_OR_TRANSPARENCY_INVALID",
@@ -89,7 +100,42 @@ public static class G3SolveProbeContentAnalyzer
             background,
             sigma,
             dynamicRangeSigma,
-            saturatedFraction);
+            saturatedFraction) { UpperBackgroundAdu = Percentile(samples, 0.90), LocalBackgroundSourceCount = localCount };
+    }
+
+    private static int CountLocalSources(MonochromeFrame frame)
+    {
+        // Same raw-pixel/core/shape rules, but estimate the background within
+        // overlapping 128px windows: moonlight/vignetting must not masquerade
+        // as read noise over the entire detector. Overlap exceeds both edge
+        // margins, so a source on a tile seam is not lost. Never change raw
+        // pixels or feed these cropped measurements into target/focus control.
+        const int size = 128, stride = 96;
+        if (frame.Width <= size && frame.Height <= size) return 0;
+        var centers = new List<PixelPoint>();
+        var structuredWithoutUsableStars = false;
+        for (var top = 0; top < frame.Height - 28; top += stride)
+        for (var left = 0; left < frame.Width - 28; left += stride)
+        {
+            var width = Math.Min(size, frame.Width - left);
+            var height = Math.Min(size, frame.Height - top);
+            var pixels = new ushort[width * height];
+            for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++) pixels[y * width + x] = frame[left + x, top + y];
+            // A median over nine pixels is not a single-pixel peak. Requiring
+            // 4 times single-pixel noise erased real moonlit sparse stars.
+            // Keep the 3.5-sigma peak and all existing spatial/finite tests;
+            // this local 3x3-core witness does not relax focus or identity gates.
+            var local = G3StellarFocusAnalyzer.Analyze(new MonochromeFrame(width, height, pixels, frame.SaturationLevel),
+                new G3StellarFocusAnalysisOptions(MinimumCoreMedianProminenceSigma: 2.5));
+            structuredWithoutUsableStars |= local.DetectedStarCount > 0 && local.Stars.Count == 0;
+            foreach (var star in local.Stars)
+            {
+                var center = new PixelPoint(left + star.Centroid.X, top + star.Centroid.Y);
+                if (centers.All(p => Math.Pow(p.X - center.X, 2) + Math.Pow(p.Y - center.Y, 2) >= 49)) centers.Add(center);
+            }
+        }
+        return Math.Max(centers.Count, structuredWithoutUsableStars ? 1 : 0);
     }
 
     private static double Percentile(IReadOnlyList<double> sorted, double fraction)

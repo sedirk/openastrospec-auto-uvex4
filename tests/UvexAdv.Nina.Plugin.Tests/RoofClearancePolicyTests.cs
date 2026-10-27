@@ -9,6 +9,21 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class RoofClearancePolicyTests
 {
+    [Fact]
+    public void DriverChangeIsExplainedAndRequiresFreshOwnerBoundEvidence()
+    {
+        var evidence = new RoofClearanceAttestation(1, "previous", "owner", Now.AddDays(-1),
+            "mount-a", "RRCIAdvanced.Dome", true, "Original owner-confirmed clearance");
+        var error = Assert.Single(RoofClearancePolicy.Validate(true, evidence, "mount-a", "RRCI.Dome", Now));
+        Assert.Contains("RRCIAdvanced.Dome", error);
+        Assert.Contains("RRCI.Dome", error);
+        Assert.Contains("操作员确认", error);
+        var renewed = evidence with { EvidenceId = "new-owner-confirmation", RoofDeviceId = "RRCI.Dome", ConfirmedUtc = Now };
+        Assert.Empty(RoofClearancePolicy.Validate(true, renewed, "mount-a", "RRCI.Dome", Now));
+        Assert.NotEmpty(RoofClearancePolicy.Validate(true, renewed, "other-mount", "RRCI.Dome", Now));
+        Assert.NotEmpty(RoofClearancePolicy.Validate(true, renewed with { AllMountPositionsClear = false }, "mount-a", "RRCI.Dome", Now));
+    }
+
     [Theory]
     [InlineData("off", true)] [InlineData("already-off", true)] [InlineData("delayed", true)]
     [InlineData("true-ack-off", true)] [InlineData("false-ack-on", false)] [InlineData("stays-on", false)]

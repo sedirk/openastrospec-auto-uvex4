@@ -51,7 +51,7 @@ internal sealed partial class RealObservationStageRunner
                     cancellationToken).ConfigureAwait(false);
                 if (optical.Disposition != GateDisposition.Passed) return optical;
             }
-            var provenance = await ValidateSparseInferenceSourcesAsync(inferred, ComputeFileSha256Async,
+            var provenance = await ValidateMeasuredSparseContinuityAsync(field, ComputeFileSha256Async,
                 cancellationToken).ConfigureAwait(false);
             if (provenance.Disposition != GateDisposition.Passed) return provenance;
         }

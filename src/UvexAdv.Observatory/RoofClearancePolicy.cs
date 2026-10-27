@@ -27,7 +27,10 @@ public static class RoofClearancePolicy
         if (string.IsNullOrWhiteSpace(telescopeId) || string.IsNullOrWhiteSpace(roofId) ||
             !string.Equals(evidence.TelescopeDeviceId, telescopeId, StringComparison.Ordinal) ||
             !string.Equals(evidence.RoofDeviceId, roofId, StringComparison.Ordinal))
-            errors.Add("Roof clearance attestation belongs to different mount/roof selections.");
+            errors.Add("屋顶防碰撞确认绑定与当前设备选择不一致。" +
+                $"已确认：赤道仪 '{evidence.TelescopeDeviceId}' / 屋顶 '{evidence.RoofDeviceId}'；" +
+                $"当前：赤道仪 '{telescopeId}' / 屋顶 '{roofId}'。" +
+                "若仅更换驱动，须由操作员确认仍为同一物理设备及原净空条件，再更新绑定；不会自动沿用确认或移动设备。");
         return errors;
     }
 

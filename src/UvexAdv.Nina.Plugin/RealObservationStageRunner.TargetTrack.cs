@@ -94,8 +94,8 @@ internal sealed partial class RealObservationStageRunner
         var available = (temporal.Usable || captureTimeUnknown) && registered.Accepted && point is not null && point.X >= 0 && point.X < frame.Width &&
             point.Y >= 0 && point.Y < frame.Height && PixelDistance(point, expectedTarget) <= preset.TargetSearchRadiusPixels;
         await PublishRunJsonEvidenceAsync("g3-target-track-registration", "Last-trusted target transported by independent field pixels; prediction only",
-            new { reference.Path, reference.Sha, reference.Target, reference.CompletedUtc,
-                currentPath = path, currentSha = sha, completedUtc, registered, temporal, point, available, captureTimeUnknown,
+            new { reference.Path, reference.Sha, reference.Target, referenceCompletedUtc = reference.CompletedUtc,
+                currentPath = path, currentSha = sha, currentCompletedUtc = completedUtc, registered, temporal, point, available, captureTimeUnknown,
                 temporalAuthority = false, searchOnly = true, motionAuthority = false,
                 targetRegionExcluded = true, targetPositionMeasured = false, budgetReset = false }, path, token).ConfigureAwait(false);
         return available ? new(reference, point!, stars, registered) : null;

@@ -13,6 +13,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2"><PrivateAssets>all</PrivateAssets></PackageReference>
   </ItemGroup>
   <ItemGroup Condition="Exists('$(NinaInstallDir)\NINA.exe')">
+    <Reference Include="NINA" HintPath="$(NinaInstallDir)\NINA.dll" Private="true" />
     <Reference Include="ASCOM.Exceptions" HintPath="$(NinaInstallDir)\ASCOM.Exceptions.dll" Private="true" />
     <Reference Include="System.ComponentModel.Composition" HintPath="$(NinaInstallDir)\System.ComponentModel.Composition.dll" Private="true" />
     <Reference Include="Accord" HintPath="$(NinaInstallDir)\Accord.dll" Private="true" />

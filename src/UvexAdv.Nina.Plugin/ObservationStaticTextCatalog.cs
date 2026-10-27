@@ -93,6 +93,8 @@ internal static partial class ObservationStaticTextCatalog
             ["日常观测沿用当前安装标定，不必每晚选方案、填哈希或生成草稿。仅更换设备或光学配置时再修改。"] = "Reuse the current installation for daily observations. No nightly package selection, hashes or drafts are required. Change it only when equipment or optics change.",
             ["更换安装标定…"] = "Change installation…",
             ["重新检查当前配置"] = "Recheck current setup",
+            ["设备变更检查…"] = "Check device changes…",
+            ["更换驱动后点这里：查看变化、确认同一物理屋顶并重新校验。不会连接设备或开始观测。"] = "After a driver change: review differences, confirm the same physical roof and revalidate. Does not connect devices or start observing.",
             ["高级设置…"] = "Advanced settings…",
             ["监督方式…"] = "Supervision…",
             ["显示历史标定包（调试记录，通常无需选择）"] = "Show historical packages (commissioning history, rarely needed)",

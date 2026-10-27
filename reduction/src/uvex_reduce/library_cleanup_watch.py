@@ -131,7 +131,7 @@ class WindowsMetadataWatch:
             raise ctypes.WinError(ctypes.get_last_error())
         entry["pending"] = True
 
-    def check(self):
+    def check(self, *, _background_drain=False):
         from ctypes import wintypes as w
         if self.closed:
             raise OSError("目录保护已结束；不能继续使用旧清理计划。")
@@ -150,16 +150,23 @@ class WindowsMetadataWatch:
                             break
                         raise ctypes.WinError(error)
                     entry["pending"] = False
-                    changes = notification_changes(entry["buffer"].raw[:count.value], entry["root"],
-                                                   self.expected_preview_paths)
+                    try:
+                        changes = notification_changes(entry["buffer"].raw[:count.value], entry["root"],
+                                                       self.expected_preview_paths)
+                    except OSError as error:
+                        raise OSError(f"{entry['root']}: {error}") from error
                     self._arm(entry)
                     if changes:
-                        raise OSError(f"数据目录在清理期间发生变化：{changes[0]}；停止并重新预览。")
+                        self.changed(entry["root"], changes)
                 else:
-                    raise OSError("目录持续变化，无法确认稳定清理边界。")
+                    if not _background_drain:
+                        raise OSError("目录持续变化，无法确认稳定清理边界。")
         except (OSError, ValueError) as error:
             self.error = str(error)
             raise
+
+    def changed(self, root, changes):
+        raise OSError(f"数据目录在清理期间发生变化：{changes[0]}；停止并重新预览。")
 
     def close(self):
         if self.closed:

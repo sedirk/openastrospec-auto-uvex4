@@ -37,6 +37,18 @@ internal sealed record ScienceQualityPolicy(bool WarningProbeEnabled, bool Legac
         WarningProbeEnabled && sameEpoch && measuredIdentityConfirmed && residuals.Count >= 3 &&
         Phd2PlacementGuideWindowPolicy.AllWithinTolerance(residuals, acquisitionEnvelope);
 
+    // A large clipped core can overlap the slit while its measured centre is
+    // consistently outside it. Keep warning probes, but prefer ONE already
+    // feasible normal correction before handing that window to spectroscopy.
+    // Along-slit error and alternating seeing samples do not request a move.
+    internal static bool HasConsistentCrossSlitBias(IReadOnlyList<Phd2SlitApertureResidual?> apertures,
+        double tolerance) => double.IsFinite(tolerance) && tolerance > 0 && apertures.Count >= 3 &&
+        apertures.All(a => a is not null && double.IsFinite(a.CrossSlitPixels) &&
+            double.IsFinite(a.HalfWidthPixels) && a.HalfWidthPixels > 0 &&
+            double.IsFinite(a.UncertaintyPixels) && a.UncertaintyPixels >= 0 &&
+            Math.Abs(a.CrossSlitPixels) > Math.Max(tolerance, a.HalfWidthPixels + a.UncertaintyPixels) &&
+            Math.Sign(a.CrossSlitPixels) == Math.Sign(apertures[0]!.CrossSlitPixels));
+
     public static string StatusText(bool warningProbe, bool weakEnvironment, bool english) =>
         (warningProbe, weakEnvironment, english) switch
         {

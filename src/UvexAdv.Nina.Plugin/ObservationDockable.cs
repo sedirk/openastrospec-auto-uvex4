@@ -2637,6 +2637,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         {
             Error = $"加载台站配置方案失败：{ex.Message}";
             CommissioningProfileLoadStatus = Error;
+            commissioningValidationIssues = [Error];
+            host.PublishCommissioningIssues(activeProfileService.ActiveProfile.Id, commissioningValidationIssues);
         }
     }
 
@@ -2686,6 +2688,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     {
         settings.RealModeCommissioned = false;
         commissioningValidationIssues = Array.Empty<string>();
+        host.PublishCommissioningIssues(activeProfileService.ActiveProfile.Id, commissioningValidationIssues);
         if (profile.IsAutomatic || string.IsNullOrWhiteSpace(profile.BindingsPath)) return string.Empty;
         if (!settings.AutoApproveValidatedCommissioningPackage && !explicitRecheck)
         {
@@ -2740,6 +2743,10 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             settings.RealModeCommissioned = false;
             commissioningValidationIssues = new[] { ex.Message };
             return $"自动确认失败：{ex.Message}；";
+        }
+        finally
+        {
+            host.PublishCommissioningIssues(activeProfileService.ActiveProfile.Id, commissioningValidationIssues);
         }
     }
 
@@ -3480,7 +3487,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         manualUvexConnectionState == DeviceConnectionState.Ready &&
         manualUvexPositionKnown;
 
-    private bool CanEditTargetPlan() => mainFocus?.IsBusy != true && (RunState is
+    private bool CanEditTargetPlan() => !deviceChangeBusy && mainFocus?.IsBusy != true && (RunState is
         ObservationRunState.Idle or
         ObservationRunState.Completed or
         ObservationRunState.Cancelled or
@@ -4151,7 +4158,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             observationPanelAnchorable is { IsSelected: true, IsVisible: true },
             Workflow, MainFocus.OptionsSnapshot, dashboard.AcquisitionProgress,
             ObservationAcquisitionPresentation.Build(dashboard.AcquisitionProgress, dashboard.Run.ObservationRunId,
-                dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture), dashboard.SafetyStandby);
+                dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture), dashboard.SafetyStandby,
+            settings.RealModeCommissioned, CommissioningProfileLoadStatus, commissioningValidationIssues.ToArray());
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(
@@ -4357,6 +4365,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
 
     private void RaiseCommandStates(bool notifyBridge = true)
     {
+        deviceChangeCommand?.RaiseCanExecuteChanged();
         mainFocus?.Refresh();
         // Snapshot rendering refreshes command availability but is not a state mutation.
         // Preserve its revision so a subsequent guarded UI command can use that snapshot.

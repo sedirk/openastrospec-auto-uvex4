@@ -138,6 +138,7 @@ public static class TargetAcquisitionStrategyPolicy
     }
 
     public static bool MayTryBoundedNeighbor(GateResult gate) => gate.Code is
+        G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode or
         "G3_PLATE_SOLVE_FAILED" or "G3_PLATE_SOLVE_LADDER_EXHAUSTED_STRUCTURED_FIELD" or
         "G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD" or "G3_SOLVED_TARGET_OUTSIDE" or
         "G3_STAR_FIELD_SPARSE_VALID_EXPOSURE" or "TARGET_NOT_FOUND" or "TARGET_AMBIGUOUS" or

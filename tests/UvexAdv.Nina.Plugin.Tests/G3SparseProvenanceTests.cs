@@ -26,6 +26,51 @@ public sealed class G3SparseProvenanceTests
         }
     };
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("old-association")]
+    [InlineData("old-measurement")]
+    [InlineData("mutated-short")]
+    [InlineData("mutated-parent")]
+    [InlineData("different-target")]
+    [InlineData("extended-expiry")]
+    [InlineData("drift-too-large")]
+    [InlineData("cancel")]
+    public async Task FreshIndependentPairTakesPositionAuthorityNotAnUnboundedWcsExtension(string scenario)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var solve = Inferred() with { InferenceValidUntilUtc = now.AddSeconds(-5) };
+        var target = new StarCandidate(new(173, 810), 4352, 6495, 25.8, 0, .389, 0, 173);
+        var identification = new TargetIdentification(GateResult.Pass("measured", "independent pair"),
+            target, new(144, 825), 32.8, 2, TargetIdentificationAuthority.CatalogWcsProjection,
+            BoundShortPositionEvidencePath: "confirmed.json", CatalogPositionSpreadPixels: 1.89);
+        var proof = new G3SparseMeasuredContinuity(now.AddSeconds(-6), now.AddSeconds(20), solve.EvidenceSha256,
+            "confirmed.json", new('3', 64), "first.fit", new('1', 64), "second.fit", new('2', 64), 100);
+        var track = new G3MeasuredTargetSource("second.fit", new('2', 64), null!, null!, null!,
+            new(now.AddSeconds(-10), now.AddSeconds(-7), .01, now.AddSeconds(-6)), target.Centroid);
+        var field = G3FieldState.Failed(GateResult.Pass("confirmed", "pair"), solve: solve) with
+        { TargetIdentification = identification, TargetTrackSource = track, SparseInferenceConfirmed = true,
+            SparseMeasuredContinuity = proof };
+        if (scenario == "old-association") field = field with { SparseMeasuredContinuity = proof with { AssociationValidatedUtc = now } };
+        if (scenario == "old-measurement") field = field with { SparseMeasuredContinuity = proof with { PositionValidUntilUtc = now.AddSeconds(-1) } };
+        if (scenario == "different-target") field = field with { TargetTrackSource = track with { Target = new(174, 810) } };
+        if (scenario == "extended-expiry") field = field with { SparseMeasuredContinuity = proof with { PositionValidUntilUtc = now.AddMinutes(1) } };
+        if (scenario == "drift-too-large") field = field with { Solve = solve with { MeasuredDrift = new(100, "registered.json") } };
+        var hashes = new Dictionary<string, string>(solve.InferenceSources)
+        { [proof.ConfirmationPath] = proof.ConfirmationSha256, [proof.FirstFramePath] = proof.FirstFrameSha256,
+            [proof.CurrentFramePath] = proof.CurrentFrameSha256 };
+        if (scenario == "mutated-short") hashes[proof.FirstFramePath] = new('9', 64);
+        if (scenario == "mutated-parent") hashes["parent.fit"] = new('9', 64);
+        using var stop = new CancellationTokenSource();
+        if (scenario == "cancel") stop.Cancel();
+        Task<GateResult> Validate() => RealObservationStageRunner.ValidateMeasuredSparseContinuityAsync(field,
+            (p, _) => Task.FromResult(hashes[p]), stop.Token);
+        if (scenario == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(Validate);
+        else Assert.Equal(scenario == "valid", (await Validate()).Disposition == GateDisposition.Passed);
+        Assert.Equal(now.AddSeconds(-5), solve.InferenceValidUntilUtc);
+        Assert.False(solve.IsFormal);
+    }
+
     [Fact]
     public async Task EveryParentIncludingDerivedPixelsAndFocusIsCheckedBeforeMotion()
     {
@@ -36,6 +81,19 @@ public sealed class G3SparseProvenanceTests
         Assert.Equal(GateDisposition.Passed, gate.Disposition);
         Assert.Equal(solve.InferenceSources.Keys, checkedPaths);
         Assert.False(solve.IsFormal);
+    }
+
+    [Theory]
+    [InlineData("typed-skip")]
+    [InlineData("typed-cleanup-failure")]
+    [InlineData("late-unsafe")]
+    public async Task ExpiredMid0PositionActuallyExecutesNextNativeTargetOnlyAfterCheckedStop(string boundary)
+    {
+        var gate = await RealObservationStageRunner.ValidateSparseInferenceSourcesAsync(
+            Inferred() with { InferenceValidUntilUtc = DateTimeOffset.UtcNow.AddSeconds(-1) },
+            (_, _) => throw new Xunit.Sdk.XunitException("Expired evidence cannot be consumed"), default);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
+            ObservationStage.AcquireG3SlitField);
     }
 
     [Theory]

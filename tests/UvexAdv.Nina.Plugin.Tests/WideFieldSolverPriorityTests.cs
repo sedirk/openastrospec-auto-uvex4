@@ -71,5 +71,5 @@ public sealed class WideFieldSolverPriorityTests
     private static Task<PlateSolveResult> Run(RealObservationStageRunner runner, string role,
         Func<CancellationToken, Task<PlateSolveResult>> solve, CancellationToken token = default) =>
         (Task<PlateSolveResult>)typeof(RealObservationStageRunner).GetMethod("RunWithImageSolverPriorityAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(runner, [role, solve, token])!;
+            BindingFlags.Instance | BindingFlags.NonPublic)!.MakeGenericMethod(typeof(PlateSolveResult)).Invoke(runner, [role, solve, token])!;
 }

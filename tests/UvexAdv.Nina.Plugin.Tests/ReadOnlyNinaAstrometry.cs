@@ -46,6 +46,10 @@ internal static class ReadOnlyNinaAstrometry
             astro.GetField("DeltaUTCache", flags)!.GetValue(null)!;
         cache[new DateTime(2026, 10, 21, 0, 0, 0, DateTimeKind.Utc)] = 0.1;
         cache[new DateTime(2026, 10, 22, 0, 0, 0, DateTimeKind.Utc)] = 0.1;
+        // Later historical fixtures may change AstroUtil's rolling reference.
+        // Pin the current-night fixture dates too; otherwise tests executed at
+        // the end of the full suite fall back to an unavailable EOP database.
+        for (var offset = -1; offset <= 1; offset++) cache[DateTime.UtcNow.Date.AddDays(offset)] = 0.1;
         return true;
     });
 

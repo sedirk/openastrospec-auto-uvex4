@@ -22,8 +22,8 @@ internal sealed partial class RealObservationStageRunner
     private CancellationTokenSource? activeWideFieldKeyframeSolve;
     private int imageSolverForegroundWaiters;
 
-    private async Task<PlateSolveResult> RunWithImageSolverPriorityAsync(string role,
-        Func<CancellationToken, Task<PlateSolveResult>> work, CancellationToken token)
+    private async Task<T> RunWithImageSolverPriorityAsync<T>(string role,
+        Func<CancellationToken, Task<T>> work, CancellationToken token)
     {
         var background = role == "QHY/GS350 continuous formal keyframe";
         using var owned = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -156,6 +156,7 @@ internal sealed partial class RealObservationStageRunner
         var gate = await wideFieldStream.StopAsync(token).ConfigureAwait(false);
         await WriteAuditBestEffortAsync("qhy-wide-stream-stop", new { gate, wideFieldStream.JobId,
             wideFieldStream.AnalyzedFrames, consumerFailure = wideFieldStream.AnalysisFailure?.GetType().Name,
+            consumerFailureMessage = wideFieldStream.AnalysisFailure?.Message,
             producerFailure = wideFieldStream.ProducerFailure?.Message,
             ownerChanged = false, budgetReset = false }).ConfigureAwait(false);
         if (gate.Disposition == GateDisposition.Passed) activeQhyJobs.TryRemove(wideFieldStream.JobId, out _);
@@ -170,6 +171,9 @@ internal sealed partial class RealObservationStageRunner
         var optical = await ReadLocalDualOpticalStateAsync(context, token).ConfigureAwait(false);
         if (optical is null || !SameHash(optical.ComputeSha256(), wideFieldOpticalSha ?? string.Empty))
             throw new QhyG3OptionalOpticalException("QHY continuous optical context is unavailable/changed; stream was retired, not silently rebound.");
+        // The producer samples before polling. A just-completed shutter can be
+        // newer than that sample: obtain a real readback, not a fabricated time.
+        await WideFieldStreamCheckpointAsync(context, token).ConfigureAwait(false);
         var samples = Array.Empty<G3FrameMountReadback>();
         lock (wideFieldStateGate) samples = wideFieldMountSamples.ToArray();
         var before = samples.LastOrDefault(s => s.ReportedUtc <= frame.ExposureStartedUtc);
@@ -194,10 +198,13 @@ internal sealed partial class RealObservationStageRunner
             wideFieldLastKeyframeAttemptUtc = DateTimeOffset.UtcNow;
             try
             {
-                solve = await RunWithG3PendingReturnTimeAsync("wide-qhy-keyframe", t => SolveExternalFitsAsync(frame.FitsPath,
+                var keyframe = await RunWideFieldKeyframeWhenStationaryAsync(durableG3AcquisitionMotion,
+                    DateTimeOffset.UtcNow, t => SolveExternalFitsAsync(frame.FitsPath,
                     frame.Settings.BitDepth, configuration.Qhy.FocalLengthMillimeters, configuration.Qhy.PixelSizeMicrometers,
                     frame.Settings.BinningX, anchor?.Solve.Result.Coordinates ?? TargetCoordinates(context.Plan),
                     "QHY/GS350 continuous formal keyframe", t), token).ConfigureAwait(false);
+                if (keyframe is null) return; // Normal motion defers this frame, not the owner stream.
+                solve = keyframe;
             }
             catch (WideFieldKeyframePreemptedException) { return; }
             if (!solve.Result.Success || solve.Result.Coordinates is null) return;
@@ -228,6 +235,25 @@ internal sealed partial class RealObservationStageRunner
             wideFieldPoses.Add(pose);
             if (wideFieldPoses.Count > 16) wideFieldPoses.RemoveAt(0);
         }
+    }
+
+    internal static async Task<T?> RunWideFieldKeyframeWhenStationaryAsync<T>(
+        G3AcquisitionMotionState? state, DateTimeOffset now,
+        Func<CancellationToken, Task<T>> work, CancellationToken token) where T : class
+    {
+        token.ThrowIfCancellationRequested();
+        if (state is not null && (state.Validate().Count != 0 || now < state.UpdatedUtc))
+            throw new G3ReturnTimeReserveException(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
+                "Optional wide-field work cannot use a corrupt ledger or reversed clock."));
+        // Foreground acquisition owns the ledger and movement. Its legitimate
+        // precharged outbound/return interval is not corruption or an exhausted
+        // clock. Drop only optional analysis; never relabel it arrived, edit the
+        // ledger, restart the capture job, or consume a moving frame as a pose.
+        if (state is not null &&
+            state.Phase is G3AcquisitionMotionPhase.OutboundIntent or G3AcquisitionMotionPhase.ReturnIntent)
+            return null;
+        return await G3AcquisitionReturnTimePolicy.ExecuteAsync(
+            G3AcquisitionReturnTimePolicy.Plan(state, now), work, token).ConfigureAwait(false);
     }
 
     private async Task<QhyG3PairQhySource?> TryGetWideFieldPairSourceAsync(ObservationContext context,

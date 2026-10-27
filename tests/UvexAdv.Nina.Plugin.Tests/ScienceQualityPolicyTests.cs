@@ -60,6 +60,17 @@ public sealed class ScienceQualityPolicyTests
             "UVEX-20261014T112329Z-1862faa86ec84de", "UVEX-20261014T114529Z-20a16ea8c244410",
             "UVEX-20261014T121814Z-bfef8e1f7392465", "UVEX-20261014T125018Z-07288c0a1416434",
             "UVEX-20261011T190811Z-8c7a4b56c1e740b", "UVEX-20261013T162452Z-b53628410c2e452"];
+        // An explicitly selected subset is useful when old originals have been
+        // archived/offlined. Default remains strict: never silently skip a
+        // missing original or report the complete corpus as verified.
+        var selected = Environment.GetEnvironmentVariable("UVEX_REPLAY_RUN_IDS");
+        if (!string.IsNullOrWhiteSpace(selected))
+        {
+            var requested = selected.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.NotEmpty(requested);
+            Assert.All(requested, id => Assert.Contains(id, ids));
+            ids = ids.Where(requested.Contains).ToArray();
+        }
         var reports = new List<object>();
         foreach (var id in ids)
         {

@@ -35,6 +35,7 @@ internal static class G3WcsTargetProjector
         if (!double.IsFinite(solve.Pixscale) || solve.Pixscale <= 0)
             throw new ArgumentOutOfRangeException(nameof(solve), "Plate scale must be positive and finite.");
 
+        if (solve is DetectorWcsResult detectorWcs) return detectorWcs.Project(target);
         var rotation = ProjectionRotationDegrees(solve.PositionAngle, solverIdentity);
         var projected = target.XYProjection(
             solve.Coordinates,
@@ -60,6 +61,26 @@ internal static class G3WcsTargetProjector
             ? 360d - positionAngleDegrees
             : positionAngleDegrees;
         return NormalizeDegrees(rotation);
+    }
+
+    internal static double? ImageXAxisEastToNorthDegrees(PlateSolveResult solve, string solverIdentity)
+    {
+        if (!solve.Success || solve.Coordinates is null || solve.Flipped ||
+            !double.IsFinite(solve.PositionAngle) || !double.IsFinite(solve.Pixscale) || solve.Pixscale <= 0)
+            return null;
+        // Derive the axis from the SAME projection as target placement, rather
+        // than interpreting PL3's angle a second, potentially mirrored way.
+        var center = solve.Coordinates;
+        PixelPoint Offset(double east, double north)
+        {
+            var sky = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+                center.RADegrees, center.Dec, east, north);
+            return Project(new Coordinates(sky.RaDegrees, sky.DecDegrees, center.Epoch, Coordinates.RAType.Degrees),
+                solve, 1920, 1080, solverIdentity);
+        }
+        var origin = Project(center, solve, 1920, 1080, solverIdentity);
+        var e = Offset(1, 0); var n = Offset(0, 1);
+        return NormalizeDegrees(Math.Atan2(n.X - origin.X, e.X - origin.X) * 180 / Math.PI);
     }
 
     /// <summary>
@@ -130,7 +151,9 @@ internal static class G3WcsTargetProjector
                 PositionAngle = solve.PositionAngle,
                 Flipped = solve.Flipped,
             };
-            return Project(target, hypothetical, imageWidth, imageHeight, solverIdentity);
+            return Project(target, solve is DetectorWcsResult detectorWcs
+                ? detectorWcs.WithCenter(hypothetical.Coordinates, imageWidth, imageHeight) : hypothetical,
+                imageWidth, imageHeight, solverIdentity);
         }
 
         for (; iterations < MaximumInverseIterations; iterations++)

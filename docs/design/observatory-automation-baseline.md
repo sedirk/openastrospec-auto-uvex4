@@ -152,6 +152,26 @@ Random unbounded mount nudging is not an automated strategy.
 
 ### 5.2 Slit-field acquisition with G3/PHD2
 
+Owner-approved [ADR-0047](../adr/0047-evidence-dependent-neighbour-search-overlap.md)
+removes the overlap cap only from blind neighbour visits without a usable current
+registered pixel route. Such visits retain the original configured search step;
+fresh independently registered support keeps the existing overlap cap. Each
+subdivision is charged to the same original spiral, origin, action/time/distance
+and full-return ledger. No search or inferred position proves target arrival;
+fresh G3 measurement and every safety/identity/stop check remain mandatory.
+
+Owner-approved [ADR-0045](../adr/0045-formal-wcs-direct-coarse-approach.md)
+narrowly replaces the universal overlap cap below: a successful formal solve of
+the current raw G3 frame may directly approach the desired target/slit position
+within the original single/cumulative/action/time/return limits. It need not
+detour through an off-frame neighbour. Inferred registered/mosaic/local-dual
+geometry still preserves uncertainty-aware overlap. Blind neighbour search follows
+the current registered-support distinction in ADR-0047.
+Every move still requires the existing source/context/safety checks and fresh
+destination-image response/arrival validation. No prediction is measured arrival,
+no additional budget is created, and quality failure still requires checked stop
+before the saved skip policy can execute the next target.
+
 Owner-approved [ADR-0044](../adr/0044-continuous-wide-narrow-acquisition-state.md)
 refines the following recovery design with a single timestamped measurement path.
 The already configured sole QHY owner may supply a bounded acquisition-only stream
@@ -280,6 +300,16 @@ QHY photometry and ATR spectral exposures share an observation run identifier an
 - The uncertain red second-order region is retained and flagged; it is not silently cropped or corrected without measured evidence.
 
 ## 7. Required sequence model
+
+Owner-requested [ADR-0049](../adr/0049-native-sequence-skip-scopes.md) distinguishes
+local native target/instruction skip from root cancellation. A dependent internal
+stage uses the existing N.I.N.A. commands, not another plugin skip button. An internal
+stage skip ends only its target after joined, independently verified stop and
+terminal reconciliation; it never fabricates prerequisite success. Native entry
+to End may consume this run's transient receipt and request the exact independent
+standby's saved closeout choice before optional End actions. Root cancellation,
+unsafe/deadline/dawn, unknown stop and failed cleanup do not grant that authority.
+Raw frames, original budgets, exclusive owners and weather monitoring remain.
 
 Under owner-requested [ADR-0025](../adr/0025-reusable-night-clock-deadlines.md),
 reusable native sequences may save a local clock-only cutoff. At night-container
@@ -642,6 +672,31 @@ nine-arcsecond refusal. Explicit warning probes may use fresh filled-core overla
 with the finite physical slit, not only its centroid; exact arrival and accepted
 ATR spectrum quality remain separate. Unknown stop/owner, weather and physical
 limits are not downgraded. See the ADR for persistence and negative-test rules.
+
+### 12.15 Measured local coarse recovery (ADR-0046)
+
+Owner-approved ADR-0046 permits one original-ledger coarse correction using a
+fresh independently confirmed target pair and the same-run formal neighbour's
+local WCS direction/scale. Recognition is capped at 100 px, correction at 40 arcsec
+including repeat uncertainty; the anchor is at most 120 seconds old and one degree
+away. Persist its one-use counter before movement, preserve all budgets/return
+and source hashes, and require a new destination image before PHD2 handoff.
+This is labelled measured local inference, never a new formal solve or calibration
+sample. No companion/multi-lobe, weather, ownership, cancellation or stop rule is
+relaxed. See [ADR-0046](../adr/0046-measured-local-coarse-recovery.md) for the complete
+expiry, provenance, verification and skip boundaries.
+
+### 12.16 Raw-verified alternative G3 solution (ADR-0048)
+
+Following a completed failed PL3 solve, owner-approved ADR-0048 permits one
+bounded measured-source ASTAP recovery per immutable G3 source hash. Local
+background/noise extraction produces a labelled solver-only point image; local
+catalogue verification checks at least five unique original-pixel matches,
+residuals and spatial support. Provenance, hashes and negative checks are retained.
+The same catalogue family is not an independent validation catalogue. Target/slit
+identity and fresh physical context remain separate checks; original time,
+return, motion and safety limits are unchanged. Failed optional recovery returns
+to acquisition and confirmed-stop skip policy, not a new whole-night blocker.
 
 ## 13. Measurements still required
 

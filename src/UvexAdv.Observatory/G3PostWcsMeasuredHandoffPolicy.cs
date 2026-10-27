@@ -7,7 +7,7 @@ public static class G3PostWcsMeasuredHandoffPolicy
 
     // An identifiable source outside the fine-motion envelope must stay on the
     // coarse route. Do not discard it after failed solve tiers and hand a stale
-    // prediction to PHD2. This routes ONE existing-frame solve, not a move or a
+    // prediction to PHD2. This keeps the original bounded solve ladder, not a move or a
     // claim that a clipped component has independent short-frame identity.
     public static bool RequiresCoarseSolve(TargetIdentification identification,
         PixelPoint predictedTarget, double maximumUncertaintyPixels, PixelPoint slit,
@@ -24,7 +24,7 @@ public static class G3PostWcsMeasuredHandoffPolicy
     public static GateResult OutsideRemainingGate(TargetIdentification identification,
         PixelPoint slit, double remainingRadiusPixels) =>
         GateResult.TargetQuality(OutsideRemainingCode,
-            "A fresh source lies outside the remaining fine-motion envelope. Try one formal solve of this existing frame for the original charged coarse route; if unavailable, retain the candidate and return/skip. A clipped candidate is not confirmed identity or authority to move.",
+            "A fresh source lies outside the remaining fine-motion envelope. Try the existing frame and remaining bounded acquisition slots for the original charged coarse route; if unavailable, retain the candidate and verify return before any remaining origin recovery or target skip. A clipped candidate is not confirmed identity or authority to move.",
             new Dictionary<string, double>
             {
                 ["measuredTargetResidualPixels"] = identification.Target is { } target ? Distance(target.Centroid, slit) : double.NaN,

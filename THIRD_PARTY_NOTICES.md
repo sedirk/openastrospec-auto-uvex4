@@ -33,6 +33,17 @@ replaceable and pinned separately from the spectral-reduction environment.
 Additional analysis/benchmark dependencies are listed in
 `scripts/star-detection/requirements.txt` and retain their own licenses.
 
+## Optional ASTAP / D80 runtime
+
+The measured-source recovery calls an independently installed, unmodified
+[ASTAP CLI](https://www.hnsky.org/astap.htm) with a local D80 stellar catalogue.
+These binaries and catalogue files are not included in this source repository.
+The explicit installer copies only operator-supplied, hash-verified local files
+and preserves the catalogue's `acknowledgement of databases.txt`; consult the
+upstream release for its software license and Gaia/Tycho catalogue attribution.
+No external program or catalogue is relicensed by this project. The analysis
+runtime is separate from the pinned spectral-reduction environment.
+
 ## Vendor native SDKs
 
 Native camera SDKs and driver binaries are intentionally ignored or copied only into

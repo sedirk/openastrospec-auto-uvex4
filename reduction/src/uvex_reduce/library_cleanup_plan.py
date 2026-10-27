@@ -158,8 +158,7 @@ class CleanupPlanner:
         files = {row["id"]: dict(row) for row in self.connection.execute("SELECT * FROM files")}
         by_path = {row["path"]: row for row in files.values()}
         runs = {row["id"]: dict(row) for row in self.connection.execute("SELECT * FROM runs")}
-        model = LibraryProjects(self.catalog)
-        projects = {row["id"]: row for row in model._rows()}
+        projects = {row["id"]: row for row in self._project_rows()}
         owners: dict[int, set[str]] = defaultdict(set)
         parent_runs: dict[str, set[str]] = defaultdict(set)
         for project in projects.values():
@@ -226,6 +225,9 @@ class CleanupPlanner:
         self._snapshot = snapshot
         return snapshot
 
+    def _project_rows(self):
+        return LibraryProjects(self.catalog)._rows()
+
     def _discover_metadata(self, snapshot: dict[str, Any]) -> None:
         """Detect newly created dependency records before trusting the old index.
 
@@ -276,8 +278,7 @@ class CleanupPlanner:
                 continue
             facts = _facts(row["path"], ancestors)
             snapshot["metadata_facts"][row["id"]] = facts
-            valid = (_same_index(row, facts) and row["parser_version"] == PARSER_VERSION
-                     and not row["warning"] and not row["missing"])
+            valid = self._metadata_valid(row, facts, snapshot)
             if not valid:
                 scope = snapshot["run_reasons"][row["run_id"]] if row["run_id"] else snapshot["global_reasons"]
                 scope.append("stale_unparsed_or_missing_metadata")
@@ -369,6 +370,10 @@ class CleanupPlanner:
                     if row["id"] in proof["source_ids"]:
                         del snapshot["proofs"][identifier]
 
+    def _metadata_valid(self, row, facts, snapshot):
+        return (_same_index(row, facts) and row["parser_version"] == PARSER_VERSION
+                and not row["warning"] and not row["missing"])
+
     @staticmethod
     def _dependency_scopes(value: Any, base: Path, snapshot: dict[str, Any], key: str = "") -> None:
         if isinstance(value, dict):
@@ -400,7 +405,7 @@ class CleanupPlanner:
         category = {"frame": "raw", "product": "result", "project": "project",
                     "metadata": "record", "log": "log", "preview": "preview"}.get(row["kind"], "unknown")
         proof = snapshot["proofs"].get(identifier)
-        if category != "preview":
+        if not self._disposable_category(category, proof):
             reasons.append({"raw": "immutable_raw_science_photometry_calibration_or_evidence",
                             "result": "retained_reduction_product", "project": "retained_project_record",
                             "record": "retained_provenance_or_runtime_record", "log": "retained_log"}.get(
@@ -436,7 +441,7 @@ class CleanupPlanner:
             # A preview output in its own stopped producer is provenance, not an
             # input. Everything else (including runtime-model evidence) protects.
             own_output = bool(proof and link["source_file_id"] in proof["source_ids"]
-                              and relation in _PROVENANCE_RELATIONS)
+                              and relation in self._output_relations(proof))
             if not own_output:
                 reasons.append("referenced_dependency_or_runtime_model")
         facts = _facts(path, ancestors) if exact or not reasons else None
@@ -457,6 +462,14 @@ class CleanupPlanner:
             item["exists"] = facts["exists"]
             item["allocated_bytes"] = facts["allocated_bytes"] if candidate else 0
         return item
+
+    def _disposable_category(self, category: str, proof: dict | None) -> bool:
+        # Explicit retention policies may provide a narrower, separately
+        # authorized raw exception; ordinary library cleanup remains previews-only.
+        return category == "preview"
+
+    def _output_relations(self, proof: dict) -> frozenset[str]:
+        return _PROVENANCE_RELATIONS
 
     def inventory(self) -> list[dict[str, Any]]:
         snapshot = self._load(force=True)
@@ -492,12 +505,14 @@ class CleanupPlanner:
 
     def preview(self, project_ids: Iterable[str], action: str = "recycle",
                 file_ids: Iterable[int] | None = None) -> dict[str, Any]:
+        return self._preview_from_snapshot(self._load(force=True), project_ids, action, file_ids)
+
+    def _preview_from_snapshot(self, snapshot, project_ids, action, file_ids=None):
         if action not in ACTIONS:
             raise ValueError("Cleanup action must be mark, recycle or permanent")
         selected_projects = sorted(set(project_ids))
         if not selected_projects:
             raise ValueError("Select at least one project")
-        snapshot = self._load(force=True)
         if any(identifier not in snapshot["projects"] for identifier in selected_projects):
             raise ValueError("Unknown project selection")
         identifiers = {identifier for identifier, owners in snapshot["owners"].items()

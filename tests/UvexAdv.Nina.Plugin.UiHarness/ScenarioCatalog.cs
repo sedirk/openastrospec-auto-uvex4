@@ -659,6 +659,7 @@ public sealed class ObservationDockMockViewModel
     public ICommand ShowMainFocusCommand => EnabledCommand;
     public int AutomaticPreparationIssueCount { get; init; } = 3;
     public ICommand RecheckPreparationCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
+    public ICommand ResolveDeviceChangeCommand => IsTargetPlanEditable ? EnabledCommand : DisabledCommand;
     public IReadOnlyList<string> PreparationBlockingDetails => PreparationChecklistIssues;
     public string PreparationOwnerSummary => ObservationUiPresentation.Text(
         "光谱主控 Profile：光谱；相机：ATR585M。PHD2 独占 G3；独立测光端独占 QHY 相机与滤镜轮。来源标签不代表所有者。",

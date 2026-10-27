@@ -203,7 +203,7 @@ public sealed class ObservationUiPresentationTests
     [InlineData("SLIT_LOCUS_LOW_CONFIDENCE", "物理狭缝对比度不足")]
     [InlineData("G3_PLATE_SOLVE_LADDER_EXHAUSTED_DECLARED_INVISIBLE_FIELD", "观测计划明确声明目标")]
     [InlineData("G3_SOLVE_PROBE_OVEREXPOSED", "曝光或天光过亮")]
-    [InlineData("G3_CLOUD_OR_TRANSPARENCY_INVALID", "云层或透明度突变")]
+    [InlineData("G3_CLOUD_OR_TRANSPARENCY_INVALID", "不能仅凭此判定过云")]
     [InlineData("G3_GUIDING_RECOVERY_STOP_CHANGED", "停止证明缺失或已失效")]
     [InlineData("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", "完整回程超出原剩余预算")]
     [InlineData("G3_GUIDING_RECOVERY_RETURN_UNCONFIRMED", "没有取得到位确认")]

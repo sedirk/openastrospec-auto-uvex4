@@ -92,7 +92,10 @@ internal sealed record ObservationAutomationSnapshot(
     UvexAdv.Observatory.SepMainFocusOptions? MainFocusOptions = null,
     ObservationAcquisitionProgress? AcquisitionProgress = null,
     ObservationAcquisitionPresentation? Acquisition = null,
-    NightSafetyStandbySnapshot? SafetyStandby = null);
+    NightSafetyStandbySnapshot? SafetyStandby = null,
+    bool RealModeCommissioned = false,
+    string CommissioningProfileLoadStatus = "",
+    IReadOnlyList<string>? CommissioningValidationIssues = null);
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,

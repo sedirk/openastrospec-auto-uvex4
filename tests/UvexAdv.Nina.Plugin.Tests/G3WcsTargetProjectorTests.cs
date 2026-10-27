@@ -8,6 +8,58 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class G3WcsTargetProjectorTests
 {
+    [Theory]
+    [InlineData("FormalSolver", true, true)]
+    [InlineData("FormalSolver", false, false)]
+    [InlineData("RegisteredMosaicWcs", true, false)]
+    [InlineData("LocalDualOpticsPrediction", true, false)]
+    [InlineData("Unknown", true, false)]
+    public void OnlyCurrentFormalSolveRemovesOverlapCapWithoutIncreasingOriginalMotionLimit(
+        string authority, bool success, bool direct)
+    {
+        var coordinates = new Coordinates(346.77, 50.19, Epoch.J2000, Coordinates.RAType.Degrees);
+        var evidence = new PlateSolveEvidence(new PlateSolveResult { Success = success, Coordinates = coordinates,
+            Pixscale = .381, PositionAngle = 77.7 }, coordinates, 0, "PL3", "current.fit", "solve.json",
+            new('A', 64), 1920, 1080, 1, DateTimeOffset.UtcNow) { Authority = authority };
+        var footprint = new G3OverlapFootprint(1920, 1080, .381, 77.7, 5);
+        Assert.Equal(direct, G3SparseRecoveryWorkflow.CanApproachDirectly(evidence));
+        // Approximately the recorded mid0 initial offset. Before ADR-0045 even
+        // a formal solution was divided into tiny overlap segments.
+        var plan = G3SparseRecoveryWorkflow.PlanCorrection(evidence, footprint, 1800, 600, 5398);
+        if (direct) Assert.Equal(1, plan.AppliedScale);
+        else Assert.InRange(plan.AppliedScale, .001, .3);
+        var capped = G3SparseRecoveryWorkflow.PlanCorrection(evidence, footprint, 1800, 600, 100);
+        Assert.InRange(Math.Sqrt(Math.Pow(capped.RaTangentArcseconds, 2) +
+            Math.Pow(capped.DeclinationArcseconds, 2)), 0, 100.000001);
+        Assert.False(G3SparseRecoveryWorkflow.CanApproachDirectly(null));
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(90)] [InlineData(180)] [InlineData(256.45384026037)] [InlineData(359.9)]
+    public void KnownAxisOverlapMatchesActualProjectorAndRetainsOriginalLimits(double angle)
+    {
+        var solve = new PlateSolveResult { Success = true, Coordinates = new Coordinates(349.9082927951558,
+            23.763221766882612, Epoch.J2000, Coordinates.RAType.Degrees), Pixscale = .3812849948092597,
+            PositionAngle = angle, Flipped = false };
+        const string solver = "NINA.PlateSolving.Solvers.Platesolve3Solver";
+        var axis = G3WcsTargetProjector.ImageXAxisEastToNorthDegrees(solve, solver);
+        Assert.NotNull(axis);
+        var footprint = new G3OverlapFootprint(1920,1080,solve.Pixscale,axis,5,OrientationUncertaintyDegrees:1);
+        // October 25 recorded command, before the old unknown-angle cap.
+        var east = 96.764007 / .90164256; var north = 158.378631 / .90164256;
+        var plan = G3FieldOverlapPolicy.CapMove(footprint,east,north,5398);
+        var p = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(solve.Coordinates.RADegrees,
+            solve.Coordinates.Dec,plan.RaTangentArcseconds,plan.DeclinationArcseconds);
+        var projected = G3WcsTargetProjector.Project(new Coordinates(p.RaDegrees,p.DecDegrees,
+            Epoch.J2000,Coordinates.RAType.Degrees),solve,1920,1080,solver);
+        Assert.True(Math.Abs(projected.X-960) < 1920*.5);
+        Assert.True(Math.Abs(projected.Y-540) < 1080*.5);
+        Assert.InRange(plan.AppliedScale,0,1);
+        if (angle == 256.45384026037) Assert.Equal(1,plan.AppliedScale);
+        solve.Success = false;
+        Assert.Null(G3WcsTargetProjector.ImageXAxisEastToNorthDegrees(solve,solver));
+    }
+
     [Fact]
     public void RecordedHd18552NeighbourArrivalCanProposeShortFramesWithinExistingEnvelope()
     {

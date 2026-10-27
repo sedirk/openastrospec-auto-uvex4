@@ -5,6 +5,31 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class HorizonCalculatorTests
 {
+    [Fact]
+    public void Mid0BudgetDoesNotGrowFrom35To55MinutesDuringSearch()
+    {
+        var start = DateTimeOffset.Parse("2026-10-25T16:10:46.4405321Z");
+        var now = DateTimeOffset.Parse("2026-10-25T16:18:11.1020671Z");
+        var plan = new ObservationPlan("mid0-replay", "setup",
+            new EquatorialTarget("HD 218393", "HD 218393", 346.77588398267, 50.19235793967),
+            new ObservatorySite(33.37583333333333, 120.41666666666667, 0), start, TimeSpan.FromMinutes(35),
+            new HorizonPolicy(42, 0, 0), new MotionLimits(), "atr", "g3", "qhy");
+        Assert.Equal(HorizonEvaluation.WindowExhaustedCode, HorizonCalculator.Evaluate(plan with
+            { PlannedStartUtc = now, PlannedDuration = TimeSpan.FromMinutes(55) }).ToRuntimeGateResult().Code);
+        var context = new ObservationContext(plan);
+        context.LimitVisibilityTo(start.AddMinutes(35));
+        context.RemainingWorstCaseDuration = TimeSpan.FromMinutes(55);
+        Assert.Equal(start.AddMinutes(35) - now, context.ProtectedDurationAt(now));
+        Assert.Equal("HORIZON_CLEAR", HorizonCalculator.Evaluate(plan with
+            { PlannedStartUtc = now, PlannedDuration = context.ProtectedDurationAt(now) }).ToRuntimeGateResult().Code);
+        context.LimitVisibilityTo(start.AddHours(1)); // cannot refill on retry/segment
+        Assert.Equal(start.AddMinutes(35) - now, context.ProtectedDurationAt(now));
+        Assert.Equal(TimeSpan.FromMinutes(3), SetShortScience());
+        TimeSpan SetShortScience() { context.RemainingWorstCaseDuration = TimeSpan.FromMinutes(3); return context.ProtectedDurationAt(now); }
+        Assert.Equal("HORIZON_BLOCKED", HorizonCalculator.Evaluate(plan with
+            { PlannedStartUtc = DateTimeOffset.Parse("2026-10-25T17:10:00Z"), PlannedDuration = TimeSpan.FromSeconds(1) }).ToRuntimeGateResult().Code);
+    }
+
     [Theory]
     [InlineData(35, "HORIZON_CLEAR")]
     [InlineData(55, HorizonEvaluation.WindowExhaustedCode)]

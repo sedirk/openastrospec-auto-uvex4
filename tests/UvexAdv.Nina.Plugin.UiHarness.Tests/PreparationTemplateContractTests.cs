@@ -5,6 +5,21 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 
 public sealed class PreparationTemplateContractTests
 {
+    [Fact]
+    public void TargetUsesNativeSkipEntryWithoutDuplicatingAPluginButton()
+    {
+        Assert.DoesNotContain(LoadTemplate().Descendants(), node => node.Attribute("Command")?.Value == "{Binding SkipTargetCommand}");
+    }
+
+    [Fact]
+    public void DeviceChangeHasDirectStartupAndPreparationActionsWithoutAnotherTab()
+    {
+        var document = LoadTemplate();
+        foreach (var name in new[] { "RealModeStartupSummary", "AutomaticPreparationRoot" })
+            Assert.Contains(Named(document, name).Descendants(), e => e.Name.LocalName == "Button" &&
+                e.Attribute("Command")?.Value == "{Binding ResolveDeviceChangeCommand}");
+        Assert.Equal(2, document.Descendants().Count(e => e.Attribute("Command")?.Value == "{Binding ResolveDeviceChangeCommand}"));
+    }
     private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
 
     [Fact]

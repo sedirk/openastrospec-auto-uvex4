@@ -27,6 +27,8 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
         IReadOnlyList<Phd2GuidingResidualState> targetCompletionWindow = request.InitialWindow;
         var completionWindowRetries = 0;
         var transientResidualGrowthWarning = false;
+        var preferredProbeCorrectionUsed = false;
+        var preferredProbeWindowUsed = false;
         while (true)
         {
             port.ThrowIfGuideOutputFailed();
@@ -106,7 +108,24 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 slitApertureResiduals, completionTolerance, preset.MaximumResidualGrowthPixels,
                 preset.MaximumAcquisitionResidualPixels);
             var alongSlitPrecisionWarning = warningProbe.AlongSlitWarning;
-            var supervisedSlitPrecisionWarning = warningProbe.CanProbe;
+            var probeCorrectionBudget = warningProbe.CanProbe && !preferredProbeCorrectionUsed
+                ? Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(session.Qualification, session.GuideMode,
+                    session.LastMeasurement.Measurement, ledger, safety, topology,
+                    preset.BuildMotionLimits(), clock.GetUtcNow()) : null;
+            var probeCorrectionAffordable = warningProbe.CanProbe && !preferredProbeCorrectionUsed &&
+                plan.IsAllowed && !plan.IsComplete && plan.Stage is not null &&
+                ScienceQualityPolicy.HasConsistentCrossSlitBias(slitApertureResiduals, completionTolerance) &&
+                probeCorrectionBudget?.IsAllowed == true;
+            var preferProbeCorrection = probeCorrectionAffordable && correctionWindow.CanContinue && !existingLockNotReached;
+            // The last primary-star sample can be just outside its lock tolerance.
+            // Give this optional improvement ONE fresh window, only if the entire
+            // correction/return still fits after that window. If it does not help,
+            // retain the warning probe rather than inventing a new quality stop.
+            var probeBiasAwaitingWindow = probeCorrectionAffordable && !preferProbeCorrection && !preferredProbeWindowUsed &&
+                correctionWindow.Code == "CORRECTION_WINDOW_LOCK_NOT_REACHED" &&
+                correctionWindow.MaximumEndpointSpreadPixels <= completionTolerance &&
+                probeCorrectionBudget!.TotalElapsedSeconds + preset.MaximumStageSeconds <= preset.MaximumElapsedSeconds;
+            var supervisedSlitPrecisionWarning = warningProbe.CanProbe && !preferProbeCorrection && !probeBiasAwaitingWindow;
             // A rejected additional movement is not a rejected observation at
             // the current verified lock. Use the remaining read-only window,
             // even after the guide has caught up, before invoking the return.
@@ -114,7 +133,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             var budgetLimitedReadOnlyWait = measuredSupervisedGeometry && ledger.AttemptsUsed > 0 &&
                 !plan.IsAllowed && canWaitWithoutNewMotion;
             if (!supervisedSlitPrecisionWarning && (nativeCorrectionPending || completionWindowUnstable ||
-                nearSlitTrackingWarning || existingLockNotReached || budgetLimitedReadOnlyWait ||
+                probeBiasAwaitingWindow || (nearSlitTrackingWarning && !preferProbeCorrection) || existingLockNotReached || budgetLimitedReadOnlyWait ||
                 (transientResidualGrowthWarning && canWaitWithoutNewMotion)))
             {
                 var completionLimits = preset.BuildMotionLimits();
@@ -152,7 +171,10 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 // the full return. Four windows are not a physical safety
                 // boundary and must not force an early wind-induced return.
                 completionWindowRetries++;
-                port.Report(budgetLimitedReadOnlyWait && !existingLockNotReached
+                preferredProbeWindowUsed |= probeBiasAwaitingWindow;
+                port.Report(probeBiasAwaitingWindow
+                    ? "新帧显示目标中心持续偏在缝的一侧：在原预算内多检查一次当前导星锁点；若可继续则精调一次，否则保留警告试拍。"
+                    : budgetLimitedReadOnlyWait && !existingLockNotReached
                     ? "追加精调预算不足：保持当前锁点等待新帧，原试拍质量策略及回程预留不变；不立即放弃目标。"
                     : existingLockNotReached
                     ? "PHD2 尚未跟上当前锁点：保持原生导星等待新帧，不追加精调、不重置预算；原回程时间继续保留。"
@@ -210,6 +232,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     {
                         completionWindowRetries, boundedByOriginalDeadline = true, nativeCorrectionPending,
                         nearSlitTrackingWarning, transientResidualGrowthWarning, existingLockNotReached, budgetLimitedReadOnlyWait,
+                        probeBiasAwaitingWindow,
                         previousWindowDecision = correctionWindow,
                         previousWindowFrames = previousCompletionWindow.Select(item => item.Measurement.FrameSha256).ToArray(),
                         rollingCorrectionWindow,
@@ -339,6 +362,11 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             }
 
             var stage = plan.Stage!;
+            if (preferProbeCorrection)
+            {
+                preferredProbeCorrectionUsed = true;
+                port.Report("三帧质心持续偏在缝的同一侧：优先完成一次原预算可承担的小步修正，再以新帧决定入缝或警告试拍。");
+            }
             if (budgetLimitedApproach)
                 port.Report($"精调预算接近上限：本步缩短为 {stage.StagePixels:F2}px，保留原回程预留；移锁后重新实测，不把预测当作入缝或试拍许可。");
             if (correctionWindow.CanContinue)
@@ -386,6 +414,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     stage.AppliedResidualToleranceScale,
                     stage.RequiredFreshResiduals,
                     planningCode = plan.Code,
+                    preferProbeCorrection,
                     budgetLimitedApproach,
                     predictedProbeEnvelopeOnly = budgetLimitedApproach,
                     stage.CumulativeAfterStageUpperPixels,

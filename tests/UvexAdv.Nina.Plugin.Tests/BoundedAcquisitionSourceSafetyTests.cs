@@ -28,8 +28,10 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private GateResult ValidateG3SearchMountState(");
         Assert.Contains("G3AcquisitionMotionPlanner.LocalSearchLineageRadiusArcseconds(", search);
         Assert.Contains("durableG3AcquisitionMotion, limits.MaximumRadiusArcseconds)", search);
-        Assert.Contains("G3FieldOverlapPolicy.PlanSearch", search);
-        Assert.Contains("overlapPlan.Waypoints", search);
+        Assert.Contains("G3LocalSearchPlanner.Build(limits)", search);
+        Assert.Contains("CurrentSearchOverlapSupportAsync(motionAuthorityField", search);
+        Assert.Contains("G3NeighbourSearchPolicy.PlanVisit", search);
+        Assert.DoesNotContain("G3FieldOverlapPolicy.PlanSearch", search);
         var begin = search.IndexOf("var durableSearch = await BeginG3AcquisitionMotionAsync(", StringComparison.Ordinal);
         var persist = search.IndexOf("await PersistG3AcquisitionMotionAsync(durableSearch", begin, StringComparison.Ordinal);
         Assert.Contains("durableMaximumRadiusArcseconds,", search[begin..persist]);
@@ -154,7 +156,9 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private async Task<StageResult> RunBoundedG3LocalSearchAsync(",
             "private GateResult ValidateG3SearchMountState(");
 
-        Assert.Contains("G3FieldOverlapPolicy.PlanSearch", body, StringComparison.Ordinal);
+        Assert.Contains("G3LocalSearchPlanner.Build(limits)", body, StringComparison.Ordinal);
+        Assert.Contains("G3NeighbourSearchPolicy.PlanVisit", body, StringComparison.Ordinal);
+        Assert.Contains("CurrentSearchOverlapSupportAsync", body, StringComparison.Ordinal);
         Assert.Contains("ValidateG3SearchMoveAndReturnReserve", body, StringComparison.Ordinal);
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", body, StringComparison.Ordinal);
         Assert.Contains("CaptureAndAnalyzeG3WithSolveLadderAsync", body, StringComparison.Ordinal);

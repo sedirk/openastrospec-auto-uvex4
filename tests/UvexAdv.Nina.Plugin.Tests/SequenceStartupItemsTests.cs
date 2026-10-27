@@ -11,8 +11,29 @@ using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
 
+[Collection("Read-only NINA ephemeris boundary")]
 public sealed class SequenceStartupItemsTests
 {
+    [Fact]
+    public async Task FailedCommissioningExplainsRootCauseWithoutGrantingAuthority()
+    {
+        using var f = new Fixture();
+        f.Settings.RealModeCommissioned = false;
+        var profile = f.Profiles.ActiveProfile.Id;
+        f.Host.PublishCommissioningIssues(profile, ["屋顶防碰撞：old-roof → new-roof"]);
+        Assert.False(f.Mode.Validate());
+        Assert.Contains("old-roof → new-roof", Assert.Single(f.Mode.Issues));
+        Assert.Contains("自动准备", f.Mode.Issues.Single());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Mode.Execute(f.Progress, default));
+        Assert.False(f.Settings.ObservationUseRealMode);
+        Assert.False(f.Settings.RealModeCommissioned);
+        Assert.Equal(0, f.ConnectCalls);
+        Assert.DoesNotContain("old-roof", f.Host.CommissioningFailureMessage(Guid.NewGuid()));
+        f.Host.PublishCommissioningIssues(profile, []);
+        Assert.DoesNotContain("old-roof", f.Host.CommissioningFailureMessage(profile));
+        Assert.False(f.Mode.Validate()); // Empty diagnostics are not approval.
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -150,6 +171,7 @@ public sealed class SequenceStartupItemsTests
         { SelectedDevice = "Safety Monitor" };
         public Fixture()
         {
+            ReadOnlyNinaAstrometry.Initialize();
             Host = new(new SilentNotifier(), Path.Combine(leaseDirectory, "owner.lock"));
             var values = new Dictionary<string, object?>();
             var options = Proxy<IPluginOptionsAccessor>((m,a) => {

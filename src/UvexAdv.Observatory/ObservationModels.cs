@@ -226,6 +226,27 @@ public sealed class ObservationContext
     private readonly Dictionary<string, object> values = new(StringComparer.OrdinalIgnoreCase);
     private Func<CancellationToken, Task>? checkpoint;
     private TimeSpan? remainingWorstCaseDuration;
+    private DateTimeOffset? visibilityDeadlineUtc;
+
+    // Native target visibility budgets include acquisition/recovery. Nested
+    // runners cannot extend that original end by adding their own allowance.
+    public void LimitVisibilityTo(DateTimeOffset deadline)
+    {
+        lock (sync)
+            if (visibilityDeadlineUtc is null || deadline < visibilityDeadlineUtc)
+                visibilityDeadlineUtc = deadline;
+    }
+
+    public TimeSpan ProtectedDurationAt(DateTimeOffset now)
+    {
+        lock (sync)
+        {
+            var duration = remainingWorstCaseDuration ?? Plan.PlannedDuration;
+            if (visibilityDeadlineUtc is { } end)
+                duration = TimeSpan.FromTicks(Math.Max(1, Math.Min(duration.Ticks, (end - now).Ticks)));
+            return duration;
+        }
+    }
 
     public ObservationContext(ObservationPlan plan) => Plan = plan;
 
@@ -265,7 +286,7 @@ public sealed class ObservationContext
     /// </summary>
     public TimeSpan? RemainingWorstCaseDuration
     {
-        get { lock (sync) return remainingWorstCaseDuration; }
+        get { lock (sync) return visibilityDeadlineUtc is null ? remainingWorstCaseDuration : ProtectedDurationAt(DateTimeOffset.UtcNow); }
         set
         {
             if (value is { } duration && duration <= TimeSpan.Zero)

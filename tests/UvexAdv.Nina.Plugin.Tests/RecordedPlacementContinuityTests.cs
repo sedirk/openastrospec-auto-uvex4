@@ -189,11 +189,24 @@ public sealed class RecordedPlacementContinuityTests(ITestOutputHelper output)
             Ledger=request.Ledger with {OriginLockPosition=actualLock!,CurrentLockPosition=actualLock!},
             Preset=request.Preset with {TargetOnSlitTolerancePixels=2,MaximumResidualGrowthPixels=2,
                 MaximumAcquisitionResidualPixels=100,MaximumStagePixels=25,MaximumCumulativePixels=100,MaximumAttempts=8} };
+        f.Trace.Handlers["get_GuideSnapshot"] = _ => Phd2StateSnapshot.Disconnected with {
+            IsConnected=true, AppState=Phd2AppState.Guiding, ConnectionEpoch=1, GuideEpoch=1, LockPosition=actualLock };
+        // .321 may make one optional read-only check before a biased core-overlap
+        // probe. Controlled unchanged response: do not fabricate new real FITS or
+        // pretend the archived guide caught up. It must still reach the probe.
+        f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = _ => {
+            f.ClockNow=f.Now.AddSeconds(3);
+            return Task.FromResult<IReadOnlyList<Phd2GuidingResidualState>>(window.Select((s,i) => s with {
+                Measurement=s.Measurement with {CapturedUtc=f.Now.AddSeconds(i+1),FrameSha256=new((char)('D'+i),64)},
+                Frame=s.Frame with {Sha256=new((char)('D'+i),64),CompletedUtc=f.Now.AddSeconds(i+1),GuideStepUtc=f.Now.AddSeconds(i+1)}
+            }).ToArray());
+        };
         var result=await f.Workflow.ConvergeAsync(f.Context,request,default);
         Assert.Equal("PHD2_SLIT_PRECISION_WARNING_PROBE_AUTHORIZED",result.Gate.Code);
         Assert.Equal(0,result.Gate.Metrics!["preciseSlitPlacementProven"]);
         Assert.DoesNotContain("SetExactLockPositionAsync",f.Trace.Calls);
         Assert.DoesNotContain("ResettleAtCurrentLockAsync",f.Trace.Calls);
+        Assert.InRange(f.Trace.Calls.Count(c => c == "CapturePhd2PlacementGuideWindowAsync"),0,1);
         Assert.Single(f.Persisted);
         Assert.Equal(request.Ledger.StartedUtc,f.Persisted[0].StartedUtc);
         Assert.Equal(request.Ledger.CumulativeCommandedPixels,f.Persisted[0].CumulativeCommandedPixels);

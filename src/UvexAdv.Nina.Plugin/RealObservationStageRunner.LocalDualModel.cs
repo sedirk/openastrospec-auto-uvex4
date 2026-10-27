@@ -241,9 +241,17 @@ internal sealed partial class RealObservationStageRunner
         return inferred;
     }
 
-    private async Task<QhyG3PairQhySource?> CaptureLocalDualWitnessAsync(ObservationContext context,
+    private Task<QhyG3PairQhySource?> CaptureLocalDualWitnessAsync(ObservationContext context,
+        G3PlateSolveProbeState probe, QhyG3FastPairPolicy policy, CancellationToken token) =>
+        G3SparseRecoveryWorkflow.WithoutContinuousOwnerAsync(wideFieldStream is not null,
+            t => CaptureLocalDualWitnessCoreAsync(context, probe, policy, t), token);
+
+    private async Task<QhyG3PairQhySource?> CaptureLocalDualWitnessCoreAsync(ObservationContext context,
         G3PlateSolveProbeState probe, QhyG3FastPairPolicy policy, CancellationToken token)
     {
+        // The continuous job already owns the camera. A missing contemporaneous
+        // pose is an optional inference miss, not permission to start another job
+        // (nor a reason to throw away this perfectly usable G3 exposure).
         if (localDualQhyRefreshAttempts >= 2) return null;
         // Precharge before native dispatch; same-run retry cannot gain more exposures.
         var ordinal = ++localDualQhyRefreshAttempts;

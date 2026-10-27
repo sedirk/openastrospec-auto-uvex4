@@ -4,6 +4,32 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3SolveProbeContentAnalysisTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    public void BrightGradientNoiseAndIsolatedHotPixelsDoNotAuthorizeMotion(int seed)
+    {
+        const int width = 512, height = 384;
+        var random = new Random(seed);
+        var pixels = new ushort[width * height];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var gaussian = Math.Sqrt(-2 * Math.Log(1 - random.NextDouble())) * Math.Cos(2 * Math.PI * random.NextDouble());
+            pixels[y * width + x] = (ushort)Math.Clamp(12000 + x * 30 + y * 10 + gaussian * 1800, 0, 65520);
+        }
+        for (var i = 0; i < 8; i++) pixels[random.Next(pixels.Length)] = 65520;
+        var result = G3SolveProbeContentAnalyzer.Analyze(new MonochromeFrame(width, height, pixels, 65520));
+        Assert.False(result.HasCoherentSource);
+        Assert.Equal("G3_CLOUD_OR_TRANSPARENCY_INVALID", result.Gate.Code);
+    }
+
     [Fact]
     public void FlatCloudLikeFrameDoesNotAuthorizeSearchMotion()
     {

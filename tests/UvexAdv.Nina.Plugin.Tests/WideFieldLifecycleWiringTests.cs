@@ -7,6 +7,21 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class WideFieldLifecycleWiringTests
 {
+    [Fact]
+    public void StreamUsesBackgroundBoundaryAndLadderUsesAdaptiveExposureInProduction()
+    {
+        var calls = Calls(Body("AnalyzeWideFieldStreamFrameAsync")).Select(m=>m.Name).ToArray();
+        Assert.Contains("RunWideFieldKeyframeWhenStationaryAsync",calls);
+        Assert.DoesNotContain("RunWithG3PendingReturnTimeAsync",calls);
+        Assert.Contains("WideFieldStreamCheckpointAsync",calls);
+        Assert.Contains("ShortRecheckMilliseconds",Calls(Body("CaptureG3PlateSolveLadderAsync")).Select(m=>m.Name));
+        Assert.Contains("WithoutContinuousOwnerAsync", Calls(Body("CaptureLocalDualWitnessAsync")).Select(m => m.Name));
+        var centering = Calls(Body("RunG3WcsCenteringAsync")).Select(m => m.Name).ToArray();
+        Assert.Contains("PlanCorrection", centering);
+        Assert.Contains("ValidateOutboundAndReturnReserve", centering);
+        Assert.Contains("ValidateG3FieldMountBindingForMotionAsync", centering);
+    }
+
     [Theory]
     [InlineData("OnPausedAsync", "RetireWideFieldForBoundaryAsync")]
     [InlineData("OnTakeoverAsync", "RetireWideFieldForBoundaryAsync")]

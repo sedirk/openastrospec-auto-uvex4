@@ -223,14 +223,15 @@ public sealed class G3SparseRecoveryContinuationTests
     }
 
     [Fact]
-    public void FirstFormalWcsCorrectionUsesOverlapBeforeAnyHistoricalSolveMissCanSetAFlag()
+    public void AuthorityAwareCorrectionStillPassesOriginalReserveAndWritesIntentBeforeMotion()
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
         var start = source.IndexOf("private async Task<StageResult> RunG3WcsCenteringAsync(", StringComparison.Ordinal);
         var end = source.IndexOf("private async Task<StageResult> RunBoundedG3LocalSearchAsync(", start, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start);
         var body = source[start..end];
-        var overlap = body.IndexOf("var overlapMove = G3FieldOverlapPolicy.CapMove(", StringComparison.Ordinal);
+        var overlap = body.IndexOf("var overlapMove = G3SparseRecoveryWorkflow.PlanCorrection(", StringComparison.Ordinal);
+        Assert.True(overlap > 0);
         var scale = body.IndexOf("var scale = overlapMove.AppliedScale;", overlap, StringComparison.Ordinal);
         var reserve = body.IndexOf("G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(", scale, StringComparison.Ordinal);
         var intent = body.IndexOf("Phase = G3AcquisitionMotionPhase.OutboundIntent", reserve, StringComparison.Ordinal);
@@ -242,7 +243,7 @@ public sealed class G3SparseRecoveryContinuationTests
     }
 
     [Fact]
-    public void RecordedHd220526FirstFormalToSevenHundredFortySevenArcsecondMoveIsCappedBeforeTheMissingFrame()
+    public void RecordedHd220526NonOverlapRemainsARealRiskButFormalWcsDoesNotRequireTheInferredCap()
     {
         var root = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
         if (string.IsNullOrWhiteSpace(root)) return;
@@ -275,6 +276,16 @@ public sealed class G3SparseRecoveryContinuationTests
         Assert.True(plan.AppliedScale < 0.25);
         var capped = Math.Sqrt(plan.RaTangentArcseconds * plan.RaTangentArcseconds + plan.DeclinationArcseconds * plan.DeclinationArcseconds);
         Assert.InRange(capped, 186, 187);
+        var formal = new PlateSolveEvidence(new PlateSolveResult { Success = true }, null!, 0, "PL3",
+            raw, solvedPath, Hash(solvedPath), fits.Width, fits.Height, 1, DateTimeOffset.UtcNow);
+        var permitted = G3SparseRecoveryWorkflow.PlanCorrection(formal, new(fits.Width, fits.Height,
+            solved.GetProperty("pixelScaleArcseconds").GetDouble(), null, 5),
+            delta.RaArcseconds, delta.DecArcseconds, 2700);
+        Assert.Equal(1, permitted.AppliedScale);
+        var inferred = G3SparseRecoveryWorkflow.PlanCorrection(formal with { Authority = "RegisteredMosaicWcs" },
+            new(fits.Width, fits.Height, solved.GetProperty("pixelScaleArcseconds").GetDouble(), null, 5),
+            delta.RaArcseconds, delta.DecArcseconds, 2700);
+        Assert.Equal(plan.AppliedScale, inferred.AppliedScale);
         // This proves an unchanged-budget planning correction, not that missing
         // historical intermediate frames now exist or a new sky run succeeded.
         foreach (var path in paths) Assert.Equal(before[path], Hash(path));

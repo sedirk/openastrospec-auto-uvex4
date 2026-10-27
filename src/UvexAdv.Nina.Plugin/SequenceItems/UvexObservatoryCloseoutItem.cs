@@ -54,7 +54,7 @@ public sealed class UvexObservatoryCloseoutItem : SequenceItem, IValidatable
         return Issues.Count == 0;
     }
 
-    public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+    public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!Validate() || NativeNightEndArea.Owner(this) is not { } night ||
@@ -62,11 +62,12 @@ public sealed class UvexObservatoryCloseoutItem : SequenceItem, IValidatable
             throw new InvalidOperationException("收口指令没有有效的整夜执行权。");
         // The immutable choice is honored in the owner's finally/standby path,
         // even when a failed target prevents this marker from being reached.
+        if (Parent is NINA.Sequencer.Container.EndAreaContainer)
+            await night.EnterNativeEndAsync(token).ConfigureAwait(false);
         progress.Report(new ApplicationStatus { Source = "OpenAstroSpec 整夜",
             Status = Parent is UvexNightSequenceContainer
                 ? "目标执行已结束；由整夜容器按启动时锁定的收口选择处理。"
                 : night.NightState });
-        return Task.CompletedTask;
     }
 
     public override object Clone()

@@ -27,6 +27,7 @@ public sealed class G3WorkflowTests
 
     [Theory]
     [InlineData("TARGET_NOT_FOUND", true)] [InlineData("TARGET_AMBIGUOUS", true)]
+    [InlineData(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode, true)]
     [InlineData("G3_PLATE_SOLVE_FAILED", true)] [InlineData("CAMERA_OWNER_CHANGED", false)]
     public async Task FailedFieldUsesExistingNeighborBranchWithoutInventingBudget(string code, bool neighbor)
     {

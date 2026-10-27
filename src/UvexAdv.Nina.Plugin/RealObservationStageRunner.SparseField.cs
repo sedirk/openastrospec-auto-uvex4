@@ -18,6 +18,29 @@ internal sealed partial class RealObservationStageRunner
     private string? sparseSepModulePath;
     private const int MaximumSparseNodes = 16;
 
+    private async Task<string[]> CurrentSearchOverlapSupportAsync(G3FieldState field, CancellationToken token)
+    {
+        var node = sparseG3Nodes.LastOrDefault(n => field.MountBinding is { } binding &&
+            SameHash(n.Sha, binding.FrameSha256) && n.Path == field.FramePath);
+        if (node is null || !node.StarsFromFrozenSep || node.Stars.Count < 5) return [];
+        var component = sparseG3Nodes.Where(n => n.Component == node.Component).ToArray();
+        // A shared component exists only after independent registration has
+        // passed, not merely because five detections or a mount offset exist.
+        var prior = component.LastOrDefault(n => n.Sha != node.Sha && n.StarsFromFrozenSep && n.Stars.Count >= 5);
+        if (prior is null) return [];
+        var window = G3SparseGraphWindowPolicy.Evaluate(node.Timing, prior.Timing,
+            component.Select(n => n.Timing).ToArray(), DateTimeOffset.UtcNow,
+            commissioning!.Value.Phd2SlitPlacement!.TargetSearchRadiusPixels);
+        // Re-rooting would require a NEW direct registration; merely selecting
+        // two young nodes cannot erase an older transform dependency here.
+        if (!window.Usable || window.StartIndependentComponent) return [];
+        foreach (var source in component) await ValidateSparseNodeHashesAsync(source, token).ConfigureAwait(false);
+        // Revalidate the frozen extractor as well. Changed evidence must not
+        // turn into permission for a longer blind search step.
+        if (await TryGetSparseRegistrationStarsAsync(node.Sha, token).ConfigureAwait(false) is null) return [];
+        return component.Select(n => n.Path).ToArray();
+    }
+
     private async Task<IReadOnlyList<StarCandidate>?> TryGetSparseRegistrationStarsAsync(string sha, CancellationToken token)
     {
         var node = sparseG3Nodes.LastOrDefault(n => SameHash(n.Sha, sha));
@@ -134,9 +157,13 @@ internal sealed partial class RealObservationStageRunner
         field.Image?.Properties.Width ?? 0, field.Image?.Properties.Height ?? 0,
         field.Solve?.Result.Success == true ? field.Solve.Result.Pixscale :
             206.264806247 * configuration.G3.PixelSizeMicrometers * configuration.G3.Binning / configuration.G3.FocalLengthMillimeters,
-        ImageXAxisEastToNorthDegrees: null,
+        ImageXAxisEastToNorthDegrees: field.Solve is { Result.Success: true } solved
+            ? G3WcsTargetProjector.ImageXAxisEastToNorthDegrees(solved.Result, solved.SolverIdentity) : null,
         EndpointPositionUncertaintyArcseconds: Math.Max(G3SearchStableEndpointToleranceArcseconds,
-            (field.Solve?.PredictionUncertaintyPixels ?? 0) * (field.Solve?.Result.Pixscale ?? 0)));
+            (field.Solve?.PredictionUncertaintyPixels ?? 0) * (field.Solve?.Result.Pixscale ?? 0)),
+        // A registered/mosaic WCS retains measured orientation. It is not an
+        // unknown-axis field. Keep a wider angular error for inferred geometry.
+        OrientationUncertaintyDegrees: field.Solve is { IsFormal: true, Result.Success: true } ? 1 : 5);
 
     private async Task ValidateSparseBoundaryAsync(ObservationContext context, G3PlateSolveProbeState probe,
         CancellationToken token)
@@ -347,11 +374,12 @@ internal sealed partial class RealObservationStageRunner
             {
                 var measuredMotion = G3OverlapGraphConsistency.Evaluate(G3SimilarityTransform.Identity,
                     registration.Transform, frame.Width, frame.Height).MaximumCornerDisagreementPixels;
-                // A stationary same-owner pair measures optical drift (including
-                // rotation); readback tolerance and fit error widen its upper bound.
-                var pixelScale = 206.264806247 * configuration.G3.PixelSizeMicrometers * configuration.G3.Binning / configuration.G3.FocalLengthMillimeters;
-                drift = new((measuredMotion + 2 * registration.MaximumHoldoutResidualPixels +
-                    2 * MountCommandArrivalToleranceArcseconds / pixelScale) / elapsedMinimum, registrationReceipt);
+                // Independent image registration already measures ALL optical
+                // displacement, including any tracking/readback error. Mount
+                // tolerance qualifies stationarity; adding it again as pixel
+                // motion fabricated ~10 px per pair and expired useful mosaics.
+                drift = new(G3SparseFrameTimingPolicy.RegisteredDriftUpperBound(
+                    measuredMotion, registration.MaximumHoldoutResidualPixels, elapsedMinimum), registrationReceipt);
             }
             if (formal)
             {
@@ -638,5 +666,53 @@ internal sealed partial class RealObservationStageRunner
             return GateResult.TargetQuality("G3_CATALOG_SHORT_POSITION_UNCONFIRMED",
                 "The optical position expired while rechecking its immutable source chain; do not issue a new correction from it.");
         return GateResult.Pass("G3_SPARSE_SOURCES_UNCHANGED", "All inferred current-field sources remain hash-bound.");
+    }
+
+    internal static async Task<GateResult> ValidateMeasuredSparseContinuityAsync(G3FieldState field,
+        Func<string, CancellationToken, Task<string>> hashFile, CancellationToken token)
+    {
+        var solve = field.Solve!;
+        if (field.SparseMeasuredContinuity is not { } proof)
+            return await ValidateSparseInferenceSourcesAsync(solve, hashFile, token).ConfigureAwait(false);
+        var track = field.TargetTrackSource;
+        if (!field.SparseInferenceConfirmed || field.Gate.Disposition != GateDisposition.Passed ||
+            !field.TargetIdentification.HasCatalogPositionRefinement || track is null ||
+            solve.InferenceValidUntilUtc is not { } expiry || proof.AssociationValidatedUtc > expiry ||
+            proof.AssociationValidatedUtc < track.Timing.CaptureCompletedUtc ||
+            proof.PositionValidUntilUtc > track.Timing.CaptureCompletedUtc.AddSeconds(30) ||
+            proof.CurrentFramePath != track.Path || !SameHash(proof.CurrentFrameSha256, track.Sha) ||
+            track.Target != field.TargetIdentification.Target?.Centroid ||
+            !SameHash(proof.SolveEvidenceSha256, solve.EvidenceSha256) ||
+            proof.ConfirmationPath != field.TargetIdentification.BoundShortPositionEvidencePath ||
+            proof.FirstFramePath == proof.CurrentFramePath || SameHash(proof.FirstFrameSha256, proof.CurrentFrameSha256))
+            return GateResult.Unknown("G3_SPARSE_SOURCE_CHANGED", "Measured continuity lacks its independently confirmed, timely catalogue association.");
+        var now = DateTimeOffset.UtcNow;
+        var temporal = G3SparseFrameTimingPolicy.Evaluate(track.Timing, now,
+            G3SparseTimingPurpose.RegisteredCurrentFrame, field.TargetIdentification.CatalogPositionSpreadPixels,
+            proof.MaximumPositionUncertaintyPixels, measuredDrift: solve.MeasuredDrift);
+        if (!temporal.Usable || now > proof.PositionValidUntilUtc)
+            return GateResult.TargetQuality("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", "The measured short-frame position is stale; no motion from old pixels.");
+        // All original parents are STILL hashed, as are both short frames and
+        // their accepted receipt. Only positional freshness changes authority;
+        // neither the old WCS nor its recorded expiry is rewritten.
+        var parents = new Dictionary<string, string>(solve.InferenceSources, StringComparer.OrdinalIgnoreCase)
+        {
+            [proof.ConfirmationPath] = proof.ConfirmationSha256,
+            [proof.FirstFramePath] = proof.FirstFrameSha256,
+            [proof.CurrentFramePath] = proof.CurrentFrameSha256,
+        };
+        var integrity = await ValidateSparseInferenceSourcesAsync(solve with
+        {
+            InferenceSources = parents,
+            InferenceValidUntilUtc = proof.PositionValidUntilUtc,
+        }, hashFile, token).ConfigureAwait(false);
+        if (integrity.Disposition != GateDisposition.Passed) return integrity;
+        // Rehashing can consume the remaining positional uncertainty even when
+        // the absolute 30-second cap has not elapsed.
+        temporal = G3SparseFrameTimingPolicy.Evaluate(track.Timing, DateTimeOffset.UtcNow,
+            G3SparseTimingPurpose.RegisteredCurrentFrame, field.TargetIdentification.CatalogPositionSpreadPixels,
+            proof.MaximumPositionUncertaintyPixels, measuredDrift: solve.MeasuredDrift);
+        return temporal.Usable ? integrity : GateResult.TargetQuality("G3_CATALOG_SHORT_POSITION_UNCONFIRMED",
+            "Measured position expired while checking its source chain; retain all evidence and use the original recovery/skip path.");
     }
 }

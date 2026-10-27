@@ -2328,7 +2328,7 @@ public sealed partial class Phd2Client : IPhd2Client
         var sequence = Interlocked.Increment(ref nextEventSequence);
         var message = new Phd2EventMessage(name, sequence, receivedUtc, payload);
 
-        UpdateSnapshot(current => ApplyEvent(current, message));
+        UpdateSnapshot(current => ApplyEvent(current, message), "event:" + name);
         CompleteMatchingEventWaiters(message);
         InvokeEventHandlersSafely(EventReceived, message);
     }
@@ -2990,12 +2990,20 @@ public sealed partial class Phd2Client : IPhd2Client
         });
     }
 
-    private void UpdateSnapshot(Func<Phd2StateSnapshot, Phd2StateSnapshot> update)
+    private void UpdateSnapshot(Func<Phd2StateSnapshot, Phd2StateSnapshot> update,
+        [System.Runtime.CompilerServices.CallerMemberName] string cause = "unknown")
     {
         Phd2StateSnapshot next;
         lock (stateGate)
         {
             next = update(snapshot);
+            if (next.GuideEpoch != snapshot.GuideEpoch)
+            {
+                var change = new Phd2GuideEpochChange(snapshot.GuideEpoch, next.GuideEpoch,
+                    cause, next.EventSequence, DateTimeOffset.UtcNow, snapshot.AppState, next.AppState);
+                next = next with { LastGuideEpochChange = change,
+                    RecentGuideEpochChanges = snapshot.RecentGuideEpochChanges.TakeLast(7).Append(change).ToArray() };
+            }
             if (next == snapshot)
             {
                 return;

@@ -107,10 +107,14 @@ public sealed class AutomaticSepFocusBoundaryTests
     [Fact]
     public async Task StopFailureIsNotConvertedToConfirmedReturnOrQuality()
     {
-        var fake = new FocusFake { SlowCapture = true };
-        var boundary = Wrap(fake, deadline: DateTimeOffset.UtcNow.AddMilliseconds(120),
+        // Cancel only after the capture was entered. A 120 ms wall-clock
+        // deadline can expire during parallel fixture setup, never reaching
+        // the stop-confirmation branch this test is supposed to exercise.
+        using var cancel = new CancellationTokenSource();
+        var fake = new FocusFake { OnCapture = cancel.Cancel };
+        var boundary = Wrap(fake, token: cancel.Token,
             stop: _ => Task.FromResult<IReadOnlyList<string>>(["motor not stopped"]));
-        var result = await Run(boundary);
+        var result = await Run(boundary, cancel.Token);
         Assert.Contains("停止边界未确认", result.Message);
         Assert.False(result.FocusVerified);
         var outcome = AutomaticSepFocusBoundary.ClassifyOutcome(result,

@@ -15,6 +15,8 @@ $requiredFiles = @(
     'UvexAdv.Nina.Plugin.dll',
     'UvexAdv.Core.dll',
     'UvexAdv.Observatory.dll',
+    'UvexAdv.Commissioning.Tool.dll',
+    'Analysis\astap_recovery.py',
     'UvexAdv.Phd2.dll',
     'UvexAdv.Protocol.dll',
     'UvexAdv.Qhy.Core.dll',

@@ -9,7 +9,8 @@ internal sealed partial class RealObservationStageRunner
     private async Task<G3PlateSolveProbeState?> ConfirmSaturatedG3HandoffWithShortExposureAsync(
         ObservationContext context, G3WcsMotionPrediction prediction, TargetIdentification longTarget,
         string longFramePath, G3FieldMountBinding longMountBinding, int exposureMilliseconds, Phd2SlitPlacementCommissioning preset,
-        SlitGeometry slit, IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, CancellationToken cancellationToken)
+        SlitGeometry slit, IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, CancellationToken cancellationToken,
+        bool allowMeasuredCoarse = false)
     {
         var longProbe = new G3PlateSolveProbeState(GateResult.Unknown("G3_SHORT_CHECK_PENDING", "Not a motion authority"),
             longFramePath, null, null, null, attempts, MountBinding: longMountBinding);
@@ -108,10 +109,16 @@ internal sealed partial class RealObservationStageRunner
                 preset.MaximumAcquisitionResidualPixels, previous, measurement, confirmation, attempt, boundaryRecheckUsed,
                 RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true), preset.TargetSearchRadiusPixels);
             var accepted = decision.Accepted;
+            var coarsePair = !accepted && allowMeasuredCoarse && MeasuredCoarseAnchorUsable(prediction) &&
+                G3MeasuredCoarseRecoveryPolicy.PairUsable(longTarget, prediction.PredictedTargetPoint,
+                    prediction.MaximumUncertaintyPixels, slit.AcquisitionPoint, frame.Width, frame.Height,
+                    preset.MaximumAcquisitionResidualPixels, preset.TargetSearchRadiusPixels,
+                    prediction.FormalAnchor!.Result.Pixscale,
+                    RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true), previous, measurement, confirmation);
             var next = boundaryRecheckUsed ? policy : policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt);
             var receipt = await PublishRunJsonEvidenceAsync("g3-post-wcs-short-target-confirmation",
                 "SEP continuity check after a small WCS correction (no repeat solve)",
-                new { accepted, attempt, maximumFrames,
+                new { accepted, coarsePair, attempt, maximumFrames,
                     longFramePath, longTarget, shortFramePath = captured.Path, shortFrameSha256 = sha,
                     exposureMilliseconds, requestedGainPercent = shortConfirmationGainPercent,
                     guidingProfileGainPercent = configuration.G3.GainPercent,
@@ -132,6 +139,16 @@ internal sealed partial class RealObservationStageRunner
                 ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, decision.Gate,
                     ObservationStaticTextLocalization.EffectiveCulture).Summary, slit, shortTarget.Target?.Centroid);
             if (accepted) return latest;
+            if (coarsePair)
+            {
+                var coarse = await CreateMeasuredCoarseProbeAsync(context, prediction, longProbe,
+                    probe with { MeasuredPostWcsTarget = shortTarget with
+                    {
+                        BoundShortPositionEvidencePath = receipt,
+                        CatalogPositionSpreadPixels = confirmation.PositionSpreadPixels,
+                    } }, previousPath!, previousHash!, receipt, cancellationToken).ConfigureAwait(false);
+                if (coarse is not null) return coarse;
+            }
             if (decision.RecheckPair)
             {
                 boundaryRecheckUsed = true;

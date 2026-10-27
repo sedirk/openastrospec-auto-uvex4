@@ -45,6 +45,29 @@ public sealed record ObservationDashboardSnapshot(
 public sealed class ObservationCoordinatorHost : IDisposable
 {
     private readonly object sync = new();
+    private Guid? commissioningIssueProfile;
+    private string[] commissioningIssues = [];
+
+    // Diagnostic only, current process/profile only. Never used to grant real-mode authority.
+    internal void PublishCommissioningIssues(Guid profileId, IEnumerable<string> issues)
+    {
+        lock (sync)
+        {
+            commissioningIssueProfile = profileId;
+            commissioningIssues = issues.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToArray();
+        }
+    }
+
+    internal string CommissioningFailureMessage(Guid profileId)
+    {
+        lock (sync)
+        {
+            var detail = commissioningIssueProfile == profileId && commissioningIssues.Length != 0
+                ? "最近静态校验：" + string.Join("；", commissioningIssues) + "。" : string.Empty;
+            return "本 Profile 的设备标定尚未通过确认。" + detail +
+                "请在主控台 → OpenAstroSpec → 自动准备查看具体原因并重新检查。";
+        }
+    }
     private readonly ObservationRunCoordinator coordinator = new();
     private readonly Dictionary<ObservationStage, GateResult> gates = new();
     private readonly Dictionary<ObservationPreviewChannel, ObservationPreview> previews = new();
@@ -204,9 +227,12 @@ public sealed class ObservationCoordinatorHost : IDisposable
     public event EventHandler<ObservationDashboardSnapshot>? DashboardChanged;
 
     internal async Task<T> RunFocusPreparationAsync<T>(Func<Task<T>> operation, CancellationToken token)
+        => await RunIdleConfigurationAsync(operation, token).ConfigureAwait(false);
+
+    internal async Task<T> RunIdleConfigurationAsync<T>(Func<Task<T>> operation, CancellationToken token)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!await runGate.WaitAsync(0, token)) throw new InvalidOperationException("观测仍占用设备；不能启动主镜对焦。");
+        if (!await runGate.WaitAsync(0, token)) throw new InvalidOperationException("观测仍占用设备；请等空闲后再准备或更改配置。");
         try
         {
             var lease = RealObservationRunOwnershipLease.TryAcquire(System.IO.Path.Combine(

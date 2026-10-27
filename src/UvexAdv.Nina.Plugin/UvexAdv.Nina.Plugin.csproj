@@ -13,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="..\..\scripts\star-detection\astap_recovery.py" Link="Analysis\astap_recovery.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Same source modules as the offline reducer, not a second implementation. -->
     <Content Include="..\..\reduction\src\uvex_reduce\*.py" Link="ReductionPreview\src\uvex_reduce\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\reduction\live_preview_worker.py" Link="ReductionPreview\live_preview_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
@@ -22,6 +23,9 @@
     <Using Remove="System.Windows.Forms" />
     <ProjectReference Include="..\UvexAdv.Core\UvexAdv.Core.csproj" />
     <ProjectReference Include="..\UvexAdv.Observatory\UvexAdv.Observatory.csproj" />
+    <!-- Reuse the existing immutable commissioning builder/validator; no CLI
+         process or hardware command is invoked by driver-only rebinding. -->
+    <ProjectReference Include="..\UvexAdv.Commissioning.Tool\UvexAdv.Commissioning.Tool.csproj" />
     <ProjectReference Include="..\UvexAdv.Phd2\UvexAdv.Phd2.csproj" />
     <ProjectReference Include="..\UvexAdv.Qhy.Core\UvexAdv.Qhy.Core.csproj" />
     <ProjectReference Include="..\UvexAdv.Spectroscopy\UvexAdv.Spectroscopy.csproj" />

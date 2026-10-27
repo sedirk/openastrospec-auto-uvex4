@@ -60,7 +60,7 @@ public sealed class UvexSelectRealModeItem : SequenceItem, IValidatable
         Issues.Clear();
         if (EnableRealMode)
             try { NinaInstancePolicy.RequireMaster(settings); SequenceStartupScope.ValidateRealTargets(this);
-                if (!settings.RealModeCommissioned) throw new InvalidOperationException("本 Profile 尚未完成真实设备调试确认。"); }
+                if (!settings.RealModeCommissioned) throw new InvalidOperationException(host.CommissioningFailureMessage(profiles.ActiveProfile.Id)); }
             catch (InvalidOperationException ex) { Issues.Add(ex.Message); }
         return Issues.Count == 0;
     }

@@ -51,6 +51,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private readonly List<object> clockContinuations = [];
     private int focusScanReservation;
     private readonly List<object> focusRecoveries = [];
+    private NightSafetyStandby? nativeEndStandby;
+    private int nativeEndReceipt;
+    private bool nativeEndTargetBoundaryClean = true;
 
     [ImportingConstructor]
     public UvexNightSequenceContainer(IProfileService profiles, ObservationCoordinatorHost host,
@@ -88,8 +91,6 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     [JsonIgnore] internal bool EffectiveHoldOpenAfterTargets =>
         NativeNightEndArea.Choices(this).FirstOrDefault() is { } closeout
             ? !closeout.CloseAfterTargets : HoldOpenAfterTargets;
-
-    internal void StopAtNativeConditionBoundary() { endRequested = true; blocked = true; }
 
     internal void OnNightUnsafe()
     {
@@ -181,7 +182,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
 
     internal async Task<bool> RecordTargetAsync(string target, ObservationDashboardSnapshot result,
         INativeTargetBoundary? runner, bool qualitySkipRequested, string? boundaryFailure = null,
-        ObservationPlan? failedPlan = null, NativeTargetSession? session = null)
+        ObservationPlan? failedPlan = null, NativeTargetSession? session = null, bool operatorSkipRequested = false,
+        bool endedByNativeCondition = false)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
         var idleErrors = runner is null ? (result.LockedRunAdapter == "real"
@@ -194,7 +196,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             runner?.CanRecheckSequenceIdle == true);
         var failedGate = NativeSequencePlan.TerminalFailure(result);
         var completed = result.Run.State == ObservationRunState.Completed && boundaryFailure is null;
-        if (result.Run.State == ObservationRunState.Cancelled && !endRequested && !unsafeTripped) operatorCancelled = true;
+        if (result.Run.State == ObservationRunState.Cancelled && !operatorSkipRequested && !endRequested && !unsafeTripped) operatorCancelled = true;
         GateResult? clockRepair = null;
         var recoveryBoundaryEligible = result.Run.State == ObservationRunState.Faulted && boundaryFailure is null &&
             qualitySkipRequested && !operatorCancelled && targetsIdle && settledErrors.Length == 0 &&
@@ -331,14 +333,22 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             (NativeSequencePlan.IsSkippableQualityFailure(failedGate) || clockRecovered) &&
             result.Run.RecentEvents.LastOrDefault()?.Code == failedGate?.Code && !unsafeTripped && !endRequested &&
             lifetime is { IsCancellationRequested: false } && standbyPlan?.StopGateNow() is null;
-        if (!completed && !skip) blocked = true;
+        var operatorSkip = operatorSkipRequested && result.Run.State == ObservationRunState.Cancelled &&
+            boundaryFailure is null && targetsIdle && settledErrors.Length == 0 &&
+            !StopFollowingTargets && standbyPlan?.StopGateNow() is null;
+        // A root jump-to-End cannot turn a faulted cleanup or failed handoff into
+        // permission for optional End actions, even if a later idle read succeeds.
+        nativeEndTargetBoundaryClean &= completed || skip || operatorSkip ||
+            result.Run.State == ObservationRunState.Cancelled && boundaryFailure is null &&
+            targetsIdle && settledErrors.Length == 0;
+        if (!completed && !skip && !operatorSkip) blocked = true;
         if (!targetsIdle || settledErrors.Length != 0) blocked = true;
         outcomes.Add(new { target, runId = result.Run.ObservationRunId, result.ManifestPath,
-            outcome = completed ? "Completed" : clockRecovered ? "SkippedClockContinuationBudgetExhausted" : skip ? "SkippedQualityFailure" : "Stopped",
+            outcome = completed ? "Completed" : operatorSkip ? endedByNativeCondition ? "SkippedNativeCondition" : "SkippedByOperator" : clockRecovered ? "SkippedClockContinuationBudgetExhausted" : skip ? "SkippedQualityFailure" : "Stopped",
             clockRepair, clockRecoveryAttempted = clockRecovery.Attempted,
             focusRepair, focusAttempted = session?.FocusAttempted, focusContinuationUsed = session?.FocusContinuationUsed,
             gate = failedGate?.Code, failureScope = failedGate?.FailureScope.ToString(), boundaryFailure, idleErrors, settledErrors,
-            qualitySkipRequested, endRequested, unsafeTripped, operatorCancelled,
+            qualitySkipRequested, operatorSkipRequested, endedByNativeCondition, endRequested, unsafeTripped, operatorCancelled,
             terminalCode = result.Run.RecentEvents.LastOrDefault()?.Code, result.AcquisitionProgress,
             // The final segment may fail during reacquisition, before it has a
             // local ATR progress object. Record already-counted logical totals,
@@ -351,7 +361,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 segmentRunIds = session.SegmentRunIds.ToArray(),
             } });
         NightState = $"目标 {attemptedTargets}/{Items.OfType<UvexTargetObservationContainer>().Count()}：{target} · " +
-            (completed ? "完成" : focusHardStop ? $"对焦恢复停止（{focusRepair!.Code}）：{focusRepair.Message}" :
+            (completed ? "完成" : operatorSkip ? "已跳过本目标；已确认停止，继续下一目标。" : focusHardStop ? $"对焦恢复停止（{focusRepair!.Code}）：{focusRepair.Message}" :
                 clockRecovered ? "校时已恢复，但本目标无剩余恢复预算，保留原帧并跳过。" : skip ? $"质量失败，已确认停止并跳过（{failedGate?.Code}）" : $"停止（{boundaryFailure ?? failedGate?.Code ?? result.Run.State.ToString()}）");
         if (!completed && session is { Accepted: > 0 })
             NightState += $" · 已保留 {session.Accepted}/{session.Original.ScienceFrames} 张，累计 {session.AcceptedSeconds:0.##} 秒；剩余未完成。";
@@ -396,6 +406,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         NativeEndInstructionsReady = false;
+        nativeEndStandby = null;
+        nativeEndReceipt = 0;
+        nativeEndTargetBoundaryClean = true;
         progress = ObservationStatusProgress.Wrap(progress);
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
         LockDeadline(DateTimeOffset.UtcNow, TimeZoneInfo.Local);
@@ -467,6 +480,18 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                     var standby = await host.BeginSafetyStandbyAsync(this, request).ConfigureAwait(false);
                     standbyJournalPath = standby.Snapshot.JournalPath;
                     handedToStandby = true;
+                    // The native root decides whether cancellation of its target
+                    // area means jump-to-End or root abort. Defer that distinction
+                    // until this same root actually runs End with a live token.
+                    if (ordinaryCancel && token.IsCancellationRequested &&
+                        failure is null or OperationCanceledException && nativeEndTargetBoundaryClean &&
+                        !unsafeTripped && !endRequested &&
+                        targetsIdle && targetBoundaryFailures.Count == 0 &&
+                        standbyPlan?.StopGateNow() is null)
+                    {
+                        nativeEndStandby = standby;
+                        Volatile.Write(ref nativeEndReceipt, 1);
+                    }
                 }
                 catch (Exception ex) { closeErrors.Add("独立安全待机未能接管：" + ex.Message); }
             }
@@ -611,7 +636,36 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     public override void ResetProgress()
     {
         NativeEndInstructionsReady = false;
+        nativeEndStandby = null;
+        nativeEndReceipt = 0;
         base.ResetProgress();
+    }
+
+    internal async Task EnterNativeEndAsync(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var root = NativeNightEndArea.Root(this);
+        if (IsActive || root?.Status != NINA.Core.Enum.SequenceEntityStatus.RUNNING ||
+            NativeNightEndArea.End(this)?.Status != NINA.Core.Enum.SequenceEntityStatus.RUNNING ||
+            Interlocked.CompareExchange(ref nativeEndReceipt, 0, 1) != 1) return;
+        var standby = nativeEndStandby;
+        if (standby is null || !ReferenceEquals(host.SafetyStandby, standby) ||
+            standby.Snapshot.JournalPath != standbyJournalPath || unsafeTripped || endRequested ||
+            !targetsIdle || targetBoundaryFailures.Count != 0 || standbyPlan?.StopGateNow() is not null) return;
+        // Keep-open is an explicit saved policy, not an implicit close command.
+        if (lockedHoldOpenAfterTargets) return;
+        standby.RequestCloseout("NATIVE_END_AREA");
+        await standby.Completion.WaitAsync(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        var final = standby.Snapshot;
+        if (final.Phase != "Closed" || final.Reason != "NATIVE_END_AREA" ||
+            final.Errors?.Count > 0 || standbyPlan?.StopGateNow() is not null)
+            throw new InvalidOperationException("原生结束区收口未通过；不执行附加设备指令。" + final.Message);
+        NightState = "已跳到原生结束区；收口已核验，继续执行附加结束指令。各目标原始结果保留。";
+        outcomes.Add(new { nativeEndArea = true, standbyJournalPath, physicalCloseoutConfirmed = final.PhysicalHardware });
+        await SaveJournalAsync("NativeEnd").ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        NativeEndInstructionsReady = standbyPlan?.StopGateNow() is null;
     }
     public override object Clone()
     {

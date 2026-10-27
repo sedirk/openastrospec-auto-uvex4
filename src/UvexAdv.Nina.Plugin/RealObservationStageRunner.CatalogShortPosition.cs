@@ -172,6 +172,7 @@ internal sealed partial class RealObservationStageRunner
             // both original WCS and short-frame bindings after it completes.
             originalBinding = await ValidateG3FieldMountBindingForMotionAsync(context,field,cancellationToken).ConfigureAwait(false);
             if (originalBinding.Disposition != GateDisposition.Passed) return field with { Gate=originalBinding };
+            var associationValidatedUtc = DateTimeOffset.UtcNow;
             shortBindingGate = await ValidateG3ProbeMountBindingForMotionAsync(context,probe,cancellationToken).ConfigureAwait(false);
             if (shortBindingGate.Disposition != GateDisposition.Passed) return field with { Gate=shortBindingGate };
             var measurement = companionVector is not null && astrometricPrimaryPrediction is not null
@@ -386,6 +387,14 @@ internal sealed partial class RealObservationStageRunner
             return field with
             {
                 SparseInferenceConfirmed = !field.Solve.IsFormal,
+                // The old inference still supplies catalogue association and
+                // differential scale/rotation. It does NOT remain our current
+                // position: the independently confirmed new raw pair does.
+                SparseMeasuredContinuity = !field.Solve.IsFormal && previousFramePath is not null && previousHash is not null
+                    ? new(associationValidatedUtc, capture.CompletedUtc.AddSeconds(30),
+                        field.Solve.EvidenceSha256, receipt,
+                        await ComputeFileSha256Async(receipt, cancellationToken).ConfigureAwait(false),
+                        previousFramePath, previousHash, capture.Path, sha, preset.TargetSearchRadiusPixels) : null,
                 TargetIdentification = identification,
                 TargetTrackSource = new(capture.Path, sha, image, frame, binding,
                     new G3SparseExposureTiming(before.ReportedUtc, capture.CompletedUtc,

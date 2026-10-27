@@ -222,7 +222,9 @@ public sealed record G3AcquisitionMotionState(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     int DirectApproachAfterNeighbourFailureAttempts = 0,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    double ExcludedAtrExposureSeconds = 0)
+    double ExcludedAtrExposureSeconds = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    int MeasuredPixelCorrectionAttempts = 0)
 {
     [JsonIgnore]
     public DateTimeOffset MotionClockStartedUtc => StartedUtc.AddSeconds(ExcludedAtrExposureSeconds);
@@ -297,6 +299,8 @@ public sealed record G3AcquisitionMotionState(
             issues.Add("Failed neighbour approaches must be bounded by already charged correction attempts.");
         if (NearTargetResponseRetries < 0 || NearTargetResponseRetries > 1 || NearTargetResponseRetries > CorrectionAttempts)
             issues.Add("Near-target response retry must be bounded by one already charged correction attempt.");
+        if (MeasuredPixelCorrectionAttempts < 0 || MeasuredPixelCorrectionAttempts > 1 || MeasuredPixelCorrectionAttempts > CorrectionAttempts)
+            issues.Add("Measured local pixel correction must be bounded by one already charged correction attempt.");
         if (DirectApproachAfterNeighbourFailureAttempts < 0 || DirectApproachAfterNeighbourFailureAttempts > 1 ||
             DirectApproachAfterNeighbourFailureAttempts > CorrectionAttempts ||
             (DirectApproachAfterNeighbourFailureAttempts > 0 && FailedNeighbourApproaches == 0))

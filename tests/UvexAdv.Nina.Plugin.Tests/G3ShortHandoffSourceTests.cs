@@ -11,9 +11,11 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("shortExposure <= exposureMilliseconds",runner);
         Assert.Contains("handoffPreset.DirectTargetGuidingExposureMilliseconds",runner);
         Assert.Contains("G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)", runner);
-        // The same image proceeds to the existing formal solver. A failed or
-        // transient solve exits before a longer tier; no second acquisition loop.
-        Assert.Equal(2, runner.Split("if (outsideShortHandoff is not null) return outsideShortHandoff;").Length - 1);
+        // The same image proceeds to the existing formal solver, but failure
+        // must not prematurely suppress the original remaining optical slots.
+        Assert.DoesNotContain("if (outsideShortHandoff is not null) return outsideShortHandoff;", runner);
+        Assert.Equal(2, runner.Split("retainedOutsideShortHandoff = outsideShortHandoff ?? retainedOutsideShortHandoff;").Length - 1);
+        Assert.Contains("!hasOverexposedContent && !allAttemptsWereTransient && retainedOutsideShortHandoff is not null", runner);
         Assert.Contains("RequireIndependentTargetPair = true", runner);
         Assert.Contains("G3MotionPredictionTimingPolicy.Evaluate", runner);
         Assert.Contains("temporal.SearchHintUsable && measuredGeometry", runner);

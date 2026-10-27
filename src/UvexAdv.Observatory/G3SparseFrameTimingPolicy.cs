@@ -54,6 +54,19 @@ public sealed record G3SparseTimingAssessment(bool Usable, GateResult Gate,
 /// </summary>
 public static class G3SparseFrameTimingPolicy
 {
+    public static double RegisteredDriftUpperBound(double measuredDisplacementPixels,
+        double maximumHoldoutResidualPixels, double minimumMidpointSeparationSeconds)
+    {
+        if (!double.IsFinite(measuredDisplacementPixels) || measuredDisplacementPixels < 0 ||
+            !double.IsFinite(maximumHoldoutResidualPixels) || maximumHoldoutResidualPixels < 0 ||
+            !double.IsFinite(minimumMidpointSeparationSeconds) || minimumMidpointSeparationSeconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(minimumMidpointSeparationSeconds));
+        // One pixel floor on EACH endpoint, plus independent holdout errors.
+        // No encoder error term: the two actual images measured that motion.
+        return (measuredDisplacementPixels + 2 * Math.Max(1, maximumHoldoutResidualPixels)) /
+            minimumMidpointSeparationSeconds;
+    }
+
     public static G3SparseTimingAssessment Evaluate(G3SparseExposureTiming current, DateTimeOffset now,
         G3SparseTimingPurpose purpose, double registrationUncertaintyPixels,
         double maximumPositionUncertaintyPixels,

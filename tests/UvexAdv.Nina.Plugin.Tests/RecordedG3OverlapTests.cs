@@ -13,6 +13,92 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class RecordedG3OverlapTests
 {
     [Fact]
+    public async Task Mid0Hd698ActualShortPairConfirmsTargetWithoutRequiringAnotherWholeFieldSolve()
+    {
+        var observations = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(observations)) return;
+        var folder = Path.Combine(observations, "UVEX-20261025T162356Z-f5d2cbf782184c9", "evidence");
+        var paths = new[] { "00136-", "00138-" }.Select(p => Assert.Single(Directory.GetFiles(folder, p + "*.fit"))).ToArray();
+        var hashes = paths.Select(Digest).ToArray();
+        Assert.Equal(new[] { "7BCF387F1123C4291E13864C165FDFBF721E206C05EF031C453822CC39C57431",
+            "FD2C1450C9736FB4A1EFC82644047D4C31627169CADCBAC6F977FFAB22218BC8" }, hashes);
+        var root = Repository();
+        var runtime = new SepDetectionRuntime(Path.Combine(root, "output", "star-detection-venv", "Scripts", "python.exe"),
+            Path.Combine(root, "scripts", "star-detection", "worker.py"));
+        G3ShortPositionMeasurement? first = null;
+        for (var i = 0; i < paths.Length; i++)
+        {
+            var f = QhyFitsCodec.Read(paths[i]);
+            var sep = await new SepStarDetectionClient().DetectAsync(runtime, f.Width, f.Height, f.Pixels, 65520, default);
+            var measured = G3SepShortPositionPolicy.Measure(sep, new(143.6689544249283, 824.6711754510916),
+                100, 8, 1.5, previousSameSetting: first);
+            Assert.Equal("G3_SEP_POSITION_MEASURED", measured.Gate.Code);
+            var result = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(first, measured,
+                i == 0 ? null : hashes[0], hashes[i], i + 1, 100, 3);
+            Assert.Equal(i == 1, result.Accepted);
+            if (i == 1) Assert.InRange(result.PositionSpreadPixels, 1.89, 1.90);
+            first = measured;
+        }
+        Assert.Equal(hashes, paths.Select(Digest).ToArray());
+    }
+
+    [Fact]
+    public void Mid0MosaicDriftIncludesImageHoldoutErrorWithoutAddingEncoderToleranceAgain()
+    {
+        var observations = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(observations)) return;
+        var folder = Path.Combine(observations, "UVEX-20261025T161820Z-3eb35419525e4fa", "evidence");
+        using var document = JsonDocument.Parse(File.ReadAllText(Assert.Single(Directory.GetFiles(folder, "00126-*.json"))));
+        var registration = document.RootElement.GetProperty("payload").GetProperty("registration");
+        var transform = registration.GetProperty("transform");
+        var motion = G3OverlapGraphConsistency.Evaluate(G3SimilarityTransform.Identity,
+            new(transform.GetProperty("a").GetDouble(), transform.GetProperty("b").GetDouble(),
+                transform.GetProperty("x").GetDouble(), transform.GetProperty("y").GetDouble()), 1920, 1080).MaximumCornerDisagreementPixels;
+        var residual = registration.GetProperty("maximumHoldoutResidualPixels").GetDouble();
+        // Use the independent native capture brackets, not the old rate to
+        // reverse-engineer a time gap. Mount readback is not an optical error.
+        using var first = JsonDocument.Parse(File.ReadAllText(Assert.Single(Directory.GetFiles(folder, "00111-*.json"))));
+        using var current = JsonDocument.Parse(File.ReadAllText(Assert.Single(Directory.GetFiles(folder, "00131-*.json"))));
+        var firstCapture = first.RootElement.GetProperty("payload");
+        var currentTiming = current.RootElement.GetProperty("payload").GetProperty("timing");
+        var gap = (currentTiming.GetProperty("earliestMidpointUtc").GetDateTimeOffset() -
+            firstCapture.GetProperty("frameCompletedUtc").GetDateTimeOffset().AddSeconds(-2.5)).TotalSeconds;
+        var old = 2.8779192443288903;
+        var corrected = G3SparseFrameTimingPolicy.RegisteredDriftUpperBound(motion, residual, gap);
+        Assert.True(corrected > motion / gap); // keep uncertainty; never call drift zero
+        Assert.InRange(corrected, 0.1, old - .5);
+        Assert.Throws<ArgumentOutOfRangeException>(() => G3SparseFrameTimingPolicy.RegisteredDriftUpperBound(motion, residual, 0));
+    }
+
+    [Fact]
+    public void October25RawPixelsSelectShortRecheckWithoutRewritingOrClaimingRecoveredTarget()
+    {
+        var observations = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");
+        if (string.IsNullOrWhiteSpace(observations)) return;
+        var directory = Path.Combine(observations,"UVEX-20261025T110550Z-2c687c92880a466","evidence");
+        var prefixes = new[] { "00034-", "00091-", "00097-", "00103-" };
+        var paths = prefixes.Select(p => Assert.Single(Directory.GetFiles(directory,p+"*.fit"))).ToArray();
+        var hashes = paths.Select(Digest).ToArray();
+        Assert.Equal(new[] {
+            "6224A712D0B48CCCD26AB5BA585A7BFF28A0610607FF6F224269289B3A5B632F",
+            "EFC5687AD56F41FA299969DB720F51C359238E1BCA83D0B2265A84FE5F0FBC5B",
+            "C6A891CACF92E14F0461F3DE327D3033DEE5C9D06947D174F6F2D26ECCBDE6F8",
+            "C7A2DADF8D204DAB50A79AE8B127A905BFDBB2F28CDD0AF4744CB8EE9A8E8313" },hashes);
+        var frames = paths.Select(QhyFitsCodec.Read).ToArray();
+        var content = frames.Select(f => G3SolveProbeContentAnalyzer.Analyze(new MonochromeFrame(f.Width,f.Height,
+            f.Pixels,G3FrameInputPolicy.ResolveEffectiveSaturationAdu(f.Pixels,4095)))).ToArray();
+        Assert.Equal(new[] {4,9,0,0},content.Select(c => c.StellarMeasurement.DetectedStarCount));
+        Assert.Equal(5000,G3SolveExposurePolicy.ShortRecheckMilliseconds(5000,10000,content[0],65520,5000,content[0]));
+        Assert.Null(G3SolveExposurePolicy.ShortRecheckMilliseconds(5000,10000,content[1],65520,5000,content[1]));
+        Assert.Equal(5000,G3SolveExposurePolicy.ShortRecheckMilliseconds(10000,15000,content[2],65520,5000,content[1]));
+        Assert.Equal(G3SolveProbeContentAnalyzer.OverexposedGateCode,content[3].Gate.Code);
+        Assert.Null(G3SolveExposurePolicy.ShortRecheckMilliseconds(15000,20000,content[3],65520,5000,content[1]));
+        // The newly requested short recheck was NOT taken historically. This
+        // test claims the decision, not invented later pixels or slit success.
+        Assert.Equal(hashes,paths.Select(Digest).ToArray());
+    }
+
+    [Fact]
     public async Task PreviousSuccessfulHd219937RunRetainsIndependentFieldRegistration()
     {
         var observations = Environment.GetEnvironmentVariable("UVEX_REPLAY_OBSERVATIONS");

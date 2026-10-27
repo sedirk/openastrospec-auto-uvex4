@@ -1213,6 +1213,7 @@ internal sealed partial class RealObservationStageRunner
                 "PHD2 lock-shift placement requires a current catalog-bound G3 target centroid.");
         }
 
+        var handoffPreflightTimer = System.Diagnostics.Stopwatch.StartNew();
         var pendingPath = Phd2LockShiftPendingPath(context.Plan.ObservationRunId);
         var discovered = await Phd2LockShiftPendingStore.DiscoverAsync(
             SlitPlacementObservationsRoot(),
@@ -1262,6 +1263,7 @@ internal sealed partial class RealObservationStageRunner
                 }
             }
         }
+        var handoffInventoryMilliseconds = handoffPreflightTimer.Elapsed.TotalMilliseconds;
         var currentCopies = discovered.Where(item => string.Equals(
             item.State!.ObservationRunId,
             context.Plan.ObservationRunId,
@@ -1428,6 +1430,13 @@ internal sealed partial class RealObservationStageRunner
             }
         }
 
+        await PublishRunJsonEvidenceAsync("phd2-handoff-preflight-timing",
+            "Complete ledger checks and guide preflight timed before fresh native selection",
+            new { ledgerCount = discovered.Count, handoffInventoryMilliseconds,
+                preflightMilliseconds = handoffPreflightTimer.Elapsed.TotalMilliseconds,
+                sourceExposureTiming = lastG3Field.ExposureTiming,
+                completeInventory = true, cachedAuthority = false, budgetReset = false },
+            lastG3Field.FramePath, cancellationToken).ConfigureAwait(false);
         var guideChoice = await AcquireFreshPhd2PlacementGuideAsync(
             context,
             lastG3Field,
@@ -4259,6 +4268,11 @@ internal sealed partial class RealObservationStageRunner
                     operatorConsent = configuration.AllowSupervisedSlitQualityWarning,
                     windowAttempt, maximumWindows, residuals, tolerance,
                     session.ConnectionEpoch, session.GuideEpoch,
+                    sameEpoch, identityConfirmed, currentConnectionEpoch = snapshot.ConnectionEpoch,
+                    currentGuideEpoch = snapshot.GuideEpoch, snapshot.AppState,
+                    snapshot.LastGuideEpochChange, snapshot.RecentGuideEpochChanges, snapshot.LastConfigurationChange,
+                    snapshot.GuideOutput, snapshot.AutomationPaused, snapshot.Phd2Paused,
+                    snapshot.PendingSettleOperationId,
                     unattendedAuthority = false, guidingStopped = false, newLockMotion = false },
                 measurements[^1].Frame.Path, cancellationToken).ConfigureAwait(false);
             if (accepted)

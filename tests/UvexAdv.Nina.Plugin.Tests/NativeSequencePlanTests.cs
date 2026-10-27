@@ -1033,6 +1033,17 @@ public sealed partial class NativeSequencePlanTests
         }
         try { await execution.WaitAsync(TimeSpan.FromSeconds(20)); }
         catch (OperationCanceledException) when (mode is "cancel" or "target-interrupt") { }
+        if (mode == "target-interrupt")
+        {
+            Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
+            Assert.Single(notifier.Notifications, x => x.Severity == ObservationAttentionSeverity.Success);
+            Assert.Contains("操作员", ((UvexTargetObservationContainer)night.Items[0]).LastOutcome);
+            Assert.Equal("完成", ((UvexTargetObservationContainer)night.Items[1]).LastOutcome);
+            using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
+            Assert.Contains(journal.RootElement.GetProperty("outcomes").EnumerateArray(),
+                x => x.TryGetProperty("outcome", out var value) && value.GetString() == "SkippedByOperator");
+            return;
+        }
         if (mode is not ("complete" or "noninterfering-roof"))
         {
             Assert.DoesNotContain(notifier.Notifications, x => x.Severity == ObservationAttentionSeverity.Success);
@@ -1121,6 +1132,8 @@ public sealed partial class NativeSequencePlanTests
     [InlineData("unknown-gate", G3WcsRecoveryPolicy.PierChangedCode)]
     [InlineData("typed-skip", "PHD2_FRESH_SLIT_REACQUISITION_EXHAUSTED")]
     [InlineData("typed-skip", "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED")]
+    [InlineData("typed-skip", "G3_PLATE_SOLVE_RETURN_TIME_RESERVED")]
+    [InlineData("typed-skip", "PHD2_COARSE_HANDOFF_RECOVERY_EXHAUSTED")]
     [InlineData("typed-cleanup-failure", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
     [InlineData("typed-end-policy", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
     [InlineData("unknown-gate", "PHD2_FRESH_GUIDE_WINDOW_DEADLINE")]
@@ -1167,7 +1180,7 @@ public sealed partial class NativeSequencePlanTests
             if (mode == "stale-gate") host.PublishGate(ObservationStage.FinalizeObservation, GateResult.Unknown("STALE_SIBLING_FAILURE", "Not the terminal stage."));
             if (mode == "late-cancel") cancel.Cancel();
             if (mode == "late-unsafe") night.OnNightUnsafe();
-            if (mode == "late-end") night.StopAtNativeConditionBoundary();
+            if (mode == "late-end") night.EndNightCommand.Execute(null);
             if (mode is "late-deadline" or "late-dawn")
             {
                 // Inject the night condition exactly during the terminal join.
