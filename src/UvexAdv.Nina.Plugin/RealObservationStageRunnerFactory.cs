@@ -163,12 +163,14 @@ public sealed class RealObservationStageRunnerFactory : IDisposable
         => new(profileService, focuserMediator, telescopeMediator, cameraMediator, domeMediator,
             flatDeviceMediator, safetyMonitorMediator, imageDataFactory, settings, options);
 
-    internal IDisposable WatchNightSafety(Action unsafeCallback)
+    internal IDisposable WatchNightSafety(Action unsafeCallback, bool abortExposureOnUnsafe = true)
     {
         EventHandler<IsSafeEventArgs> handler = (_, e) =>
         {
             if (e.IsSafe) return;
-            try { cameraMediator.AbortExposure(); }
+            // An active observing owner aborts its exposure. A post-run guardian
+            // only reports/latches safety; unknown stop is not camera authority.
+            try { if (abortExposureOnUnsafe) cameraMediator.AbortExposure(); }
             catch { /* The owner records stop/closeout readback failures. */ }
             unsafeCallback();
         };

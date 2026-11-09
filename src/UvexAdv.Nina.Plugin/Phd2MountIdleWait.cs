@@ -12,13 +12,15 @@ internal static class Phd2MountIdleWait
     internal static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(3);
     internal const string TimeoutCode = "PHD2_STOP_MOUNT_IDLE_TIMEOUT";
+    private const string CancelledSlewPending = "NATIVE_CANCELLED_SLEW_DRAIN_PENDING";
 
     // Target completion needs the same pulse-drain window as calibration
     // handoff. StopCapture's RPC receipt precedes NINA's next device poll.
     // This overload has read-only interfaces: it cannot stop/slew/reconnect.
     internal static Task<GateResult> WaitAfterTargetStopAsync(IPhd2Client phd2,
         ITelescopeMediator mount, string expectedMountId, CancellationToken token,
-        Func<TimeSpan>? elapsed = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan>? elapsed = null, Func<TimeSpan, CancellationToken, Task>? delay = null,
+        bool allowCancelledSlewDrain = false)
     {
         var stopped = phd2.Snapshot;
         return WaitAsync(async ct =>
@@ -33,20 +35,25 @@ internal static class Phd2MountIdleWait
                     "目标结束等待期间导星停止状态或所有者改变；未发出新的采集或机械动作。");
             var info = mount.GetInfo();
             if (!info.Connected || string.IsNullOrWhiteSpace(expectedMountId) ||
-                !string.Equals(info.DeviceId, expectedMountId, StringComparison.Ordinal) || info.Slewing)
+                !string.Equals(info.DeviceId, expectedMountId, StringComparison.Ordinal) ||
+                (info.Slewing && !allowCancelledSlewDrain))
                 return GateResult.Unknown("NATIVE_TARGET_MOUNT_STOP_CHANGED",
                     "目标结束等待期间赤道仪连接、身份或停止状态不符。");
+            if (info.Slewing)
+                return GateResult.Unknown(CancelledSlewPending,
+                    "已取消的目标已退出，正在有界等待转向停止读回；未授权收口运动。");
             return info.IsPulseGuiding
                 ? GateResult.Unknown("G3_SEARCH_PULSE_GUIDING_ACTIVE", "等待末次导星脉冲及 N.I.N.A. 轮询更新。")
                 : GateResult.Pass("NATIVE_TARGET_MOUNT_IDLE_SAMPLE", "同一赤道仪已报告无转向、无导星脉冲。");
-        }, token, elapsed, delay);
+        }, token, elapsed, delay, allowCancelledSlewDrain);
     }
 
     internal static async Task<GateResult> WaitAsync(
         Func<CancellationToken, Task<GateResult>> probe,
         CancellationToken cancellationToken,
         Func<TimeSpan>? elapsed = null,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        bool allowCancelledSlewDrain = false)
     {
         var watch = Stopwatch.StartNew();
         elapsed ??= () => watch.Elapsed;
@@ -56,10 +63,12 @@ internal static class Phd2MountIdleWait
         TimeSpan? quietSince = null;
         var samples = 0;
         var pulseSamples = 0;
+        var cancelledSlewSamples = 0;
         GateResult Timeout() => GateResult.Unknown(TimeoutCode,
-            "PHD2 capture stopped, but mount pulse completion and a continuous idle readback window were not confirmed within the bounded wait; no new capture or motion was issued.",
+            "PHD2 capture stopped, but mount motion/pulse completion and a continuous idle readback window were not confirmed within the bounded wait; no new capture or motion was issued.",
             new Dictionary<string, double> { ["elapsedSeconds"] = elapsed().TotalSeconds,
                 ["mountIdleSamples"] = samples, ["pulseActiveSamples"] = pulseSamples,
+                ["cancelledSlewSamples"] = cancelledSlewSamples,
                 ["maximumWaitSeconds"] = MaximumWait.TotalSeconds });
         try
         {
@@ -78,14 +87,20 @@ internal static class Phd2MountIdleWait
                         return GateResult.Pass("PHD2_STOP_MOUNT_IDLE_CONFIRMED",
                             "The same stopped PHD2 session and mount idle readbacks remained valid for the handoff window; fresh G3 evidence and all original motion gates are still required.",
                             new Dictionary<string, double> { ["elapsedSeconds"] = elapsed().TotalSeconds,
-                                ["mountIdleSamples"] = samples, ["pulseActiveSamples"] = pulseSamples });
+                                ["mountIdleSamples"] = samples, ["pulseActiveSamples"] = pulseSamples,
+                                ["cancelledSlewSamples"] = cancelledSlewSamples });
                 }
                 else if (gate.Code == "G3_SEARCH_PULSE_GUIDING_ACTIVE")
                 {
                     pulseSamples++;
                     quietSince = null;
                 }
-                else return gate; // Disconnect, resumed guiding, pier change, slew, etc. are not retried.
+                else if (allowCancelledSlewDrain && gate.Code == CancelledSlewPending)
+                {
+                    cancelledSlewSamples++;
+                    quietSince = null;
+                }
+                else return gate; // Disconnect, resumed guiding, ordinary slew, etc. are not retried.
                 await delay(TimeSpan.FromMilliseconds(500), deadline.Token).ConfigureAwait(false);
             }
         }

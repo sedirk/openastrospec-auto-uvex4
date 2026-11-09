@@ -69,7 +69,8 @@ internal sealed class MeasuredAstapRecovery(string? configuredRuntime = null, st
 
     internal static DetectorWcsResult ParseVerified(JsonElement r, string hash, int width, int height)
     {
-        if (r.GetProperty("schema").GetInt32() != 1 || r.GetProperty("algorithm").GetString() != "sep-bin2-astap-raw-verified-v1" ||
+        if (r.GetProperty("schema").GetInt32() != 1 || r.GetProperty("algorithm").GetString() is not
+                ("sep-bin2-astap-raw-verified-v1" or "sep-bin2-astap-raw-verified-v2") ||
             r.GetProperty("targetIdentityConfirmed").GetBoolean() || r.GetProperty("motionAuthorized").GetBoolean() ||
             !string.Equals(r.GetProperty("sourceSha256").GetString(), hash, StringComparison.OrdinalIgnoreCase) ||
             r.GetProperty("width").GetInt32() != width || r.GetProperty("height").GetInt32() != height)

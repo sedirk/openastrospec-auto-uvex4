@@ -60,3 +60,8 @@ Current accepted decisions:
 - [ADR-0047: Evidence-dependent overlap for bounded neighbour search](0047-evidence-dependent-neighbour-search-overlap.md)
 - [ADR-0048: Raw-verified measured-source ASTAP recovery](0048-measured-source-astap-recovery.md)
 - [ADR-0049: Native sequence skip scopes](0049-native-sequence-skip-scopes.md)
+- [ADR-0050: Ended pre-dispatch meridian retirement](0050-ended-pre-dispatch-meridian-retirement.md)
+- [ADR-0051: Formal-WCS verified return waypoints](0051-formal-wcs-verified-return-waypoints.md)
+- [ADR-0052: Exposure-timed delayed dual-optics calibration](0052-exposure-timed-delayed-dual-optics-calibration.md)
+- [ADR-0053: Successful-target parse and trial retention](0053-successful-target-frame-retention.md)
+- [ADR-0054: One bounded rebase from repeatable fresh target measurements](0054-bounded-target-continuity-rebase.md)

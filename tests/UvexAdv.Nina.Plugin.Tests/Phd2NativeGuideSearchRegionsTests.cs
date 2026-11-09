@@ -7,6 +7,20 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2NativeGuideSearchRegionsTests
 {
     [Fact]
+    public void RecordedExposureRestorationKeepsBothLostCandidateRegionsExcluded()
+    {
+        var lost = new[] { new PixelPoint(1583.45, 613), new PixelPoint(819.05, 958.81) };
+        var slit = new SlitGeometry("slit", new(817.632, 431.410), -2, 410, 3.5, .5, "G3", 1, 1);
+        var regions = Phd2NativeGuideSearchRegions.Build(1920, 1080, new(885.501, 439.504),
+            120, slit, 20, 10, lost, []);
+        Assert.NotEmpty(regions);
+        foreach (var region in regions)
+        foreach (var point in lost)
+            Assert.False(point.X >= region.X && point.X < region.X + region.Width &&
+                point.Y >= region.Y && point.Y < region.Y + region.Height);
+    }
+
+    [Fact]
     public void RecordedHd220539SeedWouldLeaveDetectorDuringSlitPlacement()
     {
         var guide = new PixelPoint(1325.29, 1058.41);

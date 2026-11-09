@@ -83,9 +83,9 @@ public static class QhyG3LocalModelPolicy
     public static IReadOnlyList<QhyG3VerifiedLocalSample> SelectLocalSamples(IReadOnlyList<QhyG3VerifiedLocalSample> input,
         QhyG3SolvedFrame query, DateTimeOffset now, TimeSpan maximumAge, double radiusDegrees = 5) =>
         input.Where(s => s.Candidate.CreatedUtc < query.ExposureStartedUtc && s.Candidate.CreatedUtc <= now &&
-            now - s.Candidate.CreatedUtc <= maximumAge && s.Candidate.ValidUntilUtc >= now &&
+            now - s.Candidate.MeasurementUtc <= maximumAge && s.Candidate.ValidUntilUtc >= now &&
             Separation(s.Candidate.Qhy, query) <= radiusDegrees * 3600)
-        .OrderBy(s => s.Candidate.CreatedUtc).ThenBy(s => s.Candidate.CandidateSha256, StringComparer.Ordinal)
+        .OrderBy(s => s.Candidate.MeasurementUtc).ThenBy(s => s.Candidate.CandidateSha256, StringComparer.Ordinal)
         .TakeLast(24).ToArray();
 
     public static QhyG3LocalSearchPrior? SearchPrior(QhyG3LocalModelRequest request)
@@ -118,7 +118,8 @@ public static class QhyG3LocalModelPolicy
         var c = source.Candidate;
         var rebuilt = QhyG3SolvePairBuilder.Build(new(c.CollectionPolicy, c.ObservationRunId, c.ActionConfigurationSha256,
             c.CommissioningPresetSha256, c.NightSetupId, c.NightSetupSha256, c.InstallationEpochId, c.TelescopeDeviceId,
-            c.QhyOpticalTrainId, c.G3OpticalTrainId, c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc));
+            c.QhyOpticalTrainId, c.G3OpticalTrainId, c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc)
+            { ExposureTiming = c.ExposureTiming });
         if (rebuilt.Candidate is null || !SameHash(rebuilt.Candidate.CandidateSha256, c.CandidateSha256)) return null;
         var point = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(request.CurrentQhy.CenterRightAscensionDegrees,
             request.CurrentQhy.CenterDeclinationDegrees, c.Model.G3MinusQhyEastArcseconds, c.Model.G3MinusQhyNorthArcseconds);
@@ -135,7 +136,7 @@ public static class QhyG3LocalModelPolicy
     {
         if (input.Count < 3 || input.Count > 24 || !binding.OpticalState.IsComplete ||
             !double.IsFinite(maximumUncertaintyArcseconds) || maximumUncertaintyArcseconds <= 0) return false;
-        var samples = input.OrderBy(s => s.Candidate.CreatedUtc).Select(s => s.Candidate).ToArray();
+        var samples = input.OrderBy(s => s.Candidate.MeasurementUtc).Select(s => s.Candidate).ToArray();
         if (samples.Any(c => c.ValidateIntegrity().Count != 0 || c.G3.FrameWidthPixels != binding.G3WidthPixels ||
             c.G3.FrameHeightPixels != binding.G3HeightPixels || c.G3.BinningX != binding.G3Binning || c.G3.BinningY != binding.G3Binning ||
             c.G3.Flipped != samples[0].G3.Flipped || !SameGeometry(c.Qhy, samples[0].Qhy))) return false;
@@ -192,7 +193,7 @@ public static class QhyG3LocalModelPolicy
             now - q.ExposureMidpointUtc > request.Limits.MaximumCurrentQhyAge)
             return Reject("CURRENT_QHY_STALE", "A fresh current-pointing hash-bound formal QHY frame is required.");
 
-        var samples = request.Samples.OrderBy(s => s.Candidate.CreatedUtc)
+        var samples = request.Samples.OrderBy(s => s.Candidate.MeasurementUtc)
             .ThenBy(s => s.Candidate.CandidateSha256, StringComparer.Ordinal).ToArray();
         if (samples.Length < 3 || samples.Length > request.Limits.MaximumSamples)
             return Reject("INSUFFICIENT_INDEPENDENT_SAMPLES", "At least two earlier training pairs and one independent chronological holdout are required.");
@@ -219,11 +220,11 @@ public static class QhyG3LocalModelPolicy
             var rebuilt = QhyG3SolvePairBuilder.Build(new(c.CollectionPolicy, c.ObservationRunId,
                 c.ActionConfigurationSha256, c.CommissioningPresetSha256, c.NightSetupId, c.NightSetupSha256,
                 c.InstallationEpochId, c.TelescopeDeviceId, c.QhyOpticalTrainId, c.G3OpticalTrainId,
-                c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc));
+                c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc) { ExposureTiming = c.ExposureTiming });
             if (rebuilt.Candidate is null || !SameHash(rebuilt.Candidate.CandidateSha256, c.CandidateSha256))
                 return Reject("SOURCE_SEMANTICS_INVALID", "A stored pair cannot be rebuilt from its formal source geometry and five-readback bracket.");
             if (c.CreatedUtc >= q.ExposureStartedUtc || c.CreatedUtc > now || c.ValidUntilUtc < now ||
-                now - c.CreatedUtc > request.Limits.MaximumSampleAge || c.Qhy.SolveCompletedUtc > c.CreatedUtc ||
+                now - c.MeasurementUtc > request.Limits.MaximumSampleAge || c.Qhy.SolveCompletedUtc > c.CreatedUtc ||
                 c.G3.SolveCompletedUtc > c.CreatedUtc)
                 return Reject("SOURCE_NOT_CAUSAL", "Future, current-frame self-validation, expired or stale pairs cannot validate this prediction.");
             if (!uniqueFiles.Add(c.Qhy.FrameSha256) ||
@@ -257,7 +258,7 @@ public static class QhyG3LocalModelPolicy
         }
         var trainingResidual = training.Max(Residual);
         var holdoutResidual = Residual(holdout);
-        var spanSeconds = (holdout.CreatedUtc - training[0].CreatedUtc).TotalSeconds;
+        var spanSeconds = (holdout.MeasurementUtc - training[0].MeasurementUtc).TotalSeconds;
         var skySpan = samples.SelectMany((a, i) => samples.Skip(i + 1).Select(c => Separation(a.Candidate.Qhy, c.Candidate.Qhy))).DefaultIfEmpty(0).Max();
         var nearest = samples.Min(s => Separation(s.Candidate.Qhy, q));
         // Independent same-pointing exposures validate local translation and
@@ -268,7 +269,7 @@ public static class QhyG3LocalModelPolicy
             return Reject("OUTSIDE_VALIDATED_ENVELOPE", "Requested time/sky extrapolation exceeds the measured local validation envelope.");
         var baseResidual = Math.Max(trainingResidual, holdoutResidual);
         var sourceUncertainty = samples.Max(s => s.Candidate.Model.PredictionUncertaintyArcseconds);
-        var growth = 1 + nearest / validatedSkySpan + (now - holdout.CreatedUtc).TotalSeconds / spanSeconds;
+        var growth = 1 + nearest / validatedSkySpan + (now - holdout.MeasurementUtc).TotalSeconds / spanSeconds;
         var uncertainty = baseResidual * growth + 2 * sourceUncertainty + q.PixelScaleArcseconds;
         if (!double.IsFinite(uncertainty) || uncertainty > request.Limits.MaximumPredictionUncertaintyArcseconds)
             return Reject("UNCERTAINTY_EXCEEDED", $"Independent holdout/corner residual and locality growth imply {uncertainty:F2} arcsec, above the original recognition envelope.");
@@ -282,7 +283,7 @@ public static class QhyG3LocalModelPolicy
         var prediction = new QhyG3LocalPrediction(modelSha, center.RaDegrees, center.DecDegrees,
             ratio * q.PixelScaleArcseconds, NormalizeAngle(q.PositionAngleDegrees + angle), samples[0].Candidate.G3.Flipped,
             uncertainty, holdoutResidual, east, north, hashes, holdout.CandidateSha256,
-            samples[0].Candidate.CreatedUtc, holdout.CreatedUtc);
+            samples[0].Candidate.MeasurementUtc, holdout.MeasurementUtc);
         return new(GateResult.Warn("QHY_G3_LOCAL_MODEL_VALIDATED_PREDICTION",
             "Locally validated inferred G3 geometry; not formal WCS or measured target. Original coarse/return budgets and fresh post-move measurements remain mandatory.",
             new Dictionary<string, double> { ["predictionUncertaintyArcseconds"] = uncertainty,

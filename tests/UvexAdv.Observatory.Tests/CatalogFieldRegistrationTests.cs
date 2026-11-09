@@ -69,4 +69,29 @@ public sealed class CatalogFieldRegistrationTests
             300,300,new("slit",new(90,160),0,100,3,.5,"camera",1,1));
         Assert.NotEqual(GateDisposition.Passed,result.Gate.Disposition);
     }
+
+    [Fact]
+    public void SepParentMomentsArePreservedInsteadOfInventingUnknownWidth()
+    {
+        var parent = new SepPositionComponent(90,80,4.790056228637695,3.2826955318450928,
+            834694,21984,40.819895838248414,0,65,191,[77,72,22,19],0,1);
+        var image = new SepImageMeasurements(1,SepStarDetectionClient.Algorithm,300,300,[],false,false)
+            { ParentComponents = [parent] };
+        var star = Assert.Single(CatalogFieldRegistration.ReferenceStars(image));
+        Assert.InRange(star.FwhmPixels,9.66,9.68);
+        Assert.Equal(1-parent.B/parent.A,star.Ellipticity,12);
+        Assert.True(G3OverlapRegistration.HasUsableMeasuredSourceShape(star));
+    }
+
+    [Theory]
+    [InlineData(0,0)]
+    [InlineData(1,-1)]
+    [InlineData(1,2)]
+    [InlineData(double.NaN,1)]
+    public void InvalidNewSepMomentsCannotMasqueradeAsLegacyUnknownShape(double a,double b)
+    {
+        var image = new SepImageMeasurements(1,SepStarDetectionClient.Algorithm,300,300,[],false,false)
+            { ParentComponents = [new(90,80,a,b,20000,3000,30,0,8,20,[87,77,7,7],0,1)] };
+        Assert.Empty(CatalogFieldRegistration.ReferenceStars(image));
+    }
 }

@@ -7,7 +7,16 @@ public static class QhyControlProtocol
     public const string OwnerTokenHeaderName = "X-QHY-Owner-Token";
     public const string LeaseExpiresUtcHeaderName = "X-QHY-Lease-Expires-Utc";
     public const string WideFieldStreamCapability = "bounded-wide-field-acquisition-v1";
+    public const string OwnerIdleCapability = "owner-idle-proof-v1";
 }
+
+/// <summary>A point-in-time read-only proof from the process that owns the QHY
+/// camera. It is not a job snapshot or a history query and never authorizes
+/// reconnecting, cancelling or taking over an existing owner.</summary>
+public sealed record QhyOwnerIdleProof(
+    int Version,
+    DateTimeOffset TimestampUtc,
+    bool OwnerIdle);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum QhyJobKind

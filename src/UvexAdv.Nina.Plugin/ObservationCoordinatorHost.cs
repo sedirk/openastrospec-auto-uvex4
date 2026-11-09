@@ -85,6 +85,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private bool workflowHistoryTruncated;
     private ObservationAcquisitionProgress? acquisitionProgress;
     private object? activeRunReservation;
+    private NativeBoundaryReservation? activeNativeBoundary;
     private RealObservationRunOwnershipLease? realRunOwnershipLease;
     private bool persistenceFailureLatched;
     private bool disposed;
@@ -155,6 +156,21 @@ public sealed class ObservationCoordinatorHost : IDisposable
         }
     }
 
+    internal void ValidateStartupPreferenceAccess()
+    {
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (activeRunReservation is not null || activeNativeBoundary is not null)
+                throw new InvalidOperationException("观测、对焦或科学采集仍在占用设备；启动偏好卡不能切入活动运行。");
+            if (nightOwner is null) return;
+            if (ReferenceEquals(nightOwner, safetyStandby) &&
+                safetyStandby?.Snapshot.Phase is "Waiting" or "MonitoringOnly")
+                return;
+            throw new InvalidOperationException("当前夜租约不属于可交接的等待态安全待机；启动偏好卡不会覆盖活动序列或收口中待机。");
+        }
+    }
+
     internal async Task<NightSafetyStandby> BeginSafetyStandbyAsync(object owner, NightSafetyStandbyRequest request)
     {
         NightSafetyStandby? guard = null;
@@ -164,7 +180,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         await guard.ArmAsync().ConfigureAwait(false);
         lock (sync)
         {
-            if (!ReferenceEquals(nightOwner, owner) || activeRunReservation is not null)
+            if (!ReferenceEquals(nightOwner, owner) || activeRunReservation is not null || activeNativeBoundary is not null)
             {
                 guard.StopForApplicationExit(); guard.Start();
                 throw new InvalidOperationException("目标所有者尚未退出，不能转交独立安全待机。");
@@ -191,12 +207,12 @@ public sealed class ObservationCoordinatorHost : IDisposable
         ObservationDashboardSnapshot dashboard;
         lock (sync)
         {
-            if (!ReferenceEquals(safetyStandby, owner)) return;
+            if (disposed || !ReferenceEquals(safetyStandby, owner)) return;
             standbySnapshot = next; dashboard = CreateDashboardLocked();
         }
         try { DashboardChanged?.Invoke(this, dashboard); }
         catch (Exception ex) { NINA.Core.Utility.Logger.Error(ex); }
-        if (next.Phase == "CloseoutFailed") attentionNotifier.Notify(new(
+        if (next.Phase is "CloseoutFailed" or "MonitoringOnly") attentionNotifier.Notify(new(
             ObservationAttentionSeverity.Error, "OpenAstroSpec 独立安全收口需要处理", next.Message,
             next.Id + ":" + next.Phase));
     }
@@ -293,7 +309,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
             // Reserve the host before provenance lookup or manifest creation. A
             // concurrent Resume/Run can therefore never bind to the previous
             // run while this run is still being prepared.
-            if (activeRunReservation is not null)
+            if (activeRunReservation is not null || activeNativeBoundary is not null)
             {
                 if (!belongsToNight) runGate.Release();
                 throw new InvalidOperationException("An observation run is already reserved.");
@@ -405,7 +421,15 @@ public sealed class ObservationCoordinatorHost : IDisposable
         return current.TryResume(coordinator.Resume);
     }
 
-    public void Cancel() => coordinator.Cancel();
+    public void Cancel()
+    {
+        // The coordinator's segment may already be terminal while its native
+        // night is joining/handing off owners. Cancel that scope as well.
+        CancellationTokenSource? boundary;
+        lock (sync) boundary = activeNativeBoundary?.Cancellation;
+        try { boundary?.Cancel(); } catch (ObjectDisposedException) { /* The joined scope already released. */ }
+        coordinator.Cancel();
+    }
 
     public void RequestTakeover(string reason = "操作员请求人工接管。") => coordinator.RequestTakeover(reason);
 
@@ -576,7 +600,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
     {
         lock (sync)
         {
-            return activeRunReservation is not null && realRunOwnershipLease is not null
+            return (activeRunReservation is not null || activeNativeBoundary is not null) && realRunOwnershipLease is not null
                 ? GateResult.Pass(
                     "REAL_OBSERVATION_OWNER_LEASE_HELD",
                     "This host holds the live machine-wide real-observation owner lease.")
@@ -585,6 +609,35 @@ public sealed class ObservationCoordinatorHost : IDisposable
                     "This host cannot prove exclusive ownership of the real observation runner; foreign durable recovery is prohibited.");
         }
     }
+
+    // A terminal segment releases its local reservation, NOT the native night's
+    // machine-wide lease. Explicitly bind the short handoff to that same night
+    // and run; neither a stale runner nor safety standby gains this authority.
+    internal async Task RunNativeTargetBoundaryAsync(object owner, string runId,
+        Func<CancellationToken, Task> operation, CancellationToken token)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var boundary = new NativeBoundaryReservation(cancellation);
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(nightOwner, owner) || ReferenceEquals(owner, safetyStandby) ||
+                realRunOwnershipLease is null || activeRunReservation is not null || activeNativeBoundary is not null ||
+                string.IsNullOrWhiteSpace(runId) || runId != nativeTargetRunId ||
+                coordinator.Snapshot.ObservationRunId != runId || coordinator.Snapshot.State != ObservationRunState.Completed)
+                throw new InvalidOperationException("原整夜所有者或已结束分段不匹配；不授权中天交接。");
+            activeNativeBoundary = boundary;
+        }
+        try { await operation(cancellation.Token).ConfigureAwait(false); }
+        finally
+        {
+            lock (sync)
+                if (ReferenceEquals(activeNativeBoundary, boundary)) activeNativeBoundary = null;
+        }
+    }
+
+    private sealed record NativeBoundaryReservation(CancellationTokenSource Cancellation);
 
     internal Task<ObservationSnapshot> CommitCompletionAsync(
         Func<ObservationSnapshot> createCompletedSnapshot,

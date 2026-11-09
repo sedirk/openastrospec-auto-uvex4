@@ -74,6 +74,23 @@ internal sealed class QhyServiceClient : IDisposable
     {
         try
         {
+            if (!nativeWorker)
+            {
+                using var ownerRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/owner-idle");
+                ownerRequest.Headers.CacheControl = new() { NoCache = true, NoStore = true };
+                using var ownerResponse = await http.SendAsync(ownerRequest, cancellationToken).ConfigureAwait(false);
+                if (ownerResponse.StatusCode != HttpStatusCode.NotFound)
+                {
+                    await EnsureSuccessAsync(ownerResponse, cancellationToken).ConfigureAwait(false);
+                    var ownerProof = await ownerResponse.Content
+                        .ReadFromJsonAsync<QhyOwnerIdleProof>(cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    return QhyOwnerIdleProofPolicy.Evaluate(ownerProof, DateTimeOffset.UtcNow);
+                }
+                // An older loopback service has no point-in-time owner proof.
+                // Preserve its bounded legacy fallback below; never infer idle
+                // from a missing or failed new endpoint.
+            }
             using var request = new HttpRequestMessage(HttpMethod.Get,
                 nativeWorker ? "/api/v1/owner-idle" : "/api/v1/jobs?count=200");
             request.Headers.CacheControl = new() { NoCache = true, NoStore = true };

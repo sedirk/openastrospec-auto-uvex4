@@ -8,12 +8,13 @@ public static class G3PostWcsShortHandoffPolicy
     public const string OutsideCode = "G3_POST_WCS_SHORT_HANDOFF_OUTSIDE";
     public const string RecheckCode = "G3_POST_WCS_SHORT_BOUNDARY_RECHECK";
 
-    // Routing only. A repeat-confirmed star outside the remaining fine-motion
-    // envelope is not an invalid field. Try a single formal solve of the ALREADY
-    // captured field before the existing charged coarse loop decides any move.
+    // Routing only. An optional short-position shortcut must not suppress the
+    // normal formal solve of the already captured long frame. Only enumerated
+    // optical failures may fall back; identity/stop/hash/geometry failures may not.
     public static bool NeedsSameFrameCoarseSolve(GateResult gate) =>
-        gate.Code == OutsideCode && gate.Disposition != GateDisposition.Passed &&
-        gate.Metrics?.GetValueOrDefault("confirmedPairCoarseSolveEligible") == 1;
+        gate.Disposition != GateDisposition.Passed &&
+        (gate.Code == OutsideCode && gate.Metrics?.GetValueOrDefault("confirmedPairCoarseSolveEligible") == 1 ||
+         gate.Code == "G3_POST_WCS_SHORT_UNCONFIRMED" && gate.Metrics?.GetValueOrDefault("shortOpticalFailureAllowsExistingFrameSolve") == 1);
 
     public static G3PostWcsShortHandoffDecision Evaluate(
         TargetIdentification longTarget, PixelPoint prediction, double uncertainty,
@@ -48,6 +49,9 @@ public static class G3PostWcsShortHandoffPolicy
         metrics["shortPairConfirmed"] = confirmation.Accepted ? 1 : 0;
         metrics["currentHandoffGeometryPassed"] = currentGeometry ? 1 : 0;
         metrics["priorHandoffGeometryPassed"] = priorGeometry ? 1 : 0;
+        metrics["shortOpticalFailureAllowsExistingFrameSolve"] = confirmation.Gate.Code is
+            "G3_SEP_UNMEASURED" or "G3_SEP_AMBIGUOUS" or "G3_SHORT_REPEAT_DISAGREES" or
+            "G3_SEP_PARENT_BLEND_UNRESOLVED" ? 1 : 0;
         if (!confirmation.Accepted)
             return new(GateResult.Unknown("G3_POST_WCS_SHORT_UNCONFIRMED",
                 $"Independent short-frame confirmation is incomplete: {confirmation.Gate.Code}: {confirmation.Gate.Message}", metrics), false, false);
@@ -62,7 +66,7 @@ public static class G3PostWcsShortHandoffPolicy
                 Metric("measuredHandoffRadiusPixels", measuredHandoffRadius);
                 metrics["confirmedPairCoarseSolveEligible"] =
                     double.IsFinite(measuredHandoffRadius) && measuredHandoffRadius > 0 ? 1 : 0;
-                return new(GateResult.Unknown(OutsideCode,
+                return new(GateResult.TargetQuality(OutsideCode,
                     "The independent pair agrees inside the recognition window, but exceeds the inherited remaining fine-motion envelope. Reuse the existing field for one coarse solve; no new budget or blind search.", metrics), false, false);
             }
             return new(GateResult.Pass("G3_POST_WCS_SHORT_HANDOFF_CONFIRMED",
@@ -127,9 +131,11 @@ public static class G3PostWcsShortHandoffPolicy
         var recheck = !recheckUsed && attempt >= 2 && attempt <= G3PostWcsShortExposurePolicy.MaximumFrames - 2 &&
             (measuredBoundary || originalBoundary);
         metrics["measuredHandoffBoundaryRecheck"] = recheck && measuredBoundary ? 1 : 0;
-        return new(GateResult.Unknown(recheck ? RecheckCode : OutsideCode,
-            recheck
-                ? "The independent pair agrees and lies at the prediction or remaining measured fine-envelope boundary. Reserve exactly one new pair inside the original six-frame limit; no move, solve, tolerance or budget reset."
-                : "Independent short positions agree, but the pair does not fit the unchanged prediction/slit handoff windows. No PHD2 handoff is authorized.", metrics), false, recheck);
+        return new(recheck
+                ? GateResult.Unknown(RecheckCode,
+                    "The independent pair agrees and lies at the prediction or remaining measured fine-envelope boundary. Reserve exactly one new pair inside the original six-frame limit; no move, solve, tolerance or budget reset.", metrics)
+                : GateResult.TargetQuality(OutsideCode,
+                    "Independent short positions agree, but the pair does not fit the unchanged prediction/slit handoff windows. No PHD2 handoff is authorized.", metrics),
+            false, recheck);
     }
 }

@@ -62,6 +62,12 @@ internal sealed class ObservationAttentionNotificationTracker
         if (snapshot.State == ObservationRunState.Completed &&
             !string.IsNullOrWhiteSpace(snapshot.ObservationRunId))
         {
+            if (snapshot.RecentEvents.Any(evt => evt.Code == "RUN_SEGMENT_COMPLETED"))
+            {
+                var clear = activeFingerprint is not null;
+                activeFingerprint = null;
+                return new(null, clear); // A joined segment is not a completed target.
+            }
             if (!completedRuns.Add(snapshot.ObservationRunId))
                 return new ObservationAttentionNotificationEvaluation(null, false);
 

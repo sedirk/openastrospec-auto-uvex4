@@ -33,10 +33,17 @@ internal static class ReadOnlyNinaAstrometry
         var open = typeof(NINA.Astrometry.NOVAS).GetMethod("EphemOpen", BindingFlags.NonPublic | BindingFlags.Static)!;
         object[] args = [Path.Combine(nina, "External", "JPLEPH"), 0d, 0d, (short)0];
         Assert.Equal((short)0, (short)open.Invoke(null, args)!);
+        return true;
+    });
 
+    internal static void Initialize()
+    {
+        _ = Initialized.Value;
         // Tests must not need the running application's EOP database/provider.
         // A fixed DUT1 of 0.1 s keeps these degree-scale twilight fixtures
         // deterministic; it is NOT a fallback used by the production gate.
+        // Re-pin at each test boundary: AstroUtil's historical readers can roll
+        // the process-global date reference/cache after the one-time native load.
         var flags = BindingFlags.NonPublic | BindingFlags.Static;
         var astro = typeof(NINA.Astrometry.AstroUtil);
         astro.GetField("DeltaUTReference", flags)!.SetValue(null, DateTime.UtcNow.Date);
@@ -50,8 +57,5 @@ internal static class ReadOnlyNinaAstrometry
         // Pin the current-night fixture dates too; otherwise tests executed at
         // the end of the full suite fall back to an unavailable EOP database.
         for (var offset = -1; offset <= 1; offset++) cache[DateTime.UtcNow.Date.AddDays(offset)] = 0.1;
-        return true;
-    });
-
-    internal static void Initialize() => _ = Initialized.Value;
+    }
 }

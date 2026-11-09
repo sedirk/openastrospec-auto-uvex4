@@ -747,13 +747,16 @@ public sealed class G3AcquisitionRecoveryTests
     }
 
     [Theory]
-    [InlineData(2.24, 0.3, 50, 100, true)]
-    [InlineData(4.01, 0.3, 50, 100, false)]
-    [InlineData(2.24, 2.01, 50, 100, false)]
-    [InlineData(2.24, 0.3, 101, 100, false)]
-    [InlineData(2.24, 0.3, 50, 1, false)]
+    [InlineData(2.24, 10, 0.3, 50, 100, true)]
+    [InlineData(4.01, 10, 0.3, 50, 100, true)]
+    [InlineData(4.30, 10, 0.3, 50, 100, true)] // Recorded stable intermediate return.
+    [InlineData(10.01, 10, 0.3, 50, 100, false)]
+    [InlineData(2.24, 1.99, 0.3, 50, 100, false)]
+    [InlineData(2.24, 10, 2.01, 50, 100, false)]
+    [InlineData(2.24, 10, 0.3, 101, 100, false)]
+    [InlineData(2.24, 10, 0.3, 50, 1, false)]
     public void IntermediateReturnReplanRequiresBoundedStableMeasuredProgress(
-        double residual, double drift, double move, double priorRadius, bool expected)
+        double residual, double stableTolerance, double drift, double move, double priorRadius, bool expected)
     {
         var state = State(DateTimeOffset.UtcNow) with
         {
@@ -767,7 +770,7 @@ public sealed class G3AcquisitionRecoveryTests
             CorrectionAttempts = 1,
         };
         Assert.Equal(expected, G3AcquisitionMotionPlanner.CanReplanStableIntermediateReturn(
-            state, priorRadius, residual, drift, move));
+            state, priorRadius, residual, drift, move, stableTolerance));
     }
 
     [Fact]

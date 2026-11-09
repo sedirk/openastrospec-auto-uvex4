@@ -112,6 +112,36 @@ public sealed class SequenceStartupItemsTests
         Assert.False(f.Settings.ObservationUseRealMode); Assert.Equal(0, f.ConnectCalls);
     }
 
+    [Fact]
+    public async Task WaitingSafetyStandbyCanApplyStartupPreferencesBeforeNightTakesOwnership()
+    {
+        using var f = new Fixture();
+        var oldOwner = new object();
+        using var old = await f.Host.ReserveNightAsync(oldOwner, true, default);
+        var journal = Path.Combine(Path.GetTempPath(), $"uvex-startup-standby-{Guid.NewGuid():N}.json");
+        var guard = await f.Host.BeginSafetyStandbyAsync(oldOwner, new(true, "config", null, journal, true,
+            _ => new NoopDisposable(), () => null, _ => Task.FromResult<IReadOnlyList<string>>([])));
+        old.Dispose();
+        try
+        {
+            await f.Safety.Execute(f.Progress, default);
+            await f.Mode.Execute(f.Progress, default);
+            Assert.Equal(1, f.ConnectCalls);
+            Assert.True(f.Settings.ObservationUseRealMode);
+            Assert.Equal("Waiting", guard.Snapshot.Phase);
+
+            using var next = await f.Host.ReserveNightAsync(new object(), true, default,
+                () => new NoopDisposable(), "config");
+            await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal("Transferred", guard.Snapshot.Phase);
+            Assert.Null(f.Host.Dashboard.SafetyStandby);
+        }
+        finally
+        {
+            if (File.Exists(journal)) File.Delete(journal);
+        }
+    }
+
     [Theory]
     [InlineData(false, "AIWeatherSafetyMonitor")]
     [InlineData(true, "AIWeatherSafetyMonitor")]
@@ -222,6 +252,10 @@ public sealed class SequenceStartupItemsTests
     {
         public void Notify(ObservationAttentionNotification n) { }
         public void ClearActiveIndicator() { }
+        public void Dispose() { }
+    }
+    private sealed class NoopDisposable : IDisposable
+    {
         public void Dispose() { }
     }
     private static object? Default(Type t) => t == typeof(void) ? null : t.IsValueType ? Activator.CreateInstance(t) : null;

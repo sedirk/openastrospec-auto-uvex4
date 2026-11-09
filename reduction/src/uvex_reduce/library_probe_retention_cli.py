@@ -1,4 +1,4 @@
-"""Headless, opt-in probe retention; no device control and no GUI windows."""
+"""Headless target-success retention; no device control and no GUI windows."""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -10,24 +10,52 @@ import time
 
 from .library_catalog import LibraryCatalog, default_catalog_path
 from .library_cleanup_execute import CleanupExecutor, confirmation_phrase
-from .library_probe_retention import ProbeRetentionPlanner
+from .library_probe_retention import (
+    REJECTED_PROBE_POLICY,
+    TARGET_SUCCESS_POLICY,
+    ProbeRetentionPlanner,
+    TargetSuccessRetentionPlanner,
+)
 from .library_probe_retention_watch import ProbeMetadataWatch
 
 
-def _status(folder, result):
-    target = folder / "probe-retention-status.json"
-    temporary = folder / f"probe-retention-status-{os.getpid()}.tmp"
+def _state_stem(policy):
+    return "target-success-retention" if policy == TARGET_SUCCESS_POLICY else "probe-retention"
+
+
+def _status(folder, policy, result):
+    stem = _state_stem(policy)
+    target = folder / f"{stem}-status.json"
+    temporary = folder / f"{stem}-status-{os.getpid()}.tmp"
     with temporary.open("w", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2)
     os.replace(temporary, target)
 
 
+def _parse_utc(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _enabled_time(path):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return _parse_utc(payload.get("enabledUtc")) if isinstance(payload, dict) else None
+
+
 @contextmanager
-def single_worker(directory):
+def single_worker(directory, policy=REJECTED_PROBE_POLICY):
     """OS releases the lock after crashes; never concurrent automatic batches."""
     import msvcrt
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "probe-retention.lock").open("a+b") as stream:
+    with (directory / f"{_state_stem(policy)}.lock").open("a+b") as stream:
         if stream.tell() == 0:
             stream.write(b"0")
             stream.flush()
@@ -40,25 +68,34 @@ def single_worker(directory):
             msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def cycle(catalog, *, execute=False, include_failed=False, scan=True):
-    result = {"utc": datetime.now(timezone.utc).isoformat(), "mode": "permanent" if execute else "preview",
+def cycle(catalog, *, execute=False, include_failed=False, scan=True,
+          policy=TARGET_SUCCESS_POLICY, not_before_utc=None):
+    result = {"utc": datetime.now(timezone.utc).isoformat(),
+              "policy": policy, "mode": "permanent" if execute else "preview",
               "require_science": not include_failed, "status": "preview", "deleted_bytes": 0}
     if scan:
         result["scan"] = catalog.scan()
         if result["scan"]["warnings"] or result["scan"]["cancelled"]:
             result["status"] = "deferred-index-incomplete"
             return result
-    planner = ProbeRetentionPlanner(catalog, authorized=True, require_science=not include_failed)
-    plan = planner.preview_probes()
+    planner = (TargetSuccessRetentionPlanner(catalog, authorized=True,
+                                             require_science=not include_failed,
+                                             not_before_utc=not_before_utc)
+               if policy == TARGET_SUCCESS_POLICY else
+               ProbeRetentionPlanner(catalog, authorized=True,
+                                     require_science=not include_failed,
+                                     policy=REJECTED_PROBE_POLICY))
+    plan = planner.preview_candidates()
     if plan is None:
-        result.update(status="no-eligible-probes", reasons=planner._snapshot["global_reasons"])
+        result.update(status="no-eligible-candidates", reasons=planner._snapshot["global_reasons"])
         return result
     selected = [i for i in plan["items"] if i["selected"]]
     result.update(count=len(selected), estimated_release_bytes=plan["estimated_release_bytes"],
                   paths=[i["path"] for i in selected])
     audit = Path(catalog.db_path).parent / "cleanup-audit"
     audit.mkdir(exist_ok=True)
-    preview_path = audit / (plan["plan_id"] + "-probe-preview.json")
+    preview_name = "-target-success-preview.json" if policy == TARGET_SUCCESS_POLICY else "-probe-preview.json"
+    preview_path = audit / (plan["plan_id"] + preview_name)
     with preview_path.open("x", encoding="utf-8") as stream:
         json.dump(plan, stream, ensure_ascii=False)
     result["preview_path"] = str(preview_path)
@@ -78,15 +115,35 @@ def cycle(catalog, *, execute=False, include_failed=False, scan=True):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=default_catalog_path())
+    parser.add_argument("--policy", choices=[TARGET_SUCCESS_POLICY, REJECTED_PROBE_POLICY],
+                        default=REJECTED_PROBE_POLICY)
+    parser.add_argument("--execute-permanent-target-success", action="store_true",
+                        help="Explicit authorization for successful-target parse/probe cleanup.")
     parser.add_argument("--execute-permanent-rejected-probes", action="store_true",
-                        help="Explicit authorization. No recycle bin; valid/science/dependent frames protected.")
+                        help="Legacy explicit authorization for rejected ATR probes only.")
+    parser.add_argument("--not-before-utc", type=str,
+                        help="Required for manual target-success runs; no historical run before this UTC time is eligible.")
     parser.add_argument("--include-failed-history", action="store_true",
                         help="One-time historical authorization, never allowed with --watch.")
     parser.add_argument("--watch", action="store_true", help="Repeat successful-terminal-run policy until disabled.")
     parser.add_argument("--interval-seconds", type=int, default=900)
     parser.add_argument("--no-scan", action="store_true", help="Use existing index; fresh dependency discovery still required.")
     args = parser.parse_args(argv)
-    if args.watch and (args.include_failed_history or not args.execute_permanent_rejected_probes or args.no_scan):
+    execute = (args.execute_permanent_target_success
+               if args.policy == TARGET_SUCCESS_POLICY
+               else args.execute_permanent_rejected_probes)
+    if args.policy == TARGET_SUCCESS_POLICY and args.execute_permanent_rejected_probes:
+        parser.error("The rejected-probe flag is not target-success authorization.")
+    if args.policy == REJECTED_PROBE_POLICY and args.execute_permanent_target_success:
+        parser.error("The target-success flag requires --policy target-success.")
+    if args.include_failed_history and args.policy != REJECTED_PROBE_POLICY:
+        parser.error("Failed-history authorization is only available to the legacy rejected-probe policy.")
+    manual_not_before = _parse_utc(args.not_before_utc) if args.not_before_utc else None
+    if args.not_before_utc and manual_not_before is None:
+        parser.error("--not-before-utc must be an ISO-8601 timestamp.")
+    if args.policy == TARGET_SUCCESS_POLICY and not args.watch and manual_not_before is None:
+        parser.error("A manual target-success run requires --not-before-utc.")
+    if args.watch and (args.include_failed_history or not execute or args.no_scan):
         parser.error("Automatic operation requires explicit permanent authorization, successful science and fresh scans.")
     if args.interval_seconds < 60:
         parser.error("Minimum interval is 60 seconds.")
@@ -99,19 +156,31 @@ def main(argv=None):
     kernel.SetPriorityClass.argtypes = (ctypes.c_void_p, ctypes.c_uint)
     kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
     folder = args.catalog.parent
-    enabled = folder / "probe-retention.enabled"
-    with single_worker(folder):
+    enabled = folder / (f"{_state_stem(args.policy)}.enabled")
+    with single_worker(folder, args.policy):
         while not args.watch or enabled.exists():
-            _status(folder, {"utc": datetime.now(timezone.utc).isoformat(), "status": "checking",
-                             "watch": args.watch, "process_id": os.getpid(),
-                             "require_science": not args.include_failed_history})
+            _status(folder, args.policy, {
+                "utc": datetime.now(timezone.utc).isoformat(), "status": "checking",
+                "policy": args.policy, "watch": args.watch, "process_id": os.getpid(),
+                "require_science": not args.include_failed_history,
+            })
             try:
+                not_before = manual_not_before
+                if args.policy == TARGET_SUCCESS_POLICY and args.watch:
+                    not_before = _enabled_time(enabled)
+                    if not_before is None:
+                        raise ValueError("Target-success enable flag has no valid enabledUtc watermark.")
                 with LibraryCatalog(args.catalog) as catalog:
-                    result = cycle(catalog, execute=args.execute_permanent_rejected_probes,
-                                   include_failed=args.include_failed_history, scan=not args.no_scan)
+                    result = cycle(catalog, execute=execute,
+                                   include_failed=args.include_failed_history,
+                                   scan=not args.no_scan, policy=args.policy,
+                                   not_before_utc=not_before)
             except Exception as error:
-                result = {"utc": datetime.now(timezone.utc).isoformat(), "status": "deferred", "error": str(error)}
-            _status(folder, {**result, "watch": args.watch, "process_id": os.getpid()})
+                result = {"utc": datetime.now(timezone.utc).isoformat(),
+                          "policy": args.policy, "status": "deferred", "error": str(error)}
+            _status(folder, args.policy, {
+                **result, "watch": args.watch, "process_id": os.getpid(),
+            })
             if not args.watch:
                 print(json.dumps(result, ensure_ascii=False), flush=True)
                 return

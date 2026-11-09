@@ -1,4 +1,5 @@
 using UvexAdv.Observatory;
+using UvexAdv.Qhy.Core;
 
 namespace UvexAdv.Nina.Plugin;
 
@@ -24,5 +25,23 @@ internal sealed record PhotometryOwnerIdleProof(int Version, DateTimeOffset Time
         return proof.CoordinatorIdle && proof.CameraIdle && proof.WheelIdle && proof.FocuserIdle && proof.PersistenceIdle
             ? GateResult.Pass("QHY_OWNER_IDLE_CONFIRMED", "Bound native QHY owner confirms jobs, native camera, wheel, focuser and pending persistence idle.", metrics)
             : GateResult.Unknown("QHY_OWNER_STOP_UNCONFIRMED", "Native QHY owner still reports busy, disconnected or unresolved state; no takeover was attempted.", metrics);
+    }
+}
+
+internal static class QhyOwnerIdleProofPolicy
+{
+    internal static GateResult Evaluate(QhyOwnerIdleProof? proof, DateTimeOffset now)
+    {
+        if (proof is null || proof.Version != 1 || proof.TimestampUtc == default ||
+            proof.TimestampUtc > now.AddSeconds(1) || now - proof.TimestampUtc > TimeSpan.FromSeconds(5))
+            return GateResult.Unknown("QHY_OWNER_IDLE_UNAVAILABLE",
+                "QHY owner idle proof is missing, unsupported or stale.");
+        return proof.OwnerIdle
+            ? GateResult.Pass("QHY_OWNER_IDLE_CONFIRMED",
+                "The sole QHY owner freshly reports no active job or pending terminal publication; no owner command was issued.",
+                new Dictionary<string, double> { ["ownerIdle"] = 1 })
+            : GateResult.Unknown("QHY_OWNER_STOP_UNCONFIRMED",
+                "The sole QHY owner reports an active or unconfirmed job; no takeover was attempted.",
+                new Dictionary<string, double> { ["ownerIdle"] = 0 });
     }
 }

@@ -255,7 +255,9 @@ public static partial class ObservationUiPresentation
             };
 
     public static string RunStateName(ObservationRunState state, string? terminalCode, CultureInfo? culture) =>
-        state == ObservationRunState.Faulted && NativeSequencePlan.IsScheduledNightStop(terminalCode)
+        state == ObservationRunState.Completed && terminalCode == "RUN_SEGMENT_COMPLETED"
+            ? Text("观测段结束 · 等待中天交接", "Segment ended; awaiting meridian handoff", culture)
+            : state == ObservationRunState.Faulted && NativeSequencePlan.IsScheduledNightStop(terminalCode)
             ? Text("已到计划收尾时间 · 请核对收口状态", "Scheduled stop reached; check closeout status", culture)
             : RunStateName(state, culture);
 
@@ -407,6 +409,7 @@ public static partial class ObservationUiPresentation
             "RUN_PAUSED" => "自动流程已在动作边界暂停。",
             "RUN_CANCELLED" => "自动观测已取消，原始证据仍保留。",
             "RUN_COMPLETED" => "自动观测与必要收尾已完成。",
+            "RUN_SEGMENT_COMPLETED" => "本观测段已保存，等待中天交接；不是目标完成，科学帧和原预算保留。",
             "STAGE_STARTED" => $"开始执行：{StageName(resolvedStage, culture)}。",
             "STAGE_COMPLETED" => $"阶段已通过：{StageName(resolvedStage, culture)}。",
             "STAGE_PASSED" => $"已完成：{StageName(resolvedStage, culture)}。",
@@ -557,6 +560,7 @@ public static partial class ObservationUiPresentation
             "PHD2_LOCK_INHERITED_BUDGET_EXHAUSTED" => "本轮入缝账本的剩余预算不足；请查看实际次数、位移、已用时间和原始原因，不代表继承了前夜用量",
             "PHD2_LOCK_MANIFEST_UNREADABLE" => "PHD2 锁点关联的运行记录无法读取或校验；请查看原始原因中的运行日期和文件，不代表本帧导星质量不合格",
             "PHD2_SCIENCE_RECOVERY_BUDGET_UNAVAILABLE" => "导星/目标证据失效，后续恢复的运动余额不足；不是曝光时长超限。未启动回退定位，原始原因见技术详情，已保存光谱保留",
+            "PHD2_TARGET_TEMPORAL_CONSENSUS_WARNING" => "附近候选使单帧唯一性不足，但连续新帧上的目标位置与 WCS/连续轨迹一致；保留形态警告继续有界精调，不宣称多瓣目标已解决",
             "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED" => "试拍前的导星会话或狭缝证据已失效；需要有界复核，不能用旧证据开始下一帧",
             "PHD2_SCIENCE_FRESH_SLIT_WINDOW_REJECTED" => "试拍前的新帧未能同时确认目标身份、导星连续性与所选入缝质量；原预算内等待／精调仍未通过，没有开始新曝光",
             "MOUNT_CLOCK_RECHECK_REQUIRED" => "赤道仪 UTC 持续异常，本段停止；整夜序列确认设备停止并校时成功后，按原剩余预算重新定位、入缝和导星，续拍本目标；目标恢复失败再跳过，取消或安全异常仍停止",
@@ -580,6 +584,7 @@ public static partial class ObservationUiPresentation
             "G3_CATALOG_WCS_AUTHORITY_INVALID" => "目录/WCS 目标几何证据格式无效，不能据此授权入缝位移",
             "G3_CATALOG_REFERENCE_MISSING" => "目录定位的原始 WCS 参考星场未传递到精调接管；这是参考证据衔接问题，不是星等不合格，未用附近亮峰替代目标",
             "G3_POST_WCS_SHORT_UNCONFIRMED" => "小范围修正后，SEP 短帧未确认一致的近缝目标；已保留目录与狭缝，未重复整套解算，未把预测位置当成实测入缝",
+            "G3_SHORT_REPEAT_CONFIRMED_WITH_TRACKING_DRIFT" => "两张高信噪比、未饱和且未分裂的独立短帧只存在轻微位置漂移；已保留漂移警告并进入原有新鲜导星复核，不代表已入缝",
             G3PostWcsShortHandoffPolicy.OutsideCode => "SEP 短帧位置一致性已通过，但目标关联或含散布的剩余精调预算检查未通过；未授权 PHD2 接管，请查看原预测半径与实测交接半径",
             G3PostWcsShortHandoffPolicy.RecheckCode => "SEP 两帧一致且仅在交接边界附近越界；正在原六帧上限内补一对独立短帧，不移动、不重解算、不扩大交接范围",
             "G3_SATURATED_TOPOLOGY_AUTHORITY_INVALID" => "饱和目标的目录身份、实心核质心或光通量不适用标记不一致，不能据此授权入缝位移",
@@ -593,6 +598,7 @@ public static partial class ObservationUiPresentation
             "PHD2_RECALIBRATION_DID_NOT_BECOME_ACTIVE" => "已执行一次强制校准，但 PHD2 仍未报告可用的当前校准",
             "PHD2_POST_CALIBRATION_SETTLE_FAILED" => "PHD2 重新校准后未在规定时间内取得稳定证据",
             "PHD2_GUIDING_SUPERVISED_ONLY" => "当前 PHD2 校准只允许有人监督运行，未授予无人值守科学曝光权限",
+            "ATR_FRAME_GUIDE_CONTINUITY_WARNING" => "光谱帧已经完整结束并保留；曝光/读出期间 PHD2 导星连续性发生变化。下一张曝光前必须重新取得新鲜导星与目标/狭缝证据，这不是删除该光谱帧的理由",
             "GUIDING_LOST" => "当前导星会话或有效证据已丢失，新的科学曝光暂未获准；不单凭此代码判断云或设备故障",
             "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" => "当前导星连续性或稳定证据不足；已保存的光谱保留，复核通过后才能继续，不是单指超出 2 像素",
             "G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED" => "G3 邻场搜索未找到可接受目标，赤道仪已返回保存的搜索起点",
@@ -614,7 +620,7 @@ public static partial class ObservationUiPresentation
             "G3_DESTINATION_PIER_SIDE_CHANGE" => "驱动预测目的地会改变赤道仪侧别；未发送跨侧转向，旧运动账本保留",
             "G3_DESTINATION_PIER_SIDE_QUERY_FAILED" => "赤道仪目的地侧别查询失败；尚未发送本次转向，请查看驱动原始错误",
             "G3_WCS_TARGET_OUTSIDE_RETURN_BUDGET" => "实际星场与目标相差过大，完整修正及回程超出原运动预算；仍在已确认的起点，未发送修正。请查看赤道仪坐标同步读回，不是本场无法解析",
-            "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已返回起点，没有继续邻场搜索",
+            "G3_WCS_CENTERING_BUDGET_EXHAUSTED_RETURNED" => "导星相机 WCS 粗居中的运动、次数或回程时间预算不足；赤道仪已回到保存的返回点，没有继续邻场搜索",
             "G3_WCS_CENTERING_RESPONSE_NOT_CONVERGED_RETURNED" => "目标已确认，但小幅修正后的实测位置未收敛；已返回起点，不再重复邻场搜索。请核对赤道仪的小幅运动响应及回差",
             "G3_MOTION_RETURN_INTERMEDIATE_RESIDUAL_LIMIT" => "G3 回原中间段未进入严格 2″ 命令包络；已保存 fresh 读回并停止后续回程段",
             "G3_GUIDING_RECOVERY_STOP_CHANGED" or "G3_GUIDING_RECOVERY_STOP_REQUIRED" => "导星中断后的停止证明缺失或已失效；为避免与 PHD2 同时驱动赤道仪，没有发送回程",

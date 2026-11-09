@@ -9,15 +9,18 @@ internal sealed record G3MeasuredHandoffDecision(GateResult Gate, G3AcquisitionM
 internal static class G3MeasuredHandoffPolicy
 {
     internal static G3MeasuredHandoffDecision Charge(G3AcquisitionMotionState state,
-        double displacement, double radius, DateTimeOffset now)
+        double displacement, double radius, DateTimeOffset now, double? returnDistanceArcseconds = null)
     {
+        var returnDistance = returnDistanceArcseconds ?? radius;
         if (state.Validate().Count != 0 || state.Phase != G3AcquisitionMotionPhase.SettledBudgetLedger ||
             now < state.UpdatedUtc || !double.IsFinite(displacement) || displacement < 0 ||
+            !double.IsFinite(returnDistance) || returnDistance < 0 ||
+            returnDistance > 2 * state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds ||
             !double.IsFinite(radius) || radius < 0)
             return new(GateResult.Unknown("G3_HANDOFF_ACCOUNTING_INVALID", "Fresh handoff has an invalid ledger, clock or geometry; no adoption or motion."));
         var progress = state.MaximumSingleCorrectionArcseconds - 2 * state.ArrivalToleranceArcseconds;
-        var returns = radius <= state.ArrivalToleranceArcseconds ? 0 :
-            Math.Ceiling((radius + 2 * state.ArrivalToleranceArcseconds) / progress);
+        var returns = returnDistance <= state.ArrivalToleranceArcseconds ? 0 :
+            Math.Ceiling((returnDistance + 2 * state.ArrivalToleranceArcseconds) / progress);
         var chargedDistance = state.CumulativeMotionArcseconds + displacement;
         var chargedActions = (long)state.CorrectionAttempts + 1;
         var requiredDistance = chargedDistance + returns * state.MaximumSingleCorrectionArcseconds;
@@ -26,6 +29,7 @@ internal static class G3MeasuredHandoffPolicy
             (1 + returns) * state.WorstCaseActionSeconds + G3AcquisitionReturnTimePolicy.CleanupReserveSeconds;
         var metrics = new Dictionary<string, double> {
             ["handoffArcseconds"] = displacement, ["radiusArcseconds"] = radius,
+            ["returnDistanceArcseconds"] = returnDistance,
             ["requiredDistanceArcseconds"] = requiredDistance, ["requiredActions"] = requiredActions,
             ["requiredSeconds"] = requiredSeconds, ["reservedReturnActions"] = returns,
             ["maximumDistanceArcseconds"] = state.MaximumCumulativeMotionArcseconds,

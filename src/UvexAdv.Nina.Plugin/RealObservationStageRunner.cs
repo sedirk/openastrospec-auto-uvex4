@@ -126,6 +126,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     private readonly C11RunFocusLock c11RunFocusLock = new();
     private long? validatedG3GuideConnectionEpoch;
     private long? validatedG3GuideEpoch;
+    private Phd2TargetContinuityRebaseWindow? phd2TargetContinuityRebaseWindow;
+    private string? phd2TargetContinuityRebaseConsumedTarget;
     private Phd2SlitPlacementSession? phd2SlitPlacementSession;
     private Phd2CompletedInitialGuideStopReceipt? phd2CompletedInitialGuideStopReceipt;
     private Phd2LockShiftPendingState? pendingPhd2LockShift;
@@ -277,6 +279,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             AllowNonLoopbackEndpoint = false,
             ReadConfigurationFingerprint = configuration.Phd2Port == 4400
                 ? () => WindowsPhd2ConfigurationFingerprint.Read(configuration.Phd2.ProfileId)
+                : null,
+            CreateNativeCaptureConfigurationWitness = configuration.Phd2Port == 4400
+                ? request => WindowsPhd2ConfigurationFingerprint.CreateNativeCaptureWitness(configuration.Phd2.ProfileId, request)
                 : null,
         });
         var atrPort = new AtrObservationPort(this);
@@ -785,7 +790,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     {
                         try
                         {
-                            if (await TryVerifyScienceInPlaceAsync(context, cancellationToken).ConfigureAwait(false))
+                            if (await TryVerifyScienceInPlaceAsync(context, result.Gate.Code, cancellationToken).ConfigureAwait(false))
                                 return (true, result);
                         }
                         catch (OperationCanceledException) { throw; }
@@ -815,7 +820,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                                 $"Science continuation could not verify the unchanged guide/slit evidence: {ex.Message}. No new motion or dependency rebuild was started.")));
                         }
                     }
-                    var replacementBudget = await CheckScienceRebuildBudgetAsync(context, result.Gate, cancellationToken).ConfigureAwait(false);
+                    // The same-epoch optical check was attempted above. The
+                    // fallback schedules real reacquisition and placement, not
+                    // just star selection; it still needs the original budget.
+                    var replacementBudget = await CheckScienceRebuildBudgetAsync(
+                        context, result.Gate, cancellationToken).ConfigureAwait(false);
                     if (replacementBudget is not null) return (false, new StageResult(replacementBudget));
                 }
                 // This uses the same reviewed recovery chain as cooperative
@@ -1275,6 +1284,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
     public override async Task OnCancelledAsync(ObservationContext context, CancellationToken cancellationToken)
     {
+        terminalCancellationObserved = true;
         var failures = new List<string>();
         // Cancellation is a stop boundary, not fresh motion authorization.
         // Existing mount/PHD lock ledgers remain the sole recovery authority;
@@ -1651,13 +1661,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             if (uvexGate.Disposition != GateDisposition.Passed) return uvexGate;
         }
 
+        var runtimeNow = DateTimeOffset.UtcNow;
+        var runtimeProtectedPlan = plan with
+        {
+            PlannedStartUtc = runtimeNow,
+            PlannedDuration = context.ProtectedDurationAt(runtimeNow),
+        };
         var roofOpenGate = await EnsureDomeOrRoofOpenForUnattendedAsync(
             context,
-            plan,
+            runtimeProtectedPlan,
             cancellationToken).ConfigureAwait(false);
         if (roofOpenGate.Disposition != GateDisposition.Passed) return roofOpenGate;
 
-        var environmentGate = ValidateEnvironment(plan);
+        // A command-capable roof transition can consume material time. Re-read
+        // the original target deadline after it so the next environment and
+        // horizon gates use the actual remaining window, never a pre-open copy.
+        runtimeNow = DateTimeOffset.UtcNow;
+        runtimeProtectedPlan = plan with
+        {
+            PlannedStartUtc = runtimeNow,
+            PlannedDuration = context.ProtectedDurationAt(runtimeNow),
+        };
+        var environmentGate = ValidateEnvironment(runtimeProtectedPlan);
         if (environmentGate.Disposition != GateDisposition.Passed) return environmentGate;
         if (environmentGate.Severity == GateSeverity.Warning)
         {
@@ -1808,7 +1833,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         context.Set("realRunConfigurationSha256", configuration.ActionConfigurationSha256);
         context.Set("commissioningPresetSha256", commissioning.Sha256);
 
-        var horizon = HorizonCalculator.Evaluate(plan with { PlannedStartUtc = DateTimeOffset.UtcNow }).ToRuntimeGateResult();
+        var horizon = HorizonCalculator.EvaluateRunning(context, runtimeNow).ToRuntimeGateResult();
         if (horizon.Disposition != GateDisposition.Passed) return horizon;
         var coverGate = await EnsureOpticalCoverOpenAsync(context, cancellationToken).ConfigureAwait(false);
         if (coverGate.Disposition != GateDisposition.Passed) return coverGate;
@@ -2092,6 +2117,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         else
         {
             issues.AddRange(health.Configuration.Validate());
+        }
+        if (!QhyServiceCompatibilityPolicy.HasOwnerIdleCapability(health.Capabilities))
+        {
+            issues.Add(
+                $"QHY service does not advertise {QhyControlProtocol.OwnerIdleCapability}; " +
+                "the installed owner cannot provide the point-in-time idle proof required before acquisition or clock continuation.");
         }
         return issues;
     }
@@ -2774,7 +2805,12 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (SequenceStopGate() is { } stop) return stop;
-            var environment = ValidateEnvironment(context.Plan);
+            var runtimeNow = DateTimeOffset.UtcNow;
+            var environment = ValidateEnvironment(context.Plan with
+            {
+                PlannedStartUtc = runtimeNow,
+                PlannedDuration = context.ProtectedDurationAt(runtimeNow),
+            });
             if (environment.Disposition != GateDisposition.Passed) return environment;
             // A finished native cooling task is not temperature evidence. Observe
             // its result for audit but let fresh telemetry drive bounded recovery.
@@ -5777,6 +5813,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             : await SelectG3PlateSolveHintAsync(context, cancellationToken, motionPrediction).ConfigureAwait(false);
         var shortHandoffConfirmationAttempted = false;
         int? finalShortRecheckMilliseconds = null;
+        var emergencyShortSolveRecheckUsed = false;
         for (var index = 0; index < tierCount; index++)
         {
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -5793,7 +5830,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             Phd2SingleFrameResult captured;
             try
             {
-                captured = await CaptureG3FullFrameForAcquisitionAsync(
+                captured = await CaptureG3NativeSingleFrameForAcquisitionAsync(
                     new Phd2SingleFrameRequest(
                         exposureMilliseconds,
                         configuration.G3.Binning,
@@ -6017,6 +6054,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }
 
             G3PlateSolveProbeState? outsideShortHandoff = null;
+            var failedShortShortcutNeedsExistingFrameSolve = false;
             var predictionTiming = motionPrediction is null ? null : G3MotionPredictionTimingPolicy.Evaluate(
                 motionPrediction.SourceTiming, DateTimeOffset.UtcNow, motionPrediction.MaximumUncertaintyPixels,
                 commissioning?.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? 0, motionPrediction.MeasuredDrift);
@@ -6050,6 +6088,24 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     // remaining return-reserved handoff envelope still apply.
                     handoffPreset.TargetSearchRadiusPixels,
                     handoffPreset.MinimumTargetSignalToNoise, handoffPreset.MinimumTargetUniquenessRatio);
+                await PublishRunJsonEvidenceAsync("g3-post-wcs-first-measurement",
+                    "Fresh post-move candidate before spending another full solve ladder",
+                    new
+                    {
+                        prediction = handoffPrediction.PredictedTargetPoint,
+                        handoffPrediction.MaximumUncertaintyPixels,
+                        measuredTarget.Gate.Code,
+                        measuredTarget.Gate.Message,
+                        measuredTarget.Authority,
+                        measuredTarget.Target,
+                        predictionResidualPixels = double.IsFinite(measuredTarget.PredictionResidualPixels)
+                            ? (double?)measuredTarget.PredictionResidualPixels : null,
+                        handoffPreset.TargetSearchRadiusPixels,
+                        exposureMilliseconds,
+                        sourceAnchorAgeSeconds = motionPrediction.SourceTiming is { } sourceTiming
+                            ? (double?)(DateTimeOffset.UtcNow - sourceTiming.EarliestMidpointUtc).TotalSeconds : null,
+                        targetOrMotionAuthorized = false,
+                    }, captured.Path, cancellationToken).ConfigureAwait(false);
                 var shortExposure = handoffPreset.DirectTargetGuidingExposureMilliseconds;
                 // Candidate exploration and accepted handoff are different gates.
                 // A long-frame core 40 px from the slit can fit the existing PHD2
@@ -6102,7 +6158,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     {
                         if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;
                         outsideShortHandoff = confirmed;
-                        Report("短帧已确认目标，但超出剩余精调范围：仅解算已有当前场图像一次，成功后按原预算继续粗定位；不扩大精调门限。");
+                        failedShortShortcutNeedsExistingFrameSolve = confirmed.Gate.Code == "G3_POST_WCS_SHORT_UNCONFIRMED";
+                        Report(failedShortShortcutNeedsExistingFrameSolve
+                            ? "短帧未确认目标：不把候选或预测当实测；回到已有长帧完成本来尚未执行的正式解算，不重拍整套阶梯。"
+                            : "短帧已确认目标，但超出剩余精调范围：仅解算已有当前场图像一次，成功后按原预算继续粗定位；不扩大精调门限。");
                     }
                 }
             }
@@ -6119,14 +6178,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var currentSolveHint = solveHint.Coordinates;
                 if (registeredCurrent is null && !currentPositionCheck && !contentIsOverexposed)
                 {
-                    var hintProbe = new G3PlateSolveProbeState(content.Gate, captured.Path, image, null, content,
+                    var hintProbe = WithG3NativeCaptureTiming(new G3PlateSolveProbeState(content.Gate, captured.Path, image, null, content,
                         attempts.AsReadOnly(), MountBinding: probeMountBinding,
-                        BeforeExposureMountReadback: beforeProbeMountReadback)
-                    {
-                        ExposureStartedUtc = beforeProbeMountReadback.ReportedUtc,
-                        ExposureEndedUtc = captured.CompletedUtc,
-                        ExposureMillisecondsActual = exposureMilliseconds,
-                    };
+                        BeforeExposureMountReadback: beforeProbeMountReadback), captured);
                     currentSolveHint = await RunWithG3PendingReturnTimeAsync("wide-field-solver-hint",
                         t => TryWideFieldSolveHintAsync(context, hintProbe, t), cancellationToken).ConfigureAwait(false)
                         ?? currentSolveHint;
@@ -6164,11 +6218,31 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     frameSha256: sha256,
                     cancellationToken).ConfigureAwait(false);
                 retainedOutsideShortHandoff = outsideShortHandoff ?? retainedOutsideShortHandoff;
+                if (failedShortShortcutNeedsExistingFrameSolve) break;
                 if (!contentIsOverexposed && content.HasCoherentSource)
                 {
                     earliestNonOverexposedStructuredProbe ??= latest;
                 }
-                if (contentIsOverexposed) break;
+                if (contentIsOverexposed)
+                {
+                    if (!emergencyShortSolveRecheckUsed &&
+                        G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(
+                            exposureMilliseconds, content.SaturatedPixelFraction, tierCount - index - 1) is { } shorter)
+                    {
+                        emergencyShortSolveRecheckUsed = true;
+                        finalShortRecheckMilliseconds = shorter;
+                        await PublishRunJsonEvidenceAsync("g3-solve-emergency-short-recheck",
+                            "A clipped solve frame is followed by one shorter exposure at the unchanged pointing",
+                            new { exposureMilliseconds, selectedMilliseconds = shorter,
+                                sampledSaturatedPixelFraction = content.SaturatedPixelFraction,
+                                budgetReset = false, motionAuthority = false,
+                                oldFrameReusedAsCurrent = false }, captured.Path,
+                            cancellationToken).ConfigureAwait(false);
+                        Report($"G3 解算帧大面积饱和：同指向改拍一张 {shorter} ms 短帧，不继续更长曝光、不移动赤道仪。");
+                        continue;
+                    }
+                    break;
+                }
                 if (!isFinalShortRecheck && index + 1 < tierCount)
                 {
                     // A solver fault is not a reason to ignore measured sky
@@ -6244,6 +6318,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     preset.PresetId,
                     ladderIndex = index + 1,
                     exposureMilliseconds,
+                    captured.NativeRequestStartedUtc,
+                    captureCompletedUtc = captured.CompletedUtc,
+                    captured.VerifiedExposureMilliseconds,
+                    captured.UsedLoopSaveFallback,
+                    captured.RequestedParametersApplied,
                     disposition = resultGate.Disposition.ToString(),
                     resultGate.Code,
                     resultGate.Message,
@@ -6287,7 +6366,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 content.Gate.Code,
                 content.CoherentSourceCount,
                 probeMountBinding));
-            latest = new G3PlateSolveProbeState(
+            latest = WithG3NativeCaptureTiming(new G3PlateSolveProbeState(
                 resultGate,
                 captured.Path,
                 image,
@@ -6295,7 +6374,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 content,
                 attempts.AsReadOnly(),
                 MountBinding: probeMountBinding,
-                BeforeExposureMountReadback: beforeProbeMountReadback);
+                BeforeExposureMountReadback: beforeProbeMountReadback), captured);
             if (!solve.Result.Success && !contentIsOverexposed && content.HasCoherentSource)
             {
                 // Retain the earliest short, non-clipped structured field for
@@ -6313,10 +6392,30 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // slots (including bright-background adaptation), never a new loop.
             // A later frame must earn its own WCS or measured handoff authority.
             retainedOutsideShortHandoff = outsideShortHandoff ?? retainedOutsideShortHandoff;
+            if (failedShortShortcutNeedsExistingFrameSolve) break;
             // Exposure tiers are ordered shortest to longest. Once widespread
             // clipping is explicit, every longer tier is strictly less useful;
             // preserve this frame and stop without consuming more wall time.
-            if (contentIsOverexposed) break;
+            if (contentIsOverexposed)
+            {
+                if (!emergencyShortSolveRecheckUsed &&
+                    G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(
+                        exposureMilliseconds, content.SaturatedPixelFraction, tierCount - index - 1) is { } shorter)
+                {
+                    emergencyShortSolveRecheckUsed = true;
+                    finalShortRecheckMilliseconds = shorter;
+                    await PublishRunJsonEvidenceAsync("g3-solve-emergency-short-recheck",
+                        "A clipped solve frame is followed by one shorter exposure at the unchanged pointing",
+                        new { exposureMilliseconds, selectedMilliseconds = shorter,
+                            sampledSaturatedPixelFraction = content.SaturatedPixelFraction,
+                            budgetReset = false, motionAuthority = false,
+                            oldFrameReusedAsCurrent = false }, captured.Path,
+                        cancellationToken).ConfigureAwait(false);
+                    Report($"G3 解算帧大面积饱和：同指向改拍一张 {shorter} ms 短帧，不继续更长曝光、不移动赤道仪。");
+                    continue;
+                }
+                break;
+            }
             if (!isFinalShortRecheck && index + 1 < tierCount)
             {
                 var useful = earliestNonOverexposedStructuredProbe;
@@ -6348,10 +6447,13 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             !IsG3PlateSolveTransientGateCode(attempt.GateCode));
         var allAttemptsWereTransient = attempts.Count > 0 &&
             attempts.All(attempt => IsG3PlateSolveTransientGateCode(attempt.GateCode));
-        var hasOverexposedContent = attempts.Any(attempt => string.Equals(
-            attempt.ContentGateCode,
+        // An earlier clipped tier does not invalidate a later successfully
+        // shortened exposure at the same pointing. Only the latest completed
+        // content assessment may veto neighbouring-field motion.
+        var hasOverexposedContent = string.Equals(
+            latest?.ContentAssessment?.Gate.Code,
             G3SolveProbeContentAnalyzer.OverexposedGateCode,
-            StringComparison.Ordinal));
+            StringComparison.Ordinal);
         var boundedSparseRecoveryAuthorized = !allAttemptsWereTransient && (hasStructuredContent ||
             UsesCatalogWcsTargetAuthority(context));
         // Weak supervision can stand in for missing environment adapters, but
@@ -6672,7 +6774,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 // solve ladder without rebasing the origin or silently
                 // minting motion, action, radius or elapsed-time budget.
                 var chargedHandoffArcseconds = conservativeHandoffArcseconds;
-                var debit = G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now);
+                var debit = G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now,
+                    continued.CurrentReturnDistanceArcseconds);
                 if (debit.Gate.Disposition != GateDisposition.Passed)
                     throw new PhysicalActionGateException(debit.Gate);
                 continued = debit.Charged! with
@@ -6791,25 +6894,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         }
         var drift = AngularSeparationArcseconds(reportedImmediatelyAfterSlew, settled);
         var commandResidual = AngularSeparationArcseconds(settled, commanded);
-        if (!double.IsFinite(maximumCommandResidualArcseconds) || maximumCommandResidualArcseconds <= 0 ||
-            !double.IsFinite(drift) || !double.IsFinite(commandResidual) ||
-            drift > MountCommandArrivalToleranceArcseconds ||
-            commandResidual > maximumCommandResidualArcseconds)
-        {
-            return new G3PostSlewStabilityResult(
-                GateResult.Unknown(
-                    "G3_POST_SLEW_POSITION_UNSTABLE",
-                    $"After waiting {settleSeconds:F2}s, reported drift was {drift:F2} arcsec (limit {MountCommandArrivalToleranceArcseconds:F2}) and command residual was {commandResidual:F2} arcsec (fresh-frame limit {maximumCommandResidualArcseconds:F2}); no fresh G3 frame is authorized."),
-                settled,
-                settleStartedUtc,
-                DateTimeOffset.UtcNow,
-                drift,
-                commandResidual);
-        }
         return new G3PostSlewStabilityResult(
-            GateResult.Pass(
-                "G3_POST_SLEW_POSITION_STABLE",
-                $"The mount drifted no more than {MountCommandArrivalToleranceArcseconds:F2} arcsec and remained within the {maximumCommandResidualArcseconds:F2} arcsec fresh-frame authorization envelope through the commissioned {settleSeconds:F2}s settle interval."),
+            G3WcsRecoveryPolicy.PostSlewPosition(drift, commandResidual,
+                MountCommandArrivalToleranceArcseconds, maximumCommandResidualArcseconds, settleSeconds),
             settled,
             settleStartedUtc,
             DateTimeOffset.UtcNow,
@@ -7447,13 +7534,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             var priorRequiredMotionArcseconds = Math.Sqrt(
                 priorDirectCorrection.RaArcseconds * priorDirectCorrection.RaArcseconds +
                 priorDirectCorrection.DecArcseconds * priorDirectCorrection.DecArcseconds);
+            var formalWaypointApproach = G3SparseRecoveryWorkflow.CanAdvanceReturnWaypoint(currentField.Solve, currentField.FramePath);
             var fullPathReserve = G3WcsRecoveryPolicy.UnreachableRoundTripAtOrigin(
                 state.CorrectionAttempts, state.CumulativeMotionArcseconds, state.CurrentRadiusArcseconds,
                 G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
                     currentField.Solve.Result.Coordinates.RADegrees, currentField.Solve.Result.Coordinates.Dec,
                     inverse.DesiredG3Center.RADegrees, inverse.DesiredG3Center.Dec),
                 placementPreset.EffectiveAcquisitionResidualPixels * currentField.Solve.Result.Pixscale,
-                state.ArrivalToleranceArcseconds, state.MaximumCumulativeMotionArcseconds);
+                state.ArrivalToleranceArcseconds, state.MaximumCumulativeMotionArcseconds, formalWaypointApproach);
             if (fullPathReserve is not null)
             {
                 if (context.TryGet<string>("qhyMountCoordinateSyncFailureCode", out var syncFailure))
@@ -7658,7 +7746,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             // mount call. A crash cannot make this action disappear.
             var destinationSideGate = ValidateG3DestinationPierSide(commanded, state.PierSide);
             var returnOriginSideGate = ValidateG3DestinationPierSide(new Coordinates(
-                state.OriginRaDegrees, state.OriginDeclinationDegrees, reported.Epoch, Coordinates.RAType.Degrees), state.PierSide);
+                state.ReturnRaDegrees, state.ReturnDeclinationDegrees, reported.Epoch, Coordinates.RAType.Degrees), state.PierSide);
             if (destinationSideGate.Disposition != GateDisposition.Passed || returnOriginSideGate.Disposition != GateDisposition.Passed)
             {
                 var blocked = destinationSideGate.Disposition != GateDisposition.Passed ? destinationSideGate : returnOriginSideGate;
@@ -7874,18 +7962,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     estimatedInMountEpoch.RaDegrees, estimatedInMountEpoch.DecDegrees,
                     reported.Epoch, Coordinates.RAType.Degrees)
                     .Transform(currentField.Solve.Result.Coordinates.Epoch);
-                var estimatedArrivalSolve = new PlateSolveResult
-                {
-                    Success = true,
-                    Coordinates = new Coordinates(
-                        estimatedCenter.RADegrees,
-                        estimatedCenter.Dec,
-                        currentField.Solve.Result.Coordinates.Epoch,
-                        Coordinates.RAType.Degrees),
-                    Pixscale = currentField.Solve.Result.Pixscale,
-                    PositionAngle = currentField.Solve.Result.PositionAngle,
-                    Flipped = currentField.Solve.Result.Flipped,
-                };
+                var estimatedArrivalSolve = G3WcsTargetProjector.Recenter(
+                    currentField.Solve.Result, estimatedCenter,
+                    currentField.Image.Properties.Width, currentField.Image.Properties.Height);
                 var predictedTarget = G3WcsTargetProjector.Project(
                     targetCoordinates,
                     estimatedArrivalSolve,
@@ -7938,6 +8017,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
             var priorMeasuredPosition = currentField.Gate.Disposition == GateDisposition.Passed &&
                 Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(currentField.TargetIdentification);
+            var departureFramePath = currentField.FramePath;
             var priorPositionSpreadPixels = currentField.TargetIdentification.CatalogPositionSpreadPixels;
             attempts++;
             try
@@ -8102,6 +8182,56 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 G3WcsRecoveryPolicy.HasMeasuredApproachProgress(
                     priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, state.ArrivalToleranceArcseconds))
             {
+                // ADR-0051: retain the initial TAN/radius origin and all debits.
+                // Only an independently captured FORMAL destination can replace
+                // the previous return point; a prediction/inferred WCS cannot.
+                if (formalWaypointApproach &&
+                    G3SparseRecoveryWorkflow.CanAdvanceReturnWaypoint(currentField.Solve, currentField.FramePath) &&
+                    !string.Equals(departureFramePath, currentField.FramePath, StringComparison.OrdinalIgnoreCase) &&
+                    currentField.MountBinding is { } waypointBinding)
+                {
+                    await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+                    var waypointMount = ValidateG3SearchMountState(state.PierSide);
+                    var waypointField = await ValidateG3FieldMountBindingForMotionAsync(
+                        context, currentField, cancellationToken).ConfigureAwait(false);
+                    if (waypointMount.Disposition != GateDisposition.Passed || waypointField.Disposition != GateDisposition.Passed)
+                    {
+                        destinationPreflightStopGate = waypointMount.Disposition != GateDisposition.Passed ? waypointMount : waypointField;
+                        stopReason = destinationPreflightStopGate.Message;
+                        break;
+                    }
+                    var waypointEvidence = await G3SparseRecoveryWorkflow.ValidateFormalEvidenceAsync(
+                        currentField.Solve!, ComputeFileSha256Async, cancellationToken).ConfigureAwait(false);
+                    if (waypointEvidence.Disposition != GateDisposition.Passed)
+                    {
+                        destinationPreflightStopGate = waypointEvidence;
+                        stopReason = waypointEvidence.Message;
+                        break;
+                    }
+                    var waypoint = new G3VerifiedReturnWaypoint(waypointBinding.RightAscensionDegrees,
+                        waypointBinding.DeclinationDegrees, state.CorrectionAttempts, waypointBinding.FrameCompletedUtc,
+                        DateTimeOffset.UtcNow, currentField.FramePath, waypointBinding.FrameSha256,
+                        currentField.Solve!.EvidencePath,
+                        currentField.Solve.EvidenceSha256,
+                        waypointBinding.BindingSha256);
+                    var promoted = G3VerifiedReturnWaypointPolicy.Promote(state, waypoint,
+                        sourceAndDestinationFormal: true, freshContextVerified: true,
+                        priorRequiredMotionArcseconds, nextRequiredMotionArcseconds);
+                    if (promoted is not null)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var previousWaypoint = state.VerifiedReturnWaypoint;
+                        await PersistG3AcquisitionMotionAsync(promoted, CancellationToken.None).ConfigureAwait(false);
+                        state = promoted;
+                        await PublishRunJsonEvidenceAsync("g3-formal-return-waypoint-advanced",
+                            "Fresh formal arrival advanced return point, not the initial origin or budgets",
+                            new { previousWaypoint, waypoint, state.OriginRaDegrees, state.OriginDeclinationDegrees,
+                                state.CumulativeMotionArcseconds, state.CorrectionAttempts, state.StartedUtc,
+                                priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, budgetReset = false },
+                            currentField.FramePath, cancellationToken).ConfigureAwait(false);
+                        Report("新图正式 WCS 已验证本步接近目标；回程点更新为此处，最初取场点半径和累计运动、次数、时限不变。");
+                    }
+                }
                 completedSolvedNeighbourApproach = G3WcsRecoveryPolicy.CompletedSolvedNeighbourApproach(
                     isSolvedNeighbourApproach, scale, currentField.Solve?.Result.Success == true,
                     priorRequiredMotionArcseconds, nextRequiredMotionArcseconds, state.ArrivalToleranceArcseconds,
@@ -8110,7 +8240,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 {
                     Phase = G3AcquisitionMotionPhase.AwaitingFreshSolve,
                     UpdatedUtc = DateTimeOffset.UtcNow,
-                    LastReason = $"Fresh G3 WCS reduced the remaining direct-to-slit motion from {priorRequiredMotionArcseconds:F2} to {nextRequiredMotionArcseconds:F2} arcsec; the durable return obligation remains outstanding while another bounded segment is planned.",
+                    LastReason = $"Fresh G3 WCS reduced the remaining direct-to-slit motion from {priorRequiredMotionArcseconds:F2} to {nextRequiredMotionArcseconds:F2} arcsec; next segment retains the saved return point and every original budget.",
                 };
                 await PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
                 continue;
@@ -8169,7 +8299,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var summaryPath = await PublishRunJsonEvidenceAsync(
             "g3-wcs-centering-summary",
             returned.ReturnedToOrigin
-                ? "G3 WCS centering stopped and returned to its reported origin"
+                ? "G3 WCS centering stopped and reached its saved verified return point"
                 : "G3 WCS centering stopped with return blocked",
             new
             {
@@ -8183,6 +8313,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 returned.State.MaximumCumulativeMotionArcseconds,
                 returned.State.MaximumCorrectionAttempts,
                 returned.State.MaximumElapsedSeconds,
+                returned.State.VerifiedReturnWaypoint,
+                initialOrigin = new { returned.State.OriginRaDegrees, returned.State.OriginDeclinationDegrees },
                 reserveFailureCode = exhaustedReserveGate?.Code,
                 fullPathBudgetInfeasible,
                 motionPreflightFailureCode = destinationPreflightStopGate?.Code,
@@ -8517,6 +8649,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         var stopReason = $"The original {limits.MaximumAttempts}-action neighbour-search allowance ended without identifying the target; overlap subdivisions consume that same allowance, not additional attempts.";
         var automaticDurableReturnPermitted = true;
         var automaticDurableReturnBlockReason = string.Empty;
+        var withheldSearchWaypoints = new List<string>();
 
         context.RemainingWorstCaseDuration =
             (previousWorstCaseDuration ?? context.Plan.PlannedDuration) + limits.MaximumElapsedTime;
@@ -8545,7 +8678,17 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     searchStopGate = reserveGate;
                     stopCode = reserveGate.Code;
                     stopReason = reserveGate.Message;
-                    break;
+                    withheldSearchWaypoints.Add($"attempt {waypoint.Attempt}: {reserveGate.Code}");
+                    await PublishRunJsonEvidenceAsync(
+                        "g3-bounded-search-waypoint-withheld",
+                        "A pre-motion reserve rejection skips this nominal waypoint without consuming a physical action",
+                        new { waypoint, nominalDestination, reserveGate, physicalMotionSent = false,
+                            originalBudgetRetained = true, nominalIndex },
+                        motionAuthorityField.FramePath,
+                        cancellationToken).ConfigureAwait(false);
+                    nominalIndex++;
+                    actionNumber--;
+                    continue;
                 }
                 var reportedBeforeOutbound = telescopeMediator.GetCurrentPosition();
                 try
@@ -8599,7 +8742,17 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     searchStopGate = durableReserve.Gate;
                     stopCode = durableReserve.Gate.Code;
                     stopReason = durableReserve.Gate.Message;
-                    break;
+                    withheldSearchWaypoints.Add($"attempt {waypoint.Attempt}: {durableReserve.Gate.Code}");
+                    await PublishRunJsonEvidenceAsync(
+                        "g3-bounded-search-waypoint-withheld",
+                        "A durable reserve rejection skips this nominal waypoint without consuming a physical action",
+                        new { waypoint, nominalDestination, durableReserve, physicalMotionSent = false,
+                            originalBudgetRetained = true, nominalIndex },
+                        motionAuthorityField.FramePath,
+                        cancellationToken).ConfigureAwait(false);
+                    nominalIndex++;
+                    actionNumber--;
+                    continue;
                 }
                 var commanded = new Coordinates(
                     commandedCoordinate.RaDegrees,
@@ -8743,7 +8896,31 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         $"Search waypoint {waypoint.Attempt} was withheld because its {outboundPrechargedMotionArcseconds:F2} arcsec worst-case outbound endpoint " +
                         $"plus {prechargedReturnMoves} fully charged return move(s) does not fit the durable local/global motion, action, radius or elapsed-time envelope. " +
                         $"Global actions used {correctionAttempts}/{commissioning.MotionLimits.MaximumCorrectionAttempts}; next step including return requires {1L + prechargedReturnMoves}.";
-                    break;
+                    withheldSearchWaypoints.Add($"attempt {waypoint.Attempt}: {stopCode}");
+                    await PublishRunJsonEvidenceAsync(
+                        "g3-bounded-search-waypoint-withheld",
+                        "A complete-return feasibility rejection skips this nominal waypoint without consuming a physical action",
+                        new
+                        {
+                            waypoint,
+                            nominalDestination,
+                            outboundPrechargedMotionArcseconds,
+                            prechargedReturnMoves,
+                            prechargedReturnReserveArcseconds,
+                            durableCumulativeMotionArcseconds = durableSearch.CumulativeMotionArcseconds,
+                            durableMaximumCumulativeMotionArcseconds = durableSearch.MaximumCumulativeMotionArcseconds,
+                            durableCorrectionAttempts = durableSearch.CorrectionAttempts,
+                            durableMaximumCorrectionAttempts = durableSearch.MaximumCorrectionAttempts,
+                            remainingPrecommandElapsedSeconds,
+                            physicalMotionSent = false,
+                            originalBudgetRetained = true,
+                            nominalIndex,
+                        },
+                        motionAuthorityField.FramePath,
+                        cancellationToken).ConfigureAwait(false);
+                    nominalIndex++;
+                    actionNumber--;
+                    continue;
                 }
                 Report(
                     $"G3 有界搜索 {waypoint.Attempt}/{waypoints.Count}：偏移 RA* {waypoint.RaTangentOffsetArcseconds:+0.0;-0.0;0.0}″，Dec {waypoint.DeclinationOffsetArcseconds:+0.0;-0.0;0.0}″");
@@ -8993,11 +9170,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     break;
                 }
                 var initialCommandResidualArcseconds = AngularSeparationArcseconds(reportedAfterMove, commanded);
-                if (!double.IsFinite(initialCommandResidualArcseconds) ||
-                    initialCommandResidualArcseconds > G3SearchStableEndpointToleranceArcseconds)
+                if (!double.IsFinite(initialCommandResidualArcseconds))
                 {
                     stopCode = "G3_SEARCH_COMMAND_NOT_REACHED";
-                    stopReason = $"The mount stopped {initialCommandResidualArcseconds:F2} arcsec from search waypoint {waypoint.Attempt}, outside the independent {G3SearchStableEndpointToleranceArcseconds:F2} arcsec stable-endpoint envelope. The reported position was adopted and no solve is attempted before bounded return.";
+                    stopReason = "The first search endpoint readback is not finite; no arrival or stability can be inferred.";
                     durableSearch = ReanchorG3AcquisitionMotionFromReportedPosition(durableSearch, reportedAfterMove) with
                     {
                         UpdatedUtc = DateTimeOffset.UtcNow,
@@ -9007,6 +9183,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     break;
                 }
 
+                // Even an inaccurate first endpoint must pass the commissioned
+                // settle window before it can be classified as a stable miss.
+                // Actual movement was already reconciled above; this authorizes
+                // neither another move nor a frame outside the unchanged 5\" envelope.
                 var stability = await WaitForG3PostSlewStabilityAsync(
                     context,
                     commanded,
@@ -9373,6 +9553,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         ["maximumActions"] = durableSearch.MaximumCorrectionAttempts,
                         ["remainingActions"] = Math.Max(0, durableSearch.MaximumCorrectionAttempts - durableSearch.CorrectionAttempts),
                         ["chargedMotionArcseconds"] = durableSearch.CumulativeMotionArcseconds,
+                        ["withheldWaypoints"] = withheldSearchWaypoints.Count,
                     })
                 : GateResult.Unknown(
                     "G3_SEARCH_RETURN_BLOCKED",
@@ -14048,12 +14229,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         if (!phd2.IsConnected) await phd2.ConnectAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private void RequireClockCurrentFieldExistingPhdOwner(Phd2AppState? rejectedBeforeMutationState = null)
+    private async Task RequireClockCurrentFieldExistingPhdOwnerAsync(CancellationToken token,
+        Phd2AppState? rejectedBeforeMutationState = null)
     {
         if (!clockCurrentFieldProbeActive) return;
+        var before = phd2.Snapshot;
+        // Own loop/save can deliver a late preview/StarLost notification after
+        // stop. A cached state is not a fresh stop proof or proof of takeover.
+        // Query without mutation; the capture primitive rechecks under its lock.
+        // A native pre-mutation rejection remains authoritative: never stop or
+        // retry a genuinely newer preview just because the connection is ours.
+        Phd2AppState appState;
+        try
+        {
+            appState = rejectedBeforeMutationState ?? await phd2.GetAppStateAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new PhysicalActionGateException(RejectClockCurrentFieldPhdOwner(
+                $"当前位置复核无法取得新的 PHD2 停止读回；不接管或重发采集：{ex.Message}"));
+        }
         var state = phd2.Snapshot;
-        if (!phd2.IsConnected || !state.IsConnected ||
-            (rejectedBeforeMutationState ?? state.AppState) != Phd2AppState.Stopped)
+        if (!phd2.IsConnected || !ClockProbeReadbackIsSameStoppedOwner(before, state) || appState != Phd2AppState.Stopped)
             throw new PhysicalActionGateException(RejectClockCurrentFieldPhdOwner(
                 "当前位置复核的 PHD2 所有者不再停止；不接管预览、不重选、不重发被拒绝的采集。"));
     }
@@ -15408,18 +15605,15 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         Phd2SingleFrameRequest request,
         CancellationToken cancellationToken)
     {
-        RequireClockCurrentFieldExistingPhdOwner();
+        await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken).ConfigureAwait(false);
         if (g3StoppedHandoff is { } handoff)
         {
             // ADR-0040's local stopped receipt must survive our OWN read-only
             // frame acquisition, not an unrelated loop/stop or new guide epoch.
             // Generic loop/save invalidates that receipt. Use the existing
             // native single-frame owner route without preview takeover/fallback.
-            if (durableG3AcquisitionMotion is not { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger } ledger ||
-                handoff.Run != ledger.ObservationRunId || handoff.Lineage != ledger.BudgetLineageId)
-                throw new PhysicalActionGateException(GateResult.Unknown("G3_GUIDING_RECOVERY_LEDGER_CHANGED",
-                    "The stopped capture receipt no longer matches the original settled lineage; no capture or movement was issued."));
-            return await handoff.Proof.CaptureAsync(() => phd2.Snapshot,
+            return await G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                handoff, durableG3AcquisitionMotion, () => phd2.Snapshot,
                 token => phd2.CaptureSingleFrameWithParametersAsync(request, token), cancellationToken).ConfigureAwait(false);
         }
         // PHD2's generic full-frame primitive deliberately accepts only an
@@ -15429,9 +15623,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         // with an acknowledged idle transition before applying its commissioned
         // exposure. Never stop any of the non-preview states here.
         var previewState = phd2.Snapshot.AppState;
-        if (previewState is Phd2AppState.Looping or Phd2AppState.Selected)
+        if ((previewState is Phd2AppState.Looping or Phd2AppState.Selected) && !clockCurrentFieldProbeActive)
         {
-            RequireClockCurrentFieldExistingPhdOwner(previewState);
             Report("PHD2 正在普通循环预览；自动观测接管 G3 全画幅采集并等待确认停止");
             var stopped = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
             ValidateConfirmedPhdStop(stopped, "Looping preview takeover");
@@ -15444,7 +15637,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         catch (Phd2CaptureException ex) when (
             ex.RejectedBeforeMutationState is Phd2AppState.Looping or Phd2AppState.Selected)
         {
-            RequireClockCurrentFieldExistingPhdOwner(ex.RejectedBeforeMutationState);
+            await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken, ex.RejectedBeforeMutationState).ConfigureAwait(false);
             // Close the narrow event/readback race where PHD2 entered Looping
             // after the snapshot check. CaptureFullFrameAsync performs its
             // state check before changing exposure or starting capture, so this
@@ -15466,16 +15659,19 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         Phd2SingleFrameRequest request,
         CancellationToken cancellationToken)
     {
-        RequireClockCurrentFieldExistingPhdOwner();
+        await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken).ConfigureAwait(false);
+        if (g3StoppedHandoff is { } handoff)
+            return await G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                handoff, durableG3AcquisitionMotion, () => phd2.Snapshot,
+                token => phd2.CaptureSingleFrameWithParametersAsync(request, token), cancellationToken).ConfigureAwait(false);
         // The native capture_single_frame command intentionally refuses every
         // non-idle PHD2 state before changing exposure/gain/binning.  A plain
         // Looping/Selected preview is the safe takeover case for the automatic G3
         // owner: checked-stop it and prove Stopped first. Guiding,
         // Calibrating, LostLock, Paused and Unknown are never stopped here.
         var previewState = phd2.Snapshot.AppState;
-        if (previewState is Phd2AppState.Looping or Phd2AppState.Selected)
+        if ((previewState is Phd2AppState.Looping or Phd2AppState.Selected) && !clockCurrentFieldProbeActive)
         {
-            RequireClockCurrentFieldExistingPhdOwner(previewState);
             Report("PHD2 正在普通循环预览；确认停止后开始原生 G3 参数化单帧采集");
             var stopped = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
             ValidateConfirmedPhdStop(stopped, "native single-frame Looping preview takeover");
@@ -15483,12 +15679,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
         try
         {
-            return await phd2.CaptureSingleFrameWithParametersAsync(request, cancellationToken).ConfigureAwait(false);
+            return await G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                g3StoppedHandoff, durableG3AcquisitionMotion, () => phd2.Snapshot,
+                token => phd2.CaptureSingleFrameWithParametersAsync(request, token), cancellationToken).ConfigureAwait(false);
         }
         catch (Phd2CaptureException ex) when (
             ex.RejectedBeforeMutationState is Phd2AppState.Looping or Phd2AppState.Selected)
         {
-            RequireClockCurrentFieldExistingPhdOwner(ex.RejectedBeforeMutationState);
+            await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken, ex.RejectedBeforeMutationState).ConfigureAwait(false);
             // The native method performs its state rejection before issuing
             // capture_single_frame, so the late-Looping race is proven to have
             // made no exposure or capture mutation. Stop once, then dispatch
@@ -15496,7 +15694,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             Report("PHD2 在原生 G3 单帧下发前进入循环预览；确认停止后重发尚未执行的采集");
             var stopped = await phd2.StopCaptureAndConfirmAsync(cancellationToken).ConfigureAwait(false);
             ValidateConfirmedPhdStop(stopped, "late native single-frame Looping preview takeover");
-            return await phd2.CaptureSingleFrameWithParametersAsync(request, cancellationToken).ConfigureAwait(false);
+            return await G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                g3StoppedHandoff, durableG3AcquisitionMotion, () => phd2.Snapshot,
+                token => phd2.CaptureSingleFrameWithParametersAsync(request, token), cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -18,7 +18,7 @@ public static class G3PriorReturnOriginPolicy
         state.Phase == G3AcquisitionMotionPhase.ReturnIntent &&
         KnownSide(state.PierSide) && KnownSide(currentSide) &&
         !string.Equals(state.PierSide, currentSide, StringComparison.Ordinal) &&
-        Separation(state.OriginRaDegrees, state.OriginDeclinationDegrees,
+        Separation(state.ReturnRaDegrees, state.ReturnDeclinationDegrees,
             state.CommandedRaDegrees, state.CommandedDeclinationDegrees) <= 1e-6;
 
     public static GateResult Evaluate(G3AcquisitionMotionState state, string newRunId,
@@ -47,7 +47,7 @@ public static class G3PriorReturnOriginPolicy
                 sample.CapturedUtc < state.UpdatedUtc || sample.CapturedUtc > nowUtc ||
                 (i > 0 && sample.CapturedUtc <= samples[i - 1].CapturedUtc))
                 return GateResult.Unknown(code, "Mount connection, idle state, current pier side, epoch or readback timestamps changed during the origin check; the old return remains outstanding.");
-            var residual = Separation(state.OriginRaDegrees, state.OriginDeclinationDegrees,
+            var residual = Separation(state.ReturnRaDegrees, state.ReturnDeclinationDegrees,
                 sample.RaDegrees, sample.DeclinationDegrees);
             if (!double.IsFinite(residual))
                 return GateResult.Unknown(code, "The owner returned invalid absolute coordinates; the old return remains outstanding.");

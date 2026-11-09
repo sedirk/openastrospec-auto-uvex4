@@ -564,7 +564,9 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
                     try
                     {
                         var remainingClockBudget = realRunner.CaptureClockContinuationBudget();
-                        await realRunner.PerformNativeMeridianFlipAsync(flip!, meridian, flipConfiguration!, token).ConfigureAwait(false);
+                        await host.RunNativeTargetBoundaryAsync(night!, plan.ObservationRunId,
+                            boundaryToken => realRunner.PerformNativeMeridianFlipAsync(flip!, meridian,
+                                flipConfiguration!, boundaryToken), token).ConfigureAwait(false);
                         session!.RetainClockBudget(remainingClockBudget);
                         continueAfterFlip = true;
                     }
@@ -893,7 +895,9 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
         for (var index = 0; index < Items.Count; index++)
         {
             if (Items[index] is not ObservationStageMarkerItem marker) continue;
-            marker.Status = index < run.CompletedStageCount
+            marker.Status = dashboard.Gates.TryGetValue(marker.Stage, out var gate) && gate.Code == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY"
+                ? SequenceEntityStatus.SKIPPED
+                : index < run.CompletedStageCount
                 ? SequenceEntityStatus.FINISHED
                 : run.State == ObservationRunState.Completed
                     ? SequenceEntityStatus.FINISHED

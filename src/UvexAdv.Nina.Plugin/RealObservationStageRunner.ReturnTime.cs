@@ -20,7 +20,8 @@ internal sealed partial class RealObservationStageRunner
                 throw new PhysicalActionGateException(GateResult.Unknown("G3_GUIDING_RECOVERY_STOP_CHANGED",
                     "Stopped handoff ownership or ledger changed before bounded acquisition work."));
             var reported = ReanchorG3AcquisitionMotionFromReportedPosition(state, telescopeMediator.GetCurrentPosition());
-            plan = G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(state, reported.CurrentRadiusArcseconds, DateTimeOffset.UtcNow);
+            plan = G3AcquisitionReturnTimePolicy.PlanStoppedHandoff(state, reported.CurrentRadiusArcseconds,
+                DateTimeOffset.UtcNow, reported.CurrentReturnDistanceArcseconds);
         }
         try
         {

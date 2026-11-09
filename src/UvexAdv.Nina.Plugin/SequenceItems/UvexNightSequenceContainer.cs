@@ -28,6 +28,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private readonly IProfileService profiles;
     private CancellationTokenSource? lifetime;
     private CancellationTokenSource? closeoutLifetime;
+    private bool safetyOwnsCloseout;
     private DateTimeOffset? lockedDeadline;
     private NightDeadlineSchedule? lockedSchedule;
     private bool lockedStopAtDawn;
@@ -466,17 +467,19 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         catch (Exception ex) { failure ??= ex; blocked = true; }
         finally
         {
-            var ordinaryCancel = (token.IsCancellationRequested || operatorCancelled) && !endRequested && !unsafeTripped;
+            var safetyReason = unsafeTripped ? "NIGHT_UNSAFE" : standbyPlan?.StopGateNow()?.Code;
+            var ordinaryCancel = (token.IsCancellationRequested || operatorCancelled) && !endRequested && safetyReason is null;
             var closeErrors = new List<string>();
             var physicalCloseoutConfirmed = false;
             var handedToStandby = false;
+            var monitoringOnly = !targetsIdle;
             // Cancellation stops observing, not weather protection. Transfer an
             // immutable request and exclusive lease; never await the standby task.
-            if ((lockedHoldOpenAfterTargets || ordinaryCancel) && !endRequested && !unsafeTripped)
+            if (!targetsIdle || ((lockedHoldOpenAfterTargets || ordinaryCancel) && !endRequested && safetyReason is null))
             {
                 try
                 {
-                    var request = CreateStandbyRequest(real);
+                    var request = CreateStandbyRequest(real, monitoringOnly, safetyReason);
                     var standby = await host.BeginSafetyStandbyAsync(this, request).ConfigureAwait(false);
                     standbyJournalPath = standby.Snapshot.JournalPath;
                     handedToStandby = true;
@@ -509,7 +512,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                         await using var closer = factory.Create(host, settings, progress,
                             lockedConfiguration!.WithSequencePlan(ApplyNight(new NativeSequencePlan(
                                 lockedConfiguration.Atr.ScienceFrameCount, lockedConfiguration.Atr.MaximumScienceAttempts, 0))));
-                        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        // A latched weather/dawn/deadline closeout outlives the
+                        // observing cancellation. It retains its own finite timeout.
+                        safetyOwnsCloseout = safetyReason is not null;
+                        using var timeout = CreateCloseoutLifetime(safetyOwnsCloseout, token);
                         timeout.CancelAfter(TimeSpan.FromSeconds(
                             lockedConfiguration.Environment.RoofCloseoutTimeoutSeconds +
                             lockedConfiguration.Environment.OpticalCoverTransitionTimeoutSeconds + 180 +
@@ -518,25 +524,41 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                         try
                         {
                             // Cancel can arrive between the branch check and token publication.
-                            if (operatorCancelled && !unsafeTripped) timeout.Cancel();
+                            if (operatorCancelled && !safetyOwnsCloseout) timeout.Cancel();
                             closeErrors.AddRange(await closer.CloseSequenceNightAsync(timeout.Token).ConfigureAwait(false));
                             physicalCloseoutConfirmed = closeErrors.Count == 0;
                         }
-                        finally { closeoutLifetime = null; }
+                        finally { closeoutLifetime = null; safetyOwnsCloseout = false; }
                     }
                 }
                 catch (Exception ex) { closeErrors.Add(ex.Message); }
             }
             else if (!targetsIdle) closeErrors.Add("采集或设备停止未确认，未执行机械收口。");
+            if (!handedToStandby && closeErrors.Count > 0)
+            {
+                // A failed one-shot closeout must not dispose the last safety
+                // watch. This guardian reports only; it cannot repeat motion.
+                try
+                {
+                    var standby = await host.BeginSafetyStandbyAsync(this,
+                        CreateStandbyRequest(real, monitoringOnly: true,
+                            initialReason: safetyReason ?? "NIGHT_CLOSEOUT_FAILED")).ConfigureAwait(false);
+                    standbyJournalPath = standby.Snapshot.JournalPath;
+                    handedToStandby = monitoringOnly = true;
+                }
+                catch (Exception ex) { closeErrors.Add("仅监控安全待机未能接管：" + ex.Message); }
+            }
             NightState = handedToStandby
-                ? (ordinaryCancel ? "观测序列已取消（取消本身不执行机械收口）" : "观测序列已结束") +
+                ? monitoringOnly ? "自动收口未确认；独立安全待机仅监控与报警，不能保证关顶，请人工处理。" +
+                    string.Join("；", closeErrors)
+                : (ordinaryCancel ? "观测序列已取消（取消本身不执行机械收口）" : "观测序列已结束") +
                     "；独立安全待机已接管（AIWeather／晨光／原截止）。目标结果和未结责任仍保留，未声称关顶或全部观测成功。" +
                     (targetBoundaryFailures.Count > 0 ? " 观测运动/交接责任未结清，不能继续目标；原始账本保留。" : string.Empty) +
                     (closeErrors.Count > 0 ? " " + string.Join("；", closeErrors) : string.Empty)
                 : DescribeTerminalState(real, ordinaryCancel, physicalCloseoutConfirmed, closeErrors, targetBoundaryFailures);
             outcomes.Add(new { terminal = NightState, closeErrors, unsafeTripped, ordinaryCancel,
                 failure = failure?.Message, physicalHardware = real, physicalCloseoutConfirmed,
-                handedToStandby, standbyJournalPath,
+                handedToStandby, monitoringOnly, safetyReason, standbyJournalPath,
                 targetBoundariesSettled = targetBoundaryFailures.Count == 0,
                 targetBoundaryFailures = targetBoundaryFailures.ToArray() });
             await SaveJournalAsync("Terminal").ConfigureAwait(false);
@@ -578,7 +600,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             : "物理收口未确认；不能声称整夜收口成功。") + unresolved;
     }
 
-    private NightSafetyStandbyRequest CreateStandbyRequest(bool real)
+    internal static CancellationTokenSource CreateCloseoutLifetime(bool safetyCloseout, CancellationToken observingToken) =>
+        safetyCloseout ? new CancellationTokenSource() : CancellationTokenSource.CreateLinkedTokenSource(observingToken);
+
+    private NightSafetyStandbyRequest CreateStandbyRequest(bool real, bool monitoringOnly = false, string? initialReason = null)
     {
         // No closure over mutable night options: the same native card can be
         // edited/reused as soon as Execute returns. The guardian keeps this run.
@@ -591,8 +616,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             configuration.Environment.OpticalCoverTransitionTimeoutSeconds + 180 +
             (plan.HomeBeforeParkOnFinalize ? plan.MountHomeTimeoutSeconds : 0);
         return new(real, configuration?.ActionConfigurationSha256 ?? string.Empty,
-            plan.DeadlineUtc, JournalPath, idle && targetBoundaryFailures.Count == 0,
-            callback => real ? factory.WatchNightSafety(callback) : null,
+            plan.DeadlineUtc, JournalPath, !monitoringOnly && idle && targetBoundaryFailures.Count == 0,
+            callback => real ? factory.WatchNightSafety(callback, abortExposureOnUnsafe: false) : null,
             () => configuration is not null && !factory.IsNightSafetyCurrent(configuration)
                 ? GateResult.Unknown("NIGHT_SAFETY_UNAVAILABLE", "安全监视器不安全、断连或绑定改变。")
                 : plan.StopGateNow(),
@@ -605,8 +630,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 await using var closer = factory.Create(host, settings, new Progress<ApplicationStatus>(), closeConfiguration);
                 return await closer.CloseSequenceNightAsync(timeout.Token).ConfigureAwait(false);
             }, idle ? null : " 停止未确认：目前仅保留监控与报警，机械收口未获准。请确认设备连接和停止后手动重试；未结运动责任不会自动清除。",
-            real && configuration is not null && targetResponsibilitiesSettled
-                ? token => factory.RecheckStandbyIdleAsync(configuration, token) : null);
+            real && configuration is not null && targetResponsibilitiesSettled && initialReason is null
+                ? token => factory.RecheckStandbyIdleAsync(configuration, token) : null,
+            MonitoringOnly: monitoringOnly, InitialReason: initialReason);
     }
 
     private async Task SaveJournalAsync(string phase)
@@ -630,7 +656,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     public override Task Interrupt()
     {
         if (lifetime is null) return Task.CompletedTask;
-        operatorCancelled = true; lifetime?.Cancel(); closeoutLifetime?.Cancel(); host.Cancel();
+        operatorCancelled = true; lifetime?.Cancel();
+        if (!safetyOwnsCloseout && !unsafeTripped) closeoutLifetime?.Cancel();
+        host.Cancel();
         return Task.CompletedTask;
     }
     public override void ResetProgress()

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using NINA.Astrometry;
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 using UvexAdv.Qhy.Core;
 
 namespace UvexAdv.Nina.Plugin;
@@ -640,6 +641,30 @@ internal sealed partial class RealObservationStageRunner
         G3PlateSolveProbeState probe,
         CancellationToken cancellationToken)
     {
+        // Calibration processing is subordinate to the unchanged return reserve
+        // and caller/target deadline, including delayed-solve historical pairs.
+        if (probe.Solve is not { IsFormal: true } || !configuration.G3.EffectiveFastSolvePair.Enabled) return;
+        try
+        {
+            await RunWideFieldKeyframeWhenStationaryAsync(durableG3AcquisitionMotion, DateTimeOffset.UtcNow,
+                async token =>
+                {
+                    await CollectQhyG3FastSolvePairWithinBudgetAsync(context, probe, token).ConfigureAwait(false);
+                    return new object();
+                }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (G3ReturnTimeReserveException ex) when (ex.Gate.Code == G3AcquisitionReturnTimePolicy.ReserveCode)
+        {
+            await RecordQhyG3PairSkipBestEffortAsync(context, probe, ex.Gate.Code, ex.Gate.Message,
+                cancellationToken, ex.Gate.Metrics).ConfigureAwait(false);
+        }
+    }
+
+    private async Task CollectQhyG3FastSolvePairWithinBudgetAsync(
+        ObservationContext context,
+        G3PlateSolveProbeState probe,
+        CancellationToken cancellationToken)
+    {
         // Inference must never train/validate itself as a new formal source pair.
         if (probe.Solve is not { IsFormal: true }) return;
         var policy = configuration.G3.EffectiveFastSolvePair;
@@ -652,12 +677,10 @@ internal sealed partial class RealObservationStageRunner
         // keyframes without any new exposure. Only the legacy temporary capture
         // retains its one-per-run allowance; a registered pose never trains itself.
         var streamPair = await TryGetWideFieldPairSourceAsync(context, probe, cancellationToken, requireFormal: true).ConfigureAwait(false);
-        if (streamPair is null && string.Equals(qhyG3FastPairCollectionRunId, context.Plan.ObservationRunId, StringComparison.Ordinal))
-        {
-            qhyG3FastPairOutcome = "AlreadyAttemptedForRun";
-            return;
-        }
-        if (streamPair is null) qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId;
+        var temporaryCaptureAlreadyAttempted = string.Equals(
+            qhyG3FastPairCollectionRunId,
+            context.Plan.ObservationRunId,
+            StringComparison.Ordinal);
         if (!attemptedQhyG3SolvePairFrames.TryAdd(probe.FramePath, 0)) return;
         latestQhyG3TransferCandidate = null;
         latestQhyG3TransferCandidateEvidencePath = null;
@@ -679,11 +702,17 @@ internal sealed partial class RealObservationStageRunner
         deadline.CancelAfter(policy.MaximumPairWallClock);
         QhyG3PairQhySource? qhySource = null;
         Guid? quickJobId = null;
+        var streamIsActive = wideFieldStream is { IsJoined: false };
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // A formal frame contemporaneous with the G3 shutter can train a
+            // historical calibration after a slow solver returns. It is never
+            // a fresh current-pose witness and does not trigger another capture.
+            var historicalPair = await TryGetExposureTimedFormalPairSourceAsync(
+                context, probe, policy, deadline.Token).ConfigureAwait(false);
             var pairBudgetRemaining = policy.MaximumPairWallClock - (DateTimeOffset.UtcNow - G3ProbeStartUtc(probe));
-            if (pairBudgetRemaining <= TimeSpan.Zero)
+            if (historicalPair is null && pairBudgetRemaining <= TimeSpan.Zero)
             {
                 await RecordQhyG3PairSkipBestEffortAsync(
                     context,
@@ -693,7 +722,7 @@ internal sealed partial class RealObservationStageRunner
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
-            deadline.CancelAfter(pairBudgetRemaining < policy.MaximumPairWallClock
+            deadline.CancelAfter(historicalPair is null && pairBudgetRemaining < policy.MaximumPairWallClock
                 ? pairBudgetRemaining
                 : policy.MaximumPairWallClock);
             if (commissioning is null || nightSetup is null || commissioning.Value.Phd2SlitPlacement is null)
@@ -702,13 +731,38 @@ internal sealed partial class RealObservationStageRunner
                 probe.MountBinding is null || probe.BeforeExposureMountReadback is null)
                 throw new InvalidOperationException("The successful G3 solve lacks its immutable frame or dual-ended mount bracket.");
 
-            qhySource = streamPair ?? await TryPrepareCachedQhyPairSourceAsync(
-                context,
-                probe,
-                policy,
-                deadline.Token).ConfigureAwait(false);
+            qhySource = historicalPair ?? streamPair
+                ?? await TryPrepareActiveWideFieldFormalPairSourceAsync(
+                    context,
+                    probe,
+                    policy,
+                    deadline.Token).ConfigureAwait(false)
+                ?? await TryPrepareCachedQhyPairSourceAsync(
+                    context,
+                    probe,
+                    policy,
+                    deadline.Token).ConfigureAwait(false);
+            if (qhySource is null && streamIsActive)
+            {
+                // The existing owner job already owns the camera handle. Do not
+                // ask the service for a second acquisition job (HTTP 409);
+                // preserve this as a typed optional skip and keep G3 fallback.
+                await RecordQhyG3PairSkipBestEffortAsync(
+                    context,
+                    probe,
+                    "QHY_G3_PAIR_ACTIVE_STREAM_SOURCE_UNAVAILABLE",
+                    "The continuous QHY owner is active, but no bounded same-pointing stream pose could be formally solved inside the pair window. No competing QHY job or exposure was requested.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
             if (qhySource is null)
             {
+                if (temporaryCaptureAlreadyAttempted)
+                {
+                    qhyG3FastPairOutcome = "AlreadyAttemptedForRun";
+                    return;
+                }
+                qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId;
                 Report($"G3 已解算；立即拍摄一张 QHY {policy.QuickQhyExposureSeconds:G4}s 配对帧（不移动赤道仪）");
                 var captured = await CaptureImmediateQhyPairSourceAsync(
                     context,
@@ -720,9 +774,19 @@ internal sealed partial class RealObservationStageRunner
             }
             else
             {
-                Report("G3 已解算；复用同一 mount binding 下的新鲜 QHY WCS，零额外曝光生成双镜配对");
+                Report(historicalPair is null
+                    ? "G3 已解算；复用同一 mount binding 下的新鲜 QHY WCS，零额外曝光生成双镜配对"
+                    : "G3 已解算；按两镜曝光时段归档历史标定配对，零额外曝光；不更新当前姿态有效期");
             }
 
+            await RequireImmediatePhysicalActionGatesAsync(context, deadline.Token).ConfigureAwait(false);
+            var finalInfo = telescopeMediator.GetInfo();
+            if (!finalInfo.Connected || finalInfo.Slewing || finalInfo.IsPulseGuiding || finalInfo.AtPark)
+            {
+                await RecordQhyG3PairSkipBestEffortAsync(context, probe, "QHY_G3_PAIR_MOUNT_NOT_STATIONARY",
+                    "The same-pointing calibration bracket is no longer stationary; no candidate was created.", deadline.Token).ConfigureAwait(false);
+                return;
+            }
             var finalMount = CaptureG3FrameMountReadback();
             var build = await BuildQhyG3PairCandidateAsync(
                 context,
@@ -1004,6 +1068,162 @@ internal sealed partial class RealObservationStageRunner
             QhyG3SolvePairSource.ReusedFreshQhySolve);
     }
 
+    private async Task<QhyG3PairQhySource?> TryGetExposureTimedFormalPairSourceAsync(
+        ObservationContext context, G3PlateSolveProbeState probe, QhyG3FastPairPolicy policy, CancellationToken token)
+    {
+        if (probe.MountBinding is null || probe.ExposureStartedUtc == default ||
+            probe.ExposureMillisecondsActual <= 0 || probe.ExposureEndedUtc <= probe.ExposureStartedUtc ||
+            (probe.ExposureEndedUtc - probe.ExposureStartedUtc).TotalMilliseconds < probe.ExposureMillisecondsActual)
+            return null;
+        if (wideFieldStream?.AnalysisFailure is PhysicalActionGateException physical) throw physical;
+        if (wideFieldStream?.ProducerFailure is PhysicalActionGateException producerPhysical) throw producerPhysical;
+        await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+        var optical = await ReadLocalDualOpticalStateAsync(context, token).ConfigureAwait(false);
+        if (optical is null || !SameHash(optical.ComputeSha256(), wideFieldOpticalSha ?? string.Empty)) return null;
+        var mount = telescopeMediator.GetInfo();
+        if (!mount.Connected || mount.Slewing || mount.IsPulseGuiding || mount.AtPark) return null;
+        QhyG3PairQhySource[] candidates;
+        lock (wideFieldStateGate) candidates = wideFieldFormalPairHistory
+            .OrderBy(source => Math.Abs((source.Frame.ExposureMidpointUtc - G3ProbeMidpointUtc(probe)).TotalSeconds)).ToArray();
+        var uncertainty = ((probe.ExposureEndedUtc - probe.ExposureStartedUtc).TotalSeconds - probe.ExposureMillisecondsActual / 1000d) / 2;
+        foreach (var source in candidates)
+        {
+            token.ThrowIfCancellationRequested();
+            var start = source.Frame.ExposureStartedUtc < probe.ExposureStartedUtc ? source.Frame.ExposureStartedUtc : probe.ExposureStartedUtc;
+            var end = source.Frame.ExposureEndedUtc > probe.ExposureEndedUtc ? source.Frame.ExposureEndedUtc : probe.ExposureEndedUtc;
+            if (!source.Solve.IsFormal || !source.Solve.Result.Success || source.Solve.Result.Coordinates is null ||
+                source.Frame.ExposureMidpointUtc > DateTimeOffset.UtcNow ||
+                (end - start) > policy.MaximumPairWallClock ||
+                Math.Abs((source.Frame.ExposureMidpointUtc - G3ProbeMidpointUtc(probe)).TotalSeconds) + uncertainty > policy.MaximumPairMidpointSeparation.TotalSeconds ||
+                source.Binding.AfterAcceptedFrame.PierSide != probe.MountBinding.PierSide ||
+                source.Binding.AfterAcceptedFrame.CoordinateEpoch != probe.MountBinding.CoordinateEpoch ||
+                G3AcquisitionMotionPlanner.AngularSeparationArcseconds(source.Binding.AfterAcceptedFrame.RightAscensionDegrees,
+                    source.Binding.AfterAcceptedFrame.DeclinationDegrees, probe.MountBinding.RightAscensionDegrees,
+                    probe.MountBinding.DeclinationDegrees) > policy.MaximumMountSpanArcseconds)
+                continue;
+            if (source.Binding.Validate(context.Plan.ObservationRunId, configuration.ActionConfigurationSha256,
+                    commissioning?.Sha256 ?? string.Empty, source.Job.Id, source.Frame.FrameId, source.Frame.Sha256,
+                    policy.MaximumMountSpanArcseconds).Disposition != GateDisposition.Passed) continue;
+            if (!SameHash(await ComputeFileSha256Async(source.Frame.FitsPath, token).ConfigureAwait(false), source.Frame.Sha256) ||
+                !SameHash(await ComputeFileSha256Async(source.Solve.EvidencePath, token).ConfigureAwait(false), source.Solve.EvidenceSha256))
+                throw new PhysicalActionGateException(GateResult.Unknown("QHY_STREAM_PAIR_SOURCE_CHANGED",
+                    "An immutable historical formal QHY pair source changed; no candidate was created."));
+            var lateOptical = await ReadLocalDualOpticalStateAsync(context, token).ConfigureAwait(false);
+            if (lateOptical is null || !SameHash(lateOptical.ComputeSha256(), wideFieldOpticalSha ?? string.Empty)) return null;
+            // This tagged source is confined to the calibration builder. Never
+            // add it to the current-pose ring or extend InferenceValidUntilUtc.
+            return source with { Source = QhyG3SolvePairSource.ExposureTimedHistoricalFormalPair };
+        }
+        return null;
+    }
+
+    private async Task<QhyG3PairQhySource?> TryPrepareActiveWideFieldFormalPairSourceAsync(
+        ObservationContext context,
+        G3PlateSolveProbeState probe,
+        QhyG3FastPairPolicy policy,
+        CancellationToken cancellationToken)
+    {
+        if (wideFieldStream is not { IsJoined: false } || probe.MountBinding is null) return null;
+        QhyG3PairQhySource[] candidates;
+        lock (wideFieldStateGate)
+            candidates = wideFieldPoses.AsEnumerable().Reverse().ToArray();
+        var probeMidpoint = G3ProbeMidpointUtc(probe);
+        foreach (var source in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            if (source.Solve.Result.Success != true || source.Solve.Result.Coordinates is null ||
+                source.Frame.ExposureMidpointUtc > now ||
+                now - source.Frame.ExposureMidpointUtc > policy.MaximumCachedQhyAge ||
+                Math.Abs((source.Frame.ExposureMidpointUtc - probeMidpoint).TotalSeconds) >
+                    policy.MaximumPairMidpointSeparation.TotalSeconds ||
+                source.Binding.AfterAcceptedFrame.PierSide != probe.MountBinding.PierSide ||
+                source.Binding.AfterAcceptedFrame.CoordinateEpoch != probe.MountBinding.CoordinateEpoch ||
+                G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+                    source.Binding.AfterAcceptedFrame.RightAscensionDegrees,
+                    source.Binding.AfterAcceptedFrame.DeclinationDegrees,
+                    probe.MountBinding.RightAscensionDegrees,
+                    probe.MountBinding.DeclinationDegrees) > policy.MaximumMountSpanArcseconds)
+                continue;
+
+            var sourceGate = source.Binding.Validate(
+                context.Plan.ObservationRunId,
+                configuration.ActionConfigurationSha256,
+                commissioning?.Sha256 ?? string.Empty,
+                source.Job.Id,
+                source.Frame.FrameId,
+                source.Frame.Sha256,
+                policy.MaximumMountSpanArcseconds);
+            if (sourceGate.Disposition != GateDisposition.Passed) continue;
+            if (!SameHash(await ComputeFileSha256Async(source.Frame.FitsPath, cancellationToken).ConfigureAwait(false),
+                    source.Frame.Sha256) ||
+                !SameHash(await ComputeFileSha256Async(source.Solve.EvidencePath, cancellationToken).ConfigureAwait(false),
+                    source.Solve.EvidenceSha256))
+                throw new PhysicalActionGateException(GateResult.Unknown(
+                    "QHY_STREAM_PAIR_SOURCE_CHANGED",
+                    "An immutable active-stream QHY frame or solve evidence changed before formal pair preparation."));
+
+            PlateSolveEvidence formal;
+            try
+            {
+                formal = await RunWithImageSolverPriorityAsync(
+                    "QHY/GS350 active-stream formal pair field",
+                    t => SolveExternalFitsAsync(
+                        source.Frame.FitsPath,
+                        source.Frame.Settings.BitDepth,
+                        configuration.Qhy.FocalLengthMillimeters,
+                        configuration.Qhy.PixelSizeMicrometers,
+                        source.Frame.Settings.BinningX,
+                        source.Solve.Result.Coordinates,
+                        "QHY/GS350 active-stream formal pair field",
+                        t),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (WideFieldKeyframePreemptedException)
+            {
+                continue;
+            }
+            if (!formal.Result.Success || formal.Result.Coordinates is null) continue;
+
+            var pose = new QhyG3PairQhySource(
+                source.Job,
+                source.Frame,
+                formal,
+                source.Binding,
+                QhyG3SolvePairSource.ReusedFreshQhySolve);
+            lock (wideFieldStateGate)
+            {
+                wideFieldFormalAnchor = pose;
+                RememberWideFieldFormalPairLocked(pose);
+                var existing = wideFieldPoses.FindIndex(item => SameHash(item.Frame.Sha256, source.Frame.Sha256));
+                if (existing >= 0) wideFieldPoses[existing] = pose;
+                else wideFieldPoses.Add(pose);
+            }
+            await PublishRunJsonEvidenceAsync(
+                "qhy-g3-active-stream-formal-pair-source",
+                "Existing owner-stream frame formally solved for a same-pointing QHY/G3 pair without a competing camera job",
+                new
+                {
+                    jobId = source.Job.Id,
+                    frameId = source.Frame.FrameId,
+                    frameSha256 = source.Frame.Sha256,
+                    priorSolveEvidencePath = source.Solve.EvidencePath,
+                    priorSolveEvidenceSha256 = source.Solve.EvidenceSha256,
+                    formalSolveEvidencePath = formal.EvidencePath,
+                    formalSolveEvidenceSha256 = formal.EvidenceSha256,
+                    g3MidpointUtc = probeMidpoint,
+                    qhyMidpointUtc = source.Frame.ExposureMidpointUtc,
+                    competingExposureStarted = false,
+                    cameraOwnerChanged = false,
+                    motionAuthority = false,
+                },
+                source.Frame.FitsPath,
+                cancellationToken).ConfigureAwait(false);
+            return pose;
+        }
+        return null;
+    }
+
     private async Task<(QhyG3PairQhySource Source, Guid JobId)> CaptureImmediateQhyPairSourceAsync(
         ObservationContext context,
         G3PlateSolveProbeState probe,
@@ -1154,9 +1374,16 @@ internal sealed partial class RealObservationStageRunner
             return new QhyG3SolvePairBuildResult(
                 GateResult.Unknown("QHY_G3_PAIR_G3_EXPOSURE_UNKNOWN", "The successful G3 frame is not bound to a versioned exposure-ladder tier."),
                 null);
-        var g3End = probe.MountBinding.FrameCompletedUtc;
-        var g3Start = g3End - TimeSpan.FromMilliseconds(g3ExposureMilliseconds);
-        var g3Midpoint = g3Start + TimeSpan.FromMilliseconds(g3ExposureMilliseconds / 2d);
+        // The PC native-capture bracket is support, not a claimed exact shutter
+        // timestamp. save_image completion minus requested time invented timing.
+        if (probe.ExposureStartedUtc == default || probe.ExposureEndedUtc <= probe.ExposureStartedUtc ||
+            probe.ExposureMillisecondsActual <= 0 || probe.ExposureMillisecondsActual != g3ExposureMilliseconds ||
+            (probe.ExposureEndedUtc - probe.ExposureStartedUtc).TotalMilliseconds < probe.ExposureMillisecondsActual)
+            return new(GateResult.Unknown("QHY_G3_PAIR_G3_EXPOSURE_UNKNOWN",
+                "The G3 frame lacks a consistent native single-frame bracket and actual exposure duration; no timestamp is inferred from save completion."), null);
+        var g3Start = probe.ExposureStartedUtc;
+        var g3End = probe.ExposureEndedUtc;
+        var g3Midpoint = g3Start + (g3End - g3Start) / 2;
         var qhyFrame = new QhyG3SolvedFrame(
             "QHY/GS350",
             context.Plan.ExpectedQhyCameraId,
@@ -1194,7 +1421,7 @@ internal sealed partial class RealObservationStageRunner
             g3Midpoint,
             g3End,
             probe.Solve.CompletedUtc,
-            "PHD2 save_image completion minus hash-locked requested exposure",
+            QhyG3ExposureTiming.NativeBracketAuthority,
             probe.Image.Properties.Width,
             probe.Image.Properties.Height,
             configuration.G3.Binning,
@@ -1238,7 +1465,10 @@ internal sealed partial class RealObservationStageRunner
             qhyFrame,
             g3Frame,
             readbacks,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow)
+        {
+            ExposureTiming = new(1, probe.ExposureMillisecondsActual / 1000d),
+        });
     }
 
     private static QhyG3PairMountReadback PairReadback(string role, G3FrameMountReadback value) => new(
@@ -1259,6 +1489,18 @@ internal sealed partial class RealObservationStageRunner
             Path.GetFullPath(probe.FramePath),
             StringComparison.OrdinalIgnoreCase))?.ExposureMilliseconds ?? 0;
         return start + TimeSpan.FromMilliseconds(exposure / 2d);
+    }
+
+    internal static G3PlateSolveProbeState WithG3NativeCaptureTiming(G3PlateSolveProbeState probe, Phd2SingleFrameResult capture)
+    {
+        if (capture.UsedLoopSaveFallback || !capture.RequestedParametersApplied ||
+            capture.NativeRequestStartedUtc is not { } start || start == default ||
+            capture.VerifiedExposureMilliseconds is not > 0 ||
+            (capture.CompletedUtc - start).TotalMilliseconds < capture.VerifiedExposureMilliseconds.Value ||
+            !string.Equals(Path.GetFullPath(probe.FramePath), Path.GetFullPath(capture.Path), StringComparison.OrdinalIgnoreCase))
+            return probe with { ExposureStartedUtc = default, ExposureEndedUtc = default, ExposureMillisecondsActual = 0 };
+        return probe with { ExposureStartedUtc = start, ExposureEndedUtc = capture.CompletedUtc,
+            ExposureMillisecondsActual = capture.VerifiedExposureMilliseconds.Value };
     }
 
     private static DateTimeOffset G3ProbeStartUtc(G3PlateSolveProbeState probe)

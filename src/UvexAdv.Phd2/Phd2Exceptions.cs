@@ -137,6 +137,15 @@ public sealed class Phd2NoGuideStarException : Phd2Exception
         : base($"{FailureCode}: PHD2 native automatic selection completed but returned no guide-star candidate point.")
     {
     }
+
+    public Phd2NoGuideStarException(Phd2RpcException rpcException)
+        : base($"{FailureCode}: PHD2 native automatic selection reported no guide-star candidate " +
+            $"(JSON-RPC {rpcException.Code}: {rpcException.RpcMessage}).")
+    {
+        RpcException = rpcException;
+    }
+
+    public Phd2RpcException? RpcException { get; }
 }
 
 /// <summary>A completed native selection refined its centroid outside the requested region.</summary>

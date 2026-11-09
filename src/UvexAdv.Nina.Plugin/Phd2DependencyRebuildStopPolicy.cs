@@ -17,6 +17,13 @@ internal sealed record Phd2CompletedInitialGuideStopReceipt(
 
 internal static class Phd2DependencyRebuildStopPolicy
 {
+    internal static bool CanStopFailedInitialGuide(Phd2StateSnapshot current,
+        Phd2FailedInitialGuideStopReceipt? receipt, long? selectionEpoch, Phd2Point? selectedLock,
+        Phd2Point? actualLock, bool hasExactLockHistory) =>
+        !hasExactLockHistory && receipt is not null && receipt.IsCurrent(current) &&
+        selectionEpoch == receipt.ConnectionEpoch && selectedLock == receipt.SelectedLock &&
+        receipt.MatchesNativeLock(actualLock);
+
     internal const string InitialSettleNotReachedCode = "PHD2_INITIAL_SETTLE_NOT_REACHED";
 
     internal static GateResult AfterConfirmedInitialGuideStop(Phd2SettleResult settle, bool lostStars) =>
@@ -30,6 +37,20 @@ internal static class Phd2DependencyRebuildStopPolicy
         bool hasExactLockHistory) =>
         !hasExactLockHistory && returned.Succeeded && !returned.NativeCalibrationOccurred &&
         snapshot.AppState == Phd2AppState.Guiding &&
+        CanRecordCompletedGuideOwner(snapshot, selectionConnectionEpoch, returned)
+            ? new(snapshot.ConnectionEpoch, snapshot.GuideEpoch, snapshot.LastSettleOperationId!.Value,
+                snapshot.LockPosition!, snapshot.EventSequence, snapshot.CalibrationChangeSequence,
+                snapshot.LastConfigurationChange?.EventSequence)
+            : null;
+
+    // A native guide/settle operation that returned a correlated terminal may end
+    // in either Guiding or LostLock without proving a successful settle. Preserve
+    // that operation-bound owner for one checked stop. Calibration operations stay
+    // on their separate fresh-field route; a failed settle is not science proof.
+    internal static Phd2CompletedInitialGuideStopReceipt? RecordGuideOperationStopOwner(
+        Phd2StateSnapshot snapshot, long selectionConnectionEpoch, Phd2SettleResult returned,
+        bool hasExactLockHistory) =>
+        !hasExactLockHistory && !returned.NativeCalibrationOccurred &&
         CanRecordCompletedGuideOwner(snapshot, selectionConnectionEpoch, returned)
             ? new(snapshot.ConnectionEpoch, snapshot.GuideEpoch, snapshot.LastSettleOperationId!.Value,
                 snapshot.LockPosition!, snapshot.EventSequence, snapshot.CalibrationChangeSequence,

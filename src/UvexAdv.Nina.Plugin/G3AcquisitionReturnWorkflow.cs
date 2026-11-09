@@ -69,12 +69,12 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             // inside the separately bounded near-origin envelope, then settle
             // the durable ledger without issuing another command.
             if (!stableNearOriginReadbackAccepted &&
-                state.CurrentRadiusArcseconds > MountCommandArrivalToleranceArcseconds &&
-                state.CurrentRadiusArcseconds <= stableNearOriginToleranceArcseconds)
+                state.CurrentReturnDistanceArcseconds > MountCommandArrivalToleranceArcseconds &&
+                state.CurrentReturnDistanceArcseconds <= stableNearOriginToleranceArcseconds)
             {
                 var originCoordinate = new Coordinates(
-                    state.OriginRaDegrees,
-                    state.OriginDeclinationDegrees,
+                    state.ReturnRaDegrees,
+                    state.ReturnDeclinationDegrees,
                     reported.Epoch,
                     Coordinates.RAType.Degrees);
                 var stableNearOrigin = await port.WaitForG3PostSlewStabilityAsync(
@@ -99,7 +99,7 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                 state = ReanchorG3AcquisitionMotionFromReportedPosition(state, stableNearOrigin.Reported) with
                 {
                     UpdatedUtc = clock.GetUtcNow(),
-                    LastReason = $"No-motion return verification remained stable at {state.CurrentRadiusArcseconds:F3} arcsec from origin; the {stableNearOriginToleranceArcseconds:F2} arcsec near-origin settlement envelope is authorized without consuming another action.",
+                    LastReason = $"No-motion return verification remained stable at {state.CurrentReturnDistanceArcseconds:F3} arcsec from return point; the {stableNearOriginToleranceArcseconds:F2} arcsec near-origin settlement envelope is authorized without consuming another action.",
                 };
                 await port.PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
                 stableNearOriginReadbackAccepted = true;
@@ -127,8 +127,8 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                     CommandMagnitudeArcseconds = 0,
                     UpdatedUtc = clock.GetUtcNow(),
                     LastReason = stableNearOriginReadbackAccepted
-                        ? $"The durable G3 acquisition return settled without another command at the stable reported position {state.CurrentRadiusArcseconds:F2} arcsec from its saved origin; the real offset remains charged and no budget was reset."
-                        : $"The durable G3 acquisition return reached a reported position {state.CurrentRadiusArcseconds:F2} arcsec from its saved origin; the real readback remains charged and no budget was reset.",
+                        ? $"The durable G3 acquisition return settled without another command at the stable reported position {state.CurrentReturnDistanceArcseconds:F2} arcsec from its saved return point; the real offset remains charged and no budget was reset."
+                        : $"The durable G3 acquisition return reached a reported position {state.CurrentReturnDistanceArcseconds:F2} arcsec from its saved return point; the real readback remains charged and no budget was reset.",
                 };
                 await port.PersistG3AcquisitionMotionAsync(state, CancellationToken.None).ConfigureAwait(false);
                 return new G3AcquisitionMotionReturnResult(true, state, path, state.LastReason!);
@@ -305,8 +305,8 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
 
             var commandTargetsDurableOrigin =
                 AngularSeparationArcseconds(commanded, new Coordinates(
-                    state.OriginRaDegrees,
-                    state.OriginDeclinationDegrees,
+                    state.ReturnRaDegrees,
+                    state.ReturnDeclinationDegrees,
                     commanded.Epoch,
                     Coordinates.RAType.Degrees)) <= 1e-6;
             var returnCommandResidualToleranceArcseconds = commandTargetsDurableOrigin
@@ -360,11 +360,12 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
             if (intermediateResidualExceeded)
             {
                 var previousRadius = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
-                    state.OriginRaDegrees, state.OriginDeclinationDegrees,
+                    state.ReturnRaDegrees, state.ReturnDeclinationDegrees,
                     NormalizeDegrees(immediatelyBefore.RADegrees), immediatelyBefore.Dec);
                 if (G3AcquisitionMotionPlanner.CanReplanStableIntermediateReturn(
                     state, previousRadius, stability.CommandResidualArcseconds,
-                    stability.ReportedDriftArcseconds, settledActualReturnMoveArcseconds))
+                    stability.ReportedDriftArcseconds, settledActualReturnMoveArcseconds,
+                    stableNearOriginToleranceArcseconds))
                 {
                     // Do not accept the missed nominal endpoint or settle the
                     // ledger. The fully precharged movement made independently
@@ -374,12 +375,12 @@ internal sealed class G3AcquisitionReturnWorkflow(G3AcquisitionReturnSettings se
                     await port.PublishRunJsonEvidenceAsync(
                         "g3-intermediate-return-replanned",
                         "A bounded nominal-endpoint miss replanned the remaining return from fresh measured position",
-                        new { previousRadius, remainingRadius = state.CurrentRadiusArcseconds,
+                        new { previousRadius, remainingRadius = state.CurrentReturnDistanceArcseconds,
                             stability.CommandResidualArcseconds, stability.ReportedDriftArcseconds,
                             settledActualReturnMoveArcseconds, fullyChargedReturnArcseconds,
                             nominalEndpointAccepted = false, budgetReset = false },
                         null, cancellationToken).ConfigureAwait(false);
-                    port.Report($"G3 回程中间点偏差 {stability.CommandResidualArcseconds:F2}″；新回读稳定且实际运动已完整计费，从剩余 {state.CurrentRadiusArcseconds:F2}″ 重新规划回程，不放宽最终回原门限");
+                    port.Report($"G3 回程中间点偏差 {stability.CommandResidualArcseconds:F2}″；新回读稳定且实际运动已完整计费，从剩余 {state.CurrentReturnDistanceArcseconds:F2}″ 重新规划回程，不放宽最终回原门限");
                     stableNearOriginReadbackAccepted = false;
                     continue;
                 }

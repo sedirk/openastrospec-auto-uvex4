@@ -12,6 +12,10 @@ internal sealed partial class RealObservationStageRunner
     private readonly object wideFieldStateGate = new();
     private readonly List<G3FrameMountReadback> wideFieldMountSamples = new();
     private readonly List<QhyG3PairQhySource> wideFieldPoses = new();
+    // Calibration history only. Registered/current poses keep their existing
+    // short ring and freshness gates; slow foreground solves must not evict a
+    // simultaneous formal keyframe before it can form an immutable pair.
+    private readonly List<QhyG3PairQhySource> wideFieldFormalPairHistory = new();
     private QhyG3PairQhySource? wideFieldFormalAnchor;
     private string? wideFieldOpticalSha;
     private string? wideFieldPierSide;
@@ -90,6 +94,7 @@ internal sealed partial class RealObservationStageRunner
         {
             wideFieldMountSamples.Add(CaptureG3FrameMountReadback());
             wideFieldPoses.Add(wideFieldFormalAnchor);
+            RememberWideFieldFormalPairLocked(wideFieldFormalAnchor);
         }
         var settings = initial.Settings;
         var request = new AcquisitionJobRequest(context.Plan.ObservationRunId, context.Plan.Target.Name + " / continuous acquisition witness",
@@ -234,7 +239,15 @@ internal sealed partial class RealObservationStageRunner
         {
             wideFieldPoses.Add(pose);
             if (wideFieldPoses.Count > 16) wideFieldPoses.RemoveAt(0);
+            RememberWideFieldFormalPairLocked(pose);
         }
+    }
+
+    private void RememberWideFieldFormalPairLocked(QhyG3PairQhySource source)
+    {
+        if (!source.Solve.IsFormal || wideFieldFormalPairHistory.Any(item => SameHash(item.Frame.Sha256, source.Frame.Sha256))) return;
+        wideFieldFormalPairHistory.Add(source);
+        if (wideFieldFormalPairHistory.Count > 16) wideFieldFormalPairHistory.RemoveAt(0);
     }
 
     internal static async Task<T?> RunWideFieldKeyframeWhenStationaryAsync<T>(

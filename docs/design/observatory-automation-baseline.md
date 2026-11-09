@@ -152,6 +152,18 @@ Random unbounded mount nudging is not an automated strategy.
 
 ### 5.2 Slit-field acquisition with G3/PHD2
 
+Owner-approved [ADR-0051](../adr/0051-formal-wcs-verified-return-waypoints.md)
+narrowly replaces the fixed return origin during formal current-image WCS
+approach. After a charged move, a distinct fresh formal G3 solution, same-owner
+stable mount binding and measured progress may atomically establish a new return
+waypoint. The immutable initial origin still bounds the global radius; cumulative
+motion, actions, earliest clock and all limits remain unchanged. Every next leg
+reserves return to the previous verified waypoint BEFORE moving. Missing/failed/
+inferred destination evidence cannot advance it; blind search retains its fixed
+return and local envelope. New source/evidence hashes distinguish a verified
+waypoint from predicted arrival. This grants no extra Sync, owner change, automatic
+restart movement or science acceptance; original safety/skip rules remain.
+
 Owner-approved [ADR-0047](../adr/0047-evidence-dependent-neighbour-search-overlap.md)
 removes the overlap cap only from blind neighbour visits without a usable current
 registered pixel route. Such visits retain the original configured search step;
@@ -432,6 +444,18 @@ and unchanged night safety/deadline. Observed side change never dispatches an
 extra flip. Ordinary retries, unknown stop, other mechanical debt and crash
 ambiguity cannot use this exception or reset budgets.
 
+Owner-approved [ADR-0050](../adr/0050-ended-pre-dispatch-meridian-retirement.md)
+narrowly permits abandonment, not adoption, of a terminal first meridian segment's
+unique canonical pre-dispatch intent at an explicitly started new logical target.
+Only authenticated `OwnersIdle` or scheduled `WaitingForMeridian` records with no
+command/after-side may qualify. Reuse original-owner, full safety, global idle and
+fresh stationary-frame startup verification; preserve old control bytes, audits,
+budgets and science files. Archive the flip handle last, repeating checks after an
+interruption. Command-pending, corrupt/ambiguous records, unknown stop, independent
+mechanical debt, live/same-target recovery and unsafe conditions remain excluded.
+No flip, return, roof/focus move or automatic observation is authorized by archival.
+The next target still requires normal new acquisition, slit and science evidence.
+
 Under [ADR-0021](../adr/0021-station-attested-noninterfering-roof.md), only a
 station with explicit hash-bound owner confirmation of clearance at **all mount
 positions** may select non-interfering roof mode. It opens with fresh safety and
@@ -558,7 +582,9 @@ Every run must retain enough evidence to answer “what object was actually obse
 - all warnings, downgrades, retries, pauses, resumptions, cancellations and operator interventions;
 - checksums of raw inputs and generated manifests.
 
-Raw acquisition files are immutable. Repairs or calibration produce new files with provenance; they never overwrite the source.
+Raw acquisition files are immutable, except for the explicit successful-target
+parse/trial retention policy in ADR-0053. Repairs or calibration produce new
+files with provenance; they never overwrite the source.
 
 ## 11. Staged implementation and commissioning
 
@@ -697,6 +723,54 @@ The same catalogue family is not an independent validation catalogue. Target/sli
 identity and fresh physical context remain separate checks; original time,
 return, motion and safety limits are unchanged. Failed optional recovery returns
 to acquisition and confirmed-stop skip policy, not a new whole-night blocker.
+
+### 12.17 Exposure-timed delayed dual-optics calibration (ADR-0052)
+
+Owner-approved [ADR-0052](../adr/0052-exposure-timed-delayed-dual-optics-calibration.md)
+distinguishes capture simultaneity from solver latency. Explicit schema-2 pairs
+may use already captured, hash-verified formal wide/G3 images as historical local
+calibration after a delayed solve, with native capture timing, at most 30 seconds
+of acquisition support and 20 seconds worst-case midpoint separation. Same-owner,
+focus, geometry, pier and stopped-pointing proofs remain mandatory. A separate
+bounded formal-frame buffer prevents relative updates from evicting the paired
+measurement. Schema-1 hashes remain unchanged. Historical calibration does not
+extend live-pose validity or authorize movement; current target/slit measurements,
+model holdouts, original budgets, return reserve and independent safety gates remain
+required. Insufficient optional evidence is a recovery miss, not a night stop.
+
+### 12.18 Successful-target parse and trial retention (ADR-0053)
+
+Owner-approved [ADR-0053](../adr/0053-successful-target-frame-retention.md) adds
+one narrow irreversible data-retention exception. Only a target run whose
+terminal manifest and indexed state both explicitly report `Completed`, with a
+fresh verified accepted science FITS, may donate exact QHY acquisition/G3 solve
+FITS and uncredited ATR trial FITS to cleanup. A probe credited as science, all
+ATR science, QHY photometry, calibration/model/project dependencies, logs,
+manifests and evidence records remain protected.
+
+The separate offline worker must use a fresh complete index, exact run/path/hash
+identity, dependency-aware revalidation, locked-handle permanent deletion and a
+durable per-file intent/result journal. Enabling records an immutable forward-only
+watermark: earlier and already-running targets are not retrospectively purged.
+The worker runs below normal priority and has no camera, PHD2, mount, roof or UVEX
+authority. Changed/unknown metadata, another run reference, active/unknown related
+state or any filesystem uncertainty defers cleanup. Installation and enabling
+remain explicit and do not start observing.
+
+### 12.19 Bounded target-continuity rebase (ADR-0054)
+
+Owner-approved [ADR-0054](../adr/0054-bounded-target-continuity-rebase.md)
+narrows ADR-0040's unconditional fresh target/primary discontinuity rejection.
+After three consecutive new frames from the same target, PHD2 owner/guide epoch,
+primary, profile, calibration, lock and current slit context pass every existing
+identity, morphology, safety and integrity gate, a maximum pairwise target-centroid
+spread of three pixels may replace only a stale search baseline with the measured
+median. An ambiguous frame breaks the run, and one rebase is available per target.
+The route creates no motion or exposure grant, resets no original action, distance,
+time, return or exposure budget, and still requires the complete fresh post-rebase
+measurement window and fresh destination confirmation before any move. Unknown
+ownership/stop, companion or multi-lobe ambiguity, weather and cancellation remain
+independent hard gates; predictions are never recorded as measurements.
 
 ## 13. Measurements still required
 

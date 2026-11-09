@@ -9,6 +9,22 @@ internal static class Phd2GuideSnrExposurePolicy
     internal const int MaximumExposureMilliseconds = 6000;
     internal const int MaximumIncreases = 2;
 
+    // Restoring an exposure tier is not proof of a viable star. Reuse the
+    // read-only native sampler once; only authenticated preview star loss can
+    // enter the existing checked-stop/direct-target-or-skip path. Low/missing
+    // SNR remains advisory, and transport/owner/cancel failures retain their type.
+    internal static async Task<Phd2SelectedStarSnrObservation> ObserveRestoredCandidateAsync(
+        Func<Task<Phd2SelectedStarSnrObservation>> observe,
+        Func<Phd2GuidingFrameLostException, bool> ownsPreviewLoss, int attempts)
+    {
+        try { return await observe().ConfigureAwait(false); }
+        catch (Phd2GuidingFrameLostException lost) when (ownsPreviewLoss(lost))
+        {
+            throw new Phd2NativeGuideSelectionExhaustedException(attempts,
+                ["The restored-exposure candidate was lost in fresh pre-guide samples; no guide/lock/mount command was issued. " + lost.Message]);
+        }
+    }
+
     // A new candidate lost while evaluating an OPTIONAL longer exposure can
     // restore the previous tier once, before guiding. Never catch owner,
     // configuration, calibration, pause or active-guide changes as low SNR.

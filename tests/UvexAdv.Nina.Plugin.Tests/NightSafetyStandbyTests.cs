@@ -1,4 +1,8 @@
 using System.Text.Json;
+using System.Reflection;
+using NINA.Core.Model;
+using NINA.Equipment.Equipment.MyTelescope;
+using NINA.Equipment.Interfaces.Mediator;
 using UvexAdv.Observatory;
 using Xunit;
 
@@ -273,6 +277,123 @@ public sealed class NightSafetyStandbyTests
         guard.RequestCloseout(); await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(1, f.Closes); Assert.Equal("CloseoutFailed", guard.Snapshot.Phase);
         Assert.Contains("日志写入失败", guard.Snapshot.Message);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task UnknownStopKeepsMonitorAndOriginalDeadlineWithoutAnyMechanicalAttempt(bool journalUnavailable)
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var request = f.Request with { MonitoringOnly = true, CanHandOver = false, InitialReason = "NIGHT_UNSAFE" };
+        if (journalUnavailable) request = request with { ParentJournal = Path.Combine(Path.GetTempFileName(), "night.json") };
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, request);
+        old.Dispose();
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(guard.Snapshot.IsActive);
+        Assert.Equal("MonitoringOnly", guard.Snapshot.Phase);
+        Assert.Equal(request.DeadlineUtc, guard.Snapshot.DeadlineUtc);
+        Assert.Equal("NIGHT_UNSAFE", guard.Snapshot.Reason);
+        Assert.Contains("不能保证关顶", guard.Snapshot.Message);
+        if (journalUnavailable) Assert.Contains("日志写入失败", guard.Snapshot.Message);
+        f.Stop = GateResult.Unknown("NIGHT_DAWN_REACHED", "Synthetic morning, no hardware");
+        f.Unsafe!();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (guard.Snapshot.LatestSafetyReason != "NIGHT_DAWN_REACHED") await Task.Delay(10, deadline.Token);
+        Assert.Equal(1, f.Watches); Assert.Equal(0, f.Closes);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        f.Host.RequestSafetyStandbyCloseout(); Assert.Equal(0, f.Closes);
+        f.Host.Dispose(); await guard.LifetimeCompletion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("Shutdown", guard.Snapshot.Phase); Assert.Equal(0, f.Watches);
+    }
+
+    [Fact]
+    public async Task FailedCloseoutFinishesNativeWaitButRetainsWatchAndLeaseUntilApplicationExit()
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            InitialReason = "NIGHT_UNSAFE",
+            Closeout = _ => { f.Closes++; return Task.FromResult<IReadOnlyList<string>>(new[] { "Roof terminal readback missing" }); },
+        });
+        old.Dispose();
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("CloseoutFailed", guard.Snapshot.Phase);
+        Assert.True(guard.Snapshot.IsActive); Assert.False(guard.LifetimeCompletion.IsCompleted);
+        Assert.Equal(1, f.Watches); Assert.Equal(1, f.Closes);
+        f.Unsafe!(); guard.RequestCloseout();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        Assert.Equal(1, f.Closes);
+        f.Host.Dispose(); await guard.LifetimeCompletion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(0, f.Watches);
+    }
+
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public void OnlySafetyCloseoutOutlivesCancelledObservingToken(bool safety)
+    {
+        using var observing = new CancellationTokenSource(); observing.Cancel();
+        using var closeout = SequenceItems.UvexNightSequenceContainer.CreateCloseoutLifetime(safety, observing.Token);
+        Assert.Equal(!safety, closeout.IsCancellationRequested);
+        closeout.Cancel(); Assert.True(closeout.IsCancellationRequested); // Its own bounded timeout remains effective.
+    }
+
+    [Theory]
+    [InlineData("delayed", false)] [InlineData("stuck", false)]
+    [InlineData("identity", false)] [InlineData("delayed", true)]
+    public async Task RecordedCancellationBoundaryReachesCheckedRoofHomeParkOrSendsNothing(string mode, bool roofRejects)
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        using var cancelledObservation = new CancellationTokenSource(); cancelledObservation.Cancel();
+        var calls = new List<string>();
+        var mountInfo = new TelescopeInfo { Connected = true, DeviceId = "mount", CanFindHome = true };
+        var mount = DispatchProxy.Create<ITelescopeMediator, CommandProxy>();
+        ((CommandProxy)(object)mount).InvokeCommand = (method, args) => method.Name switch
+        {
+            "GetInfo" => mountInfo,
+            "FindHome" => Home(),
+            "ParkTelescope" => Park(),
+            _ => throw new InvalidOperationException("Unexpected mechanical action: " + method.Name),
+        };
+        Task<bool> Home() { calls.Add("home"); mountInfo.AtHome = true; return Task.FromResult(true); }
+        Task<bool> Park() { Assert.True(mountInfo.AtHome); calls.Add("park"); mountInfo.AtPark = true; return Task.FromResult(true); }
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            InitialReason = "NIGHT_UNSAFE",
+            Closeout = async _ =>
+            {
+                using var close = SequenceItems.UvexNightSequenceContainer.CreateCloseoutLifetime(true, cancelledObservation.Token);
+                close.CancelAfter(TimeSpan.FromSeconds(3));
+                var stopped = await Phd2MountIdleWaitTests.ReplayCancelledSlew(mode, close.Token);
+                if (stopped.Disposition != GateDisposition.Passed) return new[] { stopped.Code };
+                calls.Add("cover"); // Finite cover port; no camera or COM connection.
+                var issue = await RoofClearancePolicy.CloseThenParkAsync(
+                    _ => Task.FromResult<string?>(null),
+                    _ => { calls.Add("roof"); return Task.FromResult<string?>(roofRejects ? "Roof refused" : null); },
+                    async ct =>
+                    {
+                        var home = await RealObservationStageRunner.HomeAndVerifyMountAsync(mount, "mount",
+                            new Progress<ApplicationStatus>(), TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(1), ct);
+                        if (home.Disposition != GateDisposition.Passed) return home.Code;
+                        return await mount.ParkTelescope(new Progress<ApplicationStatus>(), ct) && mount.GetInfo().AtPark ? null : "Park not verified";
+                    }, close.Token);
+                return issue is null ? Array.Empty<string>() : new[] { issue };
+            },
+        });
+        old.Dispose(); await guard.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(mode == "delayed" && !roofRejects ? "Closed" : "CloseoutFailed", guard.Snapshot.Phase);
+        Assert.Equal(mode != "delayed" ? [] : roofRejects ? new[] { "cover", "roof" } : new[] { "cover", "roof", "home", "park" }, calls);
+        var count = calls.Count;
+        guard.RequestCloseout(); f.Unsafe!(); Assert.Equal(count, calls.Count);
+        f.Host.Dispose(); await guard.LifetimeCompletion.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    public class CommandProxy : DispatchProxy
+    {
+        public Func<MethodInfo, object?[]?, object?> InvokeCommand = null!;
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => InvokeCommand(method!, args);
     }
 
     private sealed class Fixture : IDisposable

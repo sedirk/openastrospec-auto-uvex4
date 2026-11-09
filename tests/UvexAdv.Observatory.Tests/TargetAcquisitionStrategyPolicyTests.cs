@@ -148,6 +148,8 @@ public sealed class TargetAcquisitionStrategyPolicyTests
     [InlineData("TARGET_NOT_FOUND", true)]
     [InlineData("TARGET_AMBIGUOUS", true)]
     [InlineData(G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode, true)]
+    [InlineData(G3PostWcsPredictionPolicy.OutsideAcquisitionWindowCode, true)]
+    [InlineData("G3_CLOUD_OR_TRANSPARENCY_INVALID", true)]
     [InlineData("PHD2_IDENTITY_MISMATCH", false)]
     [InlineData("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", false)]
     [InlineData("G3_MOTION_RETURN_BUDGET_EXHAUSTED", false)]

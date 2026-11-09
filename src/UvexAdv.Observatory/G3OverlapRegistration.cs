@@ -42,6 +42,24 @@ public static class G3OverlapRegistration
     private const double MinimumOverlap = 0.25;
     private const double MaximumRotation = 5;
 
+    /// <summary>
+    /// Exclude measured sub-two-pixel minor axes from optional image
+    /// registration, not from target detection. SEP's convolution can enlarge
+    /// a three-pixel detector defect into a plausible connected component;
+    /// its actual second moments must still resolve both axes. Unknown legacy
+    /// widths remain unknown, while new SEP measurements preserve their width.
+    /// Zero inter-frame motion is deliberately not a rejection criterion.
+    /// </summary>
+    public static bool HasUsableMeasuredSourceShape(StarCandidate star)
+    {
+        if (!double.IsFinite(star.FwhmPixels) || star.FwhmPixels < 0 ||
+            !double.IsFinite(star.Ellipticity) || star.Ellipticity < 0 || star.Ellipticity >= 1) return false;
+        if (star.FwhmPixels == 0) return true;
+        var ratio = 1 - star.Ellipticity;
+        var minorFwhm = star.FwhmPixels * Math.Sqrt(2 / (1 + ratio * ratio)) * ratio;
+        return minorFwhm >= 1.8;
+    }
+
     public static G3OverlapRegistrationResult Register(IReadOnlyList<StarCandidate> reference,
         IReadOnlyList<StarCandidate> current, int width, int height,
         IReadOnlyList<G3RegistrationExclusion>? referenceExclusions = null,
@@ -130,6 +148,7 @@ public static class G3OverlapRegistration
                 s.Centroid.X < width - 8 && s.Centroid.Y < height - 8 &&
                 double.IsFinite(s.SignalToNoise) && s.SignalToNoise >= 5 && s.SaturatedFraction == 0 &&
                 double.IsFinite(s.Ellipticity) && s.Ellipticity <= .65 &&
+                HasUsableMeasuredSourceShape(s) &&
                 (exclusions is null || exclusions.All(e => Distance(s.Centroid, e.Center) > e.RadiusPixels)))
             .OrderByDescending(s => s.SignalToNoise).Select(s => s.Centroid)
             .Distinct().Take(24).ToArray();

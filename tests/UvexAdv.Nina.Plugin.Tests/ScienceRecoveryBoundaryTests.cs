@@ -19,7 +19,16 @@ public sealed class ScienceRecoveryBoundaryTests
         Assert.Contains("if (exposure is null)", Source[capture..credit]);
         Assert.Contains("throw new InvalidOperationException(\"ATR_EXPOSURE_EMPTY", Source[capture..credit]);
         Assert.Contains("if (!IsGuidingStable())", Source[before..capture]);
-        Assert.Contains("CheckScienceRebuildBudgetAsync(context, result.Gate,", Source);
+        var recovery = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.AdaptiveGuidingRecovery.cs"));
+        Assert.Contains("Phd2ScienceContinuationPolicy.MayVerifySettledGuideInPlace(original.Gate.Code)", recovery);
+        Assert.True(recovery.IndexOf("TryVerifyScienceInPlaceAsync", StringComparison.Ordinal) <
+            recovery.IndexOf("WaitForSameFieldGuideSelfRecoveryAsync", StringComparison.Ordinal));
+        Assert.True(recovery.IndexOf("WaitForSameFieldGuideSelfRecoveryAsync", StringComparison.Ordinal) <
+            recovery.IndexOf("EnsurePhdStoppedForAutomaticRebuildAsync", StringComparison.Ordinal));
+        Assert.True(recovery.IndexOf("CheckScienceRebuildBudgetAsync", StringComparison.Ordinal) <
+            recovery.IndexOf("adaptiveCalibrationPending = action", StringComparison.Ordinal));
+        Assert.Contains("CheckScienceRebuildBudgetAsync(", Source);
+        Assert.Contains("replacementBudget is not null", Source);
         var accounting = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.ScienceContinuation.cs"));
         Assert.Contains("pendingPhd2LockShift is not null", accounting);
         Assert.Contains("CanObserveAtSettledLock", accounting);
@@ -54,23 +63,23 @@ public sealed class ScienceRecoveryBoundaryTests
         Assert.Equal(3, Get<int>(runner, "qhyPhotometryAttempt"));
         Assert.Null(f.Probe.SelectedExposureSeconds);
         Assert.True(f.Probe.RequiresReprobe);
-        Assert.Equal(1, f.Science.AcceptedFrames);
-        Assert.Equal(2, f.Science.AttemptedFrames);
-        Assert.Equal(1, f.Science.RetainedFrames);
+        Assert.Equal(3, f.Science.AcceptedFrames);
+        Assert.Equal(3, f.Science.AttemptedFrames);
+        Assert.Equal(2, f.Science.RetainedFrames);
     }
 
     [Fact]
-    public void RejectedGuideFrameIsSavedBeforeBoundedRecoveryAndNeverAccepted()
+    public void CompletedGuideContinuityChangeIsSavedWithWarningBeforeAnyNextExposureGate()
     {
         var science = WorkflowSource.Science;
         var save = science.IndexOf("await port.SaveAtrImageAsync(", StringComparison.Ordinal);
         var retained = science.IndexOf("retainedAtrScienceFrames++;", StringComparison.Ordinal);
-        var rejection = science.IndexOf("if (quality.Code == \"GUIDING_UNSTABLE\")", StringComparison.Ordinal);
-        var recovery = science.IndexOf("return new StageResult(quality);", rejection, StringComparison.Ordinal);
+        var qualityRejection = science.IndexOf("if (quality.Disposition != GateDisposition.Passed)", StringComparison.Ordinal);
         var accepted = science.IndexOf("savedAtrFrames++;", StringComparison.Ordinal);
-        Assert.True(save >= 0 && retained > save && rejection > retained && recovery > rejection && accepted > recovery);
+        Assert.True(save >= 0 && retained > save && qualityRejection > retained && accepted > qualityRejection);
         Assert.Contains("quality.Disposition == GateDisposition.Passed", science, StringComparison.Ordinal);
         Assert.Contains("AtrScienceFrameQualityPolicy.Evaluate(metrics, configuration)", WorkflowSource.Science, StringComparison.Ordinal);
+        Assert.DoesNotContain("quality.Code == \"GUIDING_UNSTABLE\"", science, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -88,6 +97,58 @@ public sealed class ScienceRecoveryBoundaryTests
     }
 
     [Fact]
+    public void PostExposureStaleSettleResumesSameLockBeforeAnyRebuildOrReselection()
+    {
+        var continuation = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.ScienceContinuation.cs"));
+        var start = continuation.IndexOf(
+            "private async Task<bool> TryVerifyScienceInPlaceAsync(",
+            StringComparison.Ordinal);
+        var end = continuation.IndexOf(
+            "private async Task<Phd2LockShiftPendingState?> ReadSettledAtrExposureLedgerAsync(",
+            start,
+            StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var inPlace = continuation[start..end];
+
+        Assert.Contains("CanResettleAfterExposureAtSettledLock", inPlace, StringComparison.Ordinal);
+        Assert.Contains("ResettleAtCurrentLockAsync", inPlace, StringComparison.Ordinal);
+        Assert.Contains("Phd2SameLockSettleRequest", inPlace, StringComparison.Ordinal);
+        Assert.DoesNotContain("SelectGuideStarAsync", inPlace, StringComparison.Ordinal);
+        Assert.DoesNotContain("GuideAndSettleAsync", inPlace, StringComparison.Ordinal);
+        Assert.True(inPlace.IndexOf("ResettleAtCurrentLockAsync", StringComparison.Ordinal) <
+            inPlace.IndexOf("VerifyWindSampledGuidingBeforeAtrAsync", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ThinCloudSelfRecoveryWaitsOnSameFieldWithoutStopSelectionOrMotion()
+    {
+        var recovery = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.AdaptiveGuidingRecovery.cs"));
+        var start = recovery.IndexOf(
+            "private async Task<bool> WaitForSameFieldGuideSelfRecoveryAsync(",
+            StringComparison.Ordinal);
+        var end = recovery.IndexOf(
+            "private async Task<bool> TryReacquireSameFieldGuideWithoutMotionAsync(",
+            start,
+            StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var wait = recovery[start..end];
+
+        Assert.Contains("IsSameFieldGuideActiveAfterLoss", wait, StringComparison.Ordinal);
+        Assert.Contains("Task.Delay(TimeSpan.FromSeconds(1)", wait, StringComparison.Ordinal);
+        Assert.DoesNotContain("StopCapture", wait, StringComparison.Ordinal);
+        Assert.DoesNotContain("SelectGuideStarAsync", wait, StringComparison.Ordinal);
+        Assert.DoesNotContain("GuideAndSettleAsync", wait, StringComparison.Ordinal);
+        Assert.DoesNotContain("CaptureSingleFrame", wait, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestNativeMeridianBoundary", wait, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ScienceBudgetIsCheckedBeforeReprobeAndAfterRejectionBeforeRecovery()
     {
         var science = WorkflowSource.Science;
@@ -97,9 +158,9 @@ public sealed class ScienceRecoveryBoundaryTests
         var loopGate = science.IndexOf("RemainingAttemptGate(", loop, StringComparison.Ordinal);
         var loopProbe = science.IndexOf("if (probe.RequiresReprobe)", loop, StringComparison.Ordinal);
         var exhausted = science.IndexOf("var exhaustedAttempts", StringComparison.Ordinal);
-        var guideRecovery = science.IndexOf("if (quality.Code == \"GUIDING_UNSTABLE\")", StringComparison.Ordinal);
+        var accepted = science.IndexOf("savedAtrFrames++;", exhausted, StringComparison.Ordinal);
         Assert.True(entry >= 0 && entry < probe && loopGate > loop && loopGate < loopProbe);
-        Assert.True(exhausted > loopProbe && exhausted < guideRecovery);
+        Assert.True(exhausted > loopProbe && accepted > exhausted);
     }
 
     [Fact]

@@ -60,10 +60,11 @@ public static class G3SepShortPositionPolicy
             // patch or companion nearer the WCS prediction. The candidate list
             // above still enforces the original WCS window.
             var tracked = SlitTargetIdentifier.Identify(candidates, anchor.Centroid,
-                G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels, minimumSnr, minimumUniqueness);
+                G3ShortPositionMeasurementPolicy.MaximumTrackedRepeatSeparationPixels, minimumSnr, minimumUniqueness);
             metrics["sepPreviousParentX"] = anchor.Centroid.X;
             metrics["sepPreviousParentY"] = anchor.Centroid.Y;
-            metrics["sepMaximumParentContinuityPixels"] = G3ShortPositionMeasurementPolicy.MaximumRepeatSeparationPixels;
+            metrics["sepMaximumParentContinuityPixels"] =
+                G3ShortPositionMeasurementPolicy.MaximumTrackedRepeatSeparationPixels;
             if (tracked.Gate.Disposition == GateDisposition.Passed && tracked.Target is not null)
                 identified = tracked with { PredictedPoint = prediction,
                     PredictionResidualPixels = Distance(tracked.Target.Centroid, prediction) };
@@ -72,7 +73,7 @@ public static class G3SepShortPositionPolicy
                 return Reject("G3_SEP_AMBIGUOUS", "No unique current SEP parent continues the prior same-setting position inside the unchanged repeat limit; another nearby region is not a substitute.");
             // With no candidate inside the repeat radius, retain a unique WCS
             // measurement only for the existing disagreement/re-probe policy.
-            // Its separation is necessarily >4 px: ConfirmRepeat cannot accept
+            // Its separation is necessarily >4.9 px: ConfirmRepeat cannot accept
             // it as continuity. Ambiguous temporal matches never take this path.
             metrics["sepParentContinuityPixels"] = Distance(identified.Target!.Centroid, anchor.Centroid);
         }

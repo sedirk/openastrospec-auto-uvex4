@@ -30,12 +30,7 @@ internal sealed partial class RealObservationStageRunner
             throw new ArgumentException("A same-detector formal orientation/scale anchor is required.");
         var inverse = G3WcsTargetProjector.SolveCenterForTargetAtPixel(target, anchor.Result,
             width, height, anchor.SolverIdentity, measured);
-        return new PlateSolveResult
-        {
-            Success = true, Coordinates = inverse.DesiredG3Center,
-            Pixscale = anchor.Result.Pixscale, PositionAngle = anchor.Result.PositionAngle,
-            Flipped = anchor.Result.Flipped,
-        };
+        return G3WcsTargetProjector.Recenter(anchor.Result, inverse.DesiredG3Center, width, height);
     }
 
     internal static TargetIdentification TargetInMeasuredCoarseModel(TargetIdentification measured)

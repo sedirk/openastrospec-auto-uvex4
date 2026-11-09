@@ -15,6 +15,32 @@ public sealed class G3SepShortPositionPolicyTests
         };
     private static readonly PixelPoint Prediction = new(510,400);
 
+    [Fact]
+    public void RecordedHd21641ShortPairUsesMeasuredLongCoreInsteadOfBrighterNearbyStar()
+    {
+        var stalePrediction = new PixelPoint(818.270072653771, 419.94964907718645);
+        var target = Component(827.88, 363.48) with
+        {
+            Flux = 15_000,
+            Snr = 35,
+        };
+        var brighterNeighbour = Component(740.3834793640729, 369.639736140839) with
+        {
+            Flux = 100_000,
+            Snr = 120,
+        };
+        // At 10 ms the recorded frame exposed only the brighter nearby parent;
+        // the target itself appeared only after the bounded exposure increase.
+        var wide = G3SepShortPositionPolicy.Measure(Image(brighterNeighbour), stalePrediction, 100);
+        Assert.Equal(brighterNeighbour.X, wide.Identification.Target!.Centroid.X);
+
+        var image = Image(brighterNeighbour, target);
+        var anchored = G3SepShortPositionPolicy.Measure(image, new(target.X, target.Y),
+            G3ShortPositionMeasurementPolicy.MaximumTrackedRepeatSeparationPixels + 5.292464064234724);
+        Assert.Equal("G3_SEP_POSITION_MEASURED", anchored.Gate.Code);
+        Assert.Equal(new PixelPoint(target.X, target.Y), anchored.Identification.Target!.Centroid);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -106,6 +132,40 @@ public sealed class G3SepShortPositionPolicyTests
         Assert.False(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(null,m,null,new('a',64),1,100).Accepted);
         Assert.True(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(m,m,new('a',64),new('b',64),2,100).Accepted);
         Assert.False(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(m,m,new('a',64),new('a',64),2,100).Accepted);
+    }
+
+    [Fact]
+    public void RecordedCompactHighSignalHandoffPairUsesBoundedTrackingDriftWarning()
+    {
+        var prediction = new PixelPoint(817.63, 431.41);
+        var first = G3SepShortPositionPolicy.Measure(
+            Image(Component(833.0063440805952,421.4257186982479) with { A=8, B=7 }), prediction, 100);
+        var second = G3SepShortPositionPolicy.Measure(
+            Image(Component(828.2262622156176,421.54777232085047) with { A=8, B=7 }), prediction, 100);
+        var result = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
+            first, second, new('a',64), new('b',64), 2, 100);
+        Assert.True(result.Accepted);
+        Assert.True(result.RepeatGate!.Disposition == GateDisposition.Passed);
+        Assert.Equal("G3_SHORT_REPEAT_CONFIRMED_WITH_TRACKING_DRIFT", result.Gate.Code);
+        Assert.InRange(result.Gate.Metrics!["shortRepeatSeparationPixels"], 4.77, 4.79);
+        Assert.Equal(4.9, result.Gate.Metrics["maximumTrackedShortRepeatSeparationPixels"]);
+    }
+
+    [Fact]
+    public void TrackingDriftWarningNeverAcceptsPersistentSplitOrWeakParents()
+    {
+        var first = G3SepShortPositionPolicy.Measure(SplitImage(500,390), Prediction, 100);
+        var second = G3SepShortPositionPolicy.Measure(SplitImage(505,390), Prediction, 100);
+        Assert.Equal("G3_SEP_PARENT_BLEND_UNRESOLVED",
+            G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
+                first, second, new('a',64), new('b',64), 2, 100).Gate.Code);
+
+        var weak = G3SepShortPositionPolicy.Measure(
+            Image(Component(500,390) with { Snr=12 }), Prediction, 100, minimumSnr: 8);
+        var moved = G3SepShortPositionPolicy.Measure(
+            Image(Component(505,390) with { Snr=12 }), Prediction, 100, minimumSnr: 8);
+        Assert.False(G3ShortPositionMeasurementPolicy.EvaluateConfirmation(
+            weak, moved, new('a',64), new('b',64), 2, 100).Accepted);
     }
 
     [Theory]

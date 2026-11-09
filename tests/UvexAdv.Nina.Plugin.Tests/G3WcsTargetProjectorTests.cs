@@ -9,6 +9,29 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class G3WcsTargetProjectorTests
 {
     [Theory]
+    [InlineData("same")] [InlineData("changed")] [InlineData("missing")] [InlineData("cancel")]
+    public async Task WaypointAndCarryForwardReuseDigestValidationWithoutAcceptingChangedEvidence(string mode)
+    {
+        var c = new Coordinates(10, 20, Epoch.J2000, Coordinates.RAType.Degrees);
+        var evidence = new PlateSolveEvidence(new PlateSolveResult { Success = true, Coordinates = c }, c,
+            0, "PL3", "frame.fit", "formal.json", new('A',64), 1920, 1080, 1, DateTimeOffset.UtcNow);
+        Task<string> Read(string _, CancellationToken __) => mode switch {
+            "missing" => throw new IOException("fixture missing"),
+            "cancel" => throw new OperationCanceledException(),
+            _ => Task.FromResult(new string(mode == "same" ? 'A' : 'B', 64)) };
+        if (mode == "cancel")
+        {
+            await Assert.ThrowsAsync<OperationCanceledException>(() => G3SparseRecoveryWorkflow.ValidateFormalEvidenceAsync(evidence, Read, default));
+            return;
+        }
+        var gate = await G3SparseRecoveryWorkflow.ValidateFormalEvidenceAsync(evidence, Read, default);
+        Assert.Equal(mode == "same", gate.Disposition == GateDisposition.Passed);
+        if (mode != "same")
+            await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("unknown-gate", gate.Code, gate,
+                ObservationStage.AcquireG3SlitField);
+    }
+
+    [Theory]
     [InlineData("FormalSolver", true, true)]
     [InlineData("FormalSolver", false, false)]
     [InlineData("RegisteredMosaicWcs", true, false)]
@@ -23,6 +46,8 @@ public sealed class G3WcsTargetProjectorTests
             new('A', 64), 1920, 1080, 1, DateTimeOffset.UtcNow) { Authority = authority };
         var footprint = new G3OverlapFootprint(1920, 1080, .381, 77.7, 5);
         Assert.Equal(direct, G3SparseRecoveryWorkflow.CanApproachDirectly(evidence));
+        Assert.Equal(direct, G3SparseRecoveryWorkflow.CanAdvanceReturnWaypoint(evidence, "current.fit"));
+        Assert.False(G3SparseRecoveryWorkflow.CanAdvanceReturnWaypoint(evidence, "derived-mosaic.fit"));
         // Approximately the recorded mid0 initial offset. Before ADR-0045 even
         // a formal solution was divided into tiny overlap segments.
         var plan = G3SparseRecoveryWorkflow.PlanCorrection(evidence, footprint, 1800, 600, 5398);

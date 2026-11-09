@@ -100,7 +100,11 @@ public sealed class ClockRecoveryFieldSourceTests
             "private GateResult ValidateG3SolveProbeImage(");
         Ordered(ladder, "var tierCount = currentPositionCheck ? 1 : preset.ExposureMilliseconds.Count",
             "for (var index = 0; index < tierCount; index++)", "var beforeProbeMountReadback = CaptureG3FrameMountReadback()",
-            "captured = await CaptureG3FullFrameForAcquisitionAsync(");
+            "captured = await CaptureG3NativeSingleFrameForAcquisitionAsync(");
+        Assert.DoesNotContain("CaptureG3FullFrameForAcquisitionAsync(", ladder);
+        Assert.Equal(1, ladder.Split("captured = await CaptureG3NativeSingleFrameForAcquisitionAsync(").Length - 1);
+        Ordered(ladder, "new Phd2SingleFrameRequest(", "exposureMilliseconds,",
+            "configuration.G3.Binning,", "configuration.G3.GainPercent,", "path)");
         Assert.Contains("exposureMilliseconds = preset.ExposureMilliseconds.Take(tierCount).ToArray()", ladder);
         Assert.Contains("mountMotionAuthorized = !currentPositionCheck && boundedSparseRecoveryAuthorized", ladder);
     }
@@ -180,13 +184,15 @@ public sealed class ClockRecoveryFieldSourceTests
     public void ProbeConnectionAndBothCapturePrimitivesRejectExternalPreviewBeforeTakeoverOrRetry()
     {
         var source = Source("RealObservationStageRunner.cs");
-        var connected = Section(source, "private async Task EnsurePhdConnectedAsync", "private void RequireClockCurrentFieldExistingPhdOwner");
+        var connected = Section(source, "private async Task EnsurePhdConnectedAsync", "private async Task RequireClockCurrentFieldExistingPhdOwnerAsync");
         Ordered(connected, "if (clockCurrentFieldProbeActive)", "cancellationToken.ThrowIfCancellationRequested()",
             "if (!phd2.IsConnected || !phd2.Snapshot.IsConnected)",
             "throw new PhysicalActionGateException", "return;", "await phd2.ConnectAsync(cancellationToken)");
-        var guard = Section(source, "private void RequireClockCurrentFieldExistingPhdOwner", "private async Task<PlateSolveEvidence> SolveExternalFitsAsync");
-        Ordered(guard, "if (!clockCurrentFieldProbeActive) return", "var state = phd2.Snapshot",
-            "(rejectedBeforeMutationState ?? state.AppState) != Phd2AppState.Stopped",
+        var guard = Section(source, "private async Task RequireClockCurrentFieldExistingPhdOwnerAsync", "private async Task<PlateSolveEvidence> SolveExternalFitsAsync");
+        Ordered(guard, "if (!clockCurrentFieldProbeActive) return", "var before = phd2.Snapshot",
+            "rejectedBeforeMutationState ?? await phd2.GetAppStateAsync(token)", "var state = phd2.Snapshot",
+            "!ClockProbeReadbackIsSameStoppedOwner(before, state)",
+            "appState != Phd2AppState.Stopped",
             "throw new PhysicalActionGateException");
         Assert.Contains("new PhysicalActionGateException(RejectClockCurrentFieldPhdOwner(", guard);
         foreach (var (start, end, capture) in new[]
@@ -194,14 +200,14 @@ public sealed class ClockRecoveryFieldSourceTests
             ("private async Task<Phd2SingleFrameResult> CaptureG3FullFrameCoreAsync",
                 "private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameForAcquisitionAsync", "phd2.CaptureFullFrameAsync"),
             ("private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameCoreAsync",
-                "private GateResult ValidateCorrectionBudget", "phd2.CaptureSingleFrameWithParametersAsync"),
+                "private GateResult ValidateCorrectionBudget", "G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync"),
         })
         {
             var core = Section(source, start, end);
-            Ordered(core, "RequireClockCurrentFieldExistingPhdOwner();", "var previewState = phd2.Snapshot.AppState",
-                "RequireClockCurrentFieldExistingPhdOwner(previewState)", "await phd2.StopCaptureAndConfirmAsync",
+            Ordered(core, "await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken)", "var previewState = phd2.Snapshot.AppState",
+                "&& !clockCurrentFieldProbeActive", "await phd2.StopCaptureAndConfirmAsync",
                 "return await " + capture, "catch (Phd2CaptureException ex)",
-                "RequireClockCurrentFieldExistingPhdOwner(ex.RejectedBeforeMutationState)",
+                "await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken, ex.RejectedBeforeMutationState)",
                 "await phd2.StopCaptureAndConfirmAsync", "return await " + capture);
         }
     }

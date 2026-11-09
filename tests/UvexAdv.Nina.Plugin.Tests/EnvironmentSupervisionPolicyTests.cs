@@ -8,10 +8,12 @@ public sealed class EnvironmentSupervisionPolicyTests
     [Theory]
     [InlineData(false, "AIWeatherSafetyMonitor", "No_Device", true)]
     [InlineData(true, "AIWeatherSafetyMonitor", "No_Device", false)]
+    [InlineData(false, "SkySentinelSafetyMonitor", "No_Device", true)]
+    [InlineData(true, "SkySentinelSafetyMonitor", "No_Device", false)]
     [InlineData(false, "different-monitor", "No_Device", false)]
     [InlineData(false, "No_Device", "No_Device", false)]
     [InlineData(false, "AIWeatherSafetyMonitor", "NINA.OpenMeteo.Client", false)]
-    public void AiWeatherAuthorityRequiresExplicitPolicyAndExactSelections(
+    public void SkySafetyMonitorAuthorityRequiresExplicitPolicyAndExactSelections(
         bool requireWeather, string monitor, string weather, bool expected)
     {
         var devices = new NinaEnvironmentDeviceSelection(monitor, "roof", weather, "cover");

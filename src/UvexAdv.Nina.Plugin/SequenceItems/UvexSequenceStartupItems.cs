@@ -64,16 +64,20 @@ public sealed class UvexSelectRealModeItem : SequenceItem, IValidatable
             catch (InvalidOperationException ex) { Issues.Add(ex.Message); }
         return Issues.Count == 0;
     }
-    public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+    public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (!EnableRealMode) return;
+        if (!EnableRealMode) return Task.CompletedTask;
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
-        // Same exclusive gate as observation/focus; cannot hot-switch a running night.
-        using var reservation = await host.ReserveNightAsync(this, true, token);
+        // Startup cards carry preferences into the later night container. They
+        // may inspect an already-waiting safety boundary but never own or
+        // transfer its lease; UvexNightSequenceContainer performs the full
+        // idempotent handoff once all night settings are locked.
+        host.ValidateStartupPreferenceAccess();
         token.ThrowIfCancellationRequested();
         settings.ObservationUseRealMode = true;
         ObservationStatusProgress.Wrap(progress).Report(new ApplicationStatus { Source = "OpenAstroSpec 启动", Status = "真实模式已选择 · 待安全检查" });
+        return Task.CompletedTask;
     }
     public override object Clone()
     {
@@ -119,7 +123,7 @@ public sealed class UvexStartSafetyMonitorItem : SequenceItem, IValidatable
         token.ThrowIfCancellationRequested();
         if (!StartMonitoring) return;
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
-        using var reservation = await host.ReserveNightAsync(this, true, token);
+        host.ValidateStartupPreferenceAccess();
         var profile = profiles.ActiveProfile;
         var selectedId = profile.SafetyMonitorSettings.Id;
         if (!IsSelected(selectedId)) throw new InvalidOperationException("未选择安全监视器；不能连接。");

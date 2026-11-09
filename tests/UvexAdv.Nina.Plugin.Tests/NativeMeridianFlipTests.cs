@@ -73,6 +73,16 @@ public sealed class NativeMeridianFlipTests
             await bridge.ExecuteMarkerAsync(stage, new Progress<NINA.Core.Model.ApplicationStatus>(), timeout.Token);
         await run;
         Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);
+        Assert.Equal("RUN_SEGMENT_COMPLETED", host.Dashboard.Run.RecentEvents.Last().Code);
+        var graph = ObservationWorkflowProjection.Build(host.Dashboard);
+        Assert.All(graph.Nodes.Where(node => node.GateCode == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY"),
+            node => Assert.Equal(ObservationWorkflowNodeState.Skipped, node.StateKind));
+        Assert.Equal("观测段结束 · 等待中天交接", ObservationUiPresentation.RunStateName(
+            host.Dashboard.Run.State, host.Dashboard.Run.RecentEvents.Last().Code, System.Globalization.CultureInfo.GetCultureInfo("zh-CN")));
+        Assert.Equal("Segment ended; awaiting meridian handoff", ObservationUiPresentation.RunStateName(
+            host.Dashboard.Run.State, host.Dashboard.Run.RecentEvents.Last().Code, System.Globalization.CultureInfo.GetCultureInfo("en-US")));
+        Assert.Contains("不是目标完成", host.Dashboard.Run.StatusMessage);
+        Assert.Null(new ObservationAttentionNotificationTracker().Evaluate(host.Dashboard.Run, null).Notification);
         Assert.True(bridge.HasCompletedFinalMarker);
         Assert.False(bridge.HasTerminalGateResult);
         Assert.True(runner.OwnerJoined);
@@ -257,7 +267,7 @@ public sealed class NativeMeridianFlipTests
         Assert.Contains("independent.Error is { } independentError", source[durable..journal]);
         Assert.Contains("independent.Resolution?.State is { Phase: not SlitPlacementPendingPhase.SettledBudgetLedger }", source[durable..journal]);
         Assert.True(source.IndexOf("await GuideStateBoundaryRetirement.RetireMeridianSegmentAsync", StringComparison.Ordinal) > journal);
-        Assert.True(source.IndexOf("telescopeMediator.SetTrackingEnabled(false)", StringComparison.Ordinal) > journal);
+        Assert.True(source.IndexOf("NativeMeridianMountOperation.SetTrackingAndVerifyAsync(false", StringComparison.Ordinal) > journal);
     }
 
     [Fact]
@@ -319,6 +329,78 @@ public sealed class NativeMeridianFlipTests
         Assert.Equal(blocked, NativeMeridianJournalStore.PendingGate(path) is not null);
         await File.WriteAllTextAsync(path, "{corrupt}");
         Assert.Equal("NATIVE_FLIP_JOURNAL_UNREADABLE", NativeMeridianJournalStore.PendingGate(path)?.Code);
+    }
+
+    [Fact]
+    public async Task RecordedOctober30ScheduledHandoffAcceptsTrackingFalseThenDispatchesExactlyOneFlip()
+    {
+        // HD 222940, 2026-10-30 21:12:45: OwnersIdle was durable, tracking
+        // really stopped, but false was mistaken for command failure. Preserve
+        // the already accepted 600s frame while exercising both tracking ports.
+        var state = Ready(PierSide.pierWest);
+        var events = new List<string>();
+        var session = new NativeMeridianSession(new(2, 4, 600), _ => true);
+        session.RecordSegment("recorded-before", 1, 1, 1, 600);
+        Assert.True(session.RequestAtFrameBoundary(725));
+        bool Tracking(bool enabled)
+        {
+            events.Add("tracking-" + enabled);
+            state = state with { Tracking = enabled };
+            return enabled; // Exact N.I.N.A. semantics, NOT a success flag.
+        }
+        events.Add("OwnersIdle");
+        await NativeMeridianMountOperation.SetTrackingAndVerifyAsync(false, PierSide.pierWest,
+            Tracking, () => state, () => { }, _ => Task.CompletedTask, default);
+        events.Add("WaitingForMeridian");
+        await NativeMeridianMountOperation.SetTrackingAndVerifyAsync(true, PierSide.pierWest,
+            Tracking, () => state, () => { }, _ => Task.CompletedTask, default);
+        events.Add("CommandPending");
+        var side = await NativeMeridianMountOperation.ExecuteAsync(PierSide.pierWest, () => state,
+            _ => { events.Add("flip"); state = Ready(PierSide.pierEast); return Task.FromResult(true); },
+            () => events.Add("stop"), () => { }, _ => Task.CompletedTask, default);
+        Assert.Equal(PierSide.pierEast, side);
+        session.ConfirmFlip();
+        Assert.Equal(new[] { "OwnersIdle", "tracking-False", "WaitingForMeridian", "tracking-True", "CommandPending", "flip" }, events);
+        Assert.Equal(1, session.RemainingPlan().ScienceFrames);
+        Assert.Equal(3, session.RemainingPlan().MaximumAttempts);
+        Assert.Equal(600, session.AcceptedSeconds);
+    }
+
+    [Theory]
+    [InlineData("tracking")]
+    [InlineData("slewing")]
+    [InlineData("disconnected")]
+    [InlineData("side")]
+    [InlineData("parked")]
+    [InlineData("home")]
+    public async Task TrackingSetterReturnIsNeverStopProofWithoutFreshStationarySameSideReadback(string invalid)
+    {
+        var state = Ready(PierSide.pierWest);
+        var calls = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => NativeMeridianMountOperation.SetTrackingAndVerifyAsync(
+            false, PierSide.pierWest, _ => { calls++; return false; }, () => state, () => { }, _ =>
+            {
+                state = state with { Tracking = invalid == "tracking", Slewing = invalid == "slewing",
+                    Connected = invalid != "disconnected", Side = invalid == "side" ? PierSide.pierEast : PierSide.pierWest,
+                    Parked = invalid == "parked", Home = invalid == "home" };
+                return Task.CompletedTask;
+            }, default));
+        Assert.Equal(1, calls); // Never retry the tracking operation or dispatch a flip.
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationAndUnsafeConditionsDuringTrackingSettleCannotPermitTheNextAction(bool unsafeWeather)
+    {
+        using var cancel = new CancellationTokenSource();
+        var afterSetter = false;
+        var operation = NativeMeridianMountOperation.SetTrackingAndVerifyAsync(false, PierSide.pierWest,
+            _ => { afterSetter = true; return false; }, () => Ready(PierSide.pierWest) with { Tracking = !afterSetter },
+            () => { if (afterSetter && unsafeWeather) throw new InvalidOperationException("unsafe weather"); },
+            _ => { if (!unsafeWeather) cancel.Cancel(); return Task.CompletedTask; }, cancel.Token);
+        if (unsafeWeather) await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
+        else await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
     }
 
     [Fact]

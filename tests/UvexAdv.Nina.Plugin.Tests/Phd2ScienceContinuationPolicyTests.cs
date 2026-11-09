@@ -7,6 +7,140 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2ScienceContinuationPolicyTests
 {
+    [Theory]
+    [InlineData("GUIDING_LOST", true)]
+    [InlineData("GUIDING_UNSTABLE", true)]
+    [InlineData("GUIDING_NOT_STABLE", true)]
+    [InlineData("PHD2_SCIENCE_GUIDE_EPOCH_CHANGED", false)]
+    [InlineData("G3_POST_WCS_SHORT_UNCONFIRMED", false)]
+    public void OnlySameEpochReadOnlyCheckMayPrecedeMotionLedgerFunding(
+        string code, bool expected) =>
+        Assert.Equal(expected, Phd2ScienceContinuationPolicy.MayVerifySettledGuideInPlace(code));
+
+    [Theory]
+    [InlineData("GUIDING_LOST")]
+    [InlineData("GUIDING_UNSTABLE")]
+    [InlineData("GUIDING_NOT_STABLE")]
+    public void StaleSettleAfterCompletedProbeCanResumeOnlyTheSameSelectedStarAndLock(string sourceCode)
+    {
+        var ledger = Ledger() with
+        {
+            OriginLockX = 10,
+            OriginLockY = 20,
+            CurrentLockX = 30,
+            CurrentLockY = 40,
+            RequestedLockX = 30,
+            RequestedLockY = 40,
+        };
+        var state = State() with
+        {
+            LockPosition = new(30, 40),
+            SelectedStar = new(10, 20),
+            GuideOutput = new(
+                1, 0, Start, Start, false,
+                new Phd2GuideStep(1, 0, 0, 100, 3, 0, 0)),
+        };
+
+        Assert.True(Phd2ScienceContinuationPolicy.CanResettleAfterExposureAtSettledLock(
+            sourceCode, ledger, state, 1, 86, new(10, 20), new(30, 40), new(30, 40), 0.05));
+    }
+
+    [Theory]
+    [InlineData(86)]
+    [InlineData(87)]
+    public void NativeGuideSelfRecoveryAcceptsOnlyTheSameLiveFieldAndSelectedLock(long guideEpoch)
+    {
+        var state = State() with
+        {
+            GuideEpoch = guideEpoch,
+            LockPosition = new(30, 40),
+            SelectedStar = new(10, 20),
+            GuideOutput = new(
+                1, 0, Start, Start, false,
+                new Phd2GuideStep(1, 0, 0, 100, 3, 0, 0)),
+        };
+
+        Assert.True(Phd2ScienceContinuationPolicy.IsSameFieldGuideActiveAfterLoss(
+            state, 1, new(10, 20), new(30, 40), 0.05));
+    }
+
+    [Theory]
+    [InlineData("LOST_LOCK")]
+    [InlineData("SELECTION_CHANGED")]
+    [InlineData("LOCK_CHANGED")]
+    [InlineData("CONNECTION_CHANGED")]
+    [InlineData("OUTPUT_FAILED")]
+    [InlineData("PENDING_SETTLE")]
+    [InlineData("PAUSED")]
+    public void NativeGuideSelfRecoveryRejectsChangedOrUnsafeState(string kind)
+    {
+        var state = State() with
+        {
+            LockPosition = new(30, 40),
+            SelectedStar = new(10, 20),
+            GuideOutput = new(
+                1, 0, Start, Start, kind == "OUTPUT_FAILED",
+                new Phd2GuideStep(1, 0, 0, 100, 3, 0, 0)),
+        };
+        state = kind switch
+        {
+            "LOST_LOCK" => state with { AppState = Phd2AppState.LostLock },
+            "SELECTION_CHANGED" => state with { SelectedStar = new(11, 20) },
+            "LOCK_CHANGED" => state with { LockPosition = new(31, 40) },
+            "CONNECTION_CHANGED" => state with { ConnectionEpoch = 2 },
+            "PENDING_SETTLE" => state with { PendingSettleOperationId = 9 },
+            "PAUSED" => state with { Phd2Paused = true },
+            _ => state,
+        };
+
+        Assert.False(Phd2ScienceContinuationPolicy.IsSameFieldGuideActiveAfterLoss(
+            state, 1, new(10, 20), new(30, 40), 0.05));
+    }
+
+    [Theory]
+    [InlineData("LOST_STATE")]
+    [InlineData("GUIDE_EPOCH_CHANGED")]
+    [InlineData("SELECTION_CHANGED")]
+    [InlineData("LOCK_CHANGED")]
+    [InlineData("OUTPUT_FAILED")]
+    [InlineData("PENDING_SETTLE")]
+    [InlineData("PAUSED")]
+    public void StaleSettleRecoveryRejectsEveryChangedOrUnsafeOwnerState(string kind)
+    {
+        var ledger = Ledger() with
+        {
+            OriginLockX = 10,
+            OriginLockY = 20,
+            CurrentLockX = 30,
+            CurrentLockY = 40,
+            RequestedLockX = 30,
+            RequestedLockY = 40,
+        };
+        var state = State() with
+        {
+            LockPosition = new(30, 40),
+            SelectedStar = new(10, 20),
+            GuideOutput = new(
+                1, 0, Start, Start, kind == "OUTPUT_FAILED",
+                new Phd2GuideStep(1, 0, 0, 100, 3, 0, 0)),
+        };
+        state = kind switch
+        {
+            "LOST_STATE" => state with { AppState = Phd2AppState.LostLock },
+            "GUIDE_EPOCH_CHANGED" => state with { GuideEpoch = 87 },
+            "SELECTION_CHANGED" => state with { SelectedStar = new(11, 20) },
+            "LOCK_CHANGED" => state with { LockPosition = new(31, 40) },
+            "PENDING_SETTLE" => state with { PendingSettleOperationId = 9 },
+            "PAUSED" => state with { AutomationPaused = true },
+            _ => state,
+        };
+        var actualLock = kind == "LOCK_CHANGED" ? new Phd2Point(31, 40) : new Phd2Point(30, 40);
+        var sourceCode = kind == "LOST_STATE" ? "GUIDING_LOST" : "GUIDING_UNSTABLE";
+
+        Assert.False(Phd2ScienceContinuationPolicy.CanResettleAfterExposureAtSettledLock(
+            sourceCode, ledger, state, 1, 86, new(10, 20), new(30, 40), actualLock, 0.05));
+    }
+
     private static readonly DateTimeOffset Start = DateTimeOffset.Parse("2026-09-11T16:17:15Z");
     private static Phd2LockShiftPendingState Ledger() => new(
         3, "run", new string('a', 32), new string('A', 64), new string('B', 64), new string('C', 64),
@@ -127,6 +261,67 @@ public sealed class Phd2ScienceContinuationPolicyTests
         Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(after with { AttemptsUsed = 8 }, Start.AddSeconds(805)));
         Assert.False(Phd2ScienceContinuationPolicy.HasReplacementBudget(after with { CumulativeCommandedPixels = 100 }, Start.AddSeconds(805)));
         Assert.Equal(Start.AddSeconds(1000), after.ToRecoveryEpisodePlannerLedger(Start.AddSeconds(1000)).StartedUtc);
+    }
+
+    [Fact]
+    public void SameFieldGuideEpochRebasePreservesBudgetAndTranslatesOnlyTheCompletedEndpoint()
+    {
+        var before = Ledger() with
+        {
+            OriginLockX = 10,
+            OriginLockY = 20,
+            CurrentLockX = 30,
+            CurrentLockY = 40,
+            RequestedLockX = 30,
+            RequestedLockY = 40,
+            ExcludedAtrExposureSeconds = 600,
+            UpdatedUtc = Start.AddSeconds(700),
+        };
+        var now = Start.AddSeconds(700);
+        var rebased = before.RebaseAfterSameFieldGuideEpoch(
+            1, 87, new(100, 200), .05, now,
+            Path.Combine(Path.GetTempPath(), "same-field-rebased.fit"),
+            new string('D', 64),
+            "recorded same-field thin-cloud recovery");
+
+        Assert.Equal(80, rebased.OriginLockX);
+        Assert.Equal(180, rebased.OriginLockY);
+        Assert.Equal(100, rebased.CurrentLockX);
+        Assert.Equal(200, rebased.CurrentLockY);
+        Assert.Equal(100, rebased.RequestedLockX);
+        Assert.Equal(200, rebased.RequestedLockY);
+        Assert.Equal(87, rebased.GuideEpoch);
+        Assert.Equal(before.AttemptsUsed, rebased.AttemptsUsed);
+        Assert.Equal(before.CumulativeCommandedPixels, rebased.CumulativeCommandedPixels);
+        Assert.Equal(before.StartedUtc, rebased.StartedUtc);
+        Assert.Equal(before.ExcludedAtrExposureSeconds, rebased.ExcludedAtrExposureSeconds);
+        Assert.Equal(Phd2LockShiftPendingPhase.SettledBudgetLedger, rebased.Phase);
+        Assert.Empty(rebased.Validate());
+    }
+
+    [Theory]
+    [InlineData("connection")]
+    [InlineData("past-epoch")]
+    [InlineData("ambiguous-endpoint")]
+    [InlineData("pending")]
+    public void SameFieldGuideEpochRebaseRejectsChangedOrUnprovenOwnership(string failure)
+    {
+        var state = Ledger() with
+        {
+            CurrentLockX = failure == "ambiguous-endpoint" ? 31 : 30,
+            CurrentLockY = 40,
+            RequestedLockX = 30,
+            RequestedLockY = 40,
+        };
+        if (failure == "pending")
+            state = state with { Phase = Phd2LockShiftPendingPhase.ReturnRequired };
+        Assert.ThrowsAny<Exception>(() => state.RebaseAfterSameFieldGuideEpoch(
+            failure == "connection" ? 2 : 1,
+            failure == "past-epoch" ? 85 : 87,
+            new(100, 200), .05, Start.AddSeconds(100),
+            Path.Combine(Path.GetTempPath(), "same-field-rejected.fit"),
+            new string('E', 64),
+            "negative fixture"));
     }
 
     [Fact]

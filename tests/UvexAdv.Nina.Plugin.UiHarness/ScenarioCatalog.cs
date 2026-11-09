@@ -32,6 +32,10 @@ public static class ScenarioCatalog
         { HasSafetyStandby = true, SafetyStandbyStatus = "观测序列已结束；独立安全待机：AIWeather、晨光及 00:30 截止仍有效。未自动续跑。" }),
         new("independent-safety-standby-narrow", 540, 900, new ObservationDockMockViewModel
         { HasSafetyStandby = true, SafetyStandbyStatus = "观测序列已取消；独立安全待机：AIWeather、晨光及 00:30 截止仍有效。未自动续跑。" }),
+        new("safety-monitoring-only", 1180, 850, new ObservationDockMockViewModel
+        { HasSafetyStandby = true, SafetyStandbyNeedsAttention = true, SafetyStandbyStatus = "自动收口未确认：仅保留安全监控与报警，不能保证关顶，请人工处理。赤道仪停止尚未确认，未发出机械动作。" }),
+        new("safety-closeout-failed-narrow", 540, 900, new ObservationDockMockViewModel
+        { HasSafetyStandby = true, SafetyStandbyNeedsAttention = true, SafetyStandbyStatus = "独立安全收口未完成；仅监控报警，不自动重试，请人工处理：屋顶关闭读回超时，未确认关顶。" }),
         new("g3-predicted-target", 1180, 850, ObservationDockMockViewModel.PredictedTarget()),
         new("g3-predicted-target-narrow", 650, 900, ObservationDockMockViewModel.PredictedTarget()),
         new("cancel-stop-unconfirmed", 1040, 850, ObservationDockMockViewModel.CancelStopUnconfirmed()),
@@ -92,6 +96,8 @@ public static class ScenarioCatalog
         new("workflow-cancelling", 1040, 800, ObservationDockMockViewModel.WorkflowState("cancelling")),
         new("workflow-cancelled", 1040, 800, ObservationDockMockViewModel.WorkflowState("cancelled")),
         new("workflow-completed", 1180, 800, ObservationDockMockViewModel.WorkflowState("completed")),
+        new("workflow-meridian-segment", 1180, 800, ObservationDockMockViewModel.WorkflowState("meridian-segment")),
+        new("workflow-meridian-segment-narrow", 540, 800, ObservationDockMockViewModel.WorkflowState("meridian-segment")),
         new("workflow-narrow", 540, 700, ObservationDockMockViewModel.WorkflowState("fallback")),
         new("workflow-short", 760, 560, ObservationDockMockViewModel.WorkflowState("blocked")),
         new("main-focus", 900, 750, ObservationDockMockViewModel.Idle()) { TemplateKey="SepMainFocusPanel", AlternateViewModel=new MainFocusMock() },
@@ -316,7 +322,8 @@ public sealed class ObservationDockMockViewModel
 {
     public bool HasSafetyStandby { get; init; }
     public string SafetyStandbyStatus { get; init; } = string.Empty;
-    public ICommand CloseSafetyStandbyCommand => new NoOpCommand(true);
+    public bool SafetyStandbyNeedsAttention { get; init; }
+    public ICommand CloseSafetyStandbyCommand => new NoOpCommand(!SafetyStandbyNeedsAttention);
     private static readonly ICommand EnabledCommand = new NoOpCommand(true);
     private static readonly ICommand DisabledCommand = new NoOpCommand(false);
 
@@ -445,10 +452,11 @@ public sealed class ObservationDockMockViewModel
             IsRunActive = graph.RunState is not (ObservationRunState.Idle or ObservationRunState.Completed or ObservationRunState.Cancelled),
             HasFailure = graph.RunState == ObservationRunState.PausedNeedsAttention,
             PauseReason = graph.RunState == ObservationRunState.PausedNeedsAttention ? current?.Summary ?? "" : "",
-            StateText = ObservationUiPresentation.RunStateName(graph.RunState, CultureInfo.GetCultureInfo("zh-CN")),
-            StatusMessage = current?.Summary ?? graph.RunSummary,
-            CurrentStageText = current?.Label ?? (terminal ? "本轮已结束" : "尚未开始"),
-            NextStageText = terminal ? "不再自动执行" : graph.RunState == ObservationRunState.PausedNeedsAttention
+            StateText = ObservationUiPresentation.RunStateName(graph.RunState,
+                scenario == "meridian-segment" ? "RUN_SEGMENT_COMPLETED" : null, CultureInfo.GetCultureInfo("zh-CN")),
+            StatusMessage = scenario == "meridian-segment" ? "本观测段已保存，等待中天交接；不是目标完成，科学帧和原预算保留。" : current?.Summary ?? graph.RunSummary,
+            CurrentStageText = scenario == "meridian-segment" ? "—" : current?.Label ?? (terminal ? "本轮已结束" : "尚未开始"),
+            NextStageText = scenario == "meridian-segment" ? "—" : terminal ? "不再自动执行" : graph.RunState == ObservationRunState.PausedNeedsAttention
                 ? current?.Label ?? "等待复核" : next?.Label ?? (graph.RunState == ObservationRunState.Idle ? stages[0].Label : "等待当前阶段结束"),
             ProgressPercent = completed * 100d / stages.Length,
             ProgressSummary = $"模拟总体阶段 {completed}/{stages.Length} · {completed * 100d / stages.Length:F0}%",

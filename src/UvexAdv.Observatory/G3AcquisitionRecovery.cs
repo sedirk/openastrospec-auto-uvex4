@@ -224,8 +224,24 @@ public sealed record G3AcquisitionMotionState(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     double ExcludedAtrExposureSeconds = 0,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    int MeasuredPixelCorrectionAttempts = 0)
+    int MeasuredPixelCorrectionAttempts = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    G3VerifiedReturnWaypoint? VerifiedReturnWaypoint = null)
 {
+    // The TAN/radius origin NEVER changes. Only the separately authenticated
+    // return destination may advance after a new formal-image verification.
+    [JsonIgnore] public double ReturnRaDegrees => VerifiedReturnWaypoint?.RaDegrees ?? OriginRaDegrees;
+    [JsonIgnore] public double ReturnDeclinationDegrees => VerifiedReturnWaypoint?.DeclinationDegrees ?? OriginDeclinationDegrees;
+    [JsonIgnore] public double CurrentReturnDistanceArcseconds
+    {
+        get
+        {
+            var current = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(OriginRaDegrees,
+                OriginDeclinationDegrees, CurrentRaTangentOffsetArcseconds, CurrentDeclinationOffsetArcseconds);
+            return G3AcquisitionMotionPlanner.AngularSeparationArcseconds(ReturnRaDegrees,
+                ReturnDeclinationDegrees, current.RaDegrees, current.DecDegrees);
+        }
+    }
     [JsonIgnore]
     public DateTimeOffset MotionClockStartedUtc => StartedUtc.AddSeconds(ExcludedAtrExposureSeconds);
     // Schema 2 changes persisted offsets to the versioned TAN projection.
@@ -320,6 +336,20 @@ public sealed record G3AcquisitionMotionState(
             ExcludedAtrExposureSeconds > (UpdatedUtc - StartedUtc).TotalSeconds)
             issues.Add("G3 passive exposure credit is invalid.");
         if (string.IsNullOrWhiteSpace(DeclaredEvidencePath)) issues.Add("Declared recovery evidence path is missing.");
+        if (VerifiedReturnWaypoint is { } waypoint)
+        {
+            ValidateRa(issues, waypoint.RaDegrees, "verified return RA");
+            ValidateDec(issues, waypoint.DeclinationDegrees, "verified return Dec");
+            if (waypoint.ChargedAction < 1 || waypoint.ChargedAction > CorrectionAttempts ||
+                waypoint.VerifiedUtc < StartedUtc || waypoint.VerifiedUtc > UpdatedUtc ||
+                waypoint.FrameCompletedUtc < StartedUtc || waypoint.FrameCompletedUtc > waypoint.VerifiedUtc ||
+                !IsSha256(waypoint.FrameSha256) || !IsSha256(waypoint.FormalEvidenceSha256) ||
+                !IsSha256(waypoint.MountBindingSha256) || string.IsNullOrWhiteSpace(waypoint.FramePath) ||
+                string.IsNullOrWhiteSpace(waypoint.FormalEvidencePath) ||
+                G3AcquisitionMotionPlanner.AngularSeparationArcseconds(OriginRaDegrees, OriginDeclinationDegrees,
+                    waypoint.RaDegrees, waypoint.DeclinationDegrees) > MaximumRadiusArcseconds)
+                issues.Add("Verified return waypoint provenance, charged action, clock or original radius is invalid.");
+        }
         return issues.AsReadOnly();
     }
 
@@ -405,19 +435,22 @@ public static class G3AcquisitionMotionPlanner
         double previousRadiusArcseconds,
         double commandResidualArcseconds,
         double reportedDriftArcseconds,
-        double actualMoveArcseconds) =>
+        double actualMoveArcseconds,
+        double stableIntermediateResidualToleranceArcseconds) =>
         state.Validate().Count == 0 &&
         state.Phase == G3AcquisitionMotionPhase.ReturnIntent &&
         double.IsFinite(previousRadiusArcseconds) &&
         double.IsFinite(commandResidualArcseconds) &&
         commandResidualArcseconds > state.ArrivalToleranceArcseconds &&
-        commandResidualArcseconds <= 2 * state.ArrivalToleranceArcseconds &&
+        double.IsFinite(stableIntermediateResidualToleranceArcseconds) &&
+        stableIntermediateResidualToleranceArcseconds >= state.ArrivalToleranceArcseconds &&
+        commandResidualArcseconds <= stableIntermediateResidualToleranceArcseconds &&
         double.IsFinite(reportedDriftArcseconds) && reportedDriftArcseconds >= 0 &&
         reportedDriftArcseconds <= state.ArrivalToleranceArcseconds &&
         double.IsFinite(actualMoveArcseconds) && actualMoveArcseconds >= 0 &&
         actualMoveArcseconds <= state.MaximumSingleCorrectionArcseconds &&
         state.CurrentRadiusArcseconds <= state.MaximumRadiusArcseconds &&
-        previousRadiusArcseconds - state.CurrentRadiusArcseconds > state.ArrivalToleranceArcseconds;
+        previousRadiusArcseconds - state.CurrentReturnDistanceArcseconds > state.ArrivalToleranceArcseconds;
 
     public static G3AcquisitionMotionState ContinueSettledLedger(
         G3AcquisitionMotionState state,
@@ -522,7 +555,7 @@ public static class G3AcquisitionMotionPlanner
         // the existing return unaffordable, keep the already reserved smaller
         // segments. Subsequent WCS moves still pass the usual outbound AND
         // segmented-return checks; no spent charge is refunded or enlarged.
-        var inheritedRadius = state.CurrentRadiusArcseconds;
+        var inheritedRadius = state.CurrentReturnDistanceArcseconds;
         if (inheritedRadius > state.ArrivalToleranceArcseconds &&
             double.IsFinite(maximumSingle) && maximumSingle > state.MaximumSingleCorrectionArcseconds &&
             double.IsFinite(maximumCumulative))
@@ -634,15 +667,17 @@ public static class G3AcquisitionMotionPlanner
         // radially wrong direction. The guaranteed progress of a maximum
         // return command is therefore command-tolerance, not command.
         var guaranteedProgress = maximumCommandArcseconds - state.ArrivalToleranceArcseconds;
-        var returnMoves = radius <= 0
+        var returnDistance = AngularSeparationArcseconds(state.ReturnRaDegrees, state.ReturnDeclinationDegrees,
+            next.RaDegrees, next.DecDegrees);
+        var returnMoves = returnDistance <= 0
             ? 0
-            : checked((int)Math.Ceiling(radius / guaranteedProgress));
+            : checked((int)Math.Ceiling(returnDistance / guaranteedProgress));
         var requiredCumulative = state.CumulativeMotionArcseconds +
             move + state.ArrivalToleranceArcseconds +
             returnMoves * (maximumCommandArcseconds + state.ArrivalToleranceArcseconds);
         if (requiredCumulative > state.MaximumCumulativeMotionArcseconds + 1e-9)
         {
-            return BlockReserve("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT", "The outbound move plus a return to the reported origin exceeds the cumulative-motion envelope.", move, radius, targetBudget: true);
+            return BlockReserve("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT", "The outbound move plus a return to the saved verified return point exceeds the cumulative-motion envelope.", move, radius, targetBudget: true);
         }
         if (state.CorrectionAttempts + 1 + returnMoves > state.MaximumCorrectionAttempts)
         {
@@ -659,7 +694,7 @@ public static class G3AcquisitionMotionPlanner
                 returnMoves, targetBudget: true);
         }
         return new G3AcquisitionMotionReserve(
-            GateResult.Pass("G3_MOTION_OUTBOUND_AND_RETURN_RESERVED", "The outbound move and a segmented return to the reported origin are reserved."),
+            GateResult.Pass("G3_MOTION_OUTBOUND_AND_RETURN_RESERVED", "The outbound move and a segmented return to the saved verified return point are reserved."),
             move,
             radius,
             returnMoves);
@@ -684,24 +719,24 @@ public static class G3AcquisitionMotionPlanner
             return BlockReturn("G3_MOTION_RETURN_TOLERANCE_INVALID", "The return arrival tolerance is invalid.");
         }
         var radius = AngularSeparationArcseconds(
-            state.OriginRaDegrees,
-            state.OriginDeclinationDegrees,
+            state.ReturnRaDegrees,
+            state.ReturnDeclinationDegrees,
             reportedRaDegrees,
             reportedDeclinationDegrees);
         if (!double.IsFinite(radius)) return BlockReturn("G3_MOTION_REPORTED_POSITION_INVALID", "The reported origin offset is invalid.");
+        var initialRadius = AngularSeparationArcseconds(state.OriginRaDegrees, state.OriginDeclinationDegrees,
+            reportedRaDegrees, reportedDeclinationDegrees);
+        if (initialRadius > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds)
+            return BlockReturn("G3_MOTION_RETURN_OUTSIDE_RADIUS", "The reported mount position is outside the unchanged initial-origin radius; automatic return is prohibited.", initialRadius);
         if (radius <= arrivalToleranceArcseconds)
         {
             return new G3AcquisitionReturnStep(
                 GateResult.Pass("G3_MOTION_ORIGIN_REACHED", "The mount's reported position is at the durable G3 acquisition origin."),
                 true,
                 radius,
-                state.OriginRaDegrees,
-                state.OriginDeclinationDegrees,
+                state.ReturnRaDegrees,
+                state.ReturnDeclinationDegrees,
                 0);
-        }
-        if (radius > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds)
-        {
-            return BlockReturn("G3_MOTION_RETURN_OUTSIDE_RADIUS", "The reported mount position is outside the durable G3 acquisition radius; automatic return is prohibited.", radius);
         }
         var maximumIntermediateCommandArcseconds =
             state.MaximumSingleCorrectionArcseconds - state.ArrivalToleranceArcseconds;
@@ -745,8 +780,8 @@ public static class G3AcquisitionMotionPlanner
         }
         var fractionRemaining = Math.Max(0, 1 - move / radius);
         var (ra, dec) = InterpolateGreatCircle(
-            state.OriginRaDegrees,
-            state.OriginDeclinationDegrees,
+            state.ReturnRaDegrees,
+            state.ReturnDeclinationDegrees,
             reportedRaDegrees,
             reportedDeclinationDegrees,
             fractionRemaining);

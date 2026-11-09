@@ -76,6 +76,27 @@ public enum QhyG3SolvePairSource
 {
     ReusedFreshQhySolve,
     ImmediateSingleQhyExposure,
+    ExposureTimedHistoricalFormalPair,
+}
+
+/// <summary>
+/// ADR-0052: the native single-frame PC interval encloses, but does not precisely
+/// date, the G3 shutter. Solver latency is delivery latency, not a new exposure.
+/// This proof is calibration-only; it never refreshes a current pose.
+/// </summary>
+public sealed record QhyG3ExposureTiming(int SchemaVersion, double G3ExposureSeconds)
+{
+    public const string NativeBracketAuthority = "PHD2 native single-frame PC bracket; bounded shutter midpoint";
+
+    public bool IsValid(QhyG3SolvedFrame g3) => SchemaVersion == 1 &&
+        double.IsFinite(G3ExposureSeconds) && G3ExposureSeconds > 0 &&
+        g3.TimingAuthority == NativeBracketAuthority &&
+        g3.ExposureStartedUtc != default &&
+        (g3.ExposureEndedUtc - g3.ExposureStartedUtc).TotalSeconds >= G3ExposureSeconds &&
+        g3.ExposureMidpointUtc == g3.ExposureStartedUtc + (g3.ExposureEndedUtc - g3.ExposureStartedUtc) / 2;
+
+    public double MidpointUncertaintySeconds(QhyG3SolvedFrame g3) =>
+        Math.Max(0, ((g3.ExposureEndedUtc - g3.ExposureStartedUtc).TotalSeconds - G3ExposureSeconds) / 2);
 }
 
 public enum QhyToG3TransferLifecycle
@@ -201,7 +222,13 @@ public sealed record QhyToG3TransferCandidate(
     bool MotionAuthority,
     string CandidateSha256)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    public QhyG3ExposureTiming? ExposureTiming { get; init; }
+    public DateTimeOffset MeasurementUtc => ExposureTiming is null ? CreatedUtc :
+        (Qhy.ExposureEndedUtc > G3.ExposureEndedUtc ? Qhy.ExposureEndedUtc : G3.ExposureEndedUtc);
+    public double ExposureSupportSeconds =>
+        ((Qhy.ExposureEndedUtc > G3.ExposureEndedUtc ? Qhy.ExposureEndedUtc : G3.ExposureEndedUtc) -
+         (Qhy.ExposureStartedUtc < G3.ExposureStartedUtc ? Qhy.ExposureStartedUtc : G3.ExposureStartedUtc)).TotalSeconds;
 
     public string ComputeCandidateSha256()
     {
@@ -269,6 +296,11 @@ public sealed record QhyToG3TransferCandidate(
         AddNullable(fields, MaximumAzimuthDegrees);
         AddNullable(fields, MinimumTemperatureC);
         AddNullable(fields, MaximumTemperatureC);
+        if (SchemaVersion >= 2)
+        {
+            fields.Add(ExposureTiming?.SchemaVersion.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+            fields.Add(ExposureTiming?.G3ExposureSeconds.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty);
+        }
         var canonical = string.Concat(fields.Select(value => $"{value.Length}:{value}"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
@@ -276,7 +308,10 @@ public sealed record QhyToG3TransferCandidate(
     public IReadOnlyList<string> ValidateIntegrity()
     {
         var issues = new List<string>();
-        if (SchemaVersion != CurrentSchemaVersion) issues.Add("QHY-to-G3 transfer candidate schema is unsupported.");
+        if (SchemaVersion is not (1 or CurrentSchemaVersion)) issues.Add("QHY-to-G3 transfer candidate schema is unsupported.");
+        if (SchemaVersion == 1 && (ExposureTiming is not null || PairSource == QhyG3SolvePairSource.ExposureTimedHistoricalFormalPair) ||
+            SchemaVersion == 2 && ExposureTiming?.IsValid(G3) != true)
+            issues.Add("Candidate exposure-time schema or native shutter bracket is invalid.");
         if (Lifecycle != QhyToG3TransferLifecycle.Candidate) issues.Add("A solve-pair record must remain Candidate until separately verified.");
         if (MotionAuthority) issues.Add("A single solve-pair candidate cannot authorize mount motion.");
         if (SampleCount != 1) issues.Add("A solve-pair candidate must contain exactly one source sample.");
@@ -358,7 +393,10 @@ public sealed record QhyG3SolvePairBuildRequest(
     QhyG3SolvedFrame Qhy,
     QhyG3SolvedFrame G3,
     IReadOnlyList<QhyG3PairMountReadback> MountReadbacks,
-    DateTimeOffset CreatedUtc);
+    DateTimeOffset CreatedUtc)
+{
+    public QhyG3ExposureTiming? ExposureTiming { get; init; }
+}
 
 public sealed record QhyG3SolvePairBuildResult(GateResult Gate, QhyToG3TransferCandidate? Candidate);
 
@@ -391,6 +429,9 @@ public static class QhyG3SolvePairBuilder
         if (qhyIssue is not null) return Rejected("QHY_G3_PAIR_QHY_INVALID", qhyIssue);
         var g3Issue = ValidateFrame(request.G3, "G3");
         if (g3Issue is not null) return Rejected("QHY_G3_PAIR_G3_INVALID", g3Issue);
+        if (request.ExposureTiming is not null && !request.ExposureTiming.IsValid(request.G3) ||
+            request.ExposureTiming is null && request.PairSource == QhyG3SolvePairSource.ExposureTimedHistoricalFormalPair)
+            return Rejected("QHY_G3_PAIR_SHUTTER_BRACKET_INVALID", "Delayed calibration requires an explicit native single-frame shutter bracket and actual exposure duration.");
         if (!HasCompleteMountBracket(request.MountReadbacks))
             return Rejected("QHY_G3_PAIR_MOUNT_BRACKET_INCOMPLETE", "The pair needs exactly one G3 before/after, QHY before/after and final fresh mount readback.");
         var g3Before = Readback(request.MountReadbacks, "g3-before-exposure");
@@ -436,16 +477,19 @@ public static class QhyG3SolvePairBuilder
                 $"Mount readbacks span {maximumSpan:F2} arcsec (limit {request.Policy.MaximumMountSpanArcseconds:F2}); the two WCS solutions are not a same-pointing pair.",
                 new Dictionary<string, double> { ["maximumMountSpanArcseconds"] = maximumSpan });
 
-        var midpointSeparation = Math.Abs((request.Qhy.ExposureMidpointUtc - request.G3.ExposureMidpointUtc).TotalSeconds);
+        var midpointSeparation = Math.Abs((request.Qhy.ExposureMidpointUtc - request.G3.ExposureMidpointUtc).TotalSeconds) +
+            (request.ExposureTiming?.MidpointUncertaintySeconds(request.G3) ?? 0);
         var pairStart = request.Qhy.ExposureStartedUtc < request.G3.ExposureStartedUtc ? request.Qhy.ExposureStartedUtc : request.G3.ExposureStartedUtc;
+        var pairEnd = request.Qhy.ExposureEndedUtc > request.G3.ExposureEndedUtc ? request.Qhy.ExposureEndedUtc : request.G3.ExposureEndedUtc;
         if (request.CreatedUtc < request.Qhy.SolveCompletedUtc || request.CreatedUtc < request.G3.SolveCompletedUtc)
             return Rejected("QHY_G3_PAIR_TIME_ORDER_INVALID", "Candidate creation precedes one of its source solve-completion timestamps.");
         var wallClock = (request.CreatedUtc - pairStart).TotalSeconds;
+        var timingSpan = request.ExposureTiming is null ? wallClock : (pairEnd - pairStart).TotalSeconds;
         if (midpointSeparation > request.Policy.MaximumPairMidpointSeparation.TotalSeconds + 1e-9 ||
-            wallClock > request.Policy.MaximumPairWallClock.TotalSeconds + 1e-9)
+            timingSpan > request.Policy.MaximumPairWallClock.TotalSeconds + 1e-9)
             return Rejected(
                 "QHY_G3_PAIR_TIME_WINDOW_EXCEEDED",
-                $"Pair midpoint separation {midpointSeparation:F2}s / wall clock {wallClock:F2}s exceeds {request.Policy.MaximumPairMidpointSeparation.TotalSeconds:F2}s / {request.Policy.MaximumPairWallClock.TotalSeconds:F2}s.",
+                $"Worst pair midpoint separation {midpointSeparation:F2}s / bounded time support {timingSpan:F2}s exceeds {request.Policy.MaximumPairMidpointSeparation.TotalSeconds:F2}s / {request.Policy.MaximumPairWallClock.TotalSeconds:F2}s (delivery {wallClock:F2}s).",
                 new Dictionary<string, double>
                 {
                     ["pairMidpointSeparationSeconds"] = midpointSeparation,
@@ -492,7 +536,7 @@ public static class QhyG3SolvePairBuilder
         var idSeed = string.Join("|", request.ObservationRunId, request.Qhy.FrameSha256, request.G3.FrameSha256, request.CreatedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         var calibrationId = "qhy-g3-pair-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idSeed)))[..24].ToLowerInvariant();
         var provisional = new QhyToG3TransferCandidate(
-            QhyToG3TransferCandidate.CurrentSchemaVersion,
+            request.ExposureTiming is null ? 1 : QhyToG3TransferCandidate.CurrentSchemaVersion,
             calibrationId,
             1,
             QhyToG3TransferLifecycle.Candidate,
@@ -501,7 +545,7 @@ public static class QhyG3SolvePairBuilder
             request.CreatedUtc,
             null,
             request.CreatedUtc,
-            request.CreatedUtc + request.Policy.CandidateValidity,
+            (request.ExposureTiming is null ? request.CreatedUtc : pairEnd) + request.Policy.CandidateValidity,
             null,
             request.ObservationRunId,
             request.ActionConfigurationSha256,
@@ -529,7 +573,7 @@ public static class QhyG3SolvePairBuilder
             request.G3.CenterDeclinationDegrees, request.G3.CenterDeclinationDegrees,
             null, null, null, null, null, null,
             false,
-            string.Empty);
+            string.Empty) { ExposureTiming = request.ExposureTiming };
         var candidate = provisional with { CandidateSha256 = provisional.ComputeCandidateSha256() };
         var integrity = candidate.ValidateIntegrity();
         if (integrity.Count > 0) return Rejected("QHY_G3_PAIR_CANDIDATE_INVALID", string.Join(" ", integrity));

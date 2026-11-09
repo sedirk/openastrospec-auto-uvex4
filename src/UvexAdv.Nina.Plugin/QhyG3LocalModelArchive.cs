@@ -96,7 +96,7 @@ internal static class QhyG3LocalModelArchive
                     !QhyG3LocalModelPolicy.SameHash(e.OpticalStateSha256, e.OpticalState.ComputeSha256()))
                     throw new InvalidDataException("Envelope schema, hardware or optical-state digest is invalid.");
                 var c = e.Candidate;
-                if (c.CreatedUtc > now || now - c.CreatedUtc > maximumAge || c.ValidUntilUtc < now ||
+                if (c.CreatedUtc > now || now - c.MeasurementUtc > maximumAge || c.ValidUntilUtc < now ||
                     !QhyG3LocalModelPolicy.SameHash(c.CommissioningPresetSha256, binding.CommissioningPresetSha256) ||
                     !QhyG3LocalModelPolicy.SameHash(c.NightSetupSha256, binding.NightSetupSha256) ||
                     !QhyG3LocalModelPolicy.SameHash(e.OpticalStateSha256, binding.OpticalState.ComputeSha256()))
@@ -110,7 +110,7 @@ internal static class QhyG3LocalModelArchive
                 var rebuilt = QhyG3SolvePairBuilder.Build(new(c.CollectionPolicy, c.ObservationRunId,
                     c.ActionConfigurationSha256, c.CommissioningPresetSha256, c.NightSetupId, c.NightSetupSha256,
                     c.InstallationEpochId, c.TelescopeDeviceId, c.QhyOpticalTrainId, c.G3OpticalTrainId,
-                    c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc));
+                    c.PairSource, c.Qhy, c.G3, c.MountReadbacks, c.CreatedUtc) { ExposureTiming = c.ExposureTiming });
                 if (rebuilt.Candidate is null || !QhyG3LocalModelPolicy.SameHash(rebuilt.Candidate.CandidateSha256, c.CandidateSha256))
                     throw new InvalidDataException("Candidate semantics cannot be rebuilt from the original pair.");
                 await VerifyFileAsync(e.FocusEvidencePath, e.FocusEvidenceSha256, token).ConfigureAwait(false);

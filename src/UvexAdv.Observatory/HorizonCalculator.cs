@@ -38,7 +38,7 @@ public sealed record HorizonEvaluation(
             ["firstBlockedAltitudeDegrees"] = failure.AltitudeDegrees,
             ["firstBlockedRequiredAltitudeDegrees"] = failure.RequiredAltitudeDegrees,
         };
-        return GateResult.Fail(WindowExhaustedCode,
+        return GateResult.TargetQuality(WindowExhaustedCode,
             $"Target is currently above the horizon at {first.AltitudeDegrees:F2}°, but its remaining protected " +
             $"{metrics["protectedDurationMinutes"]:F1}-minute block cannot fit. {gate.Message} " +
             "No new action is authorized for this target; a native night may skip only after confirmed idle and settled motion.", metrics);
@@ -66,6 +66,30 @@ public sealed record HorizonEvaluation(
 public static class HorizonCalculator
 {
     public static HorizonEvaluation Evaluate(ObservationPlan plan)
+        => Evaluate(plan, firstSampleUsesStartMargin: true);
+
+    /// <summary>
+    /// Evaluates the still-authorized part of an already-started target. The
+    /// initial scheduler gate protects a complete fresh target block; an
+    /// in-progress target instead checks the current (continue) horizon through
+    /// its original deadline or an explicitly precharged bounded operation.
+    /// </summary>
+    public static HorizonEvaluation EvaluateRunning(
+        ObservationContext context,
+        DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var runningPlan = context.Plan with
+        {
+            PlannedStartUtc = nowUtc,
+            PlannedDuration = context.ProtectedDurationAt(nowUtc),
+        };
+        return Evaluate(runningPlan, firstSampleUsesStartMargin: false);
+    }
+
+    private static HorizonEvaluation Evaluate(
+        ObservationPlan plan,
+        bool firstSampleUsesStartMargin)
     {
         ArgumentNullException.ThrowIfNull(plan);
         var samples = new List<AltitudeSample>();
@@ -74,12 +98,18 @@ public static class HorizonCalculator
 
         for (var instant = plan.PlannedStartUtc; instant < end; instant += interval)
         {
-            samples.Add(CreateSample(plan, instant, samples.Count == 0));
+            samples.Add(CreateSample(
+                plan,
+                instant,
+                firstSampleUsesStartMargin && samples.Count == 0));
         }
 
         if (samples.Count == 0 || samples[^1].TimestampUtc != end)
         {
-            samples.Add(CreateSample(plan, end, samples.Count == 0));
+            samples.Add(CreateSample(
+                plan,
+                end,
+                firstSampleUsesStartMargin && samples.Count == 0));
         }
 
         var firstFailure = samples.FirstOrDefault(sample => !sample.Passed);

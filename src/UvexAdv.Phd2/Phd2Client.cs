@@ -37,6 +37,7 @@ public sealed partial class Phd2Client : IPhd2Client
     private bool disposed;
     private Phd2StateSnapshot? nativeSingleFrameOwner;
     private bool nativeSingleFrameStopObserved;
+    private Func<bool>? nativeSingleFrameConfigurationWitness;
 
     public Phd2Client(Phd2ClientOptions? options = null)
     {
@@ -590,6 +591,8 @@ public sealed partial class Phd2Client : IPhd2Client
         ValidateSingleFrameRequest(request);
 
         await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        string? originalConfiguration = null;
+        Func<bool>? configurationWitness = null;
         try
         {
             ThrowIfAutomationPaused();
@@ -609,6 +612,11 @@ public sealed partial class Phd2Client : IPhd2Client
             }
 
             var baseline = Snapshot;
+            originalConfiguration = ReadStableConfigurationFingerprint();
+            try { configurationWitness = options.CreateNativeCaptureConfigurationWitness?.Invoke(request); }
+            catch (Exception) { /* Unavailable evidence does not suppress invalidation. */ }
+            if (originalConfiguration is null || originalConfiguration != ReadStableConfigurationFingerprint())
+                configurationWitness = null;
             using var completedWaiter = RegisterEventWaiter(message =>
                 message.Name == "SingleFrameComplete" &&
                 message.Sequence > baseline.EventSequence);
@@ -617,8 +625,10 @@ public sealed partial class Phd2Client : IPhd2Client
             {
                 nativeSingleFrameOwner = baseline;
                 nativeSingleFrameStopObserved = false;
+                nativeSingleFrameConfigurationWitness = configurationWitness;
             }
 
+            var nativeRequestStartedUtc = DateTimeOffset.UtcNow;
             try
             {
                 await InvokeAsync(
@@ -661,6 +671,11 @@ public sealed partial class Phd2Client : IPhd2Client
 
             await WaitForFileReadyAsync(destinationPath, cancellationToken).ConfigureAwait(false);
             var stateAfter = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
+            if (configurationWitness is not null && originalConfiguration != ReadStableConfigurationFingerprint())
+            {
+                UpdateSnapshot(InvalidateSettle);
+                throw new Phd2CaptureException("Native single-frame parameters were not restored to the original material configuration; stopped handoff invalidated.");
+            }
             if (stateAfter != Phd2AppState.Stopped ||
                 !Snapshot.IsConnected || Snapshot.ConnectionEpoch != baseline.ConnectionEpoch)
             {
@@ -674,7 +689,7 @@ public sealed partial class Phd2Client : IPhd2Client
                 RequestedParametersApplied: true,
                 completed.ReceivedUtc,
                 VerifiedExposureMilliseconds: request.ExposureMs,
-                AutomaticRetryAllowed: false);
+                AutomaticRetryAllowed: false) { NativeRequestStartedUtc = nativeRequestStartedUtc };
             UpdateSnapshot(current => current with { LastSingleFrame = result });
             return result;
         }
@@ -690,7 +705,16 @@ public sealed partial class Phd2Client : IPhd2Client
         }
         finally
         {
-            lock (stateGate) nativeSingleFrameOwner = null;
+            // Failed/cancelled native frames must not leave an allowed
+            // temporary gain behind and permit a subsequent ladder attempt.
+            // Preserve the original exception; invalidate the old stop proof.
+            if (configurationWitness is not null && originalConfiguration != ReadStableConfigurationFingerprint())
+                UpdateSnapshot(InvalidateSettle);
+            lock (stateGate)
+            {
+                nativeSingleFrameOwner = null;
+                nativeSingleFrameConfigurationWitness = null;
+            }
             operationGate.Release();
         }
     }
@@ -975,8 +999,7 @@ public sealed partial class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
-            var result = await InvokeAsync(
-                    "find_star",
+            var result = await InvokeFindGuideStarAsync(
                     new
                     {
                         roi = new[]
@@ -1018,8 +1041,7 @@ public sealed partial class Phd2Client : IPhd2Client
         try
         {
             ThrowIfAutomationPaused();
-            var result = await InvokeAsync(
-                    "find_star",
+            var result = await InvokeFindGuideStarAsync(
                     parameters: null,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -1572,6 +1594,7 @@ public sealed partial class Phd2Client : IPhd2Client
         await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         long? operationId = null;
         var operationCompleted = false;
+        Phd2StateSnapshot? initialGuideOwner = null;
         try
         {
             ThrowIfAutomationPaused();
@@ -1598,15 +1621,20 @@ public sealed partial class Phd2Client : IPhd2Client
             var ownerCalibrationAllowed = sameLock is null && !forceRecalibration &&
                 Snapshot.CalibrationValidation is { OwnerManaged: true, AllowNativeCalibration: true };
             var localOperationId = Interlocked.Increment(ref nextSettleOperationId);
+            if (sameLock is null && !forceRecalibration &&
+                Snapshot.AppState is Phd2AppState.Selected or Phd2AppState.Looping)
+                initialGuideOwner = Snapshot;
             operationId = localOperationId;
+            bool OwnedOutputFailure(Phd2EventMessage message) => message.Name == "GuideStep" &&
+                Snapshot.PendingSettleOperationId == localOperationId && Snapshot.GuideOutput?.Failed == true;
             using var waiter = RegisterEventWaiter(message =>
-                message.Name == "SettleDone" &&
-                Snapshot.LastSettleOperationId == localOperationId);
+                (message.Name == "SettleDone" && Snapshot.LastSettleOperationId == localOperationId) ||
+                OwnedOutputFailure(message));
             using var calibrationWaiter = forceRecalibration || ownerCalibrationAllowed
                 ? RegisterEventWaiter(message =>
-                    message.Name is "CalibrationComplete" or "CalibrationFailed" &&
+                    (message.Name is "CalibrationComplete" or "CalibrationFailed" &&
                     Snapshot.PendingSettleOperationId == localOperationId &&
-                    Snapshot.PendingCalibrationTerminalSequence == message.Sequence)
+                    Snapshot.PendingCalibrationTerminalSequence == message.Sequence) || OwnedOutputFailure(message))
                 : null;
             UpdateSnapshot(current =>
             {
@@ -1703,12 +1731,17 @@ public sealed partial class Phd2Client : IPhd2Client
                 if (calibrationWaiter.Task.IsCompletedSuccessfully)
                     calibrationTerminal = await calibrationWaiter.Task.ConfigureAwait(false);
             }
+            // Output faults are not precision/settling failures. Wake the owner
+            // as soon as the existing multi-frame detector latches one, instead
+            // of spending the remaining native settle timeout with no pulses.
+            ThrowIfGuideOutputFailed();
             if (calibrationTerminal?.Name == "CalibrationFailed")
                 throw new Phd2CalibrationRejectedException("PHD2 reported calibration failure: " +
                     (GetOptionalString(calibrationTerminal.Payload, "Reason") ?? "unspecified"));
 
             var settledEvent = await WaitForEventAsync(waiter, "guide settle", eventTimeout, cancellationToken)
                 .ConfigureAwait(false);
+            ThrowIfGuideOutputFailed();
             var eventResult = ParseSettleResult(settledEvent);
             var attested = Snapshot;
             if (attested.LastSettle is null ||
@@ -1741,6 +1774,35 @@ public sealed partial class Phd2Client : IPhd2Client
             return calibrationTerminal?.Name == "CalibrationComplete"
                 ? result with { NativeCalibrationOccurred = true }
                 : result;
+        }
+        catch (Phd2GuideOutputException ex)
+        {
+            // Preserve only checked-stop authority before erasing the failed
+            // pending settle. Native startup may re-centroid the selected lock.
+            // No correlated accepted operation / any external lifecycle change
+            // means no receipt. Never synthesize a terminal settle result.
+            if (operationId is { } id && initialGuideOwner is { } owner)
+                UpdateSnapshot(current =>
+                {
+                    if (!IsPendingSettleOperationCurrent(current) || current.PendingSettleOperationId != id ||
+                        !current.PendingSettleCommandAccepted || current.ConnectionEpoch != owner.ConnectionEpoch ||
+                        !current.IsConnected || current.AutomationPaused || current.Phd2Paused ||
+                        current.AppState != Phd2AppState.Guiding || current.GuideOutput?.Failed != true ||
+                        current.Profile is null || current.Equipment is null ||
+                        current.Profile != owner.Profile || current.Equipment != owner.Equipment ||
+                        current.CalibrationChangeSequence != owner.CalibrationChangeSequence ||
+                        current.LastConfigurationChange?.EventSequence != owner.LastConfigurationChange?.EventSequence ||
+                        owner.LockPosition is not { } selected || current.LockPosition is not { } native ||
+                        !double.IsFinite(selected.X) || !double.IsFinite(selected.Y) ||
+                        !double.IsFinite(native.X) || !double.IsFinite(native.Y)) return current;
+                    var aborted = InvalidateSettle(current);
+                    ex.InitialGuideStopReceipt = new(id, aborted.ConnectionEpoch, aborted.GuideEpoch,
+                        selected, native, current.Profile, current.Equipment, current.CalibrationChangeSequence,
+                        current.LastConfigurationChange?.EventSequence);
+                    return aborted;
+                });
+            if (operationId.HasValue) AbortSettleOperation(operationId.Value);
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -2143,6 +2205,26 @@ public sealed partial class Phd2Client : IPhd2Client
         {
             // The immutable evidence copy is complete. A PHD2 temporary-file cleanup
             // failure must not turn a successful acquisition into a false failure.
+        }
+    }
+
+    private async Task<JsonElement> InvokeFindGuideStarAsync(
+        object? parameters,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await InvokeAsync("find_star", parameters, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Phd2RpcException ex) when (
+            ex.Code == 1 &&
+            string.Equals(ex.RpcMessage, "could not find star", StringComparison.OrdinalIgnoreCase))
+        {
+            // PHD2 2.6 reports an ordinary unsuccessful native selection as
+            // JSON-RPC code 1 with this exact message. Keep the original RPC
+            // exception on the typed wrapper for audit; all other code/message
+            // pairs remain transport/protocol failures.
+            throw new Phd2NoGuideStarException(ex);
         }
     }
 

@@ -1638,7 +1638,7 @@ internal sealed partial class RealObservationStageRunner
                         selectedLock = preGuideLock, nativeGuideLock = guideProof.LockPosition,
                         settle, stopAuthorityOnly = true, placementProven = false },
                     lastG3Field.FramePath, cancellationToken).ConfigureAwait(false);
-                phd2CompletedInitialGuideStopReceipt = Phd2DependencyRebuildStopPolicy.RecordCompletedInitialGuide(
+                phd2CompletedInitialGuideStopReceipt = Phd2DependencyRebuildStopPolicy.RecordGuideOperationStopOwner(
                     guideProof, selectionConnectionEpoch, settle,
                     pendingPhd2LockShift is not null || currentLedger is not null);
             }
@@ -1890,7 +1890,8 @@ internal sealed partial class RealObservationStageRunner
         {
             if (phd2.Snapshot.GuideOutput?.Failed == true)
                 return await RecoverPhd2GuideOutputBeforeMotionAsync(context,
-                    postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken).ConfigureAwait(false);
+                    postCalibrationReacquisitionDepth, lostLockReacquisitionDepth, cancellationToken,
+                    (ex as Phd2GuideOutputException)?.InitialGuideStopReceipt).ConfigureAwait(false);
             Exception failure = ex;
             if (AdaptiveGuideRecoveryEnabled &&
                 (IsStructuredPhd2GuideSessionLoss(ex) || Phd2StageFailurePolicy.FindLostFrame(ex) is not null) &&
@@ -2875,29 +2876,83 @@ internal sealed partial class RealObservationStageRunner
 
             // An estimator/nearby-peak switch is not sky motion. Keep the last
             // measured target/primary separation until a fresh consistent core
-            // is observed. A rejection uses the existing bounded optical window,
-            // never the prediction itself, another solve or extra motion credit.
+            // is observed. Three repeatable fresh positions may replace only the
+            // stale search baseline; this is not motion evidence or new budget.
             var continuityAllowance = Math.Max(6, preset.MaximumResidualGrowthPixels);
-            if (targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection &&
+            var targetTrackRejected = targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsProjection &&
                 RejectStellarTargetTrackCandidate(trackedTarget, frame, targetLocal,
-                    image.MetaData.Image.ExposureTime, continuityAllowance, out _))
+                    image.MetaData.Image.ExposureTime, continuityAllowance, out _);
+            if (targetTrackRejected)
             {
+                phd2TargetContinuityRebaseWindow = null;
                 rejectedStellar = new TargetIdentification(GateResult.TargetQuality(
                     "PHD2_TARGET_TRACK_COMPONENT_DISAGREEMENT", "Fresh candidate does not match the last-trusted target component after independent field registration."),
                     null, expectedTargetLocal, PixelDistance(targetLocal, expectedTargetLocal), 0);
                 targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsProjection;
             }
-            if (continuityPrediction is not null &&
+
+            var continuityRejected = !targetTrackRejected &&
+                continuityPrediction is not null &&
                 targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField &&
                 (Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
                     referenceTargetMeasured, targetLocal, expectedTargetLocal, continuityAllowance) ||
                  (trackedTarget is not null && Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
-                     referenceTargetMeasured, targetLocal, ToFrameLocal(continuityPrediction,preset), continuityAllowance))))
+                     referenceTargetMeasured, targetLocal, ToFrameLocal(continuityPrediction,preset), continuityAllowance)));
+            var continuityRebaseCandidateObserved = false;
+            if (continuityRejected)
             {
-                rejectedStellar ??= new TargetIdentification(GateResult.TargetQuality(
-                    "PHD2_TARGET_POSITION_DISCONTINUITY", "Fresh target/primary geometry disagrees with the preceding measured field."),
-                    null, expectedTargetLocal, PixelDistance(targetLocal, expectedTargetLocal), 0);
-                targetPositionAuthority = Phd2TargetPositionAuthority.CatalogWcsProjection;
+                var targetKey = $"{context.Plan.ObservationRunId}:{context.Plan.Target.CatalogId}";
+                var sameGuideForRebase = Phd2FreshTargetWindow.SameGuide(
+                    windowOwner, phd2.Snapshot, currentLock, preset.LockVerificationTolerancePixels);
+                var windowKey = $"{targetKey}:{windowOwner.ConnectionEpoch}:{windowOwner.GuideEpoch}:" +
+                    $"{currentLock.X:R}:{currentLock.Y:R}";
+                if (!sameGuideForRebase)
+                {
+                    phd2TargetContinuityRebaseWindow = null;
+                }
+                else if (!string.Equals(phd2TargetContinuityRebaseConsumedTarget, targetKey, StringComparison.Ordinal))
+                {
+                    if (phd2TargetContinuityRebaseWindow is null ||
+                        !string.Equals(phd2TargetContinuityRebaseWindow.Key, windowKey, StringComparison.Ordinal))
+                        phd2TargetContinuityRebaseWindow = new Phd2TargetContinuityRebaseWindow(windowKey);
+
+                    if (phd2TargetContinuityRebaseWindow.Observe(targetLocal,
+                        out var rebasedTarget, out var rebaseSpread))
+                    {
+                        var previousPrediction = expectedTargetLocal;
+                        expectedTargetLocal = rebasedTarget;
+                        continuityPrediction = ToPhd2Domain(rebasedTarget, preset);
+                        phd2TargetContinuityRebaseConsumedTarget = targetKey;
+                        await PublishRunJsonEvidenceAsync("phd2-target-continuity-rebased",
+                            "Three repeatable fresh target measurements replaced only the stale search baseline; no budget reset",
+                            new
+                            {
+                                targetKey, framePath = result.Path, frameSha256 = actualSha,
+                                previousPrediction, rebasedTarget, rebaseSpread,
+                                continuityAllowance, targetWindow.Captures,
+                                targetWindow.RejectedFrames, windowOwner.ConnectionEpoch,
+                                windowOwner.GuideEpoch, result.NativeLockPosition,
+                                sameGuide = sameGuideForRebase, measurementCount =
+                                    Phd2TargetContinuityRebaseWindow.RequiredSamples,
+                                rebaseLimitPerTarget = 1, motionIssued = false,
+                                predictionUsedAsMeasurement = false, budgetReset = false,
+                            }, result.Path, cancellationToken).ConfigureAwait(false);
+                        Report($"目标位置连续性警告：旧预测与连续 {Phd2TargetContinuityRebaseWindow.RequiredSamples} 张稳定新实测不一致；已用实测中位位置 {rebasedTarget.X:F2},{rebasedTarget.Y:F2} 重建本目标搜索基准（帧间离散 {rebaseSpread:F2}px）。不增加运动、时间或回程预算，后续仍须完整新帧确认。");
+                        rejectedStellar = null;
+                    }
+                    else
+                    {
+                        continuityRebaseCandidateObserved =
+                            phd2TargetContinuityRebaseWindow.SampleCount > 0;
+                    }
+                }
+
+                if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)
+                {
+                    rejectedStellar ??= new TargetIdentification(GateResult.TargetQuality(
+                        "PHD2_TARGET_POSITION_DISCONTINUITY", "Fresh target/primary geometry disagrees with the preceding measured field."),
+                        null, expectedTargetLocal, PixelDistance(targetLocal, expectedTargetLocal), 0);
+                }
             }
 
             // A formal WCS preserves catalogue identity, not a new star position
@@ -2906,6 +2961,10 @@ internal sealed partial class RealObservationStageRunner
             // enters the rolling window and fails later as an untyped exception.
             if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection)
             {
+                // A missing/ambiguous measurement breaks the three-frame
+                // rebase run; arbitrary rejected frames may not be cherry-picked.
+                if (!continuityRebaseCandidateObserved)
+                    phd2TargetContinuityRebaseWindow = null;
                 // G3_POST_WCS_TARGET_NOT_MEASURED: prediction is only a search
                 // hint. A saturated core can split for one frame; wait for a
                 // new complete consecutive window under the caller's SAME

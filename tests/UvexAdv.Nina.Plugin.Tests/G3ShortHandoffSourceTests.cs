@@ -39,6 +39,11 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("MeasuredPostWcsTarget: shortTarget",source);
         Assert.Contains("if (accepted) return latest",source);
         Assert.Contains("G3SepShortPositionPolicy.Measure",source);
+        Assert.Contains("longTargetAnchor", source);
+        Assert.Contains("shortAssociationRadius", source);
+        Assert.Contains("prediction.MaximumUncertaintyPixels + G3ShortPositionMeasurementPolicy.MaximumTrackedRepeatSeparationPixels", source);
+        Assert.Contains("G3SepShortPositionPolicy.Measure(sep, longTargetAnchor", source);
+        Assert.DoesNotContain("G3SepShortPositionPolicy.Measure(sep, prediction.PredictedTargetPoint", source);
         Assert.Contains("G3ShortPositionMeasurementPolicy.EvaluateConfirmation",source);
         Assert.Contains("attempt <= maximumFrames",source);
         Assert.Contains("G3PostWcsShortHandoffPolicy.Evaluate",source);
@@ -48,7 +53,7 @@ public sealed class G3ShortHandoffSourceTests
         Assert.Contains("maximumFrames = attempt + 2",source);
         Assert.Contains("previousHash = previousPath = null",source);
         Assert.Contains("boundaryRecheckUsed ? policy",source);
-        Assert.Contains("policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt)", source);
+        Assert.Contains("policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt,", source);
         Assert.Contains("if (next.ExposureMilliseconds != policy.ExposureMilliseconds)", source);
         Assert.Contains("return latest with { MeasuredPostWcsTarget = null }",source);
         Assert.DoesNotContain("SlitTargetIdentifier.Identify",source);

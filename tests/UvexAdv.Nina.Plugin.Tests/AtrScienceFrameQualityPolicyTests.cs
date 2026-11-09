@@ -44,18 +44,18 @@ public sealed class AtrScienceFrameQualityPolicyTests
     }
 
     [Fact]
-    public void LastAttemptRejectedForGuideContinuityStopsWithoutProbeOrRecoveryAllowance()
+    public void CompletedFrameWithGuideContinuityWarningStillCountsAndCompletesAtAttemptLimit()
     {
         var quality = AtrScienceFrameQualityPolicy.Evaluate(GoodFrame() with { GuidingStable = false }, Configuration());
         var acceptedFrames = 1;
         if (quality.Disposition == GateDisposition.Passed) acceptedFrames++;
         var terminal = AtrScienceFrameQualityPolicy.RemainingAttemptGate(acceptedFrames, 4, Configuration());
 
-        Assert.Equal("GUIDING_UNSTABLE", quality.Code);
-        Assert.Equal(1, acceptedFrames);
-        Assert.NotNull(terminal);
-        Assert.Equal("ATR_ATTEMPT_LIMIT", terminal.Code);
-        Assert.False(ObservationAutomaticRecoveryPolicy.For(ObservationStage.RunScienceBlock, terminal).IsRecoverable);
+        Assert.Equal("ATR_FRAME_GUIDE_CONTINUITY_WARNING", quality.Code);
+        Assert.Equal(GateDisposition.Passed, quality.Disposition);
+        Assert.Equal(GateSeverity.Warning, quality.Severity);
+        Assert.Equal(2, acceptedFrames);
+        Assert.Null(terminal);
     }
 
     [Theory]
@@ -63,7 +63,7 @@ public sealed class AtrScienceFrameQualityPolicyTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public void LostExposureContinuityCannotBeAcceptedEvenWithSignalOrClippingWarnings(bool lowSignal, bool clipped)
+    public void LostExposureContinuityIsRetainedUnlessTheSpectrumItselfIsClipped(bool lowSignal, bool clipped)
     {
         var metrics = GoodFrame() with
         {
@@ -74,13 +74,20 @@ public sealed class AtrScienceFrameQualityPolicyTests
 
         var gate = AtrScienceFrameQualityPolicy.Evaluate(metrics, Configuration());
 
-        Assert.Equal("GUIDING_UNSTABLE", gate.Code);
-        Assert.Equal(GateDisposition.Indeterminate, gate.Disposition);
-        Assert.Equal(GateSeverity.Error, gate.Severity);
-        Assert.False(new StageResult(gate).CanAdvance);
-        Assert.Contains("retained but not accepted", gate.Message, StringComparison.Ordinal);
-        Assert.Equal(ObservationAutomaticRecoveryAction.RebuildStageDependencies,
-            ObservationAutomaticRecoveryPolicy.For(ObservationStage.RunScienceBlock, gate).Action);
+        if (clipped)
+        {
+            Assert.Equal("ATR_SATURATION_LIMIT", gate.Code);
+            Assert.Equal(GateDisposition.Failed, gate.Disposition);
+            Assert.False(new StageResult(gate).CanAdvance);
+        }
+        else
+        {
+            Assert.Equal("ATR_FRAME_GUIDE_CONTINUITY_WARNING", gate.Code);
+            Assert.Equal(GateDisposition.Passed, gate.Disposition);
+            Assert.Equal(GateSeverity.Warning, gate.Severity);
+            Assert.True(new StageResult(gate).CanAdvance);
+            Assert.Contains("no further exposure", gate.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

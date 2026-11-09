@@ -101,6 +101,19 @@ internal static class G3FieldMountBindingPolicy
         string currentPierSide,
         double maximumSeparationArcseconds)
     {
+        var provenance = ValidateProvenance(binding, observationRunId, actionConfigurationSha256,
+            commissioningPresetSha256, framePath, currentFrameSha256);
+        if (provenance.Disposition != GateDisposition.Passed) return provenance;
+        return ValidatePosition(binding!, currentRightAscensionDegrees, currentDeclinationDegrees,
+            currentCoordinateEpoch, currentPierSide, maximumSeparationArcseconds);
+    }
+
+    // Integrity alone is NOT permission to use this field for motion. Startup
+    // retirement needs immutable file provenance plus a separate stopped-mount
+    // witness; it deliberately does not assert that the sky stayed on its pixels.
+    internal static GateResult ValidateProvenance(G3FieldMountBinding? binding, string observationRunId,
+        string actionConfigurationSha256, string commissioningPresetSha256, string framePath, string currentFrameSha256)
+    {
         if (binding is null)
             return GateResult.Unknown("G3_FIELD_MOUNT_BINDING_MISSING", "The G3 field has no capture-time mount binding; slit-placement motion is prohibited.");
         if (binding.SchemaVersion != G3FieldMountBinding.CurrentSchemaVersion ||
@@ -127,6 +140,12 @@ internal static class G3FieldMountBindingPolicy
         if (binding.FrameCompletedUtc == default || binding.MountReportedUtc == default ||
             binding.MountReportedUtc < binding.FrameCompletedUtc)
             return GateResult.Unknown("G3_FIELD_MOUNT_BINDING_TIME_INVALID", "The mount readback is not ordered with the captured G3 frame.");
+        return GateResult.Pass("G3_FIELD_PROVENANCE_VERIFIED", "Immutable G3 frame provenance only; no current optical position or motion authority.");
+    }
+
+    private static GateResult ValidatePosition(G3FieldMountBinding binding, double currentRightAscensionDegrees,
+        double currentDeclinationDegrees, string currentCoordinateEpoch, string currentPierSide, double maximumSeparationArcseconds)
+    {
         if (!FiniteCoordinate(binding.RightAscensionDegrees, binding.DeclinationDegrees) ||
             !FiniteCoordinate(currentRightAscensionDegrees, currentDeclinationDegrees) ||
             !double.IsFinite(maximumSeparationArcseconds) || maximumSeparationArcseconds <= 0)

@@ -37,7 +37,8 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private async Task<StageResult> HaltFailedPhd2GuideOutputAsync(
-        ObservationContext context, CancellationToken cancellationToken)
+        ObservationContext context, CancellationToken cancellationToken,
+        Phd2FailedInitialGuideStopReceipt? initialGuideStopReceipt = null)
     {
         var failure = phd2.Snapshot.GuideOutput
             ?? throw new InvalidOperationException("Missing structured guide-output evidence.");
@@ -58,7 +59,8 @@ internal sealed partial class RealObservationStageRunner
         }
         var evidence = await PublishRunJsonEvidenceAsync("phd2-guide-output-failed",
             "Native requested corrections have no reported mount pulse output",
-            new { failure, outstandingExactLock = outstanding, pendingLineage = pending?.LineageId,
+            new { failure, initialGuideStopReceipt, state = phd2.Snapshot,
+                outstandingExactLock = outstanding, pendingLineage = pending?.LineageId,
                 noOutputIsNotWindOrPrecision = true, budgetReset = false, mountMoveIssued = false,
                 originReturnProven = false, reconnectAttempted = false },
             lastG3Field?.FramePath, cancellationToken).ConfigureAwait(false);
@@ -85,6 +87,10 @@ internal sealed partial class RealObservationStageRunner
                 : phd2SlitPlacementSession?.LastMeasurement.Frame.NativeLockPosition ?? phd2PreMotionOutputOwner?.Lock;
             var owned = Phd2DependencyRebuildStopPolicy.CanStopOwnedSession(phd2.Snapshot,
                 Volatile.Read(ref phd2GuidingEverStarted) != 0, ownedEpoch, expected, actual);
+            if (!owned && Volatile.Read(ref phd2GuidingEverStarted) != 0)
+                owned = Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(phd2.Snapshot,
+                    initialGuideStopReceipt, phd2PreMotionOutputOwner?.ConnectionEpoch,
+                    phd2PreMotionOutputOwner?.Lock, actual, pending is not null || phd2SlitPlacementSession is not null);
             if (!owned && outstanding)
                 owned = Phd2DependencyRebuildStopPolicy.CanStopOwnedSession(phd2.Snapshot,
                     Volatile.Read(ref phd2GuidingEverStarted) != 0, ownedEpoch,
@@ -113,9 +119,10 @@ internal sealed partial class RealObservationStageRunner
     }
 
     private async Task<StageResult> RecoverPhd2GuideOutputBeforeMotionAsync(
-        ObservationContext context, int postCalibrationDepth, int lostLockDepth, CancellationToken cancellationToken)
+        ObservationContext context, int postCalibrationDepth, int lostLockDepth, CancellationToken cancellationToken,
+        Phd2FailedInitialGuideStopReceipt? initialGuideStopReceipt = null)
     {
-        var halted = await HaltFailedPhd2GuideOutputAsync(context, cancellationToken).ConfigureAwait(false);
+        var halted = await HaltFailedPhd2GuideOutputAsync(context, cancellationToken, initialGuideStopReceipt).ConfigureAwait(false);
         if (halted.Gate.Code != Phd2GuideOutputStatus.FailureCode) return halted;
         if (phd2OutputReconnectAttempts >= 1)
             return new StageResult(GateResult.Unknown("PHD2_GUIDE_OUTPUT_RECOVERY_EXHAUSTED",
@@ -131,18 +138,19 @@ internal sealed partial class RealObservationStageRunner
                 new { attempt = phd2OutputReconnectAttempts, maximumAttempts = 1,
                     pendingExactLock = false, profileChanged = false, budgetReset = false,
                     cameraOwnerRemainsPhd2 = true }, halted.EvidencePath, cancellationToken).ConfigureAwait(false);
+            var previousConnectionEpoch = phd2.Snapshot.ConnectionEpoch;
             var restored = await phd2.ReconnectEquipmentAfterOutputFailureAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
             var receipt = await PublishRunJsonEvidenceAsync("phd2-guide-output-reconnect-confirmed",
                 "Same native equipment reconnected; new optical and guide proof still required",
                 new { restored, actualPulseResponseValidated = false, budgetReset = false },
                 halted.EvidencePath, cancellationToken).ConfigureAwait(false);
-            // This is a new checked-stop receipt, not adoption of the old
-            // connection epoch. The shared acquisition boundary still handles
-            // its original coarse return responsibility and charged budgets.
-            automaticRebuildStopProof = new(restored.ConnectionEpoch, phd2.Snapshot.GuideEpoch, receipt);
-            phd2PreMotionOutputOwner = null;
-            phd2SlitPlacementSession = null;
-            lastG3Field = null;
+            var retiredTrack = AcceptConfirmedPhd2OutputReconnect(context.Plan.ObservationRunId,
+                previousConnectionEpoch, restored, receipt);
+            await PublishRunJsonEvidenceAsync("phd2-guide-output-optical-context-retired",
+                "Old optical track retired at the verified native reconnect boundary; fresh measurements required",
+                new { previousConnectionEpoch, restored.ConnectionEpoch, retiredTrack,
+                    oldPixelsAdopted = false, budgetReset = false, returnProven = false },
+                receipt, cancellationToken).ConfigureAwait(false);
             var acquired = await AcquireG3SlitFieldAsync(context, cancellationToken,
                 allowChargedCurrentPositionHandoff: true).ConfigureAwait(false);
             if (!acquired.CanAdvance) return acquired;
@@ -150,10 +158,52 @@ internal sealed partial class RealObservationStageRunner
                 postCalibrationDepth, lostLockDepth).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
+        catch (ResumeStageRestartException) { throw; }
         catch (Exception ex)
         {
-            return new StageResult(GateResult.Unknown("PHD2_GUIDE_OUTPUT_RECONNECT_FAILED",
-                $"导星输出故障后的有界重连/重新验证未完成：{ex.Message} 未重置任何动作预算。"), halted.EvidencePath);
+            return Phd2OutputRecoveryFailure(ex, halted.EvidencePath);
         }
+    }
+
+    internal string? AcceptConfirmedPhd2OutputReconnect(string runId, long previousConnectionEpoch,
+        Phd2EquipmentReconnectResult restored, string receipt)
+    {
+        var current = phd2.Snapshot;
+        if (!restored.ConfirmedStopped || restored.CaptureStarted || restored.MotionCommandIssued ||
+            restored.ConnectionEpoch != previousConnectionEpoch + 1 ||
+            current.ConnectionEpoch != restored.ConnectionEpoch || !current.IsConnected ||
+            current.AppState != Phd2AppState.Stopped || current.AutomationPaused || current.Phd2Paused ||
+            current.GuideOutput?.Failed == true || current.Profile != restored.Profile ||
+            current.Equipment != restored.After ||
+            pendingPhd2LockShift is { Phase: not Phd2LockShiftPendingPhase.SettledBudgetLedger })
+            throw new Phd2Exception("Verified native reconnect/stop changed before rebuilding optical evidence.");
+        if (stellarTargetTrack is { } track &&
+            (track.RunId != runId || track.ConnectionEpoch != previousConnectionEpoch))
+            throw new PhysicalActionGateException(GateResult.Unknown("G3_TARGET_TRACK_CONTEXT_CHANGED",
+                "The retained target track is not owned by the reconnected run/epoch; it was not adopted or discarded."));
+
+        // Only an explicitly checked equipment reconnect retires this epoch's
+        // optical state. Unexpected owner changes still fail in TargetTrack.
+        // Never re-stamp old pixels with the new epoch, clear motion ledgers,
+        // replenish retries or reset coarse/fine/science/time budgets here.
+        var retiredTrack = stellarTargetTrack?.Path;
+        automaticRebuildStopProof = new(restored.ConnectionEpoch, current.GuideEpoch, receipt);
+        stellarTargetTrack = null;
+        phd2PreMotionOutputOwner = null;
+        phd2SlitPlacementSession = null;
+        lastG3Field = null;
+        return retiredTrack;
+    }
+
+    internal static StageResult Phd2OutputRecoveryFailure(Exception error, string? evidencePath)
+    {
+        // A quality failure during fresh reacquisition is not a failed device
+        // reconnect. Preserve the producer's code, scope, metrics and evidence;
+        // the native sequence still requires an independently checked stop.
+        var result = error is PhysicalActionGateException gate
+            ? new StageResult(gate.Gate, evidencePath)
+            : new StageResult(GateResult.Unknown("PHD2_GUIDE_OUTPUT_RECONNECT_FAILED", error.Message), evidencePath);
+        return ObservationWorkflowResults.WithFailureContext(result,
+            "导星输出故障后的有界重连/重新验证未完成；未重置任何动作预算。");
     }
 }

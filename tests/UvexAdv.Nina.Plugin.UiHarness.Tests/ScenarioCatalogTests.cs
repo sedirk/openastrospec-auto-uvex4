@@ -8,6 +8,19 @@ namespace UvexAdv.Nina.Plugin.UiHarness.Tests;
 public sealed class ScenarioCatalogTests
 {
     [Theory]
+    [InlineData("workflow-meridian-segment")]
+    [InlineData("workflow-meridian-segment-narrow")]
+    public void MeridianSegmentCannotPaintBypassedScienceAsSuccessful(string name)
+    {
+        var vm = ScenarioCatalog.Select(name).Single().ViewModel;
+        Assert.Equal("观测段结束 · 等待中天交接", vm.StateText);
+        Assert.Equal(5, vm.Workflow.Nodes.Count(node => node.StateKind == ObservationWorkflowNodeState.Skipped));
+        Assert.All(vm.Workflow.Nodes.Where(node => node.GateCode == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY"),
+            node => Assert.Equal("native-meridian-bypass", node.CompletionSource));
+        Assert.True(vm.IsSimulationMode);
+    }
+
+    [Theory]
     [InlineData("native-target-clock-partial", 960)]
     [InlineData("native-target-clock-partial-narrow", 540)]
     public void ClockContinuationPartialOutcomeReusesNativeTargetLayoutWithoutExecutingOrEditingTarget(string name, int width)
@@ -273,10 +286,19 @@ public sealed class ScenarioCatalogTests
         expected = expected.Concat(new[] { "native-real-startup", "native-real-startup-en", "native-safety-startup", "native-safety-startup-en" }).ToArray();
         expected = expected.Concat(new[] { "g3-predicted-target", "g3-predicted-target-narrow" }).ToArray();
         expected = expected.Concat(new[] { "plan-sequence-draft", "plan-sequence-draft-narrow", "plan-sequence-budget" }).ToArray();
+        expected = expected.Concat(new[] { "workflow-meridian-segment", "workflow-meridian-segment-narrow" }).ToArray();
+        expected = expected.Concat(new[] { "safety-monitoring-only", "safety-closeout-failed-narrow" }).ToArray();
         Assert.Equal(expected.Length, scenarios.Count);
         Assert.Equal(expected.OrderBy(name => name), scenarios.Select(item => item.Name).OrderBy(name => name));
         Assert.Equal(scenarios.Count, scenarios.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal("zh-CN", scenarios.Single(item => item.Name == "failure").Culture.Name);
+        foreach (var name in new[] { "safety-monitoring-only", "safety-closeout-failed-narrow" })
+        {
+            var warning = scenarios.Single(item => item.Name == name).ViewModel;
+            Assert.True(warning.SafetyStandbyNeedsAttention);
+            Assert.False(warning.CloseSafetyStandbyCommand.CanExecute(null));
+            Assert.Contains("人工处理", warning.SafetyStandbyStatus);
+        }
         Assert.Equal("en-US", scenarios.Single(item => item.Name == "failure-en").Culture.Name);
         Assert.True(scenarios.Single(item => item.Name == "narrow").Width <= 540);
         Assert.False(scenarios.Single(item => item.Name == "idle").ViewModel.HasFailure);

@@ -1,4 +1,5 @@
 using UvexAdv.Observatory;
+using UvexAdv.Phd2;
 using Xunit;
 
 namespace UvexAdv.Nina.Plugin.Tests;
@@ -66,6 +67,33 @@ public sealed class QhyG3SolvePairRunnerSafetyTests
     }
 
     [Fact]
+    public void ActiveOwnerStreamIsSolvedAndReusedBeforeAnyCompetingExposure()
+    {
+        var collector = Slice(PairSource,
+            "private async Task TryCollectQhyG3FastSolvePairAsync(",
+            "private static async Task<string> PersistQhyG3CandidateCalibrationAsync(");
+        var active = collector.IndexOf("TryPrepareActiveWideFieldFormalPairSourceAsync", StringComparison.Ordinal);
+        var cached = collector.IndexOf("TryPrepareCachedQhyPairSourceAsync", StringComparison.Ordinal);
+        var immediate = collector.IndexOf("CaptureImmediateQhyPairSourceAsync", StringComparison.Ordinal);
+        Assert.True(active >= 0 && cached > active && immediate > cached);
+        Assert.True(collector.IndexOf("temporaryCaptureAlreadyAttempted", StringComparison.Ordinal) <
+            collector.IndexOf("qhyG3FastPairCollectionRunId = context.Plan.ObservationRunId", StringComparison.Ordinal));
+        Assert.Contains("streamIsActive", collector, StringComparison.Ordinal);
+        Assert.Contains("QHY_G3_PAIR_ACTIVE_STREAM_SOURCE_UNAVAILABLE", collector, StringComparison.Ordinal);
+
+        var helper = Slice(PairSource,
+            "private async Task<QhyG3PairQhySource?> TryPrepareActiveWideFieldFormalPairSourceAsync(",
+            "private async Task<(QhyG3PairQhySource Source, Guid JobId)> CaptureImmediateQhyPairSourceAsync(");
+        Assert.Contains("RunWithImageSolverPriorityAsync", helper, StringComparison.Ordinal);
+        Assert.Contains("SolveExternalFitsAsync", helper, StringComparison.Ordinal);
+        Assert.Contains("wideFieldPoses", helper, StringComparison.Ordinal);
+        Assert.Contains("competingExposureStarted = false", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("StartOrAdoptAcquisitionAsync", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("SlewToCoordinatesAsync", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("telescopeMediator.Sync", helper, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PairingNeverCommandsMountAndCandidateCannotAuthorizeMotion()
     {
         var collector = Slice(
@@ -76,7 +104,10 @@ public sealed class QhyG3SolvePairRunnerSafetyTests
         Assert.DoesNotContain("SlewToCoordinatesAsync", collector, StringComparison.Ordinal);
         Assert.DoesNotContain("telescopeMediator.Sync", collector, StringComparison.Ordinal);
         Assert.DoesNotContain("SetExactLockPositionAsync", collector, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pulse", collector, StringComparison.OrdinalIgnoreCase);
+        // A pulse-state readback is required evidence of the stopped bracket;
+        // reject pulse method invocations, not the read-only IsPulseGuiding flag.
+        Assert.Contains("finalInfo.IsPulseGuiding", collector, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"(?i)\b\w*Pulse\w*\s*\(", collector);
         Assert.Contains("mountMotionCommandCount = 0", collector, StringComparison.Ordinal);
         Assert.Contains("motionAuthority = false", collector, StringComparison.Ordinal);
         Assert.Contains("cannot authorize", collector, StringComparison.OrdinalIgnoreCase);
@@ -164,6 +195,56 @@ public sealed class QhyG3SolvePairRunnerSafetyTests
         Assert.Contains("qhy-before-job", PairSource, StringComparison.Ordinal);
         Assert.Contains("qhy-after-accepted-frame", PairSource, StringComparison.Ordinal);
         Assert.Contains("pair-final-readback", PairSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeLadderAndFinalProbePreserveOwnerReceiptInsteadOfInventingShutterTime()
+    {
+        var ladder = Slice(MainSource, "private async Task<G3PlateSolveProbeState> CaptureG3PlateSolveLadderAsync(",
+            "private GateResult ValidateG3SolveProbeImage(");
+        Assert.Contains("captured = await CaptureG3NativeSingleFrameForAcquisitionAsync(", ladder);
+        Assert.DoesNotContain("captured = await CaptureG3FullFrameForAcquisitionAsync(", ladder);
+        Assert.Contains("latest = WithG3NativeCaptureTiming(new G3PlateSolveProbeState(", ladder);
+        Assert.Contains("captured.NativeRequestStartedUtc", ladder);
+        Assert.Contains("RunWideFieldKeyframeWhenStationaryAsync(durableG3AcquisitionMotion", PairSource);
+        Assert.DoesNotContain("PHD2 save_image completion minus hash-locked requested exposure", PairSource);
+    }
+
+    [Theory]
+    [InlineData(false, true, 2000, 3, true)]
+    [InlineData(true, true, 2000, 3, false)]
+    [InlineData(false, false, 2000, 3, false)]
+    [InlineData(false, true, 2000, 1, false)]
+    [InlineData(false, true, 0, 3, false)]
+    public void OnlyConsistentNativeReceiptSuppliesExposureSupport(bool fallback, bool applied, int exposureMs, int spanSeconds, bool accepted)
+    {
+        var start = new DateTimeOffset(2026, 10, 31, 1, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(Path.GetTempPath(), "never-created-native-timing.fit");
+        var probe = new G3PlateSolveProbeState(GateResult.Pass("TEST", "test"), path, null, null, null, []);
+        var capture = new Phd2SingleFrameResult(path, fallback, applied, start.AddSeconds(spanSeconds), exposureMs)
+            { NativeRequestStartedUtc = start };
+        var result = RealObservationStageRunner.WithG3NativeCaptureTiming(probe, capture);
+        Assert.Equal(accepted ? exposureMs : 0, result.ExposureMillisecondsActual);
+        Assert.Equal(accepted ? start : default, result.ExposureStartedUtc);
+        var unknown = RealObservationStageRunner.WithG3NativeCaptureTiming(probe, capture with { NativeRequestStartedUtc = null });
+        Assert.Equal(0, unknown.ExposureMillisecondsActual);
+    }
+
+    [Fact]
+    public void HistoricalPairSelectorDoesNotRefreshPoseOrRequestNewExposureOrSolve()
+    {
+        var source = Slice(PairSource, "private async Task<QhyG3PairQhySource?> TryGetExposureTimedFormalPairSourceAsync(",
+            "private async Task<QhyG3PairQhySource?> TryPrepareActiveWideFieldFormalPairSourceAsync(");
+        Assert.Contains("wideFieldFormalPairHistory", source);
+        Assert.Contains("wideFieldOpticalSha", source);
+        Assert.Contains("source.Solve.IsFormal", source);
+        Assert.Contains("MaximumPairWallClock", source);
+        Assert.Contains("+ uncertainty > policy.MaximumPairMidpointSeparation", source);
+        Assert.DoesNotContain("StartOrAdoptAcquisitionAsync", source);
+        Assert.DoesNotContain("SolveExternalFitsAsync", source);
+        Assert.DoesNotContain("wideFieldPoses.Add", source);
+        Assert.DoesNotContain("InferenceValidUntilUtc =", source);
+        Assert.Contains("ComputeFileSha256Async", source);
     }
 
     [Fact]

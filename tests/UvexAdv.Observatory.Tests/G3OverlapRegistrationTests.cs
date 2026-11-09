@@ -95,6 +95,51 @@ public sealed class G3OverlapRegistrationTests
     }
 
     [Fact]
+    public void October31RecordedNarrowFixedPatternCannotValidateAnIdentityTransform()
+    {
+        // SEP moments from immutable HD25627 raw 02b59f28...6b8872.
+        // The same defects recur in the unrelated HD26380 field. These are
+        // recorded measurements, not claims that a successful sky solve exists.
+        var measured = new[] {
+            (1197.038954887589,1006.036137502561,1.0300843715667725,.6533253788948059),
+            (1231.9507055576373,317.10090970515444,.7780591249465942,.7224534749984741),
+            (1792.9710542195266,722.0342212113743,.776066243648529,.718072235584259),
+            (1743.5638994105989,520.6147665608955,.9508286118507385,.5977482795715332),
+            (1320.2999939190947,341.24804434159057,1.4650921821594238,.7018336653709412),
+            (1683.7550024016346,691.0907509681825,.9135646224021912,.6236329078674316) };
+        var narrow = measured.Select(q => new StarCandidate(new(q.Item1,q.Item2),30000,50000,30,
+            2.354820045*Math.Sqrt((q.Item3*q.Item3+q.Item4*q.Item4)/2),1-q.Item4/q.Item3,0,50)).ToArray();
+        Assert.All(narrow,s => Assert.False(G3OverlapRegistration.HasUsableMeasuredSourceShape(s)));
+        var oldUnknown = narrow.Select(s => s with { FwhmPixels=0 }).ToArray();
+        Assert.True(G3OverlapRegistration.Register(oldUnknown,oldUnknown,1920,1080).Accepted);
+        var rejected=G3OverlapRegistration.Register(narrow,narrow,1920,1080);
+        Assert.False(rejected.Accepted);
+        Assert.Equal("G3_OVERLAP_UNCONFIRMED",rejected.Code); // optional-route fallback, not a new physical stop
+        Assert.Null(rejected.Transform);
+    }
+
+    [Fact]
+    public void StationaryResolvedStarsStillRegisterAndUnknownLegacyWidthIsNotInvented()
+    {
+        Assert.True(G3OverlapRegistration.Register(Stars(Field),Stars(Field),640,480).Accepted);
+        var unknown=Stars(Field).Select(s => s with { FwhmPixels=0 }).ToArray();
+        Assert.True(G3OverlapRegistration.Register(unknown,unknown,640,480).Accepted);
+        Assert.True(G3OverlapRegistration.HasUsableMeasuredSourceShape(Star(Field[0]) with { FwhmPixels=1.9,Ellipticity=0 }));
+    }
+
+    [Fact]
+    public void NarrowBrightDefectsCannotDisplaceTheMovingSkyFromTheSourceCap()
+    {
+        var defects=Enumerable.Range(0,30).Select(i => Star(new(20+i%10*51,20+i/10*110),1000)
+            with {FwhmPixels=1.5,Ellipticity=.1}).ToArray();
+        var shifted=Stars(Field.Select(p => new PixelPoint(p.X+13,p.Y+8)));
+        var result=G3OverlapRegistration.Register(defects.Concat(Stars(Field)).ToArray(),defects.Concat(shifted).ToArray(),640,480);
+        Assert.True(result.Accepted,result.Reason);
+        Assert.Equal(13,result.Transform!.X,8);
+        Assert.Equal(8,result.Transform.Y,8);
+    }
+
+    [Fact]
     public void TransformCompositionAndInverseKeepReferencePixelMeaning()
     {
         var a = new G3SimilarityTransform(.999, .01, -50, 40);

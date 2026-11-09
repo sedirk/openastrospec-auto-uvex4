@@ -20,7 +20,12 @@ internal sealed partial class RealObservationStageRunner
         var workerHash = await ComputeFileSha256Async(runtime.WorkerPath, cancellationToken).ConfigureAwait(false);
         var moduleHash = await ComputeFileSha256Async(modulePath, cancellationToken).ConfigureAwait(false);
         var client = new SepStarDetectionClient();
-        var policy = G3PostWcsShortExposurePolicy.Start(exposureMilliseconds);
+        var commissionedShortExposureMilliseconds = exposureMilliseconds;
+        var commissionedTargetGuidingCeilingMilliseconds =
+            Math.Max(commissionedShortExposureMilliseconds,
+                preset.OffSlitGuidingExposureMilliseconds ?? commissionedShortExposureMilliseconds);
+        var policy = G3PostWcsShortExposurePolicy.Start(commissionedShortExposureMilliseconds,
+            commissionedTargetGuidingCeilingMilliseconds);
         G3ShortPositionMeasurement? previous = null;
         string? previousHash = null, previousPath = null;
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -29,6 +34,10 @@ internal sealed partial class RealObservationStageRunner
         const int shortConfirmationGainPercent = 0;
         var boundaryRecheckUsed = false;
         var maximumFrames = G3PostWcsShortExposurePolicy.MaximumFrames;
+        var longTargetAnchor = longTarget.Target?.Centroid
+            ?? throw new InvalidOperationException("G3_SHORT_LONG_ANCHOR_MISSING: The saturated handoff candidate has no measured long-frame centroid.");
+        var shortAssociationRadius = Math.Max(6,
+            prediction.MaximumUncertaintyPixels + G3ShortPositionMeasurementPolicy.MaximumTrackedRepeatSeparationPixels);
 
         for (var attempt = 1; attempt <= maximumFrames; attempt++)
         {
@@ -80,8 +89,12 @@ internal sealed partial class RealObservationStageRunner
                 !SameHash(sha, await ComputeFileSha256Async(captured.Path, cancellationToken).ConfigureAwait(false)) ||
                 (previousPath is not null && !SameHash(previousHash!, await ComputeFileSha256Async(previousPath, cancellationToken).ConfigureAwait(false))))
                 throw new InvalidOperationException("G3_SEP_INPUT_CHANGED: Frozen SEP/input changed during confirmation.");
-            var measurement = G3SepShortPositionPolicy.Measure(sep, prediction.PredictedTargetPoint,
-                preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
+            // The long frame already established the saturated target core.
+            // A fresh short frame is bound to that measured point, not to the
+            // wider stale prediction map: otherwise a brighter nearby star can
+            // be confirmed twice and wrongly replace the catalogue target.
+            var measurement = G3SepShortPositionPolicy.Measure(sep, longTargetAnchor,
+                shortAssociationRadius, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
                 previousSameSetting: previous);
             var shortTarget = measurement.Identification;
             var probe = new G3PlateSolveProbeState(
@@ -115,13 +128,17 @@ internal sealed partial class RealObservationStageRunner
                     preset.MaximumAcquisitionResidualPixels, preset.TargetSearchRadiusPixels,
                     prediction.FormalAnchor!.Result.Pixscale,
                     RemainingPhd2HandoffRadius(preset, measuredTargetConfirmed: true), previous, measurement, confirmation);
-            var next = boundaryRecheckUsed ? policy : policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt);
+            var next = boundaryRecheckUsed ? policy : policy.AfterConfirmation(measurement.Gate.Code, confirmation, attempt,
+                measurement.Identification.Target?.SignalToNoise);
             var receipt = await PublishRunJsonEvidenceAsync("g3-post-wcs-short-target-confirmation",
                 "SEP continuity check after a small WCS correction (no repeat solve)",
                 new { accepted, coarsePair, attempt, maximumFrames,
                     longFramePath, longTarget, shortFramePath = captured.Path, shortFrameSha256 = sha,
+                    longTargetAnchor, shortAssociationRadius,
                     exposureMilliseconds, requestedGainPercent = shortConfirmationGainPercent,
                     guidingProfileGainPercent = configuration.G3.GainPercent,
+                    commissionedShortStartMilliseconds = commissionedShortExposureMilliseconds,
+                    commissionedSearchCeilingMilliseconds = commissionedTargetGuidingCeilingMilliseconds,
                     captured.GainAndBinningApplied, imageGate, shortTarget, measurement, sep, confirmation, handoffGeometry,
                     decision, boundaryRecheckUsed,
                     policy, nextExposurePolicy = next, workerHash, moduleHash, previousPath, previousHash,
@@ -138,7 +155,7 @@ internal sealed partial class RealObservationStageRunner
             PublishG3Preview(image, accepted ? "SEP 两张独立短帧已确认目标位置；在原剩余运动预算内交给 PHD2 新帧精调，不代表已经入缝。" :
                 ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, decision.Gate,
                     ObservationStaticTextLocalization.EffectiveCulture).Summary, slit, shortTarget.Target?.Centroid);
-            if (accepted) return latest;
+            if (accepted) return latest!;
             if (coarsePair)
             {
                 var coarse = await CreateMeasuredCoarseProbeAsync(context, prediction, longProbe,
@@ -173,8 +190,9 @@ internal sealed partial class RealObservationStageRunner
             }
             policy = next;
         }
-        // Do not spend another 5/10/15-second PL3 ladder and then hand a stale
-        // prediction to guiding. Preserve the failed measured evidence instead.
+        // Preserve the failed evidence. The caller may formally solve its
+        // existing long frame for a typed optical failure, never repeat the
+        // whole capture ladder or hand a stale prediction to guiding.
         Report(ObservationUiPresentation.Present(ObservationStage.AcquireG3SlitField, latest!.Gate,
             ObservationStaticTextLocalization.EffectiveCulture).Summary);
         return latest with { MeasuredPostWcsTarget = null };

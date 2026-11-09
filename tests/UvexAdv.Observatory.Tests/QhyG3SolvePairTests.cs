@@ -104,6 +104,115 @@ public sealed class QhyG3SolvePairTests
     }
 
     [Fact]
+    public void DelayedFormalDeliveryTrainsHistoricalPairWithoutRefreshingMeasurementOrAuthority()
+    {
+        var request = DelayedRequest();
+        var candidate = Assert.IsType<QhyToG3TransferCandidate>(QhyG3SolvePairBuilder.Build(request).Candidate);
+        Assert.Equal(2, candidate.SchemaVersion);
+        Assert.Equal(46, candidate.PairWallClockSeconds);
+        Assert.Equal(5, candidate.ExposureSupportSeconds);
+        Assert.Equal(request.Qhy.ExposureEndedUtc, candidate.MeasurementUtc);
+        Assert.Equal(candidate.MeasurementUtc + request.Policy.CandidateValidity, candidate.ValidUntilUtc);
+        Assert.False(candidate.MotionAuthority);
+        Assert.Empty(candidate.ValidateIntegrity());
+        var reloaded = System.Text.Json.JsonSerializer.Deserialize<QhyToG3TransferCandidate>(
+            System.Text.Json.JsonSerializer.Serialize(candidate))!;
+        var rebuilt = QhyG3SolvePairBuilder.Build(request with { ExposureTiming = reloaded.ExposureTiming });
+        Assert.Equal(candidate.CandidateSha256, rebuilt.Candidate?.CandidateSha256);
+        Assert.Empty(reloaded.ValidateIntegrity());
+    }
+
+    [Fact]
+    public void DelayedPairCannotHideUnknownShutterTimingOrChangedSource()
+    {
+        var request = DelayedRequest();
+        Assert.Equal("QHY_G3_PAIR_SHUTTER_BRACKET_INVALID", QhyG3SolvePairBuilder.Build(request with
+            { G3 = request.G3 with { TimingAuthority = "save_image completion minus exposure" } }).Gate.Code);
+        Assert.Equal("QHY_G3_PAIR_SHUTTER_BRACKET_INVALID", QhyG3SolvePairBuilder.Build(request with
+            { ExposureTiming = null }).Gate.Code);
+        Assert.Equal("QHY_G3_PAIR_SHUTTER_BRACKET_INVALID", QhyG3SolvePairBuilder.Build(request with
+            { ExposureTiming = new(1, 3) }).Gate.Code);
+        var candidate = QhyG3SolvePairBuilder.Build(request).Candidate!;
+        Assert.Contains((candidate with { ExposureTiming = new(1, 1) }).ValidateIntegrity(), issue => issue.Contains("self-hash"));
+    }
+
+    [Fact]
+    public void DelayedPairStillRequiresFullLateStationaryAndSamePierBracket()
+    {
+        var request = DelayedRequest();
+        var moved = request.MountReadbacks.ToArray();
+        moved[^1] = moved[^1] with { RightAscensionDegrees = 0.01 };
+        Assert.Equal("QHY_G3_PAIR_MOUNT_MOVED", QhyG3SolvePairBuilder.Build(request with { MountReadbacks = moved }).Gate.Code);
+        moved[^1] = request.MountReadbacks[^1] with { PierSide = "pierWest" };
+        Assert.Equal("QHY_G3_PAIR_MOUNT_TOPOLOGY_CHANGED", QhyG3SolvePairBuilder.Build(request with { MountReadbacks = moved }).Gate.Code);
+        moved[^1] = request.MountReadbacks[^1] with { ReportedUtc = request.G3.ExposureEndedUtc };
+        Assert.Equal("QHY_G3_PAIR_MOUNT_BRACKET_TIME_INVALID", QhyG3SolvePairBuilder.Build(request with { MountReadbacks = moved }).Gate.Code);
+    }
+
+    [Fact]
+    public void DelayedPairLimitsExposureSupportAndWorstPossibleShutterMidpoint()
+    {
+        var request = DelayedRequest();
+        // A 30-second native PC bracket around a 2-second shutter is NOT a
+        // precise midpoint. The centre looks close; the worst shutter does not.
+        var g3 = request.G3 with { ExposureEndedUtc = request.G3.ExposureStartedUtc.AddSeconds(30),
+            ExposureMidpointUtc = request.G3.ExposureStartedUtc.AddSeconds(15) };
+        var readbacks = request.MountReadbacks.ToArray();
+        readbacks[1] = readbacks[1] with { ReportedUtc = g3.ExposureEndedUtc };
+        Assert.Equal("QHY_G3_PAIR_TIME_WINDOW_EXCEEDED", QhyG3SolvePairBuilder.Build(request with
+            { G3 = g3, MountReadbacks = readbacks }).Gate.Code);
+        // Even a precise shutter cannot make a >30-second capture pair local.
+        g3 = g3 with { ExposureEndedUtc = g3.ExposureStartedUtc.AddSeconds(31),
+            ExposureMidpointUtc = g3.ExposureStartedUtc.AddSeconds(15.5) };
+        readbacks[1] = readbacks[1] with { ReportedUtc = g3.ExposureEndedUtc };
+        Assert.Equal("QHY_G3_PAIR_TIME_WINDOW_EXCEEDED", QhyG3SolvePairBuilder.Build(request with
+            { G3 = g3, MountReadbacks = readbacks, ExposureTiming = new(1, 31) }).Gate.Code);
+    }
+
+    [Fact]
+    public void EveryNewNativePairIncludesUncertainShutterTimingIncludingImmediateSource()
+    {
+        var request = DelayedRequest() with { PairSource = QhyG3SolvePairSource.ImmediateSingleQhyExposure };
+        var candidate = Assert.IsType<QhyToG3TransferCandidate>(QhyG3SolvePairBuilder.Build(request).Candidate);
+        Assert.Equal(2, candidate.SchemaVersion);
+        Assert.NotNull(candidate.ExposureTiming);
+        var legacy = QhyG3SolvePairBuilder.Build(Request()).Candidate!;
+        Assert.Equal(1, legacy.SchemaVersion);
+        Assert.Null(legacy.ExposureTiming);
+        Assert.Equal(legacy.CreatedUtc, legacy.MeasurementUtc);
+    }
+
+    [Fact]
+    public void SolverArrivalDoesNotRefreshLocalTrainingAgeOrPermitFutureDelivery()
+    {
+        var candidate = QhyG3SolvePairBuilder.Build(DelayedRequest()).Candidate!;
+        var sample = new QhyG3VerifiedLocalSample(candidate, new("focus", 5000, Hash('A'), null, "ExplicitManualLock", 50), "focus.json", Hash('B'));
+        var now = candidate.MeasurementUtc.AddMinutes(30).AddSeconds(1);
+        var current = candidate.Qhy with { ExposureStartedUtc = now.AddSeconds(-2), ExposureMidpointUtc = now.AddSeconds(-1),
+            ExposureEndedUtc = now, SolveCompletedUtc = now };
+        Assert.Empty(QhyG3LocalModelPolicy.SelectLocalSamples([sample], current, now, TimeSpan.FromMinutes(30)));
+        now = candidate.CreatedUtc.AddSeconds(1);
+        current = current with { ExposureStartedUtc = now, ExposureMidpointUtc = now, ExposureEndedUtc = now, SolveCompletedUtc = now };
+        Assert.Single(QhyG3LocalModelPolicy.SelectLocalSamples([sample], current, now, TimeSpan.FromMinutes(30)));
+        Assert.Empty(QhyG3LocalModelPolicy.SelectLocalSamples([sample], current, candidate.CreatedUtc.AddSeconds(-1), TimeSpan.FromMinutes(30)));
+    }
+
+    private static QhyG3SolvePairBuildRequest DelayedRequest()
+    {
+        var request = Request();
+        var readbacks = request.MountReadbacks.ToArray();
+        readbacks[^1] = readbacks[^1] with { ReportedUtc = request.CreatedUtc.AddSeconds(40) };
+        return request with
+        {
+            PairSource = QhyG3SolvePairSource.ExposureTimedHistoricalFormalPair,
+            ExposureTiming = new(1, 2),
+            G3 = request.G3 with { TimingAuthority = QhyG3ExposureTiming.NativeBracketAuthority,
+                SolveCompletedUtc = request.CreatedUtc.AddSeconds(39) },
+            CreatedUtc = request.CreatedUtc.AddSeconds(40), MountReadbacks = readbacks,
+        };
+    }
+
+    [Fact]
     public void CandidateHashDetectsAnyModelEdit()
     {
         var candidate = Assert.IsType<QhyToG3TransferCandidate>(QhyG3SolvePairBuilder.Build(Request()).Candidate);

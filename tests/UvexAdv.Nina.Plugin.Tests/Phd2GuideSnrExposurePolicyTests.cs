@@ -108,6 +108,9 @@ public sealed class Phd2GuideSnrExposurePolicyTests
         // that optional longer image must reach the existing fresh restoration.
         Assert.DoesNotContain("if (localReselection) throw", helper);
         Assert.Contains("localReselection && next == choice.ExposureMilliseconds", helper);
+        Assert.Contains("lostCandidates.Add(ToFrameLocal(selection.Selected, preset))", helper);
+        Assert.Contains("preset, token,\n                lostCandidates,", helper.Replace("\r\n", "\n"));
+        Assert.Contains("await Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync", helper);
         Assert.True(helper.LastIndexOf("if (restored)",StringComparison.Ordinal) <
             helper.LastIndexOf("if (localReselection) continue",StringComparison.Ordinal));
         Assert.DoesNotContain("GuideRecovery.", helper);
@@ -118,6 +121,51 @@ public sealed class Phd2GuideSnrExposurePolicyTests
 
     private static Phd2StateSnapshot Preview() => Phd2StateSnapshot.Disconnected with
     { IsConnected = true, AppState = Phd2AppState.Looping, ConnectionEpoch = 1, GuideEpoch = 100 };
+
+    [Fact]
+    public async Task RecordedHd220539RestoredTwoSecondCandidateMustNotStartGuidingAfterFreshLoss()
+    {
+        var selected = new Phd2Point(819.05, 958.81);
+        var baseline = Preview() with { EventSequence = 144, SelectedStar = selected };
+        var snapshot = baseline with { GuideEpoch = 102, EventSequence = 146 };
+        var lost = new Phd2GuidingFrameLostException(snapshot) { SelectedStarSnrBaseline = baseline };
+        var samples = 0;
+        var guideCommands = 0;
+        await Assert.ThrowsAsync<Phd2NativeGuideSelectionExhaustedException>(async () =>
+        {
+            await Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync(
+                () => { samples++; return Task.FromException<Phd2SelectedStarSnrObservation>(lost); },
+                error => Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(error.SelectedStarSnrBaseline!,
+                    error.Snapshot, snapshot, selected, true, false), 3);
+            guideCommands++;
+        });
+        Assert.Equal(1, samples);
+        Assert.Equal(0, guideCommands);
+    }
+
+    [Theory]
+    [InlineData(7d)]
+    [InlineData(40d)]
+    [InlineData(null)]
+    public async Task RestoredCandidateLowOrUnavailableSnrIsStillAdvisory(double? snr)
+    {
+        var observation = Observation(snr: snr);
+        var result = await Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync(
+            () => Task.FromResult(observation), _ => throw new Exception("no loss"), 3);
+        Assert.Same(observation, result);
+    }
+
+    [Fact]
+    public async Task RestoredCandidateDoesNotMaskOwnerLossOrCancellationAsQuality()
+    {
+        var loss = new Phd2GuidingFrameLostException(Phd2StateSnapshot.Disconnected);
+        var preserved = await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() =>
+            Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync(
+                () => Task.FromException<Phd2SelectedStarSnrObservation>(loss), _ => false, 3));
+        Assert.Same(loss, preserved);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync(
+            () => Task.FromCanceled<Phd2SelectedStarSnrObservation>(new CancellationToken(true)), _ => true, 3));
+    }
 
     [Fact]
     public void RecordedFront1LowSnrPreviewLossTriesLongerNativeTierBeforeDirectFallback()

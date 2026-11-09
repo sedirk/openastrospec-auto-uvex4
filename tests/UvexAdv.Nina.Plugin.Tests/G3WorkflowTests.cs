@@ -145,6 +145,52 @@ public sealed class G3WorkflowTests
     private static GateResult Pass => GateResult.Pass("pass", "fixture");
 
     [Theory]
+    [InlineData("skip")] [InlineData("cleanup-failure")] [InlineData("end-policy")]
+    [InlineData("late-cancel")] [InlineData("late-unsafe")] [InlineData("late-deadline")]
+    public async Task October31StableEndpointMissReturnsThenExecutesNextNativeTargetOnlyWithStopProof(string boundary)
+    {
+        // HD 27029: 5 s settle, 1.00\" drift, 5.07\" command residual.
+        // This refuses the same fresh-frame envelope without calling the
+        // stable 0.07\" miss unknown motion or replenishing its return budget.
+        var source = G3WcsRecoveryPolicy.PostSlewPosition(1, 5.07, 2, 5, 5);
+        Assert.Equal(GateFailureScope.TargetQuality, source.FailureScope);
+        Assert.NotEqual(GateDisposition.Passed, source.Disposition);
+        var f = new ReturnFixture();
+        var returned = await f.Workflow.ReturnAsync(f.Context, f.State, "original.json", default);
+        Assert.True(returned.ReturnedToOrigin, returned.Message);
+        Assert.Equal(f.State.StartedUtc, returned.State.StartedUtc);
+        Assert.Equal(f.State.BudgetLineageId, returned.State.BudgetLineageId);
+        Assert.Equal(f.State.CorrectionAttempts + 1, returned.State.CorrectionAttempts);
+        Assert.True(returned.State.CumulativeMotionArcseconds > f.State.CumulativeMotionArcseconds);
+        var terminal = G3WcsRecoveryPolicy.SearchTerminalGate(
+            GateResult.Unknown("G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED", "Recorded source; checked return fixture."),
+            source, returned.ReturnedToOrigin, returned.FailureGate);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, terminal.Code,
+            terminal, ObservationStage.AcquireG3SlitField);
+    }
+
+    [Fact]
+    public async Task FailedDestinationReturnsToVerifiedWaypointThenActuallyExecutesNextTarget()
+    {
+        var f = new ReturnFixture();
+        var waypoint = new G3VerifiedReturnWaypoint(10, 20 + 5d / 3600, 1, f.State.StartedUtc,
+            f.State.UpdatedUtc, "verified.fit", new('D', 64), "formal.json", new('E', 64), new('F', 64));
+        var state = f.State with { VerifiedReturnWaypoint = waypoint };
+        var result = await f.Workflow.ReturnAsync(f.Context, state, "original.json", default);
+        Assert.True(result.ReturnedToOrigin, result.Message);
+        Assert.Equal(waypoint.DeclinationDegrees, f.Position.Dec, 7);
+        Assert.Equal(state.OriginDeclinationDegrees, result.State.OriginDeclinationDegrees);
+        Assert.InRange(result.State.CurrentRadiusArcseconds, 4.99, 5.01);
+        Assert.InRange(result.State.CurrentReturnDistanceArcseconds, 0, .01);
+        Assert.Equal(state.CumulativeMotionArcseconds + state.MaximumSingleCorrectionArcseconds, result.State.CumulativeMotionArcseconds);
+        Assert.Single(f.Trace.Calls, c => c == "SlewToCoordinatesAsync");
+        var gate = G3WcsRecoveryPolicy.ReturnedBudgetGate(GateResult.TargetQuality("reserve", "fixture"), false,
+            new Dictionary<string, double>());
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip", gate.Code, gate,
+            ObservationStage.AcquireG3SlitField);
+    }
+
+    [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task RecoveryReturnObservedFlipJoinsNativeSegmentWithoutOldSideMotionOrBudgetRefund(bool beforeCommand)
     {

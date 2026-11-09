@@ -426,6 +426,72 @@ public sealed class G3OwnedStoppedCurrentHandoffTests
             "unknown-gate", failure.Gate.Code, failure.Gate);
     }
 
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task SharedNativeDispatchTimeoutStopsLadderWithOrWithoutOwnedHandoff(bool ownsStop)
+    {
+        var ledger = State();
+        var proof = new Phd2DependencyRebuildStopProof(1, 12, "owned-stop.json");
+        var calls = 0;
+        var failure = await Assert.ThrowsAsync<PhysicalActionGateException>(() =>
+            G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                ownsStop ? (ledger.ObservationRunId, ledger.BudgetLineageId, proof) : null,
+                ledger, Stopped,
+                _ => { ++calls; return Task.FromException<int>(new Phd2CommandTimeoutException(
+                    "native single-frame capture", TimeSpan.FromSeconds(20))); }, default));
+        Assert.Equal(1, calls);
+        Assert.Equal(Phd2StageFailurePolicy.NativeFrameTimeout, failure.Gate.Code);
+        Assert.Null(RealObservationStageRunner.ClassifyG3PlateSolveTransientFailure(
+            G3PlateSolveTransientOperation.Capture, failure));
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            "unknown-gate", failure.Gate.Code, failure.Gate);
+    }
+
+    [Theory]
+    [InlineData("run")] [InlineData("lineage")] [InlineData("phase")] [InlineData("invalid")]
+    public async Task SharedNativeDispatchRejectsWrongLedgerBeforeAnyExposure(string change)
+    {
+        var original = State();
+        var ledger = change switch
+        {
+            "run" => original with { ObservationRunId = "another-run" },
+            "lineage" => original with { BudgetLineageId = new string('2', 32) },
+            "phase" => original with { Phase = G3AcquisitionMotionPhase.OutboundIntent },
+            _ => original with { MaximumElapsedSeconds = -1 },
+        };
+        var proof = new Phd2DependencyRebuildStopProof(1, 12, "owned-stop.json");
+        var calls = 0;
+        var failure = await Assert.ThrowsAsync<PhysicalActionGateException>(() =>
+            G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+                (original.ObservationRunId, original.BudgetLineageId, proof), ledger, Stopped,
+                _ => { ++calls; return Task.FromResult(42); }, default));
+        Assert.Equal(0, calls);
+        Assert.Equal("G3_GUIDING_RECOVERY_LEDGER_CHANGED", failure.Gate.Code);
+    }
+
+    [Theory]
+    [InlineData("unchanged", 1)] [InlineData("before", 0)] [InlineData("after", 1)]
+    public async Task SharedNativeDispatchReallyConsumesOriginalProofAroundOneExposure(string change, int expectedCalls)
+    {
+        var ledger = State();
+        var proof = new Phd2DependencyRebuildStopProof(1, 12, "owned-stop.json");
+        var snapshot = change == "before" ? Stopped() with { GuideEpoch = 13 } : Stopped();
+        var calls = 0;
+        var task = G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(
+            (ledger.ObservationRunId, ledger.BudgetLineageId, proof), ledger, () => snapshot,
+            _ =>
+            {
+                ++calls;
+                if (change == "after") snapshot = snapshot with { GuideEpoch = 13 };
+                return Task.FromResult(42);
+            }, default);
+        if (change == "unchanged") Assert.Equal(42, await task);
+        else Assert.Equal("G3_GUIDING_RECOVERY_STOP_CHANGED",
+            (await Assert.ThrowsAsync<PhysicalActionGateException>(() => task)).Gate.Code);
+        Assert.Equal(expectedCalls, calls);
+        Assert.Equal(12, proof.GuideEpoch);
+    }
+
     [Fact]
     public void Hd221662RecordedHandoffAvoidsOne5400ArcsecondReturnPrechargeButDoesNotRefundAnything()
     {
@@ -481,14 +547,25 @@ public sealed class G3OwnedStoppedCurrentHandoffTests
         var end = source.IndexOf("// PHD2's generic full-frame primitive", start, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start);
         var native = source[start..end];
-        Assert.Contains("G3AcquisitionMotionPhase.SettledBudgetLedger", native, StringComparison.Ordinal);
-        Assert.Contains("handoff.Run != ledger.ObservationRunId", native, StringComparison.Ordinal);
-        Assert.Contains("handoff.Lineage != ledger.BudgetLineageId", native, StringComparison.Ordinal);
-        Assert.Contains("handoff.Proof.CaptureAsync", native, StringComparison.Ordinal);
+        Assert.Contains("G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync", native, StringComparison.Ordinal);
+        Assert.Contains("handoff, durableG3AcquisitionMotion, () => phd2.Snapshot", native, StringComparison.Ordinal);
         Assert.Contains("phd2.CaptureSingleFrameWithParametersAsync", native, StringComparison.Ordinal);
         Assert.DoesNotContain("StopCaptureAndConfirmAsync", native, StringComparison.Ordinal);
         Assert.DoesNotContain("CaptureFullFrameAsync", native, StringComparison.Ordinal);
         Assert.DoesNotContain("catch", native, StringComparison.Ordinal);
+        var nativeStart = source.IndexOf("private async Task<Phd2SingleFrameResult> CaptureG3NativeSingleFrameCoreAsync(", StringComparison.Ordinal);
+        var nativeEnd = source.IndexOf("// The native capture_single_frame command", nativeStart, StringComparison.Ordinal);
+        var strictNative = source[nativeStart..nativeEnd];
+        Assert.Contains("RequireClockCurrentFieldExistingPhdOwnerAsync", strictNative, StringComparison.Ordinal);
+        Assert.Contains("if (g3StoppedHandoff is { } handoff)", strictNative, StringComparison.Ordinal);
+        Assert.Contains("G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync", strictNative, StringComparison.Ordinal);
+        Assert.Contains("handoff, durableG3AcquisitionMotion, () => phd2.Snapshot", strictNative, StringComparison.Ordinal);
+        Assert.DoesNotContain("StopCaptureAndConfirmAsync", strictNative, StringComparison.Ordinal);
+        Assert.DoesNotContain("catch", strictNative, StringComparison.Ordinal);
+        var completeNative = source[nativeStart..source.IndexOf("private GateResult ValidateCorrectionBudget(", nativeStart, StringComparison.Ordinal)];
+        Assert.Equal(3, completeNative.Split("G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync(").Length - 1);
+        Assert.Equal(3, completeNative.Split("token => phd2.CaptureSingleFrameWithParametersAsync(request, token)").Length - 1);
+        Assert.DoesNotContain("await phd2.CaptureSingleFrameWithParametersAsync(", completeNative, StringComparison.Ordinal);
         var begin = source[source.IndexOf("private async Task<G3AcquisitionMotionState> BeginG3AcquisitionMotionAsync(", StringComparison.Ordinal)..];
         Assert.Contains("handoff.Proof.IsCurrent(phd2.Snapshot)", begin, StringComparison.Ordinal);
         Assert.Contains("hasFreshMountBoundHandoffAuthority", begin, StringComparison.Ordinal);

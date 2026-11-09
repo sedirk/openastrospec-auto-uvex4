@@ -794,7 +794,19 @@
           </WrapPanel>
           <DockPanel Margin="0,4,0,0" Visibility="{Binding HasSafetyStandby, Converter={StaticResource ObservationBoolToVisibility}}">
             <Button DockPanel.Dock="Right" Content="安全待机关顶收口" Command="{Binding CloseSafetyStandbyCommand}" Margin="8,0,0,0"/>
-            <TextBlock Text="{Binding SafetyStandbyStatus}" Foreground="#7DD3FC" TextWrapping="Wrap" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding SafetyStandbyStatus}" TextWrapping="Wrap" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Foreground" Value="#7DD3FC"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding SafetyStandbyNeedsAttention}" Value="True">
+                      <Setter Property="Foreground" Value="#FDA4AF"/>
+                      <Setter Property="FontWeight" Value="Bold"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
           </DockPanel>
           <WrapPanel Margin="0,4,0,0">
             <TextBlock Text="LLM 后台：" FontWeight="Bold" Foreground="#7DD3FC" />

@@ -5,6 +5,38 @@ namespace UvexAdv.Nina.Plugin;
 /// <summary>Recovery classification only; never grants motion or replenishes a ledger.</summary>
 public static class G3WcsRecoveryPolicy
 {
+    // Called only AFTER the runner's owner, stopped-mount, side, epoch,
+    // weather and horizon checks. A missed endpoint still refuses the fresh
+    // frame; it is not evidence that the mount is moving. Keep the original
+    // motion charge and return obligation before applying native skip policy.
+    internal static GateResult PostSlewPosition(double driftArcseconds, double residualArcseconds,
+        double driftLimitArcseconds, double residualLimitArcseconds, double settleSeconds)
+    {
+        var metrics = new Dictionary<string, double>
+        {
+            ["reportedDriftArcseconds"] = driftArcseconds,
+            ["commandResidualArcseconds"] = residualArcseconds,
+            ["driftLimitArcseconds"] = driftLimitArcseconds,
+            ["commandResidualLimitArcseconds"] = residualLimitArcseconds,
+            ["settleSeconds"] = settleSeconds,
+        }.Where(p => double.IsFinite(p.Value)).ToDictionary(p => p.Key, p => p.Value);
+        var message = $"After waiting {settleSeconds:F2}s, reported drift was {driftArcseconds:F2} arcsec " +
+            $"(limit {driftLimitArcseconds:F2}) and command residual was {residualArcseconds:F2} arcsec " +
+            $"(fresh-frame limit {residualLimitArcseconds:F2}).";
+        if (!double.IsFinite(driftArcseconds) || driftArcseconds < 0 ||
+            !double.IsFinite(residualArcseconds) || residualArcseconds < 0 ||
+            !double.IsFinite(driftLimitArcseconds) || driftLimitArcseconds <= 0 ||
+            !double.IsFinite(residualLimitArcseconds) || residualLimitArcseconds <= 0 ||
+            !double.IsFinite(settleSeconds) || settleSeconds <= 0 || driftArcseconds > driftLimitArcseconds)
+            return GateResult.Unknown("G3_POST_SLEW_POSITION_UNSTABLE",
+                message + " Stability is unconfirmed; no fresh G3 frame is authorized.", metrics);
+        if (residualArcseconds > residualLimitArcseconds)
+            return GateResult.TargetQuality("G3_POST_SLEW_STABLE_ENDPOINT_MISSED",
+                message + " The mount is stable but the requested endpoint was not reached. No fresh G3 frame " +
+                "is authorized; retain the actual displacement, original budget and bounded return obligation.", metrics);
+        return GateResult.Pass("G3_POST_SLEW_POSITION_STABLE", message, metrics);
+    }
+
     internal static GateResult SearchStopGate(string code, string message, GateResult? original) =>
         original ?? (code is "G3_SEARCH_ATTEMPTS_EXHAUSTED" or "G3_SEARCH_TIME_EXHAUSTED" or
             "G3_SEARCH_STABLE_ENDPOINT_RETURN_RESERVE_LIMIT"
@@ -58,7 +90,7 @@ public static class G3WcsRecoveryPolicy
         GateResult.TargetQuality(unreachableAtOrigin ? UnreachableAtOriginCode : ExhaustedReturnedCode,
             $"{reserve.Code}: {reserve.Message} " + (unreachableAtOrigin
                 ? "The mount stayed at the verified origin; no outbound correction was sent. The solved sky/target offset exceeds the original full-route and return budget. This is not a failed local star detection or a completed correction."
-                : "The mount returned to the saved WCS-centering origin. No further local search was started; the original cumulative motion, actions and clock remain charged."),
+                : "The mount returned to the saved WCS-centering return point (initial origin or formally verified waypoint). No further local search was started; the original cumulative motion, actions and clock remain charged."),
             WithReturnMetrics(reserve, metrics));
 
     // Fail the existing reserve check before spending outbound legs when even
@@ -66,20 +98,24 @@ public static class G3WcsRecoveryPolicy
     // first, fresh solved origin qualifies; never infer this from a partial
     // route or use it to replenish/relax any movement limit.
     internal static GateResult? UnreachableRoundTripAtOrigin(int actions, double cumulative,
-        double radius, double required, double handoffAllowance, double arrivalTolerance, double ceiling)
+        double radius, double required, double handoffAllowance, double arrivalTolerance, double ceiling,
+        bool formalWaypointApproach = false)
     {
         if (actions != 0 || cumulative != 0 || !double.IsFinite(radius) || radius < 0 ||
             !double.IsFinite(required) || required < 0 || !double.IsFinite(handoffAllowance) || handoffAllowance < 0 ||
             !double.IsFinite(arrivalTolerance) || arrivalTolerance <= 0 || radius > arrivalTolerance ||
             !double.IsFinite(ceiling) || ceiling <= 0) return null;
-        var optimisticRoundTrip = 2 * Math.Max(0, required - handoffAllowance - radius - arrivalTolerance);
+        // ADR-0051: new formal destinations may advance the return waypoint.
+        // This optimistic early check is NOT the per-leg move/return reserve.
+        var optimisticRoundTrip = (formalWaypointApproach ? 1 : 2) *
+            Math.Max(0, required - handoffAllowance - radius - arrivalTolerance);
         if (optimisticRoundTrip <= ceiling) return null;
         return GateResult.TargetQuality("G3_MOTION_RETURN_CUMULATIVE_RESERVE_LIMIT",
-            $"Fresh WCS requires {required:F1} arcsec to the target; even the optimistic target/return route is " +
+            $"Fresh WCS requires {required:F1} arcsec to the target; even the optimistic {(formalWaypointApproach ? "formal one-way approach" : "target/return route")} is " +
             $"{optimisticRoundTrip:F1} arcsec, above the unchanged {ceiling:F1} arcsec cumulative limit. No outbound move sent.",
             new Dictionary<string, double> { ["requiredTargetMotionArcseconds"] = required,
                 ["optimisticRoundTripArcseconds"] = optimisticRoundTrip, ["maximumCumulativeMotionArcseconds"] = ceiling,
-                ["outboundCommandSent"] = 0 });
+                ["outboundCommandSent"] = 0, ["formalWaypointApproach"] = formalWaypointApproach ? 1 : 0 });
     }
 
     // A typed, known-side change invalidates this target's old coordinate frame;
@@ -201,7 +237,7 @@ public static class G3WcsRecoveryPolicy
         // first-step round trip cannot fit the unchanged global ceilings.
         // Otherwise the normal fresh-field and exact search-reserve gates run.
         var minimumRoundTrip = 2 * Math.Max(0,
-            search.StepArcseconds - returned.CurrentRadiusArcseconds - returned.ArrivalToleranceArcseconds);
+            search.StepArcseconds - returned.CurrentReturnDistanceArcseconds - returned.ArrivalToleranceArcseconds);
         var remainingMotion = commissioned.MaximumCumulativeCorrectionDegrees * 3600d -
             returned.CumulativeMotionArcseconds;
         var remainingActions = commissioned.MaximumCorrectionAttempts - returned.CorrectionAttempts;

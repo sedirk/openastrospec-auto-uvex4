@@ -260,8 +260,10 @@ public sealed class Phd2ClientTests
         Assert.Contains(validation.Failures, failure => failure.Contains("mount name", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task CaptureFullFrameUsesSupportedLoopSaveProtocolWithoutInventedEvent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaptureFullFrameUsesSupportedLoopSaveProtocolWithoutInventedEvent(bool latePreviewEvent)
     {
         using var directory = new TemporaryDirectory();
         var source = Path.Combine(directory.Path, "phd-save-image.fit");
@@ -309,7 +311,16 @@ public sealed class Phd2ClientTests
             Assert.Equal("save_image", save.GetProperty("method").GetString());
             Assert.False(save.TryGetProperty("params", out _));
             await File.WriteAllBytesAsync(source, [0x53, 0x49, 0x4d, 0x50, 0x4c, 0x45], cancellationToken);
+            if (latePreviewEvent)
+                await session.SendEventAsync(new { Event = "StarLost", Frame = 2, SNR = 0, ErrorCode = 2 }, cancellationToken);
             await session.ReplyResultAsync(save, new { filename = source }, cancellationToken);
+            if (latePreviewEvent)
+            {
+                var readback = await session.ReadRequestAsync(cancellationToken);
+                Assert.Equal("get_app_state", readback.GetProperty("method").GetString());
+                await session.ReplyResultAsync(readback, "Stopped", cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
         });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
@@ -328,8 +339,21 @@ public sealed class Phd2ClientTests
             await File.ReadAllBytesAsync(destination));
         Assert.False(File.Exists(source));
         Assert.Equal(result, client.Snapshot.LastSingleFrame);
+        if (latePreviewEvent)
+        {
+            Assert.Equal(Phd2AppState.LostLock, client.Snapshot.AppState);
+            var epoch = client.Snapshot.ConnectionEpoch;
+            var guideEpoch = client.Snapshot.GuideEpoch;
+            Assert.Equal(Phd2AppState.Stopped, await client.GetAppStateAsync(default));
+            Assert.Equal(epoch, client.Snapshot.ConnectionEpoch);
+            Assert.Equal(guideEpoch + 1, client.Snapshot.GuideEpoch);
+            Assert.Equal(nameof(Phd2Client.GetAppStateAsync), client.Snapshot.LastGuideEpochChange?.Cause);
+            Assert.Equal(Phd2AppState.Stopped, client.Snapshot.AppState);
+        }
         Assert.Equal(
-            ["get_app_state", "get_exposure", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image"],
+            latePreviewEvent
+                ? ["get_app_state", "get_exposure", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image", "get_app_state"]
+                : ["get_app_state", "get_exposure", "set_exposure", "get_exposure", "loop", "stop_capture", "save_image"],
             server.ReceivedMethods.ToArray());
         Assert.DoesNotContain("capture_single_frame", server.ReceivedMethods);
     }
@@ -395,6 +419,8 @@ public sealed class Phd2ClientTests
         Assert.True(result.RequestedParametersApplied);
         Assert.True(result.GainAndBinningApplied);
         Assert.Equal(10, result.VerifiedExposureMilliseconds);
+        Assert.NotNull(result.NativeRequestStartedUtc);
+        Assert.True(result.NativeRequestStartedUtc <= result.CompletedUtc);
         Assert.Equal(new byte[] { 0x47, 0x33 }, await File.ReadAllBytesAsync(destination));
         Assert.Equal(
             ["get_app_state", "capture_single_frame", "get_app_state"],
@@ -429,6 +455,58 @@ public sealed class Phd2ClientTests
         Assert.Contains("no profile-gain fallback", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(["get_app_state", "capture_single_frame"], server.ReceivedMethods.ToArray());
         Assert.False(File.Exists(destination));
+    }
+
+    [Theory]
+    [InlineData("Looping")]
+    [InlineData("Selected")]
+    public async Task NativeTimingIsNotInventedForPreviewRaceRejectedBeforeCapture(string state)
+    {
+        using var directory = new TemporaryDirectory();
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            Assert.Equal("get_app_state", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, state, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var error = await Assert.ThrowsAsync<Phd2CaptureException>(() => client.CaptureSingleFrameWithParametersAsync(
+            new(10, 1, 0, Path.Combine(directory.Path, "not-created.fit")), CancellationToken.None));
+        Assert.Equal(Enum.Parse<Phd2AppState>(state), error.RejectedBeforeMutationState);
+        Assert.Null(client.Snapshot.LastSingleFrame);
+        Assert.Equal(["get_app_state"], server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task CancelledNativeCaptureStopsOnceWithoutReturningTimingOrAnotherExposure()
+    {
+        using var directory = new TemporaryDirectory();
+        using var cancel = new CancellationTokenSource();
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(request, "Stopped", token);
+            request = await session.ReadRequestAsync(token);
+            Assert.Equal("capture_single_frame", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, 0, token);
+            accepted.SetResult();
+            request = await session.ReadRequestAsync(token);
+            Assert.Equal("stop_capture", request.GetProperty("method").GetString());
+            await session.ReplyResultAsync(request, 0, token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+        var capture = client.CaptureSingleFrameWithParametersAsync(
+            new(10, 1, 0, Path.Combine(directory.Path, "cancelled.fit")), cancel.Token);
+        await accepted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
+        Assert.Null(client.Snapshot.LastSingleFrame);
+        Assert.Equal(["get_app_state", "capture_single_frame", "stop_capture"], server.ReceivedMethods.ToArray());
     }
 
     [Theory]
@@ -1026,6 +1104,105 @@ public sealed class Phd2ClientTests
     }
 
     [Theory]
+    [InlineData(false, "missing")]
+    [InlineData(true, "missing")]
+    [InlineData(false, "missing-config-change")]
+    [InlineData(false, "pulses")]
+    [InlineData(true, "foreign-source")]
+    [InlineData(false, "one-frame")]
+    public async Task OwnedMissingPulseSeriesInterruptsNativeSettleWithoutWaitingThreeMinutes(bool ownerManaged, string mode)
+    {
+        var state = "Selected";
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            await ReplyValidCalibrationPreambleAsync(session, token);
+            while (!token.IsCancellationRequested)
+            {
+                JsonElement request;
+                try { request = await session.ReadRequestAsync(token); }
+                catch (EndOfStreamException) { break; }
+                switch (request.GetProperty("method").GetString())
+                {
+                    case "get_profile":
+                    case "get_current_equipment":
+                        await ReplyForMethodAsync(session, request, token);
+                        break;
+                    case "guide":
+                        Assert.False(request.GetProperty("params").GetProperty("recalibrate").GetBoolean());
+                        await session.ReplyResultAsync(request, 0, token);
+                        state = "Guiding";
+                        await session.SendEventAsync(new { Event = "LockPositionSet", X = 852.4, Y = 656.1 }, token);
+                        await session.SendEventAsync(new { Event = "StartGuiding" }, token);
+                        await session.SendEventAsync(new { Event = "SettleBegin" }, token);
+                        if (mode == "missing-config-change")
+                            await session.SendEventAsync(new { Event = "ConfigurationChange" }, token);
+                        for (var frame = 1; frame <= (mode == "one-frame" ? 1 : 3); frame++)
+                        {
+                            // October 30 native series: saturated (1) is not a
+                            // pulse error code. Nonzero requests + zero durations
+                            // over the existing three-frame/two-second window are.
+                            await session.SendEventAsync(new { Event = "GuideStep", Frame = frame,
+                                Mount = mode == "foreign-source" ? "foreign-AO" : Phd2RuntimeEquipmentConventions.OnStepMountName,
+                                dx = 3.299, dy = 4.382, SNR = 109.65, HFD = 6.42, ErrorCode = 1,
+                                RADistanceGuide = 4.902, DECDistanceGuide = -2.008,
+                                RADuration = mode == "pulses" ? 100 : 0 }, token);
+                            if (frame < 3 && mode != "one-frame") await Task.Delay(1050, token);
+                        }
+                        if (!mode.StartsWith("missing", StringComparison.Ordinal))
+                            await session.SendEventAsync(new { Event = "SettleDone", Status = 0, TotalFrames = 3, DroppedFrames = 0 }, token);
+                        break;
+                    case "get_app_state":
+                        await session.ReplyResultAsync(request, state, token);
+                        break;
+                    case "get_lock_position":
+                        await session.ReplyResultAsync(request, new[] { 850d, 654d }, token);
+                        break;
+                    case "stop_capture":
+                        state = "Stopped";
+                        await session.SendEventAsync(new { Event = "GuidingStopped" }, token);
+                        await session.ReplyResultAsync(request, 0, token);
+                        break;
+                    default: throw new InvalidOperationException(request.ToString());
+                }
+            }
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(default);
+        Assert.True((await client.ValidateCalibrationAsync(ValidCalibrationRequirement() with
+        { OwnerManaged = ownerManaged, AllowNativeCalibration = ownerManaged }, default)).CanStartNativeGuide);
+        await client.GetCurrentEquipmentAsync(default);
+        await client.GetAppStateAsync(default);
+        await client.GetLockPositionAsync(default);
+        var operation = client.GuideAndSettleAsync(new(3, 5, 180), false, default);
+        if (mode.StartsWith("missing", StringComparison.Ordinal))
+        {
+            var error = await Assert.ThrowsAsync<Phd2GuideOutputException>(() => operation.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal(3, error.Status.ConsecutiveMissingOutputs);
+            Assert.True(client.Snapshot.GuideOutput!.Failed);
+            Assert.False(client.Snapshot.HasCurrentSuccessfulSettle);
+            if (mode == "missing-config-change") Assert.Null(error.InitialGuideStopReceipt);
+            else
+            {
+                var receipt = Assert.IsType<Phd2FailedInitialGuideStopReceipt>(error.InitialGuideStopReceipt);
+                Assert.Equal(new Phd2Point(850, 654), receipt.SelectedLock);
+                Assert.Equal(new Phd2Point(852.4, 656.1), receipt.NativeLock);
+                Assert.True(receipt.IsCurrent(client.Snapshot));
+                Assert.False(receipt.IsCurrent(client.Snapshot with { GuideEpoch = client.Snapshot.GuideEpoch + 1 }));
+                Assert.False(receipt.IsCurrent(client.Snapshot with { LockPosition = new(850, 654) }));
+            }
+        }
+        else Assert.True((await operation.WaitAsync(TimeSpan.FromSeconds(15))).Succeeded);
+        Assert.Null(client.Snapshot.PendingSettleOperationId);
+        // The early failure must release the operation gate so the existing
+        // checked-stop/reconnect owner can run; no hidden reconnect is sent.
+        Assert.True((await client.StopCaptureAndConfirmAsync(default).WaitAsync(TimeSpan.FromSeconds(5))).ConfirmedIdle);
+        Assert.Single(server.ReceivedMethods, m => m == "guide");
+        Assert.DoesNotContain("set_connected", server.ReceivedMethods);
+        Assert.DoesNotContain("set_lock_position", server.ReceivedMethods);
+        await client.DisconnectAsync(default);
+    }
+
+    [Theory]
     [InlineData(true, false, false, false)]
     [InlineData(true, true, false, false)]
     [InlineData(false, true, false, false)]
@@ -1578,6 +1755,56 @@ public sealed class Phd2ClientTests
         Assert.Null(client.Snapshot.LockPosition);
         Assert.Null(client.Snapshot.SelectedStar);
         Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FindGuideStarClassifiesExactNativeNoStarRpcAsBoundedNoCandidateOnly(bool roi)
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            Assert.Equal("find_star", request.GetProperty("method").GetString());
+            await session.ReplyErrorAsync(request, 1, "could not find star", cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2NoGuideStarException>(() =>
+            roi
+                ? client.FindGuideStarInRoiAsync(new Phd2Rectangle(560, 770, 80, 80), CancellationToken.None)
+                : client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.Equal(1, exception.RpcException?.Code);
+        Assert.Equal("could not find star", exception.RpcException?.RpcMessage);
+        Assert.Contains(Phd2NoGuideStarException.FailureCode, exception.Message, StringComparison.Ordinal);
+        Assert.Null(client.Snapshot.LockPosition);
+        Assert.Null(client.Snapshot.SelectedStar);
+        Assert.Equal(new[] { "find_star" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1, "could not find a star")]
+    [InlineData(2, "could not find star")]
+    public async Task FindGuideStarDoesNotGeneralizeTheExactPHD2NoStarRpcPair(int code, string message)
+    {
+        await using var server = new FakePhd2Server(async (session, cancellationToken) =>
+        {
+            var request = await session.ReadRequestAsync(cancellationToken);
+            await session.ReplyErrorAsync(request, code, message, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<Phd2RpcException>(
+            () => client.FindGuideStarAsync(CancellationToken.None));
+
+        Assert.Equal(code, exception.Code);
+        Assert.Equal(message, exception.RpcMessage);
+        Assert.IsNotType<Phd2NoGuideStarException>(exception);
     }
 
     [Fact]

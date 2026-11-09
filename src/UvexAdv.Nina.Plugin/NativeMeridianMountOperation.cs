@@ -12,6 +12,32 @@ internal sealed record NativeMeridianMountReadback(bool Connected, bool Slewing,
 /// <summary>Single-dispatch mount operation. Injectable owner ports support hardware-free failure tests.</summary>
 internal static class NativeMeridianMountOperation
 {
+    // ITelescopeMediator.SetTrackingEnabled returns the resulting TRACKING
+    // STATE, not command success: false is the expected result when stopping.
+    // A setter return alone (including false while disconnected) is never stop
+    // proof. Keep the native settle interval and verify fresh owner readbacks.
+    internal static async Task SetTrackingAndVerifyAsync(bool enabled, PierSide expectedSide,
+        Func<bool, bool> setTracking, Func<NativeMeridianMountReadback> read,
+        Action checkpoint, Func<CancellationToken, Task> settle, CancellationToken token)
+    {
+        void Verify(bool requireTrackingState)
+        {
+            token.ThrowIfCancellationRequested();
+            checkpoint();
+            var state = read();
+            if (expectedSide is not (PierSide.pierEast or PierSide.pierWest) ||
+                !state.Connected || state.Slewing || state.Parked || state.Home || state.Side != expectedSide ||
+                (requireTrackingState && state.Tracking != enabled))
+                throw new InvalidOperationException(enabled
+                    ? "翻转前恢复跟踪/停止/镜筒侧读回未确认；没有下发翻转。"
+                    : "停止跟踪/运动/镜筒侧读回未确认；没有下发翻转。");
+        }
+        Verify(requireTrackingState: false);
+        _ = setTracking(enabled);
+        await settle(token).ConfigureAwait(false);
+        Verify(requireTrackingState: true);
+    }
+
     internal static async Task<PierSide> VerifyObservedChangeAsync(PierSide before, PierSide expectedAfter,
         Func<NativeMeridianMountReadback> read, Action checkpoint,
         Func<CancellationToken, Task> settle, CancellationToken token)

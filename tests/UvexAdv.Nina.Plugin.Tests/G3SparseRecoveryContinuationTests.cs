@@ -133,14 +133,15 @@ public sealed class G3SparseRecoveryContinuationTests
     }
 
     [Theory]
-    [InlineData("skip")]
-    [InlineData("cleanup-failure")]
-    [InlineData("end-policy")]
-    [InlineData("late-unsafe")]
-    [InlineData("late-cancel")]
-    [InlineData("late-deadline")]
-    [InlineData("late-dawn")]
-    public async Task ExhaustedProductionSparseFallbackActuallyRunsTheNextNativeTargetOnlyAfterCheckedStop(string boundary)
+    [InlineData("skip", false)] [InlineData("skip", true)]
+    [InlineData("cleanup-failure", false)] [InlineData("cleanup-failure", true)]
+    [InlineData("end-policy", false)] [InlineData("end-policy", true)]
+    [InlineData("late-unsafe", false)] [InlineData("late-unsafe", true)]
+    [InlineData("late-cancel", false)] [InlineData("late-cancel", true)]
+    [InlineData("late-deadline", false)] [InlineData("late-deadline", true)]
+    [InlineData("late-dawn", false)] [InlineData("late-dawn", true)]
+    public async Task ExhaustedProductionSparseFallbackActuallyRunsTheNextNativeTargetOnlyAfterCheckedStop(
+        string boundary, bool detectorDefects)
     {
         var calls = new List<string>();
         var direct = OpticalMiss();
@@ -149,7 +150,15 @@ public sealed class G3SparseRecoveryContinuationTests
             _ =>
             {
                 calls.Add("registered");
-                var registration = G3OverlapRegistration.Register([], [], 1920, 1080);
+                // October 31: a field containing only narrow detector defects
+                // used to fabricate an identity transform and a useless mosaic.
+                // Its rejection is an unavailable optical branch, not a new
+                // night-level stop or a reason to sweep focus on a zero-star field.
+                StarCandidate[] points = detectorDefects ? [
+                    Defect(200, 200), Defect(500, 350), Defect(800, 800),
+                    Defect(1100, 150), Defect(1400, 650), Defect(1700, 900),
+                ] : [];
+                var registration = G3OverlapRegistration.Register(points, points, 1920, 1080);
                 Assert.False(registration.Accepted);
                 Assert.Equal("G3_OVERLAP_UNCONFIRMED", registration.Code);
                 return Task.FromResult<StageResult?>(null);
@@ -165,6 +174,8 @@ public sealed class G3SparseRecoveryContinuationTests
         // checked stop, journal outcomes and second FinalizeObservation.
         await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
             boundary, result.Gate.Code, result.Gate, ObservationStage.AcquireG3SlitField);
+
+        static StarCandidate Defect(double x, double y) => new(new(x, y), 8000, 10000, 50, 1.6, .1, 0, 100);
     }
 
     [Theory]

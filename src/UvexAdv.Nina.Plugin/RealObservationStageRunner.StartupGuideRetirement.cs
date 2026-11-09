@@ -16,6 +16,8 @@ internal sealed partial class RealObservationStageRunner
         var ownersPrepared = false;
         NativeCameraCaptureLease? captureLease = null;
         G3FieldMountBinding? fieldWitness = null;
+        StartupGuideMountReadback? stoppedAnchor = null;
+        StartupGuideMountReadback? latestStoppedReadback = null;
         Phd2IdentityValidation? fieldOwner = null;
         long? fieldConnectionEpoch = null;
         object? SequenceOwner() => NativeTarget is not null ? nativeSequenceCaptureOwner?.Invoke() : null;
@@ -28,7 +30,9 @@ internal sealed partial class RealObservationStageRunner
         else window.CancelAfter(remaining);
         var boundaryToken = window.Token;
 
-        Task Check(CancellationToken ct)
+        StartupGuideMountReadback ReadMount() => StartupGuideMountReadback.Read(telescopeMediator.GetInfo(), DateTimeOffset.UtcNow);
+
+        async Task Check(CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             token.ThrowIfCancellationRequested();
@@ -58,8 +62,23 @@ internal sealed partial class RealObservationStageRunner
                     mount.SideOfPier.ToString() is not ("pierEast" or "pierWest") || !focus.Connected || focus.IsMoving || focus.IsSettling ||
                     !activeQhyJobs.IsEmpty || !pendingQhyRequests.IsEmpty || automaticFocusBoundaryIssue is not null)
                     throw new PhysicalActionGateException(GateResult.Unknown("GUIDE_STARTUP_OWNER_NOT_IDLE", "当前设备身份或实际停止状态未确认；旧控制记录保留。"));
+                if (stoppedAnchor is { } anchor)
+                {
+                    var current = ReadMount();
+                    var stable = StartupGuideStationaryMount.Validate(anchor, current, configuration.ExpectedTelescopeId,
+                        MountCommandArrivalToleranceArcseconds);
+                    if (stable.Disposition == GateDisposition.Passed && latestStoppedReadback is { } previous)
+                        stable = StartupGuideStationaryMount.Validate(previous, current, configuration.ExpectedTelescopeId,
+                            MountCommandArrivalToleranceArcseconds);
+                    if (stable.Disposition != GateDisposition.Passed)
+                    {
+                        await WriteAuditBestEffortAsync("terminal-guide-stationary-witness-rejected",
+                            new { before = anchor, current, stable, motionSent = false, deadline }).ConfigureAwait(false);
+                        throw new PhysicalActionGateException(stable);
+                    }
+                    latestStoppedReadback = current;
+                }
             }
-            return Task.CompletedTask;
         }
 
         async Task Prepare(CancellationToken ct)
@@ -93,7 +112,10 @@ internal sealed partial class RealObservationStageRunner
         async Task Capture(CancellationToken ct)
         {
             await Check(ct).ConfigureAwait(false);
-            var before = CaptureG3FrameMountReadback();
+            var before = await StartupGuideStationaryMount.ReadFreshAsync(ReadMount, configuration.ExpectedTelescopeId,
+                MountCommandArrivalToleranceArcseconds, Check, ct).ConfigureAwait(false);
+            stoppedAnchor = before;
+            latestStoppedReadback = before;
             var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), ct).ConfigureAwait(false);
             var owner = phd2.Snapshot;
             if (!identity.IsValid || !owner.IsConnected || owner.AppState != Phd2AppState.Stopped)
@@ -121,16 +143,15 @@ internal sealed partial class RealObservationStageRunner
                 freshIdentity.Profile != identity.Profile || freshIdentity.Equipment != identity.Equipment ||
                 await phd2.GetAppStateAsync(ct).ConfigureAwait(false) != Phd2AppState.Stopped)
                 throw new PhysicalActionGateException(GateResult.Unknown("GUIDE_STARTUP_OWNER_CHANGED", "单帧前后连接历元或物理相机身份改变，未归档。"));
-            var after = CaptureG3FrameMountReadback();
             if (!string.Equals(Path.GetFullPath(frame.Path), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase) ||
                 !File.Exists(path) || frame.CompletedUtc < start || frame.CompletedUtc > DateTimeOffset.UtcNow ||
                 frame.UsedLoopSaveFallback || !frame.RequestedParametersApplied || frame.VerifiedExposureMilliseconds != configuration.G3.ExposureMilliseconds)
                 throw new PhysicalActionGateException(GateResult.Unknown("GUIDE_STARTUP_FRESH_FRAME_UNCONFIRMED", "原生单帧文件、参数或完成时刻未确认；没有归档。"));
+            var after = await StartupGuideStationaryMount.ReadFreshAsync(ReadMount, configuration.ExpectedTelescopeId,
+                MountCommandArrivalToleranceArcseconds, Check, ct).ConfigureAwait(false);
             var sha = await ComputeFileSha256Async(path, ct).ConfigureAwait(false);
-            var binding = CreateG3FieldMountBinding(context, path, sha, frame.CompletedUtc, after);
-            var stable = G3FieldMountBindingPolicy.ValidateForMotion(binding, context.Plan.ObservationRunId,
-                configuration.ActionConfigurationSha256, commissioning!.Sha256, path, sha,
-                before.RightAscensionDegrees, before.DeclinationDegrees, before.CoordinateEpoch, before.PierSide,
+            var binding = CreateG3FieldMountBinding(context, path, sha, frame.CompletedUtc, after.SkyReadback);
+            var stable = StartupGuideStationaryMount.Validate(before, after, configuration.ExpectedTelescopeId,
                 MountCommandArrivalToleranceArcseconds);
             if (stable.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(stable);
             await Check(ct).ConfigureAwait(false);
@@ -170,12 +191,12 @@ internal sealed partial class RealObservationStageRunner
                 if (!fresh.IsValid || fieldConnectionEpoch != phd2.Snapshot.ConnectionEpoch ||
                     fresh.Profile != fieldOwner!.Profile || fresh.Equipment != fieldOwner.Equipment)
                     throw new PhysicalActionGateException(GateResult.Unknown("GUIDE_STARTUP_OWNER_CHANGED", "新帧之后 PHD2 所有者发生变化。"));
-                var current = CaptureG3FrameMountReadback();
+                // Check() continuously verifies the stopped mount in the correct
+                // frame. File integrity must not reintroduce a same-sky assertion
+                // when tracking is OFF and the sky naturally crosses the camera.
                 var hash = await ComputeFileSha256Async(bound.FramePath, ct).ConfigureAwait(false);
-                var gate = G3FieldMountBindingPolicy.ValidateForMotion(bound, context.Plan.ObservationRunId,
-                    configuration.ActionConfigurationSha256, commissioning!.Sha256, bound.FramePath, hash,
-                    current.RightAscensionDegrees, current.DeclinationDegrees, current.CoordinateEpoch, current.PierSide,
-                    MountCommandArrivalToleranceArcseconds);
+                var gate = G3FieldMountBindingPolicy.ValidateProvenance(bound, context.Plan.ObservationRunId,
+                    configuration.ActionConfigurationSha256, commissioning!.Sha256, bound.FramePath, hash);
                 if (gate.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(gate);
             }
             var witness = await ReadTerminalGuideWitnessAsync(ct).ConfigureAwait(false);

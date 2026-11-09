@@ -27,16 +27,20 @@ internal static class AtrScienceFrameQualityPolicy
 
     public static GateResult Evaluate(SpectralProbeMetrics metrics, AtrRunConfiguration configuration)
     {
-        if (!metrics.GuidingStable)
-        {
-            return GateResult.Unknown(
-                "GUIDING_UNSTABLE",
-                "ATR science-frame guiding continuity was not preserved. The immutable frame is retained but not accepted; fresh guide/slit evidence is required before another exposure.");
-        }
         if (metrics.SaturatedFraction > configuration.MaximumSaturatedFraction) return GateResult.Fail("ATR_SATURATION_LIMIT", $"ATR science frame full-ROI saturated fraction {metrics.SaturatedFraction:P3} exceeds {configuration.MaximumSaturatedFraction:P3}.");
         if (metrics.TraceSaturatedFraction > configuration.MaximumTraceSaturatedFraction) return GateResult.Fail("ATR_TRACE_SATURATION_LIMIT", $"ATR spectral-trace saturated fraction {metrics.TraceSaturatedFraction:P3} exceeds {configuration.MaximumTraceSaturatedFraction:P3}.");
         if (metrics.ClippedDispersionColumnFraction > configuration.MaximumClippedDispersionColumnFraction) return GateResult.Fail("ATR_CLIPPED_COLUMNS_LIMIT", $"ATR spectrum clips {metrics.ClippedDispersionColumnFraction:P2} of wavelength columns, above {configuration.MaximumClippedDispersionColumnFraction:P2}.");
         if (metrics.LongestClippedDispersionColumnRun > configuration.MaximumConsecutiveClippedDispersionColumns) return GateResult.Fail("ATR_CONSECUTIVE_CLIP_LIMIT", $"ATR spectrum has {metrics.LongestClippedDispersionColumnRun} consecutive clipped wavelength columns; limit is {configuration.MaximumConsecutiveClippedDispersionColumns}.");
+        if (!metrics.GuidingStable)
+        {
+            // The shutter has already closed and the spectral pixels are an
+            // immutable observation. Keep the completed frame with its actual
+            // continuity flag; the next exposure still requires a fresh,
+            // settled guide epoch and target/slit verification.
+            return GateResult.Warn(
+                "ATR_FRAME_GUIDE_CONTINUITY_WARNING",
+                "ATR frame completed, but PHD2 guide continuity changed during the exposure/readout window. The immutable spectrum is retained with a continuity warning; no further exposure is allowed until fresh guiding and target/slit evidence pass.");
+        }
         if (metrics.TargetToSkyContrast < configuration.MinimumTargetToSkyContrast)
         {
             return GateResult.Warn(

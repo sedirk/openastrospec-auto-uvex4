@@ -81,20 +81,76 @@ public sealed class AtrWorkflowTests
     }
 
     [Fact]
-    public async Task RejectedGuideFrameIsRetainedAndRecoveryCannotReissueScienceBudget()
+    public async Task Recorded10CasSixHundredSecondTierSurvivesPostReadoutGuideLossWithoutRerunningLadder()
+    {
+        var tiers = new[] { 0.1, 0.3, 1, 3, 10, 30, 60, 120, 300, 600 };
+        var f = new AtrWorkflowFixture(3, tiers, attempts: 6, probeSeconds: 0.1);
+        f.Port.NextMetrics = m => m.ExposureSeconds switch
+        {
+            <= 1 => m with
+            {
+                HighPercentileAdu = 368,
+                TargetToSkyContrast = 1.06,
+                ContinuumSnrPerResolutionElement = .67,
+                LineSnrPerResolutionElement = 4.72,
+            },
+            3 => m with
+            {
+                HighPercentileAdu = 416,
+                TargetToSkyContrast = 1.25,
+                ContinuumSnrPerResolutionElement = 2.70,
+                LineSnrPerResolutionElement = 6.74,
+            },
+            600 => m with
+            {
+                HighPercentileAdu = 8384,
+                TargetToSkyContrast = 14.2,
+                ContinuumSnrPerResolutionElement = 111.29,
+                LineSnrPerResolutionElement = 168.29,
+                GuidingStable = false,
+            },
+            _ => m,
+        };
+
+        var selected = await f.Science.SelectExposureAsync(f.Context, default);
+
+        Assert.True(selected.CanAdvance);
+        Assert.Equal("ATR_PROBE_TIER_VALIDATED", selected.Gate.Code);
+        Assert.Equal(600, f.Probe.SelectedExposureSeconds);
+        Assert.Equal(1, f.Science.AcceptedFrames);
+        Assert.Equal(new double[] { 0.1, 0.3, 1, 3, 600 }, f.Port.Captures.Select(c => c.Metrics.ExposureSeconds));
+
+        f.Port.NextMetrics = m => m with { GuidingStable = true };
+        f.Port.GuidingStable = false;
+        Assert.Equal("GUIDING_LOST", (await f.Science.RunAsync(f.Context, default)).Gate.Code);
+        Assert.Equal(5, f.Port.Captures.Count);
+        Assert.Equal(1, f.Science.AcceptedFrames);
+
+        // The stage supervisor's bounded same-lock resettle is outside this
+        // pure workflow fixture. Simulate its successful completion and prove
+        // that the already-selected tier resumes without a new ladder visit.
+        f.Port.GuidingStable = true;
+        Assert.True((await f.Science.RunAsync(f.Context, default)).CanAdvance);
+        Assert.Equal(7, f.Port.Captures.Count);
+        Assert.All(f.Port.Captures.Skip(5), capture => Assert.Equal(600, capture.Metrics.ExposureSeconds));
+        Assert.Equal(3, f.Science.AcceptedFrames);
+    }
+
+    [Fact]
+    public async Task CompletedGuideChangedFrameIsRetainedWithWarningButCannotExceedAttemptBudget()
     {
         var f = new AtrWorkflowFixture(3, attempts: 2);
         await f.Science.SelectExposureAsync(f.Context, default);
         f.Port.NextMetrics = m => m with { GuidingStable = false };
         var result = await f.Science.RunAsync(f.Context, default);
         Assert.Equal("ATR_ATTEMPT_LIMIT", result.Gate.Code);
-        Assert.Equal(1, f.Science.AcceptedFrames);
+        Assert.Equal(2, f.Science.AcceptedFrames);
         Assert.Equal(2, f.Science.AttemptedFrames);
         Assert.Equal(2, f.Port.Saved.Count);
-        Assert.True(f.Probe.RequiresReprobe);
-        f.Probe.Invalidate();
+        Assert.False(f.Probe.RequiresReprobe);
         var events = f.Port.Events.Count;
-        Assert.Equal("ATR_ATTEMPT_LIMIT", (await f.Science.RunAsync(f.Context, default)).Gate.Code);
+        Assert.Equal("ATR_ATTEMPT_LIMIT",
+            (await f.Science.RunAsync(f.Context, default)).Gate.Code);
         Assert.Equal(events, f.Port.Events.Count); // no reprobe, recovery, capture or save
     }
 
@@ -189,11 +245,12 @@ internal sealed class AtrTestPort : IAtrObservationPort
     internal bool Meridian;
     internal Func<int, GateResult>? SavedTemperature;
     internal Func<int, GateResult>? CoolingReadiness;
+    internal bool GuidingStable = true;
     private int coolingCalls;
     private GateResult Gate(string name) { Events.Add(name); return Deny == name ? GateResult.Unknown(name, name) : GateResult.Pass(name, name); }
     public GateResult ValidateAtrCameraIdentity(string id) => Gate("identity");
     public void ThrowIfGuideOutputFailed() => Events.Add("guide-output");
-    public bool IsGuidingStable() => true;
+    public bool IsGuidingStable() => GuidingStable;
     public Task<GateResult> WaitForAtrScienceTemperatureAsync(ObservationContext c, CancellationToken t)
     {
         t.ThrowIfCancellationRequested();

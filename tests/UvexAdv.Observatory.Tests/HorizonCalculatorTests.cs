@@ -30,6 +30,49 @@ public sealed class HorizonCalculatorTests
             { PlannedStartUtc = DateTimeOffset.Parse("2026-10-25T17:10:00Z"), PlannedDuration = TimeSpan.FromSeconds(1) }).ToRuntimeGateResult().Code);
     }
 
+    [Fact]
+    public void RecordedHd18552RecoveryUsesItsOriginalDeadlineInsteadOfAFreshProtectedBlock()
+    {
+        var start = DateTimeOffset.Parse("2026-11-05T18:56:23.2468081Z");
+        var recovery = DateTimeOffset.Parse("2026-11-05T19:25:56Z");
+        var plan = new ObservationPlan(
+            "hd18552-replay",
+            "night",
+            new EquatorialTarget("HD 18552", "HD 18552", 45.049525452640005, 38.13172151748999),
+            new ObservatorySite(33.37583333333333, 120.41666666666667, 0),
+            start,
+            TimeSpan.FromMinutes(35),
+            new HorizonPolicy(42, 0, 0),
+            new MotionLimits(),
+            "atr",
+            "g3",
+            "qhy");
+        var context = new ObservationContext(plan);
+        context.LimitVisibilityTo(start.AddMinutes(35));
+
+        // This is the old in-run calculation: treating recovery as if the target
+        // were only now starting rejects a target that remains observable through
+        // its actual 19:31:23Z target deadline.
+        Assert.Equal(
+            HorizonEvaluation.WindowExhaustedCode,
+            HorizonCalculator.Evaluate(plan with { PlannedStartUtc = recovery }).ToRuntimeGateResult().Code);
+
+        var running = HorizonCalculator.EvaluateRunning(context, recovery);
+        Assert.True(running.Passed);
+        Assert.Equal("HORIZON_CLEAR", running.ToRuntimeGateResult().Code);
+        Assert.Equal(recovery, running.Samples[0].TimestampUtc);
+        Assert.Equal(start.AddMinutes(35), running.Samples[^1].TimestampUtc);
+        Assert.InRange(running.Samples[0].AltitudeDegrees, 48.1, 48.2);
+
+        var scheduledGate = HorizonCalculator.Evaluate(plan with
+        {
+            PlannedStartUtc = recovery,
+            PlannedDuration = TimeSpan.FromMinutes(35),
+        }).ToRuntimeGateResult();
+        Assert.Equal(HorizonEvaluation.WindowExhaustedCode, scheduledGate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, scheduledGate.FailureScope);
+    }
+
     [Theory]
     [InlineData(35, "HORIZON_CLEAR")]
     [InlineData(55, HorizonEvaluation.WindowExhaustedCode)]

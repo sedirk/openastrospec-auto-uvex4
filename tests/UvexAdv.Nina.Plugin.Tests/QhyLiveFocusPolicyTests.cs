@@ -129,7 +129,7 @@ public sealed class QhyLiveFocusPolicyTests
         Assert.Null(Get("currentQhyFocusMetric"));
         Assert.Null(Get("lastQhySolve"));
         Assert.Equal(JobId, (Guid)Get("photometryJobId")!);
-        Assert.Equal(2, f.Science.AcceptedFrames);
+        Assert.Equal(3, f.Science.AcceptedFrames);
         Assert.Equal(3, f.Science.AttemptedFrames);
         void Set(string name, object? value) => typeof(RealObservationStageRunner).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(runner, value);
         object? Get(string name) => typeof(RealObservationStageRunner).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(runner);

@@ -14,6 +14,8 @@ internal sealed record NinaEnvironmentDeviceSelection(
     string OpticalCoverId)
 {
     public const string NoDeviceId = "No_Device";
+    public const string LegacyAiWeatherSafetyMonitorId = "AIWeatherSafetyMonitor";
+    public const string SkySentinelSafetyMonitorId = "SkySentinelSafetyMonitor";
 
     public static NinaEnvironmentDeviceSelection None { get; } = new(
         NoDeviceId,
@@ -33,10 +35,13 @@ internal sealed record NinaEnvironmentDeviceSelection(
 
     // ADR-0022: this is an explicitly commissioned alternative, never an
     // automatic fallback when a weather adapter fails. No parallel forecast
-    // adapter is selected, and the bound AIWeather monitor owns the verdict.
+    // adapter is selected, and the bound all-sky safety monitor owns the verdict.
+    // Sky Sentinel is the independently identified successor to the legacy
+    // AI Weather Advanced plugin; both IDs remain accepted for saved Profiles.
     public bool UsesAiWeatherAuthority(bool requireWeatherData) =>
         !requireWeatherData && !HasWeatherData &&
-        string.Equals(SafetyMonitorId, "AIWeatherSafetyMonitor", StringComparison.Ordinal);
+        (string.Equals(SafetyMonitorId, LegacyAiWeatherSafetyMonitorId, StringComparison.Ordinal) ||
+         string.Equals(SafetyMonitorId, SkySentinelSafetyMonitorId, StringComparison.Ordinal));
 
     public GateResult ValidateForMode(bool weakSupervisionEnabled, bool requireWeatherData = true)
     {
@@ -53,7 +58,7 @@ internal sealed record NinaEnvironmentDeviceSelection(
                     ? "WEAK_SUPERVISION_ALL_ENVIRONMENT_ADAPTERS_SELECTED"
                     : "UNATTENDED_ENVIRONMENT_ADAPTERS_SELECTED",
                 UsesAiWeatherAuthority(requireWeatherData)
-                    ? "AIWeather owns the weather safety verdict; the bound monitor, roof and cover still require fresh live verification. No forecast adapter is used."
+                    ? "The bound Sky Sentinel/AI Weather monitor owns the weather safety verdict; the monitor, roof and cover still require fresh live verification. No forecast adapter is used."
                     : "The N.I.N.A. Profile selects all four environment adapters; their live connection and state still require fresh verification.");
         }
 

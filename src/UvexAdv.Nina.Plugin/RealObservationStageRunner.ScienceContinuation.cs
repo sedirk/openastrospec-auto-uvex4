@@ -7,19 +7,134 @@ internal sealed partial class RealObservationStageRunner
 {
     private Phd2PreExposureReceipt? preExposureReceipt;
 
-    private async Task<bool> TryVerifyScienceInPlaceAsync(ObservationContext context, CancellationToken cancellationToken)
+    private async Task<bool> TryVerifyScienceInPlaceAsync(
+        ObservationContext context,
+        string sourceCode,
+        CancellationToken cancellationToken)
     {
         preExposureReceipt = null;
-        if (phd2SlitPlacementSession is not { } session || lastG3Field is null || !IsGuidingStable()) return false;
+        if (phd2SlitPlacementSession is not { } session || lastG3Field is null) return false;
         var loaded = await Phd2LockShiftPendingStore.LoadAsync(
             Phd2LockShiftPendingPath(context.Plan.ObservationRunId), cancellationToken).ConfigureAwait(false);
         if (loaded.Error is not null || loaded.State is not { } ledger) return false;
         var preset = commissioning!.Value.Phd2SlitPlacement!;
         if (ValidateCurrentPhd2LockLedgerBinding(context, preset, ledger).Disposition != GateDisposition.Passed) return false;
+        var lockTolerance = preset.BuildMotionLimits().LockVerificationTolerancePixels;
         var actual = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
+        if (!IsGuidingStable())
+        {
+            if (!Phd2ScienceContinuationPolicy.CanResettleAfterExposureAtSettledLock(
+                    sourceCode, ledger, phd2.Snapshot, session.ConnectionEpoch, session.GuideEpoch,
+                    session.SelectedGuide, session.OriginLock, actual, lockTolerance))
+                return false;
+
+            Phd2SettleResult resettle;
+            try
+            {
+                resettle = await phd2.ResettleAtCurrentLockAsync(
+                    new Phd2SameLockSettleRequest(
+                        session.ConnectionEpoch,
+                        session.GuideEpoch,
+                        session.OriginLock,
+                        lockTolerance,
+                        new Phd2SettleCriteria(
+                            configuration.Phd2.SettlePixels,
+                            configuration.Phd2.SettleStableSeconds,
+                            configuration.Phd2.SettleTimeoutSeconds)),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (ResumeStageRestartException) { throw; }
+            catch (Exception ex)
+            {
+                await PublishRunJsonEvidenceAsync(
+                    "phd2-science-same-lock-resettle-failed",
+                    "Same-lock settle failed without reselection, lock mutation, calibration, motion or budget reset",
+                    new
+                    {
+                        sourceCode,
+                        session.ConnectionEpoch,
+                        session.GuideEpoch,
+                        selectedGuide = session.SelectedGuide,
+                        settledLock = session.OriginLock,
+                        error = ex.Message,
+                        reselectionIssued = false,
+                        calibrationIssued = false,
+                        lockMutationIssued = false,
+                        motionBudgetReset = false,
+                    },
+                    session.LastMeasurement.Frame.Path,
+                    cancellationToken).ConfigureAwait(false);
+                return false;
+            }
+
+            var resettled = phd2.Snapshot;
+            if (!resettle.Succeeded ||
+                resettled.ConnectionEpoch != session.ConnectionEpoch ||
+                resettled.GuideEpoch != session.GuideEpoch + 1 ||
+                resettled.SelectedStar is not { } selectedAfter ||
+                PointDistance(selectedAfter, session.SelectedGuide) > lockTolerance ||
+                resettled.LockPosition is not { } lockAfter ||
+                PointDistance(lockAfter, session.OriginLock) > lockTolerance)
+            {
+                await PublishRunJsonEvidenceAsync(
+                    "phd2-science-same-lock-resettle-unconfirmed",
+                    "PHD2 same-lock settle did not preserve the selected star and exact runtime lock",
+                    new
+                    {
+                        sourceCode,
+                        resettle,
+                        beforeConnectionEpoch = session.ConnectionEpoch,
+                        beforeGuideEpoch = session.GuideEpoch,
+                        afterConnectionEpoch = resettled.ConnectionEpoch,
+                        afterGuideEpoch = resettled.GuideEpoch,
+                        selectedGuide = session.SelectedGuide,
+                        settledLock = session.OriginLock,
+                        selectedAfter = resettled.SelectedStar,
+                        lockAfter = resettled.LockPosition,
+                        reselectionIssued = false,
+                        calibrationIssued = false,
+                        lockMutationIssued = false,
+                        motionBudgetReset = false,
+                    },
+                    session.LastMeasurement.Frame.Path,
+                    cancellationToken).ConfigureAwait(false);
+                return false;
+            }
+
+            session = session with
+            {
+                Settle = resettle,
+                GuideEpoch = resettled.GuideEpoch,
+                FreshGuidingWindowReplacedSettle = false,
+                ReadOnlyPostLockObservation = null,
+            };
+            phd2SlitPlacementSession = session;
+            validatedG3GuideConnectionEpoch = resettled.ConnectionEpoch;
+            validatedG3GuideEpoch = resettled.GuideEpoch;
+            actual = await phd2.GetLockPositionAsync(cancellationToken).ConfigureAwait(false);
+            await PublishRunJsonEvidenceAsync(
+                "phd2-science-same-lock-resettled",
+                "Post-exposure stale settle resumed at the same selected star and exact runtime lock",
+                new
+                {
+                    sourceCode,
+                    session.ConnectionEpoch,
+                    session.GuideEpoch,
+                    selectedGuide = session.SelectedGuide,
+                    settledLock = session.OriginLock,
+                    resettle,
+                    reselectionIssued = false,
+                    calibrationIssued = false,
+                    lockMutationIssued = false,
+                    motionBudgetReset = false,
+                },
+                session.LastMeasurement.Frame.Path,
+                cancellationToken).ConfigureAwait(false);
+        }
         if (!Phd2ScienceContinuationPolicy.CanObserveAtSettledLock(ledger, phd2.Snapshot,
             session.ConnectionEpoch, session.GuideEpoch, IsGuidingStable(), actual,
-            preset.BuildMotionLimits().LockVerificationTolerancePixels)) return false;
+            lockTolerance)) return false;
         var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
         if (!identity.IsValid || ValidatePhdProfileBindingEvidence().Disposition != GateDisposition.Passed) return false;
         await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);

@@ -2,7 +2,10 @@ namespace UvexAdv.Phd2;
 
 public sealed record Phd2ConfigurationChangeEvidence(
     long EventSequence, DateTimeOffset ReceivedUtc, string? BeforeSha256,
-    string? AfterSha256, bool MaterialConfigurationUnchanged);
+    string? AfterSha256, bool MaterialConfigurationUnchanged)
+{
+    public bool OwnedNativeCaptureGainChange { get; init; }
+}
 
 public sealed partial class Phd2Client
 {
@@ -35,6 +38,22 @@ public sealed partial class Phd2Client
         // Identical complete material evidence is NOT a new guiding operation.
         // Separate LostLock/stop/selection/flip events still invalidate normally.
         if (unchanged) return next;
+        if (nativeSingleFrameOwner is { } owner && nativeSingleFrameConfigurationWitness is { } witness &&
+            current.IsConnected && current.AppState == Phd2AppState.Stopped &&
+            !current.AutomationPaused && !current.Phd2Paused &&
+            current.ConnectionEpoch == owner.ConnectionEpoch && current.GuideEpoch == owner.GuideEpoch &&
+            current.Profile == owner.Profile && current.Equipment == owner.Equipment)
+        {
+            try
+            {
+                if (witness()) return next with
+                {
+                    LastConfigurationChange = next.LastConfigurationChange! with { OwnedNativeCaptureGainChange = true },
+                    CalibrationValidation = null,
+                };
+            }
+            catch (Exception) { /* Unknown change still invalidates. */ }
+        }
         approvedIdentityValidation = null;
         next = next with { CalibrationValidation = null };
         return IsPendingSettleOperationCurrent(next) ? next : InvalidateSettle(next);

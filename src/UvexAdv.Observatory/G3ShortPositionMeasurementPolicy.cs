@@ -21,6 +21,12 @@ public static partial class G3ShortPositionMeasurementPolicy
     public const int MaximumFrames = 3;
     public const double MaximumContourSpreadPixels = 3;
     public const double MaximumRepeatSeparationPixels = 4;
+    // A high-S/N, compact, unsaturated SEP parent may move slightly between
+    // independent frames because of tracking/readout jitter. The strict 4 px
+    // pair remains the normal proof; this second bound is only a warning-level
+    // continuity route and never accepts a split/blended parent.
+    public const double MaximumTrackedRepeatSeparationPixels = 4.9;
+    public const double MinimumTrackedRepeatSignalToNoise = 30;
     public const string Version = "compact-short-contours-v6-component-lineage";
 
     public static G3ShortPositionMeasurement Measure(MonochromeFrame frame,
@@ -142,14 +148,39 @@ public static partial class G3ShortPositionMeasurementPolicy
             return GateResult.Unknown("G3_SHORT_FRAME_REUSED", "Repeated or invalid image hashes cannot establish independent confirmation.");
         var separation = Distance(first.Identification.Target.Centroid, second.Identification.Target.Centroid);
         var metrics = new Dictionary<string, double> { ["shortRepeatSeparationPixels"] = separation,
-            ["maximumShortRepeatSeparationPixels"] = MaximumRepeatSeparationPixels };
+            ["maximumShortRepeatSeparationPixels"] = MaximumRepeatSeparationPixels,
+            ["maximumTrackedShortRepeatSeparationPixels"] = MaximumTrackedRepeatSeparationPixels };
         if ((G3SepShortPositionPolicy.IsSplitParent(first) || G3SepShortPositionPolicy.IsSplitParent(second))
             && !G3SepShortPositionPolicy.IsUnsplitParent(first) && !G3SepShortPositionPolicy.IsUnsplitParent(second))
             return GateResult.Unknown("G3_SEP_PARENT_BLEND_UNRESOLVED",
                 "Both whole-parent measurements remain split. A common parent label and matching photocentre alone cannot resolve a persistent blend; an independent unsplit witness or catalogue-primary route is required.", metrics);
-        return double.IsFinite(separation) && separation <= MaximumRepeatSeparationPixels
-            ? GateResult.Pass("G3_SHORT_REPEAT_CONFIRMED", "Independent compact positions agree for coarse handoff; fresh fine residual remains mandatory.", metrics)
-            : GateResult.Unknown("G3_SHORT_REPEAT_DISAGREES", "Independent short-frame positions disagree; do not move from an uncertain centre.", metrics);
+        if (!double.IsFinite(separation) || separation < 0)
+            return GateResult.Unknown("G3_SHORT_REPEAT_DISAGREES",
+                "Independent short-frame positions are invalid; do not move from an uncertain centre.", metrics);
+        if (separation <= MaximumRepeatSeparationPixels)
+            return GateResult.Pass("G3_SHORT_REPEAT_CONFIRMED",
+                "Independent compact positions agree for coarse handoff; fresh fine residual remains mandatory.", metrics);
+        if (separation <= MaximumTrackedRepeatSeparationPixels &&
+            IsHighSignalUnsaturatedParent(first) && IsHighSignalUnsaturatedParent(second))
+            return GateResult.Warn("G3_SHORT_REPEAT_CONFIRMED_WITH_TRACKING_DRIFT",
+                "Two independent high-S/N unsaturated parents continue the same compact target within the tracked handoff allowance; retain the drift warning and require fresh fine residual evidence.",
+                metrics);
+        return GateResult.Unknown("G3_SHORT_REPEAT_DISAGREES",
+            "Independent short-frame positions disagree; do not move from an uncertain centre.", metrics);
+    }
+
+    private static bool IsHighSignalUnsaturatedParent(G3ShortPositionMeasurement measurement)
+    {
+        if (measurement.Gate.Disposition != GateDisposition.Passed ||
+            measurement.Identification.Target is not { } target ||
+            G3SepShortPositionPolicy.IsSplitParent(measurement) ||
+            !double.IsFinite(target.SignalToNoise) ||
+            target.SignalToNoise < MinimumTrackedRepeatSignalToNoise ||
+            !double.IsFinite(target.FluxAdu) || target.FluxAdu <= 0 ||
+            !double.IsFinite(target.SaturatedFraction) || target.SaturatedFraction > .005 ||
+            !double.IsFinite(target.Ellipticity) || target.Ellipticity > .45)
+            return false;
+        return !double.IsFinite(target.FwhmPixels) || target.FwhmPixels <= 0 || target.FwhmPixels <= 7;
     }
 
     /// <summary>

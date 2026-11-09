@@ -10,6 +10,50 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2MountIdleWaitTests
 {
     [Theory]
+    [InlineData("delayed", true)]
+    [InlineData("stuck", false)]
+    [InlineData("disconnected", false)]
+    [InlineData("identity", false)]
+    [InlineData("guide-resumed", false)]
+    [InlineData("epoch", false)]
+    public async Task CancelledSlewWaitsReadOnlyWithinOriginalLimit(string mode, bool pass)
+    {
+        var result = await ReplayCancelledSlew(mode, default);
+        Assert.Equal(pass, result.Disposition == GateDisposition.Passed);
+        if (pass) Assert.Equal(5.5, result.Metrics!["elapsedSeconds"]);
+        if (mode == "stuck")
+        {
+            Assert.Equal(Phd2MountIdleWait.TimeoutCode, result.Code);
+            Assert.Equal(15, result.Metrics!["elapsedSeconds"]);
+            Assert.Equal(30, result.Metrics!["cancelledSlewSamples"]);
+        }
+    }
+
+    internal static Task<GateResult> ReplayCancelledSlew(string mode, CancellationToken token)
+    {
+        var now = TimeSpan.Zero;
+        var snapshot = Phd2StateSnapshot.Disconnected with { IsConnected = true,
+            AppState = Phd2AppState.Stopped, ConnectionEpoch = 1, GuideEpoch = 2 };
+        var client = DispatchProxy.Create<IPhd2Client, ReadOnlyProxy>();
+        ((ReadOnlyProxy)(object)client).Read = name =>
+        {
+            if (name == "get_Snapshot") return snapshot;
+            if (name != "GetAppStateAsync") throw new InvalidOperationException("Unexpected action: " + name);
+            if (now.TotalSeconds >= 1 && mode == "guide-resumed") snapshot = snapshot with { AppState = Phd2AppState.Guiding };
+            if (now.TotalSeconds >= 1 && mode == "epoch") snapshot = snapshot with { ConnectionEpoch = 3 };
+            return Task.FromResult(snapshot.AppState);
+        };
+        var mount = DispatchProxy.Create<ITelescopeMediator, ReadOnlyProxy>();
+        ((ReadOnlyProxy)(object)mount).Read = name => name == "GetInfo"
+            ? new TelescopeInfo { Connected = mode != "disconnected", DeviceId = mode == "identity" ? "other" : "mount",
+                Slewing = mode == "stuck" || now.TotalSeconds < 2.5 }
+            : throw new InvalidOperationException("Unexpected mount action: " + name);
+        return Phd2MountIdleWait.WaitAfterTargetStopAsync(client, mount, "mount", token,
+            () => now, (duration, ct) => { ct.ThrowIfCancellationRequested(); now += duration; return Task.CompletedTask; },
+            allowCancelledSlewDrain: true);
+    }
+
+    [Theory]
     [InlineData("delayed-poll", true)]
     [InlineData("pulse-stuck", false)]
     [InlineData("disconnected", false)]

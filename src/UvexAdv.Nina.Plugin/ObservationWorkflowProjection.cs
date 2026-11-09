@@ -130,6 +130,16 @@ public static class ObservationWorkflowProjection
                 : last?.Message ?? "尚未记录执行；不能据此认定已跳过。";
             snapshot.Gates.TryGetValue(stage, out var gate);
             if (!hasRun) gate = null;
+            if (gate?.Code == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY")
+            {
+                // Native markers joined the segment; they did not perform its
+                // skipped optical/science work. Counted completion is not success.
+                passed = false;
+                isCurrent = false;
+                state = ObservationWorkflowNodeState.Skipped;
+                completionSource = "native-meridian-bypass";
+                summary = gate.Message;
+            }
             var paths = stageEvents.Where(item => !string.IsNullOrWhiteSpace(item.EvidencePath))
                 .Select(item => item.EvidencePath!).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var associated = hasRun ? snapshot.Evidence.Where(item =>

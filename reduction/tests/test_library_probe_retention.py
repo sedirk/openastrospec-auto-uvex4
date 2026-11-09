@@ -11,7 +11,10 @@ import pytest
 from uvex_reduce.library_catalog import LibraryCatalog
 from uvex_reduce.library_cleanup_execute import CleanupExecutor, confirmation_phrase, latest_file_receipt
 from uvex_reduce.library_cleanup_plan import CleanupPlanner
-from uvex_reduce.library_probe_retention import ProbeRetentionPlanner
+from uvex_reduce.library_probe_retention import (
+    ProbeRetentionPlanner,
+    TargetSuccessRetentionPlanner,
+)
 from uvex_reduce.library_probe_retention_watch import ProbeMetadataWatch, unrelated_metadata
 
 
@@ -42,11 +45,98 @@ def make_run(root, *, state="Completed", science=True, code="TARGET_SKY_CONTRAST
     return paths, manifest, record
 
 
+def make_target_success_run(root, *, state="Completed", science=True,
+                            planned_start="2026-11-06T12:00:00+00:00"):
+    run_id = "success"
+    folder = root / run_id
+    evidence_dir = folder / "evidence"
+    evidence_dir.mkdir(parents=True)
+    paths = {}
+    evidence = []
+
+    def add_frame(name, kind, *, stage=None, accepted=None, metadata=None):
+        path = evidence_dir / name
+        hdu = fits.PrimaryHDU(np.ones((8, 8), dtype=np.uint16))
+        hdu.header["OBSRUNID"] = run_id
+        hdu.header["UVEXCID"] = (metadata or {}).get("captureId", name)
+        if stage:
+            hdu.header["UVEXSTG"] = stage
+        hdu.writeto(path)
+        paths[path.stem] = path
+        evidence.append({
+            "kind": kind,
+            "absolutePath": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "metadata": metadata,
+        })
+        return path
+
+    add_frame("bad-probe.fits", "atr-probe-fits", stage="PROBE", metadata={
+        "observationRunId": run_id, "captureId": "bad", "stageRole": "PROBE",
+        "qualityAccepted": "False", "qualityCode": "TARGET_SKY_CONTRAST_LOW",
+        "fitsProvenanceVerified": "True",
+    })
+    add_frame("unselected-probe.fits", "atr-probe-fits", stage="PROBE", metadata={
+        "observationRunId": run_id, "captureId": "unselected", "stageRole": "PROBE",
+        "qualityAccepted": "False", "qualityCode": "EXPOSURE_TIER_SELECTED",
+        "fitsProvenanceVerified": "True",
+    })
+    add_frame("accepted-uncredited-probe.fits", "atr-probe-fits", stage="PROBE", metadata={
+        "observationRunId": run_id, "captureId": "accepted-uncredited",
+        "stageRole": "PROBE", "qualityAccepted": "True",
+        "qualityCode": "ATR_PROBE_TIER_VALIDATED", "fitsProvenanceVerified": "True",
+    })
+    if science:
+        credited = add_frame("credited-trial.fits", "atr-probe-fits", stage="PROBE", metadata={
+            "observationRunId": run_id, "captureId": "credited", "stageRole": "PROBE",
+            "qualityAccepted": "True", "qualityCode": "ATR_PROBE_TIER_VALIDATED",
+            "fitsProvenanceVerified": "True",
+        })
+        evidence.append({
+            "kind": "atr-science-fits", "absolutePath": str(credited),
+            "sha256": hashlib.sha256(credited.read_bytes()).hexdigest(),
+            "metadata": {
+                "observationRunId": run_id, "captureId": "credited",
+                "effectiveStageRole": "SCIENCE", "qualityAccepted": "True",
+                "qualityCode": "ATR_FRAME_QUALITY_VALID", "fitsProvenanceVerified": "True",
+            },
+        })
+        add_frame("science.fits", "atr-science-fits", stage="SCIENCE", metadata={
+            "observationRunId": run_id, "captureId": "science",
+            "stageRole": "SCIENCE", "qualityAccepted": "True",
+            "qualityCode": "ATR_FRAME_QUALITY_VALID",
+            "fitsProvenanceVerified": "True",
+        })
+    add_frame("g3-solve.fit", "g3-plate-solve-probe-fits")
+    add_frame("g3-residual.fit", "g3-phd2-lock-residual")
+    add_frame("qhy-acquisition.fits", "qhy-acquisition-fits")
+    add_frame("qhy-photometry-r.fits", "qhy-photometry-fits")
+
+    record = {
+        "observationRunId": run_id,
+        "simulator": False,
+        "plan": {"target": {"name": "Star"}, "plannedStartUtc": planned_start},
+        "snapshot": {"state": state},
+        "terminalState": state,
+        "evidence": evidence,
+    }
+    manifest = folder / "manifest.json"
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+    return paths, manifest, record
+
+
 def planner(tmp_path, **kwargs):
     catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
     catalog.add_root(tmp_path / "data")
     catalog.scan()
     return ProbeRetentionPlanner(catalog, authorized=True, **kwargs)
+
+
+def target_success_planner(tmp_path):
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    return TargetSuccessRetentionPlanner(catalog, authorized=True)
 
 
 def test_explicit_policy_only_rejects_and_preserves_valid_probes(tmp_path):
@@ -60,6 +150,95 @@ def test_explicit_policy_only_rejects_and_preserves_valid_probes(tmp_path):
     assert [Path(i["path"]).name for i in selected] == ["bad.fits"]
     assert plan["estimated_release_bytes"] == paths["bad"].stat().st_size
     assert p.revalidate(plan)["valid"]
+    p.catalog.close()
+
+
+def test_target_success_deletes_parse_and_uncredited_trials_but_keeps_science_photometry_and_credited_trial(tmp_path):
+    paths, manifest, _ = make_target_success_run(tmp_path / "data")
+    p = target_success_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert selected == {
+        "bad-probe.fits", "unselected-probe.fits", "accepted-uncredited-probe.fits",
+        "g3-solve.fit", "g3-residual.fit", "qhy-acquisition.fits",
+    }
+    assert paths["credited-trial"].exists()
+    assert paths["science"].exists()
+    assert paths["qhy-photometry-r"].exists()
+    assert manifest.exists()
+    p.catalog.close()
+
+
+@pytest.mark.parametrize("state", ["Faulted", "Cancelled", "RunningAuto", "PausedNeedsAttention"])
+def test_target_success_never_cleans_unsuccessful_or_active_target(tmp_path, state):
+    make_target_success_run(tmp_path / "data", state=state)
+    p = target_success_planner(tmp_path)
+    assert p.preview_candidates() is None
+    p.catalog.close()
+
+
+def test_target_success_requires_accepted_science(tmp_path):
+    make_target_success_run(tmp_path / "data", science=False)
+    p = target_success_planner(tmp_path)
+    assert p.preview_candidates() is None
+    p.catalog.close()
+
+
+def test_target_success_never_reaches_back_before_enable_watermark(tmp_path):
+    make_target_success_run(tmp_path / "data", planned_start="2026-11-06T12:00:00+00:00")
+    p = target_success_planner(tmp_path)
+    assert p.preview_candidates()
+    p.catalog.close()
+
+    catalog = LibraryCatalog(tmp_path / "future.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    future = TargetSuccessRetentionPlanner(
+        catalog, authorized=True, not_before_utc="2026-11-06T13:00:00+00:00")
+    assert future.preview_candidates() is None
+    catalog.close()
+
+
+def test_target_success_dependency_protects_only_referenced_parse_frame(tmp_path):
+    paths, _, _ = make_target_success_run(tmp_path / "data")
+    (tmp_path / "data" / "saved.astroproj").write_text(
+        json.dumps({"inputs": {"g3": [str(paths["g3-solve"])]}}), encoding="utf-8")
+    p = target_success_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert "g3-solve.fit" not in selected
+    assert "g3-residual.fit" in selected
+    assert paths["g3-solve"].exists()
+    p.catalog.close()
+
+
+def test_target_success_changed_parse_hash_is_protected(tmp_path):
+    paths, _, _ = make_target_success_run(tmp_path / "data")
+    p = target_success_planner(tmp_path)
+    paths["qhy-acquisition"].write_bytes(paths["qhy-acquisition"].read_bytes() + b"changed")
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert "qhy-acquisition.fits" not in selected
+    p.catalog.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real Windows locked-handle backend")
+def test_target_success_physical_batch_keeps_only_science_credited_trial_and_photometry(tmp_path):
+    paths, manifest, _ = make_target_success_run(tmp_path / "data")
+    p = target_success_planner(tmp_path)
+    plan = p.preview_candidates()
+    receipt = CleanupExecutor(p.catalog, p).execute(plan, confirmation_phrase(plan))
+    assert receipt["status"] == "completed", receipt
+    assert sum(row["status"] == "deleted" for row in receipt["results"]) == 6
+    for name in ("bad-probe", "unselected-probe", "accepted-uncredited-probe",
+                 "g3-solve", "g3-residual", "qhy-acquisition"):
+        assert not paths[name].exists()
+    for name in ("credited-trial", "science", "qhy-photometry-r"):
+        assert paths[name].exists()
+    assert manifest.exists()
+    audit = Path(receipt["audit_path"])
+    assert audit.exists()
+    assert json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])["receipt"]["status"] == "completed"
     p.catalog.close()
 
 
@@ -237,6 +416,29 @@ def test_automatic_cli_cannot_apply_failed_history_authorization():
     with pytest.raises(SystemExit) as result:
         main(["--watch", "--include-failed-history", "--execute-permanent-rejected-probes"])
     assert result.value.code == 2
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--watch", "--policy", "target-success"],
+    ["--watch", "--policy", "target-success", "--execute-permanent-rejected-probes"],
+    ["--watch", "--policy", "target-success", "--include-failed-history",
+     "--execute-permanent-target-success"],
+    ["--policy", "target-success", "--execute-permanent-target-success"],
+])
+def test_target_success_watch_requires_its_own_explicit_authorization(arguments):
+    from uvex_reduce.library_probe_retention_cli import main
+    with pytest.raises(SystemExit) as result:
+        main(arguments)
+    assert result.value.code == 2
+
+
+def test_target_success_enable_flag_requires_valid_utc_watermark(tmp_path):
+    from uvex_reduce.library_probe_retention_cli import _enabled_time
+    flag = tmp_path / "target-success-retention.enabled"
+    flag.write_text(json.dumps({"enabledUtc": "not-a-time"}), encoding="utf-8")
+    assert _enabled_time(flag) is None
+    flag.write_text(json.dumps({"enabledUtc": "2026-11-06T13:00:00+00:00"}), encoding="utf-8")
+    assert _enabled_time(flag).isoformat() == "2026-11-06T13:00:00+00:00"
 
 
 def test_windows_usb_identity_is_not_a_question_mark_input_glob(tmp_path):

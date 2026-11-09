@@ -362,21 +362,30 @@ public sealed class G3SlitIlluminationPolicyTests
         Assert.Contains("ValidateConfirmedPhdStop", helper, StringComparison.Ordinal);
         Assert.Contains("catch (Phd2CaptureException ex)", helper, StringComparison.Ordinal);
         Assert.Contains("ex.RejectedBeforeMutationState is Phd2AppState.Looping or Phd2AppState.Selected", helper, StringComparison.Ordinal);
-        Assert.Equal(2, Count(helper, "CaptureSingleFrameWithParametersAsync"));
+        var previewStart = helper.IndexOf("var previewState = phd2.Snapshot.AppState", StringComparison.Ordinal);
+        // The original stopped handoff returns through its strict proof before
+        // preview handling. It is an alternative route, not another exposure.
+        var owned = helper[..previewStart];
+        Assert.Contains("if (g3StoppedHandoff is { } handoff)", owned, StringComparison.Ordinal);
+        Assert.Contains("return await G3GuidingRecoveryReturnPolicy.CaptureNativeFrameAsync", owned, StringComparison.Ordinal);
+        Assert.Equal(1, Count(owned, "CaptureSingleFrameWithParametersAsync"));
+        Assert.DoesNotContain("StopCaptureAndConfirmAsync", owned, StringComparison.Ordinal);
+        Assert.Equal(2, Count(helper[previewStart..], "CaptureSingleFrameWithParametersAsync"));
         Assert.DoesNotContain("AppState == Phd2AppState.Guiding", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("AppState == Phd2AppState.Calibrating", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("AppState == Phd2AppState.LostLock", helper, StringComparison.Ordinal);
-        var takeoverGuard = helper.IndexOf("RequireClockCurrentFieldExistingPhdOwner(previewState)", StringComparison.Ordinal);
+        var takeoverGuard = helper.IndexOf("&& !clockCurrentFieldProbeActive", StringComparison.Ordinal);
         var takeover = helper.IndexOf("StopCaptureAndConfirmAsync", StringComparison.Ordinal);
         var rejected = helper.IndexOf("catch (Phd2CaptureException ex)", StringComparison.Ordinal);
-        var retryGuard = helper.IndexOf("RequireClockCurrentFieldExistingPhdOwner(ex.RejectedBeforeMutationState)", StringComparison.Ordinal);
+        var retryGuard = helper.IndexOf("await RequireClockCurrentFieldExistingPhdOwnerAsync(cancellationToken, ex.RejectedBeforeMutationState)", StringComparison.Ordinal);
         var retryStop = helper.IndexOf("StopCaptureAndConfirmAsync", rejected, StringComparison.Ordinal);
         Assert.True(takeoverGuard >= 0 && takeover > takeoverGuard && rejected > takeover &&
             retryGuard > rejected && retryStop > retryGuard);
-        var optionalGuard = Slice(source, "private void RequireClockCurrentFieldExistingPhdOwner(",
+        var optionalGuard = Slice(source, "private async Task RequireClockCurrentFieldExistingPhdOwnerAsync(",
             "private async Task<PlateSolveEvidence> SolveExternalFitsAsync(");
         Assert.Contains("if (!clockCurrentFieldProbeActive) return", optionalGuard, StringComparison.Ordinal);
-        Assert.Contains("(rejectedBeforeMutationState ?? state.AppState) != Phd2AppState.Stopped", optionalGuard, StringComparison.Ordinal);
+        Assert.Contains("rejectedBeforeMutationState ?? await phd2.GetAppStateAsync(token)", optionalGuard, StringComparison.Ordinal);
+        Assert.Contains("appState != Phd2AppState.Stopped", optionalGuard, StringComparison.Ordinal);
         Assert.Contains("throw new PhysicalActionGateException", optionalGuard, StringComparison.Ordinal);
     }
 

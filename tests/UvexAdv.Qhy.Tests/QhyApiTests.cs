@@ -34,6 +34,12 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
         Assert.True(QhyServiceConfigurationProof.IsSha256(health.Configuration.NativeFilterPositionsSha256));
         Assert.Empty(health.Configuration.Validate());
         Assert.True(QhyServiceConfigurationProof.IsSha256(health.Configuration.ConfigurationSha256));
+        Assert.Contains(QhyControlProtocol.OwnerIdleCapability, health.Capabilities!);
+        var initiallyIdle = await client.GetFromJsonAsync<QhyOwnerIdleProof>("/api/v1/owner-idle");
+        Assert.NotNull(initiallyIdle);
+        Assert.Equal(1, initiallyIdle.Version);
+        Assert.True(initiallyIdle.OwnerIdle);
+        Assert.InRange(initiallyIdle.TimestampUtc, DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow.AddSeconds(1));
 
         using var response = await client.PostAsJsonAsync("/api/v1/jobs/acquisition", new AcquisitionJobRequest(
             "api-run",
@@ -62,6 +68,11 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
 
         var completed = await WaitForTerminalAsync(client, started.Id);
         Assert.Equal(QhyJobState.Completed, completed.State);
+        // Terminal publication and worker/finally join are deliberately separate.
+        // The owner-idle proof must become true after that short boundary, not be
+        // inferred from a terminal state observed before the worker has joined.
+        var idleAfterCompletion = await WaitForOwnerIdleAsync(client, expectedIdle: true);
+        Assert.True(idleAfterCompletion.OwnerIdle);
         Assert.Equal(health.Configuration.ExpectedStableId, completed.ExpectedCameraStableId);
         Assert.Single(completed.Frames);
         Assert.Equal(1, completed.TotalFrameCount);
@@ -117,6 +128,40 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
             $"/api/v1/jobs/{Guid.NewGuid()}/pause",
             new QhyOwnerControlRequest("not-a-real-token"));
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task OwnerIdleProofTurnsFalseWhileAJobNeedsAttentionAndRecoversAfterCheckedCancellation()
+    {
+        using var client = factory.CreateClient();
+        using var startResponse = await client.PostAsJsonAsync("/api/v1/jobs/acquisition", new AcquisitionJobRequest(
+            "api-owner-idle-busy",
+            "field",
+            [0.01],
+            10,
+            256,
+            MaximumAttempts: 1,
+            QualityThresholds: new QhyQualityThresholds(
+                MinimumDetectedStars: 100_000,
+                MaximumSaturatedFraction: 0.1,
+                MinimumTransparency: 0,
+                DetectionSigma: 3)));
+        startResponse.EnsureSuccessStatusCode();
+        var ownerToken = Assert.Single(startResponse.Headers.GetValues(QhyControlProtocol.OwnerTokenHeaderName));
+        var started = await startResponse.Content.ReadFromJsonAsync<QhyJobSnapshot>();
+        Assert.NotNull(started);
+        await WaitForStateAsync(client, started.Id, QhyJobState.PausedNeedsAttention);
+        var busy = await client.GetFromJsonAsync<QhyOwnerIdleProof>("/api/v1/owner-idle");
+        Assert.NotNull(busy);
+        Assert.False(busy.OwnerIdle);
+
+        using var cancel = await client.PostAsJsonAsync(
+            $"/api/v1/jobs/{started.Id}/cancel",
+            new QhyOwnerControlRequest(ownerToken, "api-test-owner"));
+        cancel.EnsureSuccessStatusCode();
+        await WaitForStateAsync(client, started.Id, QhyJobState.Cancelled);
+        var idle = await WaitForOwnerIdleAsync(client, expectedIdle: true);
+        Assert.True(idle.OwnerIdle);
     }
 
     [Fact]
@@ -178,6 +223,20 @@ public sealed class QhyApiTests : IClassFixture<QhySimulatorWebApplicationFactor
         }
 
         throw new TimeoutException($"API job did not finish; latest={latest?.State}, error={latest?.Error}.");
+    }
+
+    private static async Task<QhyOwnerIdleProof> WaitForOwnerIdleAsync(HttpClient client, bool expectedIdle)
+    {
+        QhyOwnerIdleProof? latest = null;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            latest = await client.GetFromJsonAsync<QhyOwnerIdleProof>("/api/v1/owner-idle");
+            if (latest?.OwnerIdle == expectedIdle) return latest;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException(
+            $"QHY owner-idle proof did not become {expectedIdle}; latest={latest?.OwnerIdle}.");
     }
 
     private static async Task<QhyJobSnapshot> WaitForStateAsync(HttpClient client, Guid id, QhyJobState expected)

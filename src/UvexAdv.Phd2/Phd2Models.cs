@@ -197,6 +197,9 @@ public sealed record Phd2SingleFrameResult(
     int? VerifiedExposureMilliseconds = null,
     bool AutomaticRetryAllowed = false)
 {
+    /// <summary>PC time immediately before native atomic capture dispatch; absent on loop/save routes.</summary>
+    public DateTimeOffset? NativeRequestStartedUtc { get; init; }
+
     /// <summary>The supported capture path applies ExposureMs through set_exposure before loop.</summary>
     public bool ExposureApplied => true;
 

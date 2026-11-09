@@ -12,14 +12,14 @@ internal static class WorkflowFixtures
             ObservationSnapshot.Idle, new Dictionary<ObservationStage, GateResult>(),
             new Dictionary<ObservationPreviewChannel, ObservationPreview>(), [], null));
         const string runId = "UI-REPLAY-20260914";
-        var completed = scenario == "completed" ? 11 : scenario == "running" ? 8 : scenario == "placement" ? 5 : 4;
-        var current = scenario == "completed" ? (ObservationStage?)null : ObservationRunCoordinator.Stages[completed];
+        var completed = scenario is "completed" or "meridian-segment" ? 11 : scenario == "running" ? 8 : scenario == "placement" ? 5 : 4;
+        var current = completed == 11 ? (ObservationStage?)null : ObservationRunCoordinator.Stages[completed];
         var state = scenario switch
         {
             "blocked" => ObservationRunState.PausedNeedsAttention,
             "cancelled" => ObservationRunState.Cancelled,
             "cancelling" => ObservationRunState.Cancelling,
-            "completed" => ObservationRunState.Completed,
+            "completed" or "meridian-segment" => ObservationRunState.Completed,
             _ => ObservationRunState.RunningAuto,
         };
         var events = new List<ObservationEvent>();
@@ -30,6 +30,8 @@ internal static class WorkflowFixtures
             events.Add(new(now.AddSeconds(-40 + i * 2), ObservationRunState.RunningAuto, stage, "STAGE_STARTED", "开始本阶段"));
             events.Add(new(now.AddSeconds(-39 + i * 2), ObservationRunState.RunningAuto, stage, "STAGE_COMPLETED", "本阶段已通过；详见保留的运行记录。"));
             gates[stage] = GateResult.Pass("UI_REPLAY_STAGE_PASS", "本阶段已通过。");
+            if (scenario == "meridian-segment" && i is >= 5 and < 10)
+                gates[stage] = GateResult.Pass("NATIVE_MERIDIAN_SEGMENT_BOUNDARY", "本段跳过，等待中天交接后重新定位；未执行本阶段。");
         }
         if (current is { } active)
             events.Add(new(now.AddSeconds(-10), state, active, "STAGE_STARTED", "正在执行本阶段"));
@@ -42,6 +44,7 @@ internal static class WorkflowFixtures
             "placement" => "导星相机取场已确认，正在执行 PHD2 有界锁点微调并等待新鲜残差。",
             "recovering" => "导星相机新帧不足，保持原位并按本轮原有次数上限补拍；没有重置运动预算。",
             "completed" => "模拟编排已完成；此截图不是实机验收证据。",
+            "meridian-segment" => "观测段结束，等待中天交接；不是目标完成，原预算和已拍帧保留。",
             _ => "本轮已切换目录定位。原因：本轮同帧解算有效，星像无法稳定分离；未宣称精确入缝。",
         };
         var evidence = new List<ObservationDashboardEvidence>();
@@ -86,6 +89,8 @@ internal static class WorkflowFixtures
             events.Add(new(now, state, current, "CANCEL_REQUESTED", reason));
         else if (scenario == "completed")
             events.Add(new(now, state, null, "RUN_COMPLETED", reason));
+        else if (scenario == "meridian-segment")
+            events.Add(new(now, state, null, "RUN_SEGMENT_COMPLETED", reason));
         var run = new ObservationSnapshot(runId, state, scenario == "cancelled" ? null : current, null, reason,
             scenario == "blocked" ? reason : null, completed, 11, now, events);
         var plan = new ObservationPlan(runId, "UI-REPLAY-NIGHT", new("Almach（离线回放）", "HIP 9640", 30.98, 42.32),

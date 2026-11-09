@@ -105,13 +105,13 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("actualOriginRadiusArcseconds > state.MaximumRadiusArcseconds", wcs, StringComparison.Ordinal);
         Assert.Contains("additionalActualMotionCharge", wcs, StringComparison.Ordinal);
         Assert.Contains("maximumCommandResidualArcseconds", settle, StringComparison.Ordinal);
-        Assert.Contains("drift > MountCommandArrivalToleranceArcseconds", settle, StringComparison.Ordinal);
+        Assert.Contains("G3WcsRecoveryPolicy.PostSlewPosition(drift, commandResidual", settle, StringComparison.Ordinal);
         Assert.Contains("G3SearchStableEndpointToleranceArcseconds,", search, StringComparison.Ordinal);
         Assert.Contains("originalLimits.StepArcseconds + 2 * G3SearchStableEndpointToleranceArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("var durableWaypointOffset = G3AcquisitionMotionPlanner.SignedTangentOffsetArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("durableWaypointOffset.RaArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("attestedLineageMaximumAttempts: commissioning.MotionLimits.MaximumCorrectionAttempts", search, StringComparison.Ordinal);
-        Assert.Contains("drift > MountCommandArrivalToleranceArcseconds", settle, StringComparison.Ordinal);
+        Assert.Contains("MountCommandArrivalToleranceArcseconds, maximumCommandResidualArcseconds, settleSeconds", settle, StringComparison.Ordinal);
         Assert.Contains("additionalActualMotionCharge", search, StringComparison.Ordinal);
         Assert.Contains("actualReturnReserveArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("projectedDurableCumulativeArcseconds + actualReturnReserveArcseconds", search, StringComparison.Ordinal);
@@ -119,6 +119,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("outboundPrechargedMotionArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("prechargedReturnReserveArcseconds", search, StringComparison.Ordinal);
         Assert.Contains("G3_SEARCH_STABLE_ENDPOINT_RETURN_RESERVE_LIMIT", search, StringComparison.Ordinal);
+        Assert.Contains("g3-bounded-search-waypoint-withheld", search, StringComparison.Ordinal);
+        Assert.Contains("withheldSearchWaypoints", search, StringComparison.Ordinal);
+        Assert.True(CountOccurrences(search, "actionNumber--;") >= 3);
+        Assert.True(CountOccurrences(search, "nominalIndex++;") >= 3);
+        Assert.Contains("physicalMotionSent = false", search, StringComparison.Ordinal);
+        Assert.Contains("originalBudgetRetained = true", search, StringComparison.Ordinal);
         Assert.Contains("CumulativeMotionArcseconds = durableSearch.CumulativeMotionArcseconds +", search, StringComparison.Ordinal);
         Assert.Contains("RegisterCorrection(outboundPrechargedMotionArcseconds / 3600d)", search, StringComparison.Ordinal);
         Assert.Contains("actualMoveArcseconds - outboundPrechargedMotionArcseconds", search, StringComparison.Ordinal);
@@ -251,6 +257,12 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(gate)", recoverable, StringComparison.Ordinal);
         Assert.True(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
             GateResult.Unknown("G3_STAR_FIELD_SPARSE_VALID_EXPOSURE", "fresh structured evidence")));
+        Assert.True(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
+            GateResult.TargetQuality(G3PostWcsPredictionPolicy.OutsideAcquisitionWindowCode,
+                "returned post-WCS optical miss")));
+        Assert.True(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
+            GateResult.Unknown("G3_CLOUD_OR_TRANSPARENCY_INVALID",
+                "G3-only no-source result; the independent weather monitor remains authoritative")));
         Assert.False(TargetAcquisitionStrategyPolicy.MayTryBoundedNeighbor(
             GateResult.Unknown("G3_FOCUS_UNCONFIRMED", "local morphology alone is not recovery authority")));
         Assert.Contains("solveLadderHasStructuredContent || targetMayBeInvisible", recoverable, StringComparison.Ordinal);
@@ -348,7 +360,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("no source-count veto", analysis, StringComparison.Ordinal);
         Assert.Contains("G3_TRUSTED_PL3_CARRIED_FORWARD", G3MountBindingSource, StringComparison.Ordinal);
         Assert.Contains("ValidateG3ProbeMountBindingForMotionAsync", G3MountBindingSource, StringComparison.Ordinal);
-        Assert.Contains("probe.Solve.EvidenceSha256", G3MountBindingSource, StringComparison.Ordinal);
+        Assert.Contains("G3SparseRecoveryWorkflow.ValidateFormalEvidenceAsync(", G3MountBindingSource, StringComparison.Ordinal);
+        Assert.Contains("probe.Solve, ComputeFileSha256Async, cancellationToken", G3MountBindingSource, StringComparison.Ordinal);
         Assert.Contains("MountCommandArrivalToleranceArcseconds", G3MountBindingSource, StringComparison.Ordinal);
     }
 
@@ -412,7 +425,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("var maximumFreshBoundHandoffArcseconds = handoffToleranceArcseconds +", begin, StringComparison.Ordinal);
         Assert.Contains("2 * existing.ArrivalToleranceArcseconds", begin, StringComparison.Ordinal);
         Assert.Contains("G3_MOTION_FRESH_BINDING_HANDOFF_LIMIT", begin, StringComparison.Ordinal);
-        Assert.Contains("G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now)", begin, StringComparison.Ordinal);
+        Assert.Contains("G3MeasuredHandoffPolicy.Charge(continued, chargedHandoffArcseconds, inheritedOriginRadius, now,", begin, StringComparison.Ordinal);
+        Assert.Contains("continued.CurrentReturnDistanceArcseconds)", begin, StringComparison.Ordinal);
         Assert.Contains("throw new PhysicalActionGateException(debit.Gate)", begin, StringComparison.Ordinal);
         Assert.Contains("handoff.Proof.IsCurrent(phd2.Snapshot)", begin, StringComparison.Ordinal);
         Assert.Contains("ValidateG3SearchMountState(pierSide)", begin, StringComparison.Ordinal);
@@ -603,7 +617,9 @@ public sealed class BoundedAcquisitionSourceSafetyTests
             "private bool TryGetCurrentG3SlitGeometryRunCache(");
 
         Assert.Contains("G3SolveProbeContentAnalyzer.OverexposedGateCode", ladder, StringComparison.Ordinal);
-        Assert.Contains("if (contentIsOverexposed) break;", ladder, StringComparison.Ordinal);
+        Assert.Contains("G3SolveExposurePolicy.EmergencyShortSolveMilliseconds", ladder, StringComparison.Ordinal);
+        Assert.Contains("g3-solve-emergency-short-recheck", ladder, StringComparison.Ordinal);
+        Assert.Contains("if (contentIsOverexposed)", ladder, StringComparison.Ordinal);
         Assert.Contains("if (hasOverexposedContent) boundedSparseRecoveryAuthorized = false;", ladder, StringComparison.Ordinal);
         Assert.Contains("sampledSaturatedPixelFraction = content.SaturatedPixelFraction", ladder, StringComparison.Ordinal);
         Assert.Contains("earliestNonOverexposedStructuredProbe ??= latest;", ladder, StringComparison.Ordinal);
@@ -619,7 +635,7 @@ public sealed class BoundedAcquisitionSourceSafetyTests
 
         var analyze = ladder.IndexOf("G3SolveProbeContentAnalyzer.Analyze", StringComparison.Ordinal);
         var solve = ladder.IndexOf("SolveG3HandoffFrameWithResolutionRecoveryAsync", analyze, StringComparison.Ordinal);
-        var stop = ladder.IndexOf("if (contentIsOverexposed) break;", solve, StringComparison.Ordinal);
+        var stop = ladder.IndexOf("if (contentIsOverexposed)", solve, StringComparison.Ordinal);
         Assert.True(analyze >= 0 && solve > analyze && stop > solve);
     }
 
@@ -632,7 +648,11 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("MotionPostSlewSettleSeconds", settle, StringComparison.Ordinal);
         Assert.Contains("Task.Delay", settle, StringComparison.Ordinal);
         Assert.Contains("RequireImmediatePhysicalActionGatesAsync", settle, StringComparison.Ordinal);
-        Assert.Contains("G3_POST_SLEW_POSITION_UNSTABLE", settle, StringComparison.Ordinal);
+        Assert.Contains("G3WcsRecoveryPolicy.PostSlewPosition(drift, commandResidual", settle, StringComparison.Ordinal);
+        Assert.True(settle.IndexOf("ValidateG3SearchMountState", StringComparison.Ordinal) <
+            settle.IndexOf("G3WcsRecoveryPolicy.PostSlewPosition", StringComparison.Ordinal));
+        Assert.True(settle.IndexOf("ValidateCommandCoordinateHorizon", StringComparison.Ordinal) <
+            settle.IndexOf("G3WcsRecoveryPolicy.PostSlewPosition", StringComparison.Ordinal));
 
         var wcs = MethodBody(
             "private async Task<StageResult> RunG3WcsCenteringAsync(",
@@ -1343,8 +1363,16 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("preset.TargetSearchRadiusPixels", shortSource);
         Assert.Contains("if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;", ladder);
         Assert.Contains("outsideShortHandoff = confirmed;", ladder);
-        // A failed short confirmation returns its evidence rather than buying
-        // another full PL3 ladder or claiming a prediction as measurement.
+        // A typed optical rejection must reach the already captured frame's
+        // ordinary formal solver, but never buy another capture ladder. Both
+        // completed solver failure and reviewed solver-transient paths exit.
+        var fallback = ladder.IndexOf("failedShortShortcutNeedsExistingFrameSolve = confirmed.Gate.Code", StringComparison.Ordinal);
+        Assert.True(fallback > shortFrames && fallback < solver);
+        Assert.Contains("captured.Path, probeMountBinding, outsideShortHandoff is not null", ladder);
+        Assert.Equal(2, ladder.Split("if (failedShortShortcutNeedsExistingFrameSolve) break;", StringSplitOptions.None).Length - 1);
+        Assert.Contains("if (solve.Result.Success && resultGate.Code != \"G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED\") return latest;", ladder);
+        Assert.Contains("retainedOutsideShortHandoff = outsideShortHandoff ?? retainedOutsideShortHandoff;", ladder);
+        // No failed short candidate or prediction becomes a measured handoff.
         Assert.Contains("return latest with { MeasuredPostWcsTarget = null };", shortSource);
         // Accepted measured-warning evidence survives the cached-slit adapter;
         // it is not re-labelled as exact placement or returned to the 20 px route.

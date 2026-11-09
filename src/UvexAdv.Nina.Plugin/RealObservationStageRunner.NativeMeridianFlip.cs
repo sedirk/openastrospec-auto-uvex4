@@ -161,18 +161,15 @@ internal sealed partial class RealObservationStageRunner
             {
                 // Reuse N.I.N.A.'s timing and mount API, not its main-camera
                 // recenter/autofocus workflow (ATR sees a spectrum, not a star field).
-                if (!telescopeMediator.SetTrackingEnabled(false)) throw new InvalidOperationException("未确认停止跟踪。");
-                await DelayChecked(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                if (telescopeMediator.GetInfo().TrackingEnabled || telescopeMediator.GetInfo().Slewing)
-                    throw new InvalidOperationException("停止跟踪/运动读回未确认。");
+                await NativeMeridianMountOperation.SetTrackingAndVerifyAsync(false, before,
+                    telescopeMediator.SetTrackingEnabled, ReadMount, CheckFlipPrerequisites,
+                    _ => DelayChecked(TimeSpan.FromSeconds(2)), token).ConfigureAwait(false);
                 await Journal("WaitingForMeridian").ConfigureAwait(false);
                 await DelayChecked(wait - (DateTimeOffset.UtcNow - started)).ConfigureAwait(false);
                 CheckFlipPrerequisites();
-                if (!telescopeMediator.SetTrackingEnabled(true)) throw new InvalidOperationException("未确认恢复跟踪。");
-                await DelayChecked(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                if (!telescopeMediator.GetInfo().TrackingEnabled || telescopeMediator.GetInfo().Slewing ||
-                    telescopeMediator.GetInfo().SideOfPier != before)
-                    throw new InvalidOperationException("翻转前读回改变；没有下发翻转。");
+                await NativeMeridianMountOperation.SetTrackingAndVerifyAsync(true, before,
+                    telescopeMediator.SetTrackingEnabled, ReadMount, CheckFlipPrerequisites,
+                    _ => DelayChecked(TimeSpan.FromSeconds(2)), token).ConfigureAwait(false);
                 await Journal("CommandPending").ConfigureAwait(false);
                 afterSide = await NativeMeridianMountOperation.ExecuteAsync(before, ReadMount,
                     ct => telescopeMediator.MeridianFlip(TargetCoordinates(context.Plan), ct),

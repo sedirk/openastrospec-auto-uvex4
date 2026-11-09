@@ -68,3 +68,70 @@ def test_ring_coverage_and_ra_wrap():
     assert sum(worker.RING_CELLS) == 1476
     assert len(worker.RING_EDGES) == len(worker.RING_CELLS)+1
     assert np.all(np.diff(worker.RING_EDGES) > 0)
+
+
+@pytest.mark.parametrize("measured_count,strong_count,mode", [
+    (49, 7, "noise-tail-5sigma"), (39, 5, "noise-tail-5sigma"),
+    (25, 5, "noise-tail-5sigma"), (24, 5, "original-3.5sigma"),
+    (21, 5, "original-3.5sigma"), (16, 3, "original-3.5sigma"),
+    (100, 4, "original-3.5sigma"), (20, 0, "original-3.5sigma"),
+])
+def test_noise_tail_selection_keeps_sparse_faint_support_and_does_not_call_solver(
+        monkeypatch, measured_count, strong_count, mode):
+    measured = [dict(x=i, y=i, flux=100-i) for i in range(measured_count)]
+    original = [dict(r) for r in measured]
+    strong = measured[:strong_count]
+    calls = []
+
+    def detect(data, threshold):
+        calls.append(threshold)
+        return strong
+
+    monkeypatch.setattr(worker, "detect", detect)
+    selected, receipt = worker.select_solver_sources(None, measured)
+    assert receipt["mode"] == mode
+    assert receipt["solverCalls"] == 1  # budget, not a claim that solving happened
+    assert selected is (strong if mode == "noise-tail-5sigma" else measured)
+    assert measured == original
+    assert calls == [5.]
+
+
+def test_noise_only_comparison_does_not_become_field_or_focus_evidence():
+    data = np.full((128, 128), 1000., np.float32)
+    rows = worker.detect(data)
+    selected, receipt = worker.select_solver_sources(data, rows)
+    assert rows == selected == []
+    assert receipt["mode"] == "original-3.5sigma"
+
+
+def test_selected_sources_get_one_solver_call_not_an_unbounded_fallback(monkeypatch, tmp_path):
+    from astropy.io import fits
+    from types import SimpleNamespace
+    raw_dir = tmp_path/"raw"
+    raw_dir.mkdir()
+    raw = raw_dir/"frame.fit"
+    fits.writeto(raw, np.full((128, 128), 1000., np.float32))
+    output = tmp_path/"analysis"
+    output.mkdir()
+    exe = tmp_path/"fake.exe"
+    exe.write_bytes(b"not executed")
+    rows = [dict(x=20+i, y=30+i, flux=100-i) for i in range(25)]
+    monkeypatch.setattr(worker, "detect", lambda data, threshold=3.5: rows if threshold == 3.5 else rows[:5])
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=1, stdout="no solution", stderr="")
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    digest = worker.sha(raw)
+    result = worker.recover(dict(sourcePath=str(raw), sourceSha256=digest,
+        astapPath=str(exe), astapSha256=worker.sha(exe), databasePath=str(tmp_path),
+        ra=10., dec=20., scale=.384, radiusDegrees=2.), output)
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == 22
+    assert result["reason"] == "solver_no_solution"
+    assert not result["accepted"] and not result["motionAuthorized"] and not result["targetIdentityConfirmed"]
+    assert result["solverSelection"]["mode"] == "noise-tail-5sigma"
+    assert result["detections"] == rows and len(result["solverDetections"]) == 5
+    assert worker.sha(raw) == digest

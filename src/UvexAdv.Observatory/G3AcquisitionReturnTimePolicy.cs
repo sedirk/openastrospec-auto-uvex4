@@ -17,7 +17,7 @@ public static class G3AcquisitionReturnTimePolicy
             return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
                 "Acquisition work requires a valid, arrived acquisition ledger and a non-reversed clock. " + string.Join(" ", issues)), null);
 
-        return PlanDuration(state, state.CurrentRadiusArcseconds, now);
+        return PlanDuration(state, state.CurrentReturnDistanceArcseconds, now);
     }
 
     // A stopped guide handoff has not adopted a fresh image position yet. Its
@@ -25,14 +25,18 @@ public static class G3AcquisitionReturnTimePolicy
     // return from the CURRENT reported pointing on the ORIGINAL motion clock.
     // This is a time reservation only, never position or movement authority.
     public static G3AcquisitionWorkTimePlan PlanStoppedHandoff(
-        G3AcquisitionMotionState state, double reportedRadiusArcseconds, DateTimeOffset now)
+        G3AcquisitionMotionState state, double reportedRadiusArcseconds, DateTimeOffset now,
+        double? returnDistanceArcseconds = null)
     {
+        var returnDistance = returnDistanceArcseconds ?? reportedRadiusArcseconds;
         if (state.Validate().Count != 0 || state.Phase != G3AcquisitionMotionPhase.SettledBudgetLedger ||
             now < state.UpdatedUtc || !double.IsFinite(reportedRadiusArcseconds) || reportedRadiusArcseconds < 0 ||
+            !double.IsFinite(returnDistance) || returnDistance < 0 ||
+            returnDistance > 2 * state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds ||
             reportedRadiusArcseconds > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds)
             return new(GateResult.Unknown("G3_WORK_RETURN_STATE_INVALID",
                 "Stopped handoff work requires its unchanged settled ledger, current bounded geometry and a non-reversed clock."), null);
-        return PlanDuration(state, reportedRadiusArcseconds, now);
+        return PlanDuration(state, returnDistance, now);
     }
 
     private static G3AcquisitionWorkTimePlan PlanDuration(

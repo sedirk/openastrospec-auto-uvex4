@@ -63,4 +63,26 @@ public sealed class Phd2GuideOutputException(Phd2GuideOutputStatus status)
         "Connected/Guiding and star centroids do not prove a working mount connection.")
 {
     public Phd2GuideOutputStatus Status { get; } = status;
+    public Phd2FailedInitialGuideStopReceipt? InitialGuideStopReceipt { get; internal set; }
+}
+
+// Issued only while aborting this client's accepted initial guide RPC because
+// its output detector failed. Never a SettleDone, arrival or motion receipt.
+public sealed record Phd2FailedInitialGuideStopReceipt(long OperationId, long ConnectionEpoch,
+    long GuideEpoch, Phd2Point SelectedLock, Phd2Point NativeLock, Phd2Profile Profile,
+    Phd2Equipment Equipment, long CalibrationSequence, long? ConfigurationSequence)
+{
+    public bool IsCurrent(Phd2StateSnapshot current) => current.IsConnected &&
+        !current.AutomationPaused && !current.Phd2Paused && current.AppState == Phd2AppState.Guiding &&
+        current.GuideOutput?.Failed == true && current.PendingSettleOperationId is null &&
+        current.LastSettle is null && current.ConnectionEpoch == ConnectionEpoch && current.GuideEpoch == GuideEpoch &&
+        current.Profile == Profile && current.Equipment == Equipment && MatchesNativeLock(current.LockPosition) &&
+        current.CalibrationChangeSequence == CalibrationSequence &&
+        current.LastConfigurationChange?.EventSequence == ConfigurationSequence;
+
+    // Native event X/Y uses three decimals, get_lock_position uses two.
+    // Account only for serialization rounding, not centroid motion.
+    public bool MatchesNativeLock(Phd2Point? value) => value is not null &&
+        double.IsFinite(value.X) && double.IsFinite(value.Y) &&
+        Math.Abs(value.X - NativeLock.X) <= .01 && Math.Abs(value.Y - NativeLock.Y) <= .01;
 }

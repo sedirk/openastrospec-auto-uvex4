@@ -542,6 +542,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public ICommand CloseSafetyStandbyCommand { get; private set; } = null!;
     public bool HasSafetyStandby => host.Dashboard.SafetyStandby is not null;
     public string SafetyStandbyStatus => host.Dashboard.SafetyStandby?.Message ?? string.Empty;
+    public bool SafetyStandbyNeedsAttention => host.Dashboard.SafetyStandby?.Phase is "MonitoringOnly" or "CloseoutFailed";
     public ICommand TakeoverCommand => takeoverCommand;
     public ICommand EnableModelAutomationBridgeCommand => enableModelAutomationBridgeCommand;
     public ICommand ArmModelAutomationRealControlCommand => armModelAutomationRealControlCommand;
@@ -3821,6 +3822,7 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         RaisePropertyChanged(nameof(PlanDraftNotice));
         RaisePropertyChanged(nameof(HasSafetyStandby));
         RaisePropertyChanged(nameof(SafetyStandbyStatus));
+        RaisePropertyChanged(nameof(SafetyStandbyNeedsAttention));
         (CloseSafetyStandbyCommand as SimpleCommand)?.RaiseCanExecuteChanged();
         // A native startup card may select REAL before the target begins.
         // Reflect the shared Profile selection without granting bridge control.

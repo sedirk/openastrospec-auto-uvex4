@@ -16,6 +16,9 @@ public sealed partial class NativeSequencePlanTests
     [Theory]
     [InlineData("success")]
     [InlineData("fresh-quality-failure")]
+    [InlineData("untracked-drift")]
+    [InlineData("untracked-drift-quality")]
+    [InlineData("untracked-move")]
     [InlineData("same-logical-target")]
     [InlineData("active")]
     [InlineData("paused")]
@@ -87,19 +90,22 @@ public sealed partial class NativeSequencePlanTests
         var error = await Record.ExceptionAsync(() => night.Execute(new Progress<ApplicationStatus>(), cancel.Token)
             .WaitAsync(TimeSpan.FromSeconds(15)));
         Assert.IsNotType<TimeoutException>(error);
-        var allowed = mode is "success" or "fresh-quality-failure";
+        var allowed = mode is "success" or "fresh-quality-failure" or "untracked-drift" or "untracked-drift-quality";
         Assert.Equal(allowed, second.Stages.Count > 0);
         if (allowed)
         {
             Assert.Equal(ObservationRunCoordinator.Stages, second.Stages);
             Assert.True(first.Calls.IndexOf("fresh-stationary-frame") < first.Calls.IndexOf("archive-verified"));
             Assert.True(first.Calls.IndexOf("archive-verified") < first.Calls.IndexOf("new-target-catalog-slew"));
-            var archive = Assert.Single(Directory.GetFiles(fixture.Root, "g3-acquisition-motion.json.terminal-*.archive", SearchOption.AllDirectories));
-            Assert.Equal(fixture.OriginalLedger, await File.ReadAllBytesAsync(archive));
-            Assert.Equal(fixture.State, (await G3AcquisitionMotionStore.LoadAsync(archive, default)).State);
-            using var audit = JsonDocument.Parse(await File.ReadAllTextAsync(archive + ".audit.json"));
-            foreach (var key in new[] { "returnVerified", "targetOnSlitVerified", "motionSent", "countersReset" })
-                Assert.False(audit.RootElement.GetProperty(key).GetBoolean());
+            if (fixture.HasGuideLedger)
+            {
+                var archive = Assert.Single(Directory.GetFiles(fixture.Root, "g3-acquisition-motion.json.terminal-*.archive", SearchOption.AllDirectories));
+                Assert.Equal(fixture.OriginalLedger, await File.ReadAllBytesAsync(archive));
+                Assert.Equal(fixture.State, (await G3AcquisitionMotionStore.LoadAsync(archive, default)).State);
+                using var audit = JsonDocument.Parse(await File.ReadAllTextAsync(archive + ".audit.json"));
+                foreach (var key in new[] { "returnVerified", "targetOnSlitVerified", "motionSent", "countersReset" })
+                    Assert.False(audit.RootElement.GetProperty(key).GetBoolean());
+            }
             Assert.Empty(await G3AcquisitionMotionStore.DiscoverAsync(fixture.Root, default));
         }
         else
@@ -115,7 +121,7 @@ public sealed partial class NativeSequencePlanTests
         using var journal = JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
         var outcomes = journal.RootElement.GetProperty("outcomes").EnumerateArray().Where(x => x.TryGetProperty("target", out _)).ToArray();
         Assert.Equal(allowed ? 2 : 1, outcomes.Length);
-        Assert.Equal(mode == "success" ? "Completed" : mode == "fresh-quality-failure" ? "SkippedQualityFailure" : "Stopped",
+        Assert.Equal(mode is "success" or "untracked-drift" ? "Completed" : mode is "fresh-quality-failure" or "untracked-drift-quality" ? "SkippedQualityFailure" : "Stopped",
             outcomes[0].GetProperty("outcome").GetString());
         if (allowed) Assert.Equal("Completed", outcomes[1].GetProperty("outcome").GetString());
         if (host.SafetyStandby is { } guard)
@@ -156,10 +162,19 @@ public sealed partial class NativeSequencePlanTests
                         t =>
                         {
                             t.ThrowIfCancellationRequested();
-                            Assert.True(File.Exists(fixture.LedgerPath));
+                            Assert.Equal(fixture.HasGuideLedger, File.Exists(fixture.LedgerPath));
                             Assert.DoesNotContain("new-target-catalog-slew", Calls);
                             if (mode == "capture-failed") throw new InvalidOperationException("Fresh stationary frame unavailable.");
                             Calls.Add("fresh-stationary-frame"); frameCaptured = true;
+                            if (mode.StartsWith("untracked-", StringComparison.Ordinal))
+                            {
+                                var before = StartupGuideStationaryMountTests.RecordedBefore;
+                                var after = StartupGuideStationaryMountTests.RecordedAfter;
+                                if (mode == "untracked-move") after = after with { AltitudeDegrees = after.AltitudeDegrees + .01 };
+                                var stationary = StartupGuideStationaryMount.Validate(before, after, "mount", 2);
+                                if (stationary.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(stationary);
+                                Calls.Add("earth-fixed-witness-verified");
+                            }
                             if (mode == "cancel-after-frame") cancel.Cancel();
                             if (mode == "unsafe-after-frame") night.OnNightUnsafe();
                             if (mode == "deadline-after-frame")
@@ -211,7 +226,7 @@ public sealed partial class NativeSequencePlanTests
             {
                 Assert.True(archived); Calls.Add("new-target-catalog-slew");
             }
-            if (mode == "fresh-quality-failure" && stage == ObservationStage.AcquireG3SlitField)
+            if (mode is "fresh-quality-failure" or "untracked-drift-quality" && stage == ObservationStage.AcquireG3SlitField)
                 return new(RealObservationStageRunner.CreateCatalogShortPositionFailure("New target short pair exhausted; old ledger is already archived."));
             return new(GateResult.Pass("SIM_FRESH_STAGE", "Finite device ports; no equipment."));
         }
@@ -227,12 +242,25 @@ public sealed partial class NativeSequencePlanTests
         internal G3AcquisitionMotionState State { get; private set; } = null!;
         internal byte[] OriginalManifest { get; private set; } = [];
         internal byte[] OriginalLedger { get; private set; } = [];
+        internal bool HasGuideLedger => OriginalLedger.Length != 0;
+
+        internal static async Task<TerminalStartupFixture> CopyUnissuedFlipOnlyAsync(string run, byte[] manifest, byte[] flip)
+        {
+            var value = new TerminalStartupFixture { RunId = run, OriginalManifest = manifest };
+            Directory.CreateDirectory(Path.GetDirectoryName(value.ManifestPath)!);
+            await File.WriteAllBytesAsync(value.ManifestPath, manifest);
+            value.Manifest = (await new ObservationRunJournalStore(value.ManifestPath).ReadAsync(default))!;
+            var path = Path.Combine(value.Root, "control", "native-meridian-flip.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllBytesAsync(path, flip);
+            return value;
+        }
 
         internal GuideBoundaryWitness Witness() => new(true, true, true, true,
             Manifest.LockedMetadata.Labels!["telescopeId"], Manifest.LockedMetadata.Labels["g3CameraId"],
             Phd2AppState.Stopped, true, DateTimeOffset.UtcNow);
 
-        internal static async Task<TerminalStartupFixture> CreateAsync(string mode)
+        internal static async Task<TerminalStartupFixture> CreateAsync(string mode, bool meridian = false)
         {
             var value = new TerminalStartupFixture();
             var terminal = mode switch
@@ -240,7 +268,7 @@ public sealed partial class NativeSequencePlanTests
                 "active" => ObservationRunState.RunningAuto,
                 "paused" => ObservationRunState.Paused,
                 "paused-attention" => ObservationRunState.PausedNeedsAttention,
-                _ => ObservationRunState.Cancelled,
+                _ => meridian ? ObservationRunState.Completed : ObservationRunState.Cancelled,
             };
             await value.AddRunAsync(value.RunId, terminal, true);
             if (mode == "ambiguous-g3") await value.AddRunAsync("second-old-target", ObservationRunState.Faulted, true);
@@ -280,9 +308,12 @@ public sealed partial class NativeSequencePlanTests
             var action = new string('A', 64); var preset = new string('B', 64);
             var store = new ObservationRunJournalStore(Path.Combine(Root, run, "manifest.json"));
             var manifest = await store.InitializeAsync(plan, new(CommissioningPresetSha256: preset, QhyConfigurationSha256: new string('D', 64),
+                Phd2ProfileEvidenceSha256: new string('C', 64),
                 AdditionalHashes: new Dictionary<string, string> { ["actionConfigurationSha256"] = action },
                 Labels: new Dictionary<string, string>
-                { ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera", ["qhyCameraId"] = "qhy-camera", ["nativeTargetRootRunId"] = run }));
+                { ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera", ["qhyCameraId"] = "qhy-camera", ["nativeTargetRootRunId"] = run,
+                    ["atrCameraId"] = "ATR", ["phd2RuntimeCameraName"] = "guide", ["phd2RuntimeMountName"] = "mount",
+                    ["weakSupervisionEnabled"] = "False", ["requireSafetyMonitor"] = "True", ["requireOpenDomeOrRoof"] = "True" }));
             await store.PublishSnapshotAsync(manifest.Snapshot with { State = terminal, UpdatedUtc = DateTimeOffset.UtcNow }, manifest.Counters, manifest.Revision);
             if (!g3)
             {
@@ -309,6 +340,21 @@ public sealed partial class NativeSequencePlanTests
             value.Manifest = (await new ObservationRunJournalStore(value.ManifestPath).ReadAsync(default))!;
             value.State = (await G3AcquisitionMotionStore.LoadAsync(value.LedgerPath, default)).State!;
             return value;
+        }
+
+        internal async Task AddPreDispatchMeridianAsync(string mode, string phase = "OwnersIdle")
+        {
+            var store = new ObservationRunJournalStore(ManifestPath);
+            if (mode != "missing-segment-gate")
+                await store.PublishGateAsync(ObservationStage.AcquireG3SlitField,
+                    GateResult.Pass("NATIVE_MERIDIAN_SEGMENT_BOUNDARY", "Ended for native handoff, not target success."));
+            var fresh = (await store.ReadAsync(default))!;
+            var terminal = mode is "active" or "paused" or "paused-attention" ? fresh.TerminalState : ObservationRunState.Completed;
+            await store.PublishSnapshotAsync(fresh.Snapshot with { State = terminal ?? fresh.Snapshot.State, UpdatedUtc = DateTimeOffset.UtcNow }, fresh.Counters, fresh.Revision);
+            Manifest = (await store.ReadAsync(default))!;
+            OriginalManifest = await File.ReadAllBytesAsync(ManifestPath);
+            await NativeMeridianJournalStore.SaveAsync(Path.Combine(Root, "control", "native-meridian-flip.json"),
+                new(RunId, phase, "pierWest", "", DateTimeOffset.UtcNow, [RunId], phase == "WaitingForMeridian" ? "Scheduled" : "ObservedSideChange"), default);
         }
 
         public ValueTask DisposeAsync()

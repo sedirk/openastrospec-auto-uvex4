@@ -229,6 +229,24 @@ Start-Service $serviceName
 $installed = Get-Service $serviceName
 $installed.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 
+$healthUri = 'http://127.0.0.1:47845/api/v1/health'
+$healthDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+$health = $null
+do {
+    try { $health = Invoke-RestMethod -Uri $healthUri -TimeoutSec 5; break }
+    catch { Start-Sleep -Milliseconds 500 }
+} while ([DateTimeOffset]::UtcNow -lt $healthDeadline)
+if ($null -eq $health) {
+    throw "Installed $serviceName did not expose a fresh health proof at $healthUri."
+}
+if (@($health.capabilities) -notcontains 'owner-idle-proof-v1') {
+    throw "Installed $serviceName does not advertise owner-idle-proof-v1; deployment is not compatible with acquisition and clock continuation."
+}
+$idleProof = Invoke-RestMethod -Uri 'http://127.0.0.1:47845/api/v1/owner-idle' -TimeoutSec 10
+if ($idleProof.version -ne 1 -or $null -eq $idleProof.PSObject.Properties['ownerIdle']) {
+    throw "Installed $serviceName returned an unsupported owner-idle proof."
+}
+
 if (Test-Path -LiteralPath $backupDirectory) {
     Write-Host "Previous service files retained at: $backupDirectory"
 }

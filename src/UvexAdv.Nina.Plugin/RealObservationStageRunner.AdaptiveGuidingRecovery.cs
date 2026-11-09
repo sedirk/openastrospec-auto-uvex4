@@ -23,18 +23,28 @@ internal sealed partial class RealObservationStageRunner
             return (false, new StageResult(attemptGate));
         // These are prerequisites, not precision thresholds. In particular a
         // lost star during unreturned lock motion cannot authorize a new guide.
-        if (!HasNoOutstandingGuideRecoveryMotion || !phd2.IsConnected ||
-            phd2.Snapshot.GuideOutput?.Failed == true)
+        if (!HasNoOutstandingGuideRecoveryMotion || !phd2.IsConnected)
             return (false, original);
         // Retain the existing no-motion science continuation before stopping a
         // guide that can still pass a fresh same-epoch slit check.
         if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
-            original.Gate.Code is "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE" &&
+            Phd2ScienceContinuationPolicy.MayVerifySettledGuideInPlace(original.Gate.Code) &&
             GuideRecovery.TryConsumeInPlaceCheck())
         {
             try
             {
-                if (await TryVerifyScienceInPlaceAsync(context, token).ConfigureAwait(false)) return (true, original);
+                if (await TryVerifyScienceInPlaceAsync(context, original.Gate.Code, token).ConfigureAwait(false)) return (true, original);
+            }
+            catch (PhysicalActionGateException ex) when (ex.Gate.Code == "GUIDING_LOST") { }
+        }
+        if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
+            Phd2ScienceContinuationPolicy.MayVerifySettledGuideInPlace(original.Gate.Code) &&
+            await WaitForSameFieldGuideSelfRecoveryAsync(context, original.Gate.Code, token).ConfigureAwait(false))
+        {
+            try
+            {
+                if (await TryVerifyScienceInPlaceAsync(context, original.Gate.Code, token).ConfigureAwait(false))
+                    return (true, original);
             }
             catch (PhysicalActionGateException ex) when (ex.Gate.Code == "GUIDING_LOST") { }
         }
@@ -124,11 +134,20 @@ internal sealed partial class RealObservationStageRunner
                 return (false, AdaptiveRecoveryExhausted(AdaptiveGuidingRecovery.ExhaustedCode, evidence));
             if (action is GuideRecoveryAction.Reselect or GuideRecoveryAction.ForceCalibration)
             {
+                if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
+                    action == GuideRecoveryAction.Reselect &&
+                    await TryReacquireSameFieldGuideWithoutMotionAsync(
+                        context, original.Gate.Code, evidence, token).ConfigureAwait(false))
+                    return (true, original);
+                // The observations above are inert. MarkResumeRecoveryRequired
+                // below schedules full G3 acquisition AND slit placement, and
+                // ForceCalibration emits pulses. Neither is a no-motion check.
+                // If that chain cannot be funded, retain the original cause and
+                // skip after checked stop instead of wasting another solve/search.
                 if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock)
                 {
                     var budget = await CheckScienceRebuildBudgetAsync(context, original.Gate, token).ConfigureAwait(false);
-                    if (budget is not null)
-                        return (false, new StageResult(budget, evidence));
+                    if (budget is not null) return (false, new StageResult(budget, evidence));
                 }
                 adaptiveCalibrationPending = action == GuideRecoveryAction.ForceCalibration;
                 // The old run-wide "guiding ever started" shortcut silently
@@ -151,6 +170,359 @@ internal sealed partial class RealObservationStageRunner
             await Task.Delay(remaining < TimeSpan.FromSeconds(15) ? remaining : TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
         }
         return (false, AdaptiveRecoveryExhausted(AdaptiveGuidingRecovery.StarsTimeoutCode, evidence));
+    }
+
+    private async Task<bool> WaitForSameFieldGuideSelfRecoveryAsync(
+        ObservationContext context,
+        string sourceCode,
+        CancellationToken token)
+    {
+        if (phd2SlitPlacementSession is not { } session) return false;
+        var preset = commissioning?.Value.Phd2SlitPlacement;
+        if (preset is null) return false;
+        var tolerance = preset.BuildMotionLimits().LockVerificationTolerancePixels;
+        var maximumSeconds = Math.Clamp(configuration.SequencePlan?.GuideStarWaitSeconds ?? 60, 15, 60);
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(maximumSeconds);
+        Phd2StateSnapshot? previous = null;
+        var gatePoll = 0;
+
+        Report($"PHD2 掉星后先在原锁点等待自身恢复最多 {maximumSeconds} 秒；不换场、不移动、不重新选星。");
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            token.ThrowIfCancellationRequested();
+            if (SequenceStopGate() is not null) return false;
+            if (gatePoll++ % 5 == 0)
+                await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+
+            var current = phd2.Snapshot;
+            if (current.ConnectionEpoch != session.ConnectionEpoch ||
+                current.AutomationPaused || current.Phd2Paused ||
+                current.GuideOutput?.Failed == true ||
+                current.PendingSettleOperationId is not null)
+                return false;
+
+            var active = Phd2ScienceContinuationPolicy.IsSameFieldGuideActiveAfterLoss(
+                current, session.ConnectionEpoch, session.SelectedGuide, session.OriginLock, tolerance);
+            if (!active)
+            {
+                previous = null;
+                continue;
+            }
+
+            if (previous is not null &&
+                previous.GuideEpoch == current.GuideEpoch &&
+                previous.SelectedStar == current.SelectedStar &&
+                previous.LockPosition == current.LockPosition)
+            {
+                session = session with
+                {
+                    GuideEpoch = current.GuideEpoch,
+                    FreshGuidingWindowReplacedSettle = true,
+                    ReadOnlyPostLockObservation = null,
+                };
+                phd2SlitPlacementSession = session;
+                await PublishRunJsonEvidenceAsync(
+                    "phd2-same-field-guide-self-recovered",
+                    "PHD2 recovered the same selected guide field after loss; no selection, motion, calibration or exposure was issued",
+                    new
+                    {
+                        sourceCode,
+                        session.ConnectionEpoch,
+                        session.GuideEpoch,
+                        selectedGuide = session.SelectedGuide,
+                        settledLock = session.OriginLock,
+                        waitSeconds = maximumSeconds,
+                        stablePolls = 2,
+                        reselectionIssued = false,
+                        calibrationIssued = false,
+                        mountMotionIssued = false,
+                        exposureStarted = false,
+                        budgetReset = false,
+                    },
+                    session.LastMeasurement.Frame.Path,
+                    token).ConfigureAwait(false);
+                return true;
+            }
+            previous = current;
+        }
+        return false;
+    }
+
+    private async Task<bool> TryReacquireSameFieldGuideWithoutMotionAsync(
+        ObservationContext context,
+        string sourceCode,
+        string? failedEvidence,
+        CancellationToken token)
+    {
+        if (phd2SlitPlacementSession is not { } previousSession ||
+            lastG3Field is not { TargetIdentification.Target: not null } seedField ||
+            automaticRebuildStopProof?.IsCurrent(phd2.Snapshot) != true ||
+            !HasNoOutstandingGuideRecoveryMotion ||
+            phd2.Snapshot.GuideOutput?.Failed == true ||
+            previousSession.ConnectionEpoch != phd2.Snapshot.ConnectionEpoch)
+            return false;
+
+        var preset = commissioning?.Value.Phd2SlitPlacement;
+        if (preset is null || preset.Validate().Count != 0) return false;
+        var ledgerLoad = await Phd2LockShiftPendingStore.LoadAsync(
+            Phd2LockShiftPendingPath(context.Plan.ObservationRunId), token).ConfigureAwait(false);
+        if (ledgerLoad.Error is not null ||
+            ledgerLoad.State is not { Phase: Phd2LockShiftPendingPhase.SettledBudgetLedger } previousLedger ||
+            ValidateCurrentPhd2LockLedgerBinding(context, preset, previousLedger).Disposition != GateDisposition.Passed)
+            return false;
+
+        var originalBinding = await ValidateG3FieldMountBindingForMotionAsync(
+            context, seedField, token).ConfigureAwait(false);
+        if (originalBinding.Disposition != GateDisposition.Passed) return false;
+
+        Report("薄云/短时掉星后已取得连续可用星场：尝试在当前离线场原地重新选择导星，不移动赤道仪、不重跑 WCS/邻场搜索。");
+        Phd2PlacementGuideChoice choice;
+        try
+        {
+            choice = await AcquireFreshPhd2PlacementGuideAsync(
+                context, seedField, preset, token).ConfigureAwait(false);
+        }
+        catch (Phd2Exception ex) when (ex is Phd2NoGuideStarException or
+            Phd2GuideSelectionUnavailableException or Phd2GuidingFrameLostException)
+        {
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-reacquire-rejected",
+                "Fresh local guide selection was transiently unavailable; no mount motion or budget reset",
+                new { sourceCode, error = ex.Message, retryable = true,
+                    motionIssued = false, lockMutationIssued = false,
+                    budgetReset = false, fullG3WcsRebuildIssued = false },
+                failedEvidence, token).ConfigureAwait(false);
+            return false;
+        }
+        catch (Phd2CommandTimeoutException ex)
+        {
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-reacquire-timed-out",
+                "Fresh local guide selection timed out; no mount motion or budget reset",
+                new { sourceCode, error = ex.Message, timeoutSeconds = ex.Timeout.TotalSeconds,
+                    motionIssued = false, lockMutationIssued = false,
+                    budgetReset = false, fullG3WcsRebuildIssued = false },
+                failedEvidence, token).ConfigureAwait(false);
+            return false;
+        }
+        if (choice.Selection.Gate.Disposition != GateDisposition.Passed ||
+            choice.Field.TargetIdentification.Target is null)
+        {
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-reacquire-rejected",
+                "Fresh local target/slit continuity was insufficient; no guide, lock or mount command was issued",
+                new { sourceCode, choice.Selection.Gate, choice.SelectionReason,
+                    previousConnectionEpoch = previousSession.ConnectionEpoch,
+                    previousGuideEpoch = previousSession.GuideEpoch,
+                    motionIssued = false, lockMutationIssued = false,
+                    reselectionIssued = false, budgetReset = false },
+                choice.Field.FramePath ?? failedEvidence, token).ConfigureAwait(false);
+            return false;
+        }
+        lastG3Field = choice.Field;
+
+        var calibration = await phd2.ValidateCalibrationAsync(
+            preset.CalibrationQualityPolicy.ApplyHardRejectionCeilings(PhdCalibrationRequirement()),
+            token).ConfigureAwait(false);
+        if (calibration.Status != Phd2ValidationStatus.Valid ||
+            previousSession.Quality.IsLockShiftAuthority != true)
+            return false;
+
+        await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+        var loop = await phd2.StartLoopingAndWaitForFreshFrameAsync(
+            new Phd2LoopingStartRequest(TimeSpan.FromSeconds(preset.FreshLoopFrameTimeoutSeconds)),
+            token).ConfigureAwait(false);
+        if (!loop.LeavesLoopingForGuideTakeover || loop.StopCommandSent || loop.ExposureChanged)
+            return false;
+
+        var preSelectionBinding = await ValidateG3FieldMountBindingForMotionAsync(
+            context, lastG3Field, token).ConfigureAwait(false);
+        if (preSelectionBinding.Disposition != GateDisposition.Passed)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+
+        Phd2PreparedGuideSelection prepared;
+        try
+        {
+            prepared = await PrepareSnrOptimizedGuideSelectionAsync(
+                context, choice, preset, loop, token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is Phd2NativeGuideSelectionExhaustedException or
+            Phd2NoGuideStarException or Phd2GuideSelectionUnavailableException or
+            Phd2GuidingFrameLostException or Phd2CommandTimeoutException)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+        if (prepared.Selection.Gate.Disposition != GateDisposition.Passed ||
+            prepared.Selection.Star is null)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+
+        choice = prepared.Choice;
+        lastG3Field = choice.Field;
+        var guideSelectionRoi = BuildPhd2GuideSelectionRoi(
+            prepared.Selected, preset.SensorWidthPixels, preset.SensorHeightPixels);
+        await PublishPhd2GuideSelectionEvidenceAsync(
+            context, choice.Field, prepared.Selection, prepared.Requested, prepared.Selected,
+            preset, choice.Mode, choice.Capture, prepared.Loop, guideSelectionRoi,
+            token).ConfigureAwait(false);
+
+        await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+        var preGuideBinding = await ValidateG3FieldMountBindingForMotionAsync(
+            context, lastG3Field, token).ConfigureAwait(false);
+        if (preGuideBinding.Disposition != GateDisposition.Passed)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+
+        Volatile.Write(ref phd2GuidingEverStarted, 1);
+        var settle = await phd2.GuideAndSettleAsync(
+            Phd2SettleCriteriaForSlitPlacement(preset),
+            forceRecalibration: false,
+            guideSelectionRoi,
+            preserveSameEpochGuidingOnSettleTimeout: HasSupervisedScienceOptIn(),
+            token).ConfigureAwait(false);
+        var snapshot = phd2.Snapshot;
+        var windSampledSettle = CanReplaceSettleWithFreshGuidingWindow(settle, snapshot);
+        if ((!settle.Succeeded && !windSampledSettle) ||
+            (settle.Succeeded && !snapshot.HasCurrentSuccessfulSettle))
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+
+        var lockReadback = await phd2.GetLockPositionWithSameEpochRetryAsync(
+            snapshot.ConnectionEpoch, snapshot.GuideEpoch, maximumAttempts: 3, token).ConfigureAwait(false);
+        if (!lockReadback.SameGuideEpoch || lockReadback.Position is not { } freshLock)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+
+        var requiredResiduals = windSampledSettle
+            ? Math.Max(3, preset.CalibrationQualityPolicy.RequiredFreshResidualsPerLockShiftStage)
+            : preset.CalibrationQualityPolicy.RequiredFreshResidualsPerLockShiftStage;
+        IReadOnlyList<Phd2GuidingResidualState> freshMeasurements;
+        try
+        {
+            freshMeasurements = await CapturePhd2GuidingMeasurementsAsync(
+                context,
+                preset,
+                previousSession.Topology,
+                freshLock,
+                ToPhd2Domain(lastG3Field.TargetIdentification.Target!.Centroid, preset),
+                lastG3Field.SlitDetection.Geometry,
+                choice.Mode,
+                requiredResiduals,
+                token,
+                referenceGuide: prepared.Selected,
+                referenceTargetMeasured: Phd2FreshTargetFluxPolicy.HasMeasuredHandoffPosition(
+                    lastG3Field.TargetIdentification)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is Phd2GuidingFrameLostException or
+            Phd2CommandTimeoutException)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
+        var initial = freshMeasurements[^1];
+        var targetSlitResidual = PointDistance(
+            initial.Measurement.TargetCentroid,
+            initial.Measurement.RecognizedSlitAcquisitionPoint);
+        var precisionTolerance = preset.BuildMotionLimits().TargetOnSlitTolerancePixels *
+            previousSession.Quality.RequiredResidualToleranceScale;
+        var maximumResidual = precisionTolerance + preset.MaximumResidualGrowthPixels;
+        if (!double.IsFinite(targetSlitResidual) || targetSlitResidual > maximumResidual)
+        {
+            await StopPhdAndWaitAsync(CancellationToken.None).ConfigureAwait(false);
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-residual-rejected",
+                "Fresh guiding returned, but target/slit growth exceeded the unchanged same-field envelope",
+                new { sourceCode, targetSlitResidual, precisionTolerance, maximumResidual,
+                    previousResidual = PointDistance(previousSession.LastMeasurement.Measurement.TargetCentroid,
+                        previousSession.LastMeasurement.Measurement.RecognizedSlitAcquisitionPoint),
+                    motionIssuedByCoordinator = false, budgetReset = false },
+                initial.Frame.Path, token).ConfigureAwait(false);
+            return false;
+        }
+
+        lastG3Field = UpdateG3FieldFromGuidingResidual(lastG3Field, initial, preset);
+        var rebasedLedger = previousLedger.RebaseAfterSameFieldGuideEpoch(
+            snapshot.ConnectionEpoch,
+            snapshot.GuideEpoch,
+            freshLock,
+            preset.LockVerificationTolerancePixels,
+            DateTimeOffset.UtcNow,
+            initial.Frame.Path,
+            initial.Measurement.FrameSha256,
+            "PHD2 reacquired the same visible field after a short star loss. Only guide coordinates/epoch were translated; coordinator-issued mount motion, attempts, cumulative pixels and lineage time remain unchanged.");
+        await Phd2LockShiftPendingStore.WriteAtomicAsync(
+            Phd2LockShiftPendingPath(context.Plan.ObservationRunId),
+            rebasedLedger,
+            token).ConfigureAwait(false);
+        phd2SettledHandoffBudget = rebasedLedger;
+        pendingPhd2LockShift = rebasedLedger;
+
+        var warning = targetSlitResidual > precisionTolerance;
+        phd2SlitPlacementSession = previousSession with
+        {
+            SelectedGuide = prepared.Selected,
+            OriginLock = freshLock,
+            InitialTarget = initial.Measurement.TargetCentroid,
+            InitialRuntimeSlitLocal = initial.RuntimeSlitLocal,
+            LastMeasurement = initial,
+            Settle = settle,
+            ConnectionEpoch = snapshot.ConnectionEpoch,
+            GuideEpoch = snapshot.GuideEpoch,
+            FreshGuidingWindowReplacedSettle = windSampledSettle,
+            SlitPrecisionWarningActive = previousSession.SlitPrecisionWarningActive || warning,
+            ReadOnlyPostLockObservation = null,
+        };
+        validatedG3GuideConnectionEpoch = snapshot.ConnectionEpoch;
+        validatedG3GuideEpoch = snapshot.GuideEpoch;
+        preExposureReceipt = new Phd2PreExposureReceipt(
+            context.Plan.ObservationRunId,
+            initial.Measurement.FrameSha256,
+            initial.Frame.CompletedUtc,
+            phd2.Snapshot);
+        await PublishRunJsonEvidenceAsync(
+            "phd2-same-field-guide-reacquired",
+            "PHD2 guide recovered on the unchanged current target/slit field without coordinator-issued mount motion",
+            new
+            {
+                sourceCode,
+                previousConnectionEpoch = previousSession.ConnectionEpoch,
+                previousGuideEpoch = previousSession.GuideEpoch,
+                newConnectionEpoch = snapshot.ConnectionEpoch,
+                newGuideEpoch = snapshot.GuideEpoch,
+                previousLock = previousSession.OriginLock,
+                newLock = freshLock,
+                targetSlitResidual,
+                guideTolerance = preset.LockVerificationTolerancePixels,
+                precisionTolerance,
+                warning,
+                preservedAttempts = rebasedLedger.AttemptsUsed,
+                preservedCumulativePixels = rebasedLedger.CumulativeCommandedPixels,
+                preservedExcludedAtrSeconds = rebasedLedger.ExcludedAtrExposureSeconds,
+                coordinatorMountMotionIssued = false,
+                lockDisplacementIssued = false,
+                calibrationIssued = false,
+                budgetReset = false,
+                fullG3WcsRebuildIssued = false,
+            },
+            initial.Frame.Path,
+            token).ConfigureAwait(false);
+        Report(warning
+            ? $"warning：同场导星已恢复，但目标距缝 {targetSlitResidual:F2}px；按警告后试拍策略继续，不宣称精确入缝。"
+            : $"同场导星已在原地恢复，目标距缝 {targetSlitResidual:F2}px；保留原曝光档和科学帧预算继续。");
+        return true;
     }
 
     private StageResult AdaptiveRecoveryExhausted(string code, string? evidence) =>

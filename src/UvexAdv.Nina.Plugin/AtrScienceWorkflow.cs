@@ -166,14 +166,6 @@ internal sealed class AtrScienceWorkflow(AtrRunConfiguration configuration, AtrP
                     {
                         Message = $"{exhaustedAttempts.Message} Last retained frame: {quality.Code}: {quality.Message}",
                     });
-                if (quality.Code == "GUIDING_UNSTABLE")
-                {
-                    // Save the failed exposure first, but never count it as
-                    // accepted or retry through the clipping-only loop. The
-                    // stage supervisor owns the single bounded same-lock check
-                    // or dependency rebuild, with all counters preserved.
-                    return new StageResult(quality);
-                }
                 // Clipping is recoverable: retain and flag the rejected FITS,
                 // re-run the bounded exposure selector, and continue in the same
                 // unattended stage.  The maximum-attempt limit still bounds this

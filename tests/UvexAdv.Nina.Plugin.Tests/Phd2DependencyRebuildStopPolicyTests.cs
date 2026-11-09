@@ -5,6 +5,30 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class Phd2DependencyRebuildStopPolicyTests
 {
+    [Fact]
+    public void FailedInitialGuideStopReceiptIsNotAnArrivalOrExternalOwnerOverride()
+    {
+        var s = Owned(Phd2AppState.Guiding) with { LockPosition = new(852.4, 656.1),
+            Profile = new(2, "bound"), Equipment = new(new("camera", true), new("mount", true), null, null, null) };
+        s = s with { GuideOutput = new(3, 3, DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow,
+            true, new(3, -1.321, -5.524, 74.25, 5.76, 5.12, 1, "mount", -5.671, 0)) };
+        var receipt = new Phd2FailedInitialGuideStopReceipt(8, 7, 98, new(850, 654),
+            s.LockPosition!, s.Profile!, s.Equipment!, 0, null);
+        Assert.True(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(s, receipt, 7, receipt.SelectedLock, receipt.NativeLock, false));
+        Assert.False(s.HasCurrentSuccessfulSettle);
+        var rounded = s with { LockPosition = new(852.404, 656.096) };
+        Assert.True(receipt.IsCurrent(rounded));
+        Assert.True(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(rounded, receipt, 7, receipt.SelectedLock, rounded.LockPosition, false));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(s, receipt, 7, receipt.SelectedLock, receipt.NativeLock, true));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(s, receipt, 6, receipt.SelectedLock, receipt.NativeLock, false));
+        Assert.False(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(s, receipt, 7, new(0, 0), receipt.NativeLock, false));
+        foreach (var changed in new[] { s with { GuideEpoch = 99 }, s with { IsConnected = false },
+            s with { AutomationPaused = true }, s with { Phd2Paused = true }, s with { AppState = Phd2AppState.LostLock },
+            s with { GuideOutput = null }, s with { PendingSettleOperationId = 9 },
+            s with { LockPosition = new(852, 656) }, s with { CalibrationChangeSequence = 4 },
+            s with { Profile = new(3, "other") }, s with { LastConfigurationChange = new(4, DateTimeOffset.UtcNow, null, null, false) } })
+            Assert.False(Phd2DependencyRebuildStopPolicy.CanStopFailedInitialGuide(changed, receipt, 7, receipt.SelectedLock, receipt.NativeLock, false));
+    }
     [Theory]
     [InlineData("skip")]
     [InlineData("cleanup-failure")]
@@ -90,6 +114,35 @@ public sealed class Phd2DependencyRebuildStopPolicyTests
             s with { GuideEpoch = s.GuideEpoch + 1 }, s with { AppState = Phd2AppState.Calibrating } })
             Assert.False(Phd2DependencyRebuildStopPolicy.CanClassifyInitialLostStarFailure(bad, 1, lost, false));
     }
+
+    [Fact]
+    public void RecordedXPerFailedSettleRetainsOwnerForOneCheckedLossStop()
+    {
+        var completed = CompletedInitialGuide() with
+        {
+            LockPosition = new(461.894, 483.827),
+        };
+        var result = completed.LastSettle! with
+        {
+            Succeeded = false,
+            Error = "timed-out waiting for guider to settle",
+            TotalFrames = 36,
+            DroppedFrames = 0,
+        };
+        var snapshot = completed with { LastSettle = result };
+        var receipt = Phd2DependencyRebuildStopPolicy.RecordGuideOperationStopOwner(
+            snapshot, 1, result, hasExactLockHistory: false);
+        Assert.NotNull(receipt);
+
+        var lost = SingleLoss(snapshot);
+        Assert.True(Phd2DependencyRebuildStopPolicy.CanStopInitialGuideAfterSingleLoss(
+            lost, true, receipt, receipt!.Lock, hasExactLockHistory: false));
+        Assert.Null(Phd2DependencyRebuildStopPolicy.RecordGuideOperationStopOwner(
+            snapshot, 1, result with { NativeCalibrationOccurred = true }, hasExactLockHistory: false));
+        Assert.Null(Phd2DependencyRebuildStopPolicy.RecordGuideOperationStopOwner(
+            snapshot, 1, result, hasExactLockHistory: true));
+    }
+
     [Fact]
     public void RecordedHd18552InitialGuideLossCanBeCheckedStoppedBeforePlacementSessionExists()
     {
@@ -182,7 +235,7 @@ public sealed class Phd2DependencyRebuildStopPolicyTests
         var start = placement.IndexOf("private async Task<StageResult> PlaceTargetOnSlitWithPhd2Async(", StringComparison.Ordinal);
         var clear = placement.IndexOf("phd2CompletedInitialGuideStopReceipt = null;", start, StringComparison.Ordinal);
         var completed = placement.IndexOf("CanRecordCompletedGuideOwner(", start, StringComparison.Ordinal);
-        var record = placement.IndexOf("Phd2DependencyRebuildStopPolicy.RecordCompletedInitialGuide(", completed, StringComparison.Ordinal);
+        var record = placement.IndexOf("Phd2DependencyRebuildStopPolicy.RecordGuideOperationStopOwner(", completed, StringComparison.Ordinal);
         var window = placement.IndexOf("firstMeasurements = await CapturePhd2PlacementGuideWindowAsync(", record, StringComparison.Ordinal);
         Assert.True(start >= 0 && clear > start && completed > clear && record > completed && window > record);
         Assert.Contains("pendingPhd2LockShift is not null || currentLedger is not null", placement[record..window]);

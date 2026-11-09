@@ -11,6 +11,22 @@ internal sealed partial class RealObservationStageRunner
     private bool clockCurrentFieldProbeActive;
     private volatile bool clockCurrentFieldOwnerUncertain;
 
+    internal static bool ClockProbeReadbackIsSameStoppedOwner(Phd2StateSnapshot before, Phd2StateSnapshot after)
+    {
+        if (!before.IsConnected || !after.IsConnected || before.ConnectionEpoch != after.ConnectionEpoch ||
+            after.AppState != Phd2AppState.Stopped || before.AppState is not
+                (Phd2AppState.Stopped or Phd2AppState.Looping or Phd2AppState.Selected or Phd2AppState.LostLock)) return false;
+        if (before.GuideEpoch == after.GuideEpoch) return true;
+        // This client's own stopped RPC reconciles cached preview/StarLost and
+        // invalidates settle once. That invalidation is not a new guide owner.
+        // Any intervening event, second transition, reconnect or other cause
+        // remains a veto; do not bless an epoch merely because it ended stopped.
+        return after.GuideEpoch == before.GuideEpoch + 1 &&
+            after.LastGuideEpochChange is { Cause: nameof(Phd2Client.GetAppStateAsync), State: Phd2AppState.Stopped } change &&
+            change.PreviousEpoch == before.GuideEpoch && change.Epoch == after.GuideEpoch &&
+            change.PreviousState == before.AppState;
+    }
+
     private GateResult RejectClockCurrentFieldPhdOwner(string reason)
     {
         // Sticky across probe completion and generic fault cleanup: a newer

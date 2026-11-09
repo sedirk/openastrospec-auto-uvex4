@@ -21,7 +21,7 @@ from astropy.wcs import WCS
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-ALGORITHM = "sep-bin2-astap-raw-verified-v1"
+ALGORITHM = "sep-bin2-astap-raw-verified-v2"
 RING_CELLS = [1, 3, 9, 15, 21, 27, 33, 38, 43, 48, 52, 56, 60, 63, 65, 67, 68, 69]
 RING_CELLS += RING_CELLS[::-1]
 RING_EDGES = np.r_[-90., np.arange(-17, 18)*90/17.5, 90.]
@@ -32,13 +32,13 @@ def sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def detect(data):
+def detect(data, threshold=3.5):
     h, w = data.shape
     if min(h, w) < 64 or h*w > 8_000_000 or h % 2 or w % 2 or not np.isfinite(data).all():
         raise ValueError("unsupported_raw_geometry")
     image = np.ascontiguousarray(data.reshape(h//2, 2, w//2, 2).mean((1, 3)), dtype=np.float32)
     bg = sep.Background(image, bw=64, bh=64, fw=3, fh=3)
-    sources = sep.extract(image-bg.back(), 3.5, err=np.maximum(bg.rms(), .001),
+    sources = sep.extract(image-bg.back(), threshold, err=np.maximum(bg.rms(), .001),
                           minarea=5, deblend_nthresh=32, deblend_cont=.005)
     rows = []
     for s in sources:
@@ -51,6 +51,21 @@ def detect(data):
         rows.append(dict(x=(x+.5)*2-.5, y=(y+.5)*2-.5, flux=flux,
                          rawFwhm=2*fwhm, sepFlags=int(s["flag"])))
     return sorted(rows, key=lambda r: r["flux"], reverse=True)[:300]
+
+
+def select_solver_sources(data, measured):
+    # Equal-amplitude point rendering otherwise promotes a long marginal-noise
+    # tail to the brightness of real stars. Select BEFORE consulting any WCS.
+    # Keep the original faint-source route unless >=80% of candidates disappear
+    # at 5 sigma AND at least five stronger measurements survive. The full 3.5
+    # sigma list remains the raw-coordinate verifier, not a second solver try.
+    strong = detect(data, 5.)
+    prefer_strong = len(strong) >= 5 and len(measured) >= 5*len(strong)
+    selected = strong if prefer_strong else measured
+    return selected, dict(mode="noise-tail-5sigma" if prefer_strong else "original-3.5sigma",
+                          measurementThreshold=3.5, comparisonThreshold=5.,
+                          measuredCount=len(measured), strongerCount=len(strong),
+                          renderedCount=min(60, len(selected)), solverCalls=1)
 
 
 def point_render(rows, shape):
@@ -174,11 +189,14 @@ def recover(request, output):
         if len(rows) < 5:
             result["reason"] = "too_few_measured_sources"
             return result
+        selected, selection = select_solver_sources(data, rows)
+        result["solverSelection"] = selection
+        result["solverDetections"] = selected
         header = fits.Header()
         header["SYNTHET"], header["MEASURED"], header["RAWSHA"] = True, True, digest
         header["METHOD"] = ALGORITHM
         points = output/"solver-only-points.fit"
-        fits.writeto(points, point_render(rows, data.shape), header)
+        fits.writeto(points, point_render(selected, data.shape), header)
         exe = Path(request["astapPath"]).resolve(strict=True)
         if sha(exe).lower() != request["astapSha256"].lower():
             raise ValueError("solver_hash_changed")

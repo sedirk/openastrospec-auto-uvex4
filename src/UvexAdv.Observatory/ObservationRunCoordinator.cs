@@ -633,12 +633,18 @@ public sealed class ObservationRunCoordinator : IDisposable
             }
 
             completionCommitPointReached = true;
+            // Completion commits one immutable execution segment. Native
+            // meridian bypass markers did not acquire its remaining science;
+            // preserve that distinction at the original commit point (never
+            // substitute a different snapshot after the writer acknowledges it).
+            var meridianSegment = events.Any(item => item.Code == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY");
             var evt = new ObservationEvent(
                 DateTimeOffset.UtcNow,
                 ObservationRunState.Completed,
                 null,
-                "RUN_COMPLETED",
-                "Observation completed and its final manifest was durably committed.");
+                meridianSegment ? "RUN_SEGMENT_COMPLETED" : "RUN_COMPLETED",
+                meridianSegment ? "本观测段已结束并保存，等待中天交接；这不是目标完成，已接受科学帧和原预算保留。"
+                    : "Observation completed and its final manifest was durably committed.");
             var completedEvents = events.Append(evt).TakeLast(200).ToArray();
             return new ObservationSnapshot(
                 runId,

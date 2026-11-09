@@ -16,6 +16,17 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class QhyOwnerIdleProofTests
 {
     [Theory]
+    [InlineData(null, false)]
+    [InlineData(new string[0], false)]
+    [InlineData(new[] { QhyControlProtocol.WideFieldStreamCapability }, false)]
+    [InlineData(new[] { QhyControlProtocol.OwnerIdleCapability }, true)]
+    [InlineData(new[] { QhyControlProtocol.WideFieldStreamCapability, QhyControlProtocol.OwnerIdleCapability }, true)]
+    public void CurrentServiceMustAdvertisePointInTimeOwnerIdleProof(string[]? capabilities, bool expected)
+    {
+        Assert.Equal(expected, QhyServiceCompatibilityPolicy.HasOwnerIdleCapability(capabilities));
+    }
+
+    [Theory]
     [InlineData(QhyJobState.Completed, true)]
     [InlineData(QhyJobState.Cancelled, true)]
     [InlineData(QhyJobState.Faulted, true)]
@@ -57,6 +68,30 @@ public sealed class QhyOwnerIdleProofTests
     {
         using var client = Client(false, _ => Json(Enumerable.Range(0, 200).Select(_ => Job(QhyJobState.Completed)).ToArray()));
         Assert.Equal("QHY_OWNER_IDLE_UNAVAILABLE", (await client.ReadGlobalIdleAsync(CancellationToken.None)).Code);
+    }
+
+    [Fact]
+    public async Task CurrentLegacyOwnerUsesSingleFreshPointInTimeIdleProof()
+    {
+        var calls = new List<string>();
+        using var client = Client(false, request =>
+        {
+            calls.Add(request.Method + " " + request.RequestUri!.PathAndQuery);
+            return Json(new QhyOwnerIdleProof(1, DateTimeOffset.UtcNow, true));
+        }, advertiseOwnerIdleProof: true);
+        var gate = await client.ReadGlobalIdleAsync(CancellationToken.None);
+        Assert.Equal("QHY_OWNER_IDLE_CONFIRMED", gate.Code);
+        Assert.Equal(new[] { "GET /api/v1/owner-idle" }, calls);
+    }
+
+    [Theory]
+    [InlineData(-30, true, "QHY_OWNER_IDLE_UNAVAILABLE")]
+    [InlineData(30, true, "QHY_OWNER_IDLE_UNAVAILABLE")]
+    [InlineData(0, false, "QHY_OWNER_STOP_UNCONFIRMED")]
+    public void LegacyOwnerProofFailsClosedWhenStaleFutureOrBusy(int age, bool ownerIdle, string code)
+    {
+        var proof = new QhyOwnerIdleProof(1, DateTimeOffset.UtcNow.AddSeconds(age), ownerIdle);
+        Assert.Equal(code, QhyOwnerIdleProofPolicy.Evaluate(proof, DateTimeOffset.UtcNow).Code);
     }
 
     [Theory]
@@ -183,8 +218,13 @@ public sealed class QhyOwnerIdleProofTests
     private static QhyJobSnapshot Job(QhyJobState state) => new(Guid.NewGuid(), "old-run", QhyJobKind.Acquisition, state,
         DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "target", "QHY", null, null, [], [], "manifest.json");
     private static HttpResponseMessage Json<T>(T value) => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
-    private static QhyServiceClient Client(bool native, Func<HttpRequestMessage, HttpResponseMessage> action) =>
-        new("http://127.0.0.1/", new Handler(action), native);
+    private static QhyServiceClient Client(bool native, Func<HttpRequestMessage, HttpResponseMessage> action,
+        bool advertiseOwnerIdleProof = false) =>
+        new("http://127.0.0.1/", new Handler(request =>
+            !native && !advertiseOwnerIdleProof &&
+            request.RequestUri!.AbsolutePath == "/api/v1/owner-idle"
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                : action(request)), native);
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> action) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(action(request));

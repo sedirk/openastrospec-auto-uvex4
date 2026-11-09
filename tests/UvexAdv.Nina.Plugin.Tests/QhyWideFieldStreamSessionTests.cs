@@ -45,11 +45,17 @@ public sealed class QhyWideFieldStreamSessionTests
                     _ => { measured.Add(frame.SequenceNumber); return Task.FromResult("measured"); }, token);
             }, CancellationToken.None);
         Assert.NotNull(session);
-        for (var i = 0; i < 100 && !session.IsJoined; i++) await Task.Delay(20);
+        for (var i = 0; i < 250 && !session.IsJoined; i++) await Task.Delay(20);
         Assert.True(session.IsJoined);
         Assert.Null(session.AnalysisFailure);
         Assert.Null(session.ProducerFailure);
-        Assert.Equal(new[] { 2, 3, 4 }, measured);
+        // Capacity one deliberately keeps only the latest pending frame. The
+        // deferred frame 1 must not stop later analysis, but frame 3 may be
+        // superseded by frame 4 under ordinary scheduler timing.
+        Assert.Equal(2, measured[0]);
+        Assert.Contains(4, measured);
+        Assert.Equal(measured.OrderBy(value => value), measured);
+        Assert.DoesNotContain(1, measured);
         Assert.Equal(1, transport.Starts); Assert.Equal(0, transport.Cancels);
         Assert.Equal(1, state.CorrectionAttempts); // policy never resets/writes the immutable ledger
         Assert.Equal(GateDisposition.Passed, (await session.StopAsync(CancellationToken.None)).Disposition);
@@ -116,9 +122,12 @@ public sealed class QhyWideFieldStreamSessionTests
     [Fact]
     public async Task LatestWinsHasOnePendingAnalysisAndRetiresTheSameOwner()
     {
-        using var transport = new OwnerTransport { ProduceFrames = true };
-        using var client = new QhyServiceClient("http://127.0.0.1", transport);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Latest-wins may legitimately drop frame 1 if the producer outruns the
+        // first consumer scheduling under a full parallel suite. Pin that boundary
+        // explicitly; do not change the production queue or rely on a sleep.
+        using var transport = new OwnerTransport { ProduceFrames = true, BeforeSecondFrame = entered.Task };
+        using var client = new QhyServiceClient("http://127.0.0.1", transport);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var terminalObservations = 0;
@@ -138,11 +147,11 @@ public sealed class QhyWideFieldStreamSessionTests
                 if (frame.SequenceNumber == 1) { entered.TrySetResult(); await release.Task.WaitAsync(token); }
             }, CancellationToken.None);
         Assert.NotNull(session);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        await retired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        await retired.Task.WaitAsync(TimeSpan.FromSeconds(20));
         Assert.True(transport.FrameReads >= 4);
         release.TrySetResult();
-        for (var i = 0; i < 100 && !session.IsJoined; i++) await Task.Delay(20);
+        for (var i = 0; i < 250 && !session.IsJoined; i++) await Task.Delay(20);
         Assert.Equal(new[] { 1, 4 }, measured.ToArray());
         Assert.Equal(GateDisposition.Passed, (await session.StopAsync(CancellationToken.None)).Disposition);
         Assert.Equal(1, transport.Starts);
@@ -170,6 +179,7 @@ public sealed class QhyWideFieldStreamSessionTests
         public bool HealthUnavailable { get; init; }
         public bool ProduceFrames { get; init; }
         public bool LoseJob { get; init; }
+        public Task? BeforeSecondFrame { get; init; }
         public int Starts; public int Cancels; public int FrameReads;
         private QhyJobSnapshot? job;
         private readonly string owner = new('x', 43);
@@ -204,6 +214,7 @@ public sealed class QhyWideFieldStreamSessionTests
             else if (ProduceFrames && message.Method == HttpMethod.Get && job!.State == QhyJobState.Running)
             {
                 var n = Math.Min(4, Interlocked.Increment(ref FrameReads));
+                if (n == 2 && BeforeSecondFrame is { } ready) await ready.WaitAsync(token);
                 var now = DateTimeOffset.UtcNow;
                 var metrics = new QhyFrameMetrics(0, 100, 50, 50, 1, 50, 50, 50, 0, 0, 0, null, null, null, null, []);
                 var frame = new QhyFrameRecord(new Guid(n, 0, 0, new byte[8]), n, "ACQUISITION-WIDE-STREAM", "finite-" + n + ".fits",

@@ -19,6 +19,44 @@ internal static class G3WcsTargetProjector
     private const int MaximumInverseIterations = 40;
     private const double MaximumInverseResidualPixels = 0.1d;
 
+    /// <summary>
+    /// Reanchors an existing projection without changing its detector geometry.
+    /// This is an inferred/hypothetical position, not a new formal solve. In
+    /// particular, TAN/CD results must not collapse into scalar angle/scale:
+    /// that loses skew, parity and the reference pixel during coarse handoff.
+    /// </summary>
+    internal static PlateSolveResult Recenter(
+        PlateSolveResult solve, Coordinates center, int imageWidth, int imageHeight)
+    {
+        ArgumentNullException.ThrowIfNull(solve);
+        ArgumentNullException.ThrowIfNull(center);
+        if (!solve.Success || solve.Coordinates is null)
+            throw new ArgumentException("A successful solve with center coordinates is required.", nameof(solve));
+        if (imageWidth <= 0 || imageHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), "Image dimensions must be positive.");
+        var sameEpochCenter = center.Epoch == solve.Coordinates.Epoch
+            ? center : center.Transform(solve.Coordinates.Epoch);
+        if (solve is DetectorWcsResult detectorWcs)
+        {
+            var recentered = detectorWcs.WithCenter(sameEpochCenter, imageWidth, imageHeight);
+            // Registered/mosaic WCS can keep CRVAL at an off-centre pixel while
+            // Coordinates describes the detector centre. Preserve both meanings.
+            recentered.Coordinates = new Coordinates(sameEpochCenter.RADegrees, sameEpochCenter.Dec,
+                solve.Coordinates.Epoch, Coordinates.RAType.Degrees);
+            return recentered;
+        }
+        return new PlateSolveResult
+        {
+            Success = true,
+            Coordinates = new Coordinates(sameEpochCenter.RADegrees, sameEpochCenter.Dec,
+                solve.Coordinates.Epoch, Coordinates.RAType.Degrees),
+            Pixscale = solve.Pixscale,
+            PositionAngle = solve.PositionAngle,
+            Flipped = solve.Flipped,
+            Radius = solve.Radius,
+        };
+    }
+
     internal static PixelPoint Project(
         Coordinates target,
         PlateSolveResult solve,
@@ -139,21 +177,12 @@ internal static class G3WcsTargetProjector
 
         PixelPoint ProjectAtCenter(double raDegrees, double decDegrees)
         {
-            var hypothetical = new PlateSolveResult
-            {
-                Success = true,
-                Coordinates = new Coordinates(
+            var hypothetical = Recenter(solve, new Coordinates(
                     NormalizeDegrees(raDegrees),
                     Math.Clamp(decDegrees, -89.9d, 89.9d),
                     solve.Coordinates.Epoch,
-                    Coordinates.RAType.Degrees),
-                Pixscale = solve.Pixscale,
-                PositionAngle = solve.PositionAngle,
-                Flipped = solve.Flipped,
-            };
-            return Project(target, solve is DetectorWcsResult detectorWcs
-                ? detectorWcs.WithCenter(hypothetical.Coordinates, imageWidth, imageHeight) : hypothetical,
-                imageWidth, imageHeight, solverIdentity);
+                    Coordinates.RAType.Degrees), imageWidth, imageHeight);
+            return Project(target, hypothetical, imageWidth, imageHeight, solverIdentity);
         }
 
         for (; iterations < MaximumInverseIterations; iterations++)

@@ -78,7 +78,6 @@ public static class ExposureTierSelector
         {
             return Reject("PROBE_CONTRAST_INVALID", "Probe target/sky contrast must be finite and non-negative.", ladder[0], double.NaN, probe);
         }
-        if (!probe.GuidingStable) return Reject("GUIDING_UNSTABLE", "Probe was acquired while guiding was unstable.", probe.ExposureSeconds, double.NaN, probe);
         if (probe.TargetToSkyContrast < options.MinimumTargetToSkyContrast) return Reject("TARGET_SKY_CONTRAST_LOW", $"Target/sky contrast {probe.TargetToSkyContrast:F2} is below {options.MinimumTargetToSkyContrast:F2}.", probe.ExposureSeconds, double.NaN, probe);
 
         var usableRange = probe.FullScaleAdu - probe.BiasLevelAdu;

@@ -29,6 +29,7 @@ internal sealed partial class RealObservationStageRunner
         int? previousExposureMilliseconds = null;
         var selectionAttemptsAtTier = selection.Attempts;
         var candidateReselectionConsumed = false;
+        var lostCandidates = new List<PixelPoint>();
         for (var preparationPass = 0; preparationPass < Phd2GuideSnrExposurePolicy.MaximumIncreases + 3; preparationPass++)
         {
             await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
@@ -55,7 +56,11 @@ internal sealed partial class RealObservationStageRunner
             if (localReselection && (candidateReselectionConsumed || selectionAttemptsAtTier >= 4))
                 throw new Phd2NativeGuideSelectionExhaustedException(selectionAttemptsAtTier,
                     ["Pre-guide candidate disappeared during SNR sampling; local selection allowance exhausted, no guide/mount command issued."]);
-            var excludedCandidate = localReselection ? ToFrameLocal(selection.Selected, preset) : (PixelPoint?)null;
+            // A change of exposure must not erase a measured candidate loss.
+            // In particular, restoring 2s after a loss at 4s must not select
+            // that same disappearing point and skip its fresh-frame check.
+            if (candidateLoss is not null)
+                lostCandidates.Add(ToFrameLocal(selection.Selected, preset));
             if (localReselection) candidateReselectionConsumed = true;
             var increases = guideSnrPreparation.Increases;
             var next = candidateLoss is not null ? previousExposureMilliseconds ??
@@ -70,7 +75,7 @@ internal sealed partial class RealObservationStageRunner
                     maximumExposureMilliseconds = Phd2GuideSnrExposurePolicy.MaximumExposureMilliseconds,
                     candidateLost = candidateLoss is not null, lostFrame = candidateLoss?.LostFrame,
                     restoringPreviousTier = candidateLoss is not null && !localReselection,
-                    localReselection, selectionAttemptsAtTier, recoveryPreparation, preparationPass,
+                    localReselection, selectionAttemptsAtTier, recoveryPreparation, preparationPass, lostCandidates,
                     candidateRankingByCoordinator = false, automaticExposureMode = false, qualityGate = false },
                 choice.Field.FramePath, token).ConfigureAwait(false);
             if (next is null)
@@ -125,12 +130,27 @@ internal sealed partial class RealObservationStageRunner
             if (!loop.LeavesLoopingForGuideTakeover || loop.StopCommandSent || loop.ExposureChanged)
                 throw new InvalidOperationException("PHD2 SNR selection loop did not preserve the fixed-exposure takeover contract.");
             selection = await SelectFreshPhd2GuideAsync(choice, preset, token,
-                excludedCandidate is { } excluded ? [excluded] : null,
+                lostCandidates,
                 localReselection ? 4 - selectionAttemptsAtTier : 4).ConfigureAwait(false);
             selectionAttemptsAtTier = localReselection ? selectionAttemptsAtTier + selection.Attempts : selection.Attempts;
             if (restored)
             {
-                Report($"warning：长曝光候选未保留，已用新帧恢复 {choice.ExposureMilliseconds} ms 并由 PHD2 重选；不再延长，后续仍须实测导星和入缝。");
+                await RequireImmediatePhysicalActionGatesAsync(context, token).ConfigureAwait(false);
+                var restoredObservation = await Phd2GuideSnrExposurePolicy.ObserveRestoredCandidateAsync(
+                    () => phd2.ObserveSelectedStarSnrAsync(selection.Selected, choice.ExposureMilliseconds,
+                        TimeSpan.FromSeconds(10 + 4d * choice.ExposureMilliseconds / 1000), token),
+                    lost => lost.SelectedStarSnrBaseline is { } baseline &&
+                        Phd2GuideSnrExposurePolicy.CanRecoverCandidateLoss(baseline, lost.Snapshot, phd2.Snapshot,
+                            selection.Selected, HasNoOutstandingGuideRecoveryMotion && pendingPhd2LockShift is null &&
+                            (pendingSlitPlacement is null or { Phase: SlitPlacementPendingPhase.SettledBudgetLedger }),
+                            guidingEverStarted, recoveryPreparation), selectionAttemptsAtTier).ConfigureAwait(false);
+                await PublishRunJsonEvidenceAsync("phd2-guide-snr-restored-candidate",
+                    "Fresh native candidate sampled after exposure restoration; low SNR remains advisory",
+                    new { observation = restoredObservation, lostCandidates,
+                        medianSnr = Phd2GuideSnrExposurePolicy.MedianSnr(restoredObservation),
+                        additionalExposureIncrease = false, guideCommandSent = false, budgetReset = false },
+                    choice.Field.FramePath, token).ConfigureAwait(false);
+                Report($"warning：已用新帧恢复 {choice.ExposureMilliseconds} ms，排除已丢失候选并完成新候选连续采样；不再延长，后续仍须实测导星和入缝。");
                 break;
             }
             if (localReselection) continue;

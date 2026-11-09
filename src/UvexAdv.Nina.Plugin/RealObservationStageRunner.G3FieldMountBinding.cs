@@ -142,23 +142,9 @@ internal sealed partial class RealObservationStageRunner
             cancellationToken).ConfigureAwait(false);
         if (probeBindingGate.Disposition != GateDisposition.Passed) return probeBindingGate;
 
-        string evidenceSha256;
-        try
-        {
-            evidenceSha256 = await ComputeFileSha256Async(probe.Solve.EvidencePath, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return GateResult.Unknown(
-                "G3_TRUSTED_PL3_EVIDENCE_UNREADABLE",
-                $"The accepted PL3 evidence cannot be re-read: {ex.Message}");
-        }
-        if (!SameHash(evidenceSha256, probe.Solve.EvidenceSha256))
-        {
-            return GateResult.Fail(
-                "G3_TRUSTED_PL3_EVIDENCE_CHANGED",
-                "The accepted PL3 evidence changed after its immutable digest was recorded.");
-        }
+        var evidenceGate = await G3SparseRecoveryWorkflow.ValidateFormalEvidenceAsync(
+            probe.Solve, ComputeFileSha256Async, cancellationToken).ConfigureAwait(false);
+        if (evidenceGate.Disposition != GateDisposition.Passed) return evidenceGate;
         if (!string.Equals(probe.MountBinding.CoordinateEpoch, reference.Captured.MountBinding.CoordinateEpoch, StringComparison.Ordinal) ||
             !string.Equals(probe.MountBinding.PierSide, reference.Captured.MountBinding.PierSide, StringComparison.OrdinalIgnoreCase))
         {

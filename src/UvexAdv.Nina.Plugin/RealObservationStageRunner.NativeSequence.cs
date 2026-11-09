@@ -13,6 +13,7 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
     internal NativeTargetSession? NativeTarget { get; private set; }
     bool INativeTargetBoundary.CanRecheckSequenceIdle => canRecheckSequenceIdle;
     private bool canRecheckSequenceIdle;
+    private bool terminalCancellationObserved;
     private ClockContinuationBudget? retiredClockBudget;
     private ClockRecoveryFieldWorkflow? clockRecoveryField;
 
@@ -109,11 +110,13 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         if (errors.Count == 0 && phd2.IsConnected)
         {
             var quiet = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd2, telescopeMediator,
-                configuration.ExpectedTelescopeId, token).ConfigureAwait(false);
+                configuration.ExpectedTelescopeId, token,
+                allowCancelledSlewDrain: terminalCancellationObserved).ConfigureAwait(false);
             await WriteAuditBestEffortAsync("native-target-mount-pulse-drain", new
             {
                 quiet, maximumWaitSeconds = Phd2MountIdleWait.MaximumWait.TotalSeconds,
                 quietSeconds = Phd2MountIdleWait.QuietPeriod.TotalSeconds, motionIssued = false,
+                terminalCancellationObserved,
             }).ConfigureAwait(false);
             if (quiet.Disposition != GateDisposition.Passed) errors.Add($"{quiet.Code}: {quiet.Message}");
         }

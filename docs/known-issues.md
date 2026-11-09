@@ -1,5 +1,15 @@
 # Known issues
 
+## October 31 WR 134 recovery correction (.335)
+
+See the [two-run diagnosis and bounded recovery fix](reports/2026-10-31-wr134-guide-recovery.md).
+The failures occurred after successful acquisition: real low-SNR guide loss followed
+by a native-frame gain/stop-receipt bug, and a separate On-Step RPC/output failure
+whose initial guide receipt was lost before settle completion. The software fixes
+do not establish that the driver fault is physically repaired or that the next sky
+run will succeed. Deployment status is recorded in the linked report; no observing
+is authorized by publication or installation.
+
 ## Current closeout boundary (2026-10-24, installed 0.4.0.312)
 
 See the [October 24 closeout](closeout-2026-10-24.md) for the acquisition and library

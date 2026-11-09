@@ -23,6 +23,21 @@ public sealed class TargetFailureContinuationTests
     [Theory]
     [InlineData("skip")]
     [InlineData("cleanup-failure")]
+    public async Task RecordedHd18552WindowRejectionReallyExecutesNextNativeTarget(string boundary)
+    {
+        var gate = GateResult.TargetQuality(
+            HorizonEvaluation.WindowExhaustedCode,
+            "HD 18552 exhausted its original target window after retaining one accepted frame.");
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            boundary,
+            gate.Code,
+            gate,
+            ObservationStage.RunScienceBlock);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
     [InlineData("end-policy")]
     public async Task AmbiguousDirectFallbackCannotGuidePredictionOrEndNightAfterCheckedStop(string boundary)
     {
@@ -53,6 +68,27 @@ public sealed class TargetFailureContinuationTests
         var gate = new Phd2NativeGuideSelectionExhaustedException(4,
             ["Pre-guide candidate lost after the final SNR sample; bounded native reselection exhausted."])
             .AfterCheckedStop().Gate;
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
+            ObservationStage.PlaceTargetOnSlit);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    public async Task NativeNoStarRpcReselectionExhaustionActuallyExecutesFollowingNativeTarget(string boundary)
+    {
+        var gate = new Phd2NativeGuideSelectionExhaustedException(4,
+            [
+                $"attempt 1: {Phd2NoGuideStarException.FailureCode}",
+                $"attempt 2: {Phd2NoGuideStarException.FailureCode}",
+                $"attempt 3: {Phd2NoGuideStarException.FailureCode}",
+                $"attempt 4: {Phd2NoGuideStarException.FailureCode}",
+            ]).AfterCheckedStop().Gate;
+
+        Assert.Equal("PHD2_OFF_SLIT_NATIVE_SELECTION_EXHAUSTED", gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        Assert.True(NativeSequencePlan.IsSkippableQualityFailure(gate));
+        Assert.NotEqual("PHD2_SLIT_PLACEMENT_FAILED_SAFE", gate.Code);
         await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
             ObservationStage.PlaceTargetOnSlit);
     }

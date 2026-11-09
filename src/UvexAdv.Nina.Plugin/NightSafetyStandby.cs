@@ -8,7 +8,8 @@ public sealed record NightSafetyStandbySnapshot(string Id, string Phase, string 
     string JournalPath, DateTimeOffset? DeadlineUtc, bool PhysicalHardware,
     string? Reason = null, IReadOnlyList<string>? Errors = null)
 {
-    public bool IsActive => Phase is "Waiting" or "Closing";
+    public bool IsActive => Phase is "Waiting" or "Closing" or "MonitoringOnly" or "CloseoutFailed";
+    public string? LatestSafetyReason { get; init; }
 }
 
 // The observing task has a finite lifetime. This owner has a separate lifetime,
@@ -17,7 +18,8 @@ internal sealed record NightSafetyStandbyRequest(bool Real, string Configuration
     DateTimeOffset? DeadlineUtc, string ParentJournal, bool CanHandOver,
     Func<Action, IDisposable?> WatchSafety, Func<GateResult?> StopGate,
     Func<CancellationToken, Task<IReadOnlyList<string>>> Closeout, string? Warning = null,
-    Func<CancellationToken, Task<bool>>? RecheckIdle = null);
+    Func<CancellationToken, Task<bool>>? RecheckIdle = null,
+    bool MonitoringOnly = false, string? InitialReason = null);
 
 internal sealed class NightSafetyStandby
 {
@@ -31,6 +33,7 @@ internal sealed class NightSafetyStandby
     private NightSafetyStandbySnapshot snapshot;
     private string? closeReason;
     private string? persistenceError;
+    private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal NightSafetyStandby(NightSafetyStandbyRequest request, IDisposable reservation,
         Action<NightSafetyStandbySnapshot> changed)
@@ -38,28 +41,42 @@ internal sealed class NightSafetyStandby
         this.request = request; this.reservation = reservation; this.changed = changed;
         var id = $"standby-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}";
         var path = Path.Combine(Path.GetDirectoryName(request.ParentJournal)!, id + ".json");
-        snapshot = new(id, "Waiting", "观测序列已退出；独立安全待机：AIWeather、晨光及原截止仍有效。" + request.Warning, path,
-            request.DeadlineUtc, request.Real);
+        closeReason = request.InitialReason;
+        snapshot = new(id, request.MonitoringOnly ? "MonitoringOnly" : "Waiting",
+            request.MonitoringOnly ? "自动收口未确认：仅保留安全监控与报警，不能保证关顶，请人工处理。" + request.Warning :
+                "观测序列已退出；独立安全待机：AIWeather、晨光及原截止仍有效。" + request.Warning,
+            path, request.DeadlineUtc, request.Real, request.InitialReason);
     }
 
     internal NightSafetyStandbySnapshot Snapshot { get { lock (sync) return snapshot; } }
-    internal Task Completion { get; private set; } = Task.CompletedTask;
+    // Completion is the finite closeout/transfer decision, not the lifetime of
+    // monitoring after a failed attempt. Native end instructions must not hang.
+    internal Task Completion => completion.Task;
+    internal Task LifetimeCompletion { get; private set; } = Task.CompletedTask;
 
     // Called while the original night still owns the exclusive lease and watch.
     internal async Task ArmAsync()
     {
         subscription = request.WatchSafety(() => RequestCloseout("NIGHT_UNSAFE"));
         try { await SaveAsync().ConfigureAwait(false); }
+        catch (Exception ex) when (request.MonitoringOnly)
+        {
+            // No mechanical action is available in this mode. A full disk must
+            // not make us discard the last live safety subscription as well.
+            persistenceError = "安全待机日志写入失败：" + ex.Message;
+            lock (sync) snapshot = snapshot with
+            { Message = snapshot.Message + " " + persistenceError, Errors = new[] { persistenceError } };
+        }
         catch { subscription?.Dispose(); subscription = null; throw; }
     }
 
-    internal void Start() => Completion = Task.Run(RunAsync);
+    internal void Start() => LifetimeCompletion = Task.Run(RunAsync);
 
     internal void RequestCloseout(string reason = "OPERATOR_CLOSEOUT")
     {
         lock (sync)
         {
-            if (snapshot.Phase != "Waiting") return;
+            if (!snapshot.IsActive) return;
             closeReason ??= reason;
             Wake();
         }
@@ -72,7 +89,7 @@ internal sealed class NightSafetyStandby
     {
         lock (sync)
         {
-            if (request.CanHandOver || request.RecheckIdle is null || snapshot.Phase != "Waiting" ||
+            if (request.CanHandOver || request.RecheckIdle is null || snapshot.Phase is not ("Waiting" or "MonitoringOnly") ||
                 closeReason is not null || request.Real != real ||
                 request.ConfigurationKey != (configurationKey ?? string.Empty)) return false;
             if (ReadStopReason() is { } stop) { closeReason = stop; Wake(); return false; }
@@ -90,7 +107,7 @@ internal sealed class NightSafetyStandby
     {
         lock (sync)
         {
-            if (snapshot.Phase != "Waiting" || closeReason is not null ||
+            if (snapshot.Phase is not ("Waiting" or "MonitoringOnly") || closeReason is not null ||
                 !(request.CanHandOver || (request.RecheckIdle is not null && freshIdleConfirmed)) ||
                 request.Real != real || request.ConfigurationKey != (configurationKey ?? string.Empty)) return false;
             if (ReadStopReason() is { } stop) { closeReason = stop; Wake(); return false; }
@@ -108,7 +125,7 @@ internal sealed class NightSafetyStandby
         lock (sync)
         {
             if (!snapshot.IsActive) return;
-            if (snapshot.Phase == "Waiting")
+            if (snapshot.Phase != "Closing")
                 snapshot = snapshot with { Phase = "Shutdown", Message = "N.I.N.A. 已退出；软件安全待机不再运行，屋顶需由操作员或独立硬件保护。" };
             shutdown.Cancel();
             Wake();
@@ -153,7 +170,7 @@ internal sealed class NightSafetyStandby
                 lock (sync) snapshot = snapshot with
                 {
                     Phase = errors.Count == 0 ? "Closed" : "CloseoutFailed", Errors = errors,
-                    Message = errors.Count > 0 ? "独立安全收口未完成：" + string.Join("；", errors) :
+                    Message = errors.Count > 0 ? "独立安全收口未完成；仅监控报警，不自动重试，请人工处理：" + string.Join("；", errors) :
                         request.Real ? "独立安全收口已确认；未自动启动观测。" : "独立安全待机模拟结束；未操作硬件。",
                 };
                 await PublishAsync().ConfigureAwait(false);
@@ -166,8 +183,38 @@ internal sealed class NightSafetyStandby
         }
         finally
         {
-            subscription?.Dispose();
-            reservation.Dispose(); // A transferred lease is a no-op, never releases the new night.
+            try
+            {
+                if (Snapshot.Phase is "MonitoringOnly" or "CloseoutFailed")
+                {
+                    completion.TrySetResult();
+                    // Failure is not a release of observatory responsibility.
+                    // Keep the original watch and lease; never retry a command
+                    // or promote an unknown physical stop in this background loop.
+                    while (!shutdown.IsCancellationRequested && (Snapshot.Phase is "MonitoringOnly" or "CloseoutFailed"))
+                    {
+                        var currentReason = ReadStopReason();
+                        bool update;
+                        lock (sync)
+                        {
+                            update = snapshot.LatestSafetyReason != currentReason ||
+                                (snapshot.Reason is null && closeReason is not null);
+                            snapshot = snapshot with { LatestSafetyReason = currentReason, Reason = snapshot.Reason ?? closeReason };
+                        }
+                        if (update) await PublishAsync().ConfigureAwait(false);
+                        await wake.WaitAsync(TimeSpan.FromSeconds(1), shutdown.Token).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+            finally
+            {
+                if (Snapshot.Phase is "Transferred" or "Shutdown")
+                    await PublishAsync().ConfigureAwait(false);
+                subscription?.Dispose();
+                reservation.Dispose(); // Transferred lease: never releases the new night.
+                completion.TrySetResult();
+            }
         }
     }
 
@@ -177,7 +224,12 @@ internal sealed class NightSafetyStandby
         catch (Exception ex)
         {
             persistenceError = "安全待机日志写入失败：" + ex.Message;
-            lock (sync) snapshot = snapshot with { Message = snapshot.Message + " " + persistenceError, Errors = new[] { persistenceError } };
+            lock (sync) snapshot = snapshot with
+            {
+                Message = snapshot.Message.Contains(persistenceError, StringComparison.Ordinal)
+                    ? snapshot.Message : snapshot.Message + " " + persistenceError,
+                Errors = (snapshot.Errors ?? Array.Empty<string>()).Append(persistenceError).Distinct().ToArray(),
+            };
         }
         changed(Snapshot);
     }
@@ -186,7 +238,8 @@ internal sealed class NightSafetyStandby
     {
         var current = Snapshot;
         var json = JsonSerializer.Serialize(new { schemaVersion = 1, updatedUtc = DateTimeOffset.UtcNow,
-            parentJournal = request.ParentJournal, request.ConfigurationKey, request.CanHandOver, current },
+            parentJournal = request.ParentJournal, request.ConfigurationKey, request.CanHandOver,
+            request.MonitoringOnly, request.InitialReason, current },
             new JsonSerializerOptions { WriteIndented = true });
         Directory.CreateDirectory(Path.GetDirectoryName(current.JournalPath)!);
         await File.WriteAllTextAsync(current.JournalPath + ".tmp", json).ConfigureAwait(false);

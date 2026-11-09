@@ -37,6 +37,25 @@ public sealed class AdaptiveGuidingRecoveryTests
         Assert.Equal(1, s.Reselections); Assert.False(s.CalibrationConsumed);
     }
 
+    [Theory]
+    [InlineData(16, 95.76296531263989, 0.0000308641975308642)] // Recorded HD 26380, 02:18:15.
+    [InlineData(11, 122.7048466898377, 0.0000617283950617284)] // Recorded HD 26380, 02:18:33.
+    public void RecordedThinCloudRecoveryFramesAuthorizeOnlyBoundedLocalReacquisition(
+        int stars, double medianSnr, double saturatedPixelFraction)
+    {
+        Assert.True(AdaptiveGuidingRecovery.HasUsableStars(
+            stars, medianSnr, saturatedPixelFraction));
+        var s = new AdaptiveGuidingRecovery();
+        s.BeginCheck(Start);
+        Assert.Equal(GuideRecoveryAction.WaitForStars,
+            s.Observe(Start, Start, true, stars, medianSnr, saturatedPixelFraction));
+        Assert.Equal(GuideRecoveryAction.Reselect,
+            s.Observe(Start.AddSeconds(15), Start.AddSeconds(15), true,
+                stars, medianSnr, saturatedPixelFraction));
+        Assert.Equal(1, s.Reselections);
+        Assert.False(s.CalibrationConsumed);
+    }
+
     [Fact]
     public void FailedReselectionEscalatesOnceAndLaterFailureCannotLoopCalibration()
     {
@@ -147,9 +166,35 @@ public sealed class AdaptiveGuidingRecoveryTests
         Assert.Contains("GuideRecovery.Observe", source);
         Assert.Contains("MarkResumeRecoveryRequired()", source);
         Assert.DoesNotContain("SetLockPosition", source);
-        Assert.DoesNotContain("GuideAndSettleAsync", source);
         Assert.DoesNotContain("CloseDome", source);
         Assert.DoesNotContain("pendingPhd2LockShift = null", source);
+        var localStart = source.IndexOf(
+            "private async Task<bool> TryReacquireSameFieldGuideWithoutMotionAsync(",
+            StringComparison.Ordinal);
+        var localEnd = source.IndexOf(
+            "private StageResult AdaptiveRecoveryExhausted(",
+            localStart,
+            StringComparison.Ordinal);
+        Assert.True(localStart >= 0 && localEnd > localStart);
+        var local = source[localStart..localEnd];
+        Assert.Contains("AcquireFreshPhd2PlacementGuideAsync", local);
+        Assert.Contains("CapturePhd2GuidingMeasurementsAsync", local);
+        Assert.Contains("RebaseAfterSameFieldGuideEpoch", local);
+        Assert.Contains("coordinatorMountMotionIssued = false", local);
+        Assert.Contains("fullG3WcsRebuildIssued = false", local);
+        Assert.Contains("Phd2NoGuideStarException", local);
+        Assert.Contains("Phd2GuideSelectionUnavailableException", local);
+        Assert.Contains("Phd2GuidingFrameLostException", local);
+        Assert.Contains("Phd2CommandTimeoutException", local);
+        Assert.DoesNotContain("AcquireG3SlitFieldAsync", local);
+        Assert.DoesNotContain("PlaceTargetOnSlitWithPhd2Async", local);
+        Assert.DoesNotContain("RequestNativeMeridianBoundary", local);
+        Assert.True(source.IndexOf(
+                "TryReacquireSameFieldGuideWithoutMotionAsync(",
+                StringComparison.Ordinal) <
+            source.IndexOf(
+                "var budget = await CheckScienceRebuildBudgetAsync(",
+                StringComparison.Ordinal));
         var runner = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.cs"));
         Assert.DoesNotContain("PHD2_REBUILD_IDLE_OR_PREVIEW", runner);
         Assert.Contains("StopPreviewAndConfirmAsync(before.ConnectionEpoch", runner);

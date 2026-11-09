@@ -1,3 +1,4 @@
+using System.IO;
 using UvexAdv.Observatory;
 
 namespace UvexAdv.Nina.Plugin;
@@ -10,6 +11,23 @@ internal static class G3SparseRecoveryWorkflow
 
     internal static bool CanApproachDirectly(PlateSolveEvidence? solve) =>
         solve is { IsFormal: true, Result.Success: true };
+
+    internal static bool CanAdvanceReturnWaypoint(PlateSolveEvidence? solve, string framePath) =>
+        CanApproachDirectly(solve) && !string.IsNullOrWhiteSpace(framePath) &&
+        string.Equals(solve!.SourcePath, framePath, StringComparison.OrdinalIgnoreCase);
+
+    internal static async Task<GateResult> ValidateFormalEvidenceAsync(PlateSolveEvidence solve,
+        Func<string, CancellationToken, Task<string>> hash, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        string digest;
+        try { digest = await hash(solve.EvidencePath, token).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { return GateResult.Unknown("G3_TRUSTED_PL3_EVIDENCE_UNREADABLE", $"The accepted formal evidence cannot be re-read: {ex.Message}"); }
+        return string.Equals(digest, solve.EvidenceSha256, StringComparison.OrdinalIgnoreCase)
+            ? GateResult.Pass("G3_FORMAL_EVIDENCE_UNCHANGED", "The accepted formal WCS retains its recorded digest.")
+            : GateResult.Fail("G3_TRUSTED_PL3_EVIDENCE_CHANGED", "The accepted formal evidence changed after its immutable digest was recorded.");
+    }
 
     // ADR-0045: only a formal solve of this image removes the optical-overlap
     // cap. This helper does not validate/execute motion; the caller retains the

@@ -21,9 +21,14 @@ public static class CatalogFieldRegistration
         // prove that extended fixed-pattern patches are optical stars.
         return image.ParentComponents.Where(c => c.SepFlags == 0 && c.Flux > 0 && c.Snr >= 5 &&
                 c.SaturatedFraction == 0 && c.Npix >= 9 && c.RawSupportPixels >= 3 &&
+                double.IsFinite(c.A) && double.IsFinite(c.B) && c.A >= c.B && c.B > 0 &&
                 c.Bbox[0] >= 8 && c.Bbox[1] >= 8 && c.Bbox[0]+c.Bbox[2] <= image.Width-8 &&
                 c.Bbox[1]+c.Bbox[3] <= image.Height-8)
-            .Select(c => new StarCandidate(new(c.X,c.Y),c.Peak,c.Flux,c.Snr,0,1-c.B/c.A,0,
+            // Preserve measured second moments. Zero used to discard this
+            // evidence and let several narrow fixed detector defects validate
+            // one another as independent sky-registration witnesses.
+            .Select(c => new StarCandidate(new(c.X,c.Y),c.Peak,c.Flux,c.Snr,
+                2.354820045 * Math.Sqrt((c.A*c.A+c.B*c.B)/2),1-c.B/c.A,0,
                 Math.Min(Math.Min(c.X,c.Y),Math.Min(image.Width-1-c.X,image.Height-1-c.Y))))
             .ToArray();
     }
@@ -41,6 +46,7 @@ public static class CatalogFieldRegistration
         var predicted = Add(cataloguePoint, expectedTranslation);
         bool Usable(StarCandidate star, PixelPoint excluded) => Finite(star.Centroid) &&
             double.IsFinite(star.SignalToNoise) && star.SignalToNoise >= 5 && star.SaturatedFraction == 0 &&
+            G3OverlapRegistration.HasUsableMeasuredSourceShape(star) &&
             star.EdgeDistancePixels >= 8 && Distance(star.Centroid, excluded) > 20 &&
             GuideStarSelector.DistanceToGuideExclusion(star.Centroid, slit) > slit.WidthPixels / 2 + 5;
         var a = reference.Where(s => Usable(s, cataloguePoint)).ToArray();

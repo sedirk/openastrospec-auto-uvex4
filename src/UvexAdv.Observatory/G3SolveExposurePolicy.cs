@@ -4,6 +4,24 @@ namespace UvexAdv.Observatory;
 /// Never adds a frame, changes gain or turns an earlier image into current authority.</summary>
 public static class G3SolveExposurePolicy
 {
+    public const int MinimumEmergencySolveExposureMilliseconds = 100;
+
+    /// <summary>
+    /// A solve-only frame that is widely clipped has no useful longer tier.
+    /// Spend the next bounded capture at the same pointing with a shorter
+    /// exposure. This is image-only recovery: it does not grant motion,
+    /// target identity or a new acquisition budget.
+    /// </summary>
+    public static int? EmergencyShortSolveMilliseconds(int currentMilliseconds,
+        double saturatedPixelFraction, int remainingCaptureSlots = 1)
+    {
+        if (remainingCaptureSlots <= 0 || currentMilliseconds <= MinimumEmergencySolveExposureMilliseconds ||
+            !double.IsFinite(saturatedPixelFraction) ||
+            saturatedPixelFraction < G3SolveProbeContentAnalyzer.MaximumSearchAuthorizingSaturatedPixelFraction)
+            return null;
+        return Math.Max(MinimumEmergencySolveExposureMilliseconds, currentMilliseconds / 5);
+    }
+
     public static int? ShortRecheckMilliseconds(int currentMilliseconds, int nextConfiguredMilliseconds,
         G3SolveProbeContentAssessment current, double saturationAdu,
         int? earlierUsefulMilliseconds, G3SolveProbeContentAssessment? earlierUseful)

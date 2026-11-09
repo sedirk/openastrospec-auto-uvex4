@@ -33,6 +33,18 @@ public sealed class G3SolveExposurePolicyTests
         Assert.Null(G3SolveExposurePolicy.ShortRecheckMilliseconds(5000,5000,Content(4,30000,45000),65520,null,null));
     }
 
+    [Fact]
+    public void WidespreadClippingGetsOneShorterSamePointingSolveFrame()
+    {
+        Assert.Equal(1000,
+            G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(5000, 0.25));
+        Assert.Equal(200,
+            G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(1000, 0.10));
+        Assert.Null(G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(5000, 0.099));
+        Assert.Null(G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(100, 0.50));
+        Assert.Null(G3SolveExposurePolicy.EmergencyShortSolveMilliseconds(5000, 0.25, remainingCaptureSlots: 0));
+    }
+
     private static G3SolveProbeContentAssessment Content(int stars,double median,double upper) => new(
         GateResult.Pass("finite-content","not target authority"),
         new(GateResult.Pass("stars","finite fixture"),3,0,stars,stars,0,20,0,1,[]),median,100,20,0)

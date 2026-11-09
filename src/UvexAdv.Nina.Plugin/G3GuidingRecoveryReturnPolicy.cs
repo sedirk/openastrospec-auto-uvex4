@@ -41,9 +41,13 @@ internal sealed record Phd2DependencyRebuildStopProof(long ConnectionEpoch, long
 
         void RequireCurrent()
         {
-            if (!IsCurrent(readState()))
+            var current = readState();
+            if (!IsCurrent(current))
                 throw new PhysicalActionGateException(GateResult.Unknown("G3_GUIDING_RECOVERY_STOP_CHANGED",
-                    "本轮停止/所有者/导星纪元在原生交接采集前后改变；新图不授予位置交接或运动权限。"));
+                    $"本轮停止/所有者/导星纪元在原生交接采集前后改变；新图不授予位置交接或运动权限。 " +
+                    $"Connection {ConnectionEpoch}->{current.ConnectionEpoch}; guide {GuideEpoch}->{current.GuideEpoch}; " +
+                    $"state={current.AppState}; lastChange={current.LastGuideEpochChange?.Cause}; " +
+                    $"event={current.LastGuideEpochChange?.EventSequence}."));
         }
     }
 }
@@ -57,6 +61,39 @@ internal sealed record G3OwnedStopSelection(GateResult Gate, Phd2DependencyRebui
 
 internal static class G3GuidingRecoveryReturnPolicy
 {
+    // Every native acquisition route shares this boundary, including the solve
+    // ladder. A stopped handoff cannot be bypassed by choosing a different
+    // camera primitive. Without a handoff, a timeout is still an unconfirmed
+    // acquisition, not permission to advance to another exposure tier.
+    internal static async Task<T> CaptureNativeFrameAsync<T>(
+        (string Run, string Lineage, Phd2DependencyRebuildStopProof Proof)? pending,
+        G3AcquisitionMotionState? ledger, Func<Phd2StateSnapshot> readState,
+        Func<CancellationToken, Task<T>> nativeCapture, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(readState);
+        ArgumentNullException.ThrowIfNull(nativeCapture);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (pending is { } handoff)
+            {
+                if (ledger is not { Phase: G3AcquisitionMotionPhase.SettledBudgetLedger } ||
+                    ledger.Validate().Count != 0 || handoff.Run != ledger.ObservationRunId ||
+                    handoff.Lineage != ledger.BudgetLineageId)
+                    throw new PhysicalActionGateException(GateResult.Unknown("G3_GUIDING_RECOVERY_LEDGER_CHANGED",
+                        "The stopped capture receipt no longer matches the original settled lineage; no capture or movement was issued."));
+                return await handoff.Proof.CaptureAsync(readState, nativeCapture, cancellationToken).ConfigureAwait(false);
+            }
+            return await nativeCapture(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Phd2CommandTimeoutException ex)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PhysicalActionGateException(GateResult.Unknown(Phd2StageFailurePolicy.NativeFrameTimeout,
+                $"Native single-frame acquisition timed out; do not advance the exposure ladder or issue motion before independent stop confirmation. {ex.Message}"));
+        }
+    }
+
     // A bounded read-only acquisition retry retains the exact in-process stop
     // object, not a new epoch, receipt, deadline or return attempt. Conflicting
     // new receipts cannot silently replace this unfinished responsibility.
@@ -110,7 +147,7 @@ internal static class G3GuidingRecoveryReturnPolicy
     // Unknown side, motion, tracking, identity and weather failures stay hard.
     internal static GateResult FailureGate(GateResult? failure, string detail)
     {
-        var message = $"导星后回原点未确认；不开始搜索：{detail}";
+        var message = $"导星后回到保存的返回点未确认；不开始搜索：{detail}";
         return failure is { Code: "G3_SEARCH_PIER_SIDE_CHANGED", Disposition: GateDisposition.Failed }
             ? GateResult.TargetQuality("G3_GUIDING_RECOVERY_PIER_CHANGED",
                 $"{message} 已知换侧使旧回程失效；停止与账本归档确认后按目标失败策略处理，不声称回位成功。",
@@ -139,6 +176,8 @@ internal static class G3GuidingRecoveryReturnPolicy
                 Math.Pow(offset.DecArcseconds - state.CurrentDeclinationOffsetArcseconds, 2)));
         var radius = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
             state.OriginRaDegrees, state.OriginDeclinationDegrees, reportedRa, reportedDec);
+        var returnDistance = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+            state.ReturnRaDegrees, state.ReturnDeclinationDegrees, reportedRa, reportedDec);
         var continuityLimit = Math.Max(handoffToleranceArcseconds, state.ArrivalToleranceArcseconds) +
             2 * state.ArrivalToleranceArcseconds;
         if (!double.IsFinite(delta) || !double.IsFinite(radius) ||
@@ -161,7 +200,7 @@ internal static class G3GuidingRecoveryReturnPolicy
             // debit and complete return reserve. Do not persist/adopt its
             // returned ledger: actual fresh image binding and the later debit
             // are still required at BeginG3AcquisitionMotionAsync.
-            var preview = G3MeasuredHandoffPolicy.Charge(state, delta, radius, now);
+            var preview = G3MeasuredHandoffPolicy.Charge(state, delta, radius, now, returnDistance);
             if (preview.Gate.Disposition == GateDisposition.Passed)
                 return new(GateResult.Pass("G3_GUIDING_RECOVERY_CURRENT_CAPTURE_RESERVED",
                     "本轮导星已确认停止，原账本可容纳当前位置交接及完整回程；先取本指向新图，待新图绑定后再实际扣账，不预填 WCS 或扩大预算。",
@@ -183,8 +222,8 @@ internal static class G3GuidingRecoveryReturnPolicy
             UpdatedUtc = now,
             LastReason = $"Owned guiding ended; {delta:F2} arcsec and one accounting action reserved for return-only recovery. No N.I.N.A. command sent; origin/limits/clock unchanged.",
         };
-        var returnActionCount = radius <= nearOriginToleranceArcseconds ? 0 :
-            Math.Ceiling(radius / (state.MaximumSingleCorrectionArcseconds - 2 * nearOriginToleranceArcseconds));
+        var returnActionCount = returnDistance <= nearOriginToleranceArcseconds ? 0 :
+            Math.Ceiling(returnDistance / (state.MaximumSingleCorrectionArcseconds - 2 * nearOriginToleranceArcseconds));
         if (!double.IsFinite(returnActionCount) || returnActionCount > int.MaxValue)
             return Block("G3_GUIDING_RECOVERY_RETURN_RESERVE_LIMIT", "完整回程的分段数无效；未发送运动。");
         var returnActions = (int)returnActionCount;
@@ -211,6 +250,6 @@ internal static class G3GuidingRecoveryReturnPolicy
         var next = G3AcquisitionMotionPlanner.PlanNextReturnStep(charged, reportedRa, reportedDec, nearOriginToleranceArcseconds, now);
         if (next.Gate.Disposition != GateDisposition.Passed) return new(next.Gate);
         return new(GateResult.Pass("G3_GUIDING_RECOVERY_RETURN_RESERVED",
-            "已在原账本中预留导星位置差及完整回程；仅允许先回原点，再取新图重新定位。"), charged, delta, returnActions);
+            "已在原账本中预留导星位置差及完整回程；仅允许先回到保存的返回点，再取新图重新定位。"), charged, delta, returnActions);
     }
 }

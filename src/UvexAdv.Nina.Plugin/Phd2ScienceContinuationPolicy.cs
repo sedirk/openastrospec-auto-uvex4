@@ -5,6 +5,74 @@ namespace UvexAdv.Nina.Plugin;
 
 internal static class Phd2ScienceContinuationPolicy
 {
+    // A StarLost notification can be older than an already recovered live
+    // guide. This permits only the original same-epoch fresh optical check;
+    // it does NOT characterize reselection/calibration/reacquisition as inert.
+    internal static bool MayVerifySettledGuideInPlace(string sourceCode) =>
+        sourceCode is "GUIDING_LOST" or "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE";
+
+    // A long science/probe exposure can outlive PHD2's last native settle
+    // attestation while the same selected star and exact runtime lock remain
+    // actively guiding. Permit the existing same-lock native settle route in
+    // that narrow case; the source label is not authoritative (a completed
+    // frame can surface it as GUIDING_LOST), so the current PHD2 state below
+    // must still prove the same selected star, lock, epoch and live output.
+    internal static bool CanResettleAfterExposureAtSettledLock(
+        string sourceCode,
+        Phd2LockShiftPendingState ledger,
+        Phd2StateSnapshot state,
+        long sessionConnection,
+        long sessionGuide,
+        Phd2Point selectedGuide,
+        Phd2Point settledLock,
+        Phd2Point? actualLock,
+        double lockTolerance)
+    {
+        if (sourceCode is not ("GUIDING_LOST" or "GUIDING_UNSTABLE" or "GUIDING_NOT_STABLE") ||
+            !double.IsFinite(lockTolerance) || lockTolerance <= 0 ||
+            ledger.Validate().Count != 0 ||
+            ledger.Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger)
+            return false;
+
+        return state.IsConnected && !state.AutomationPaused && !state.Phd2Paused &&
+            state.AppState == Phd2AppState.Guiding &&
+            state.ConnectionEpoch == sessionConnection && state.GuideEpoch == sessionGuide &&
+            state.PendingSettleOperationId is null &&
+            state.GuideOutput is { Failed: false } &&
+            state.SelectedStar is { } selected &&
+            Distance(selected, selectedGuide.X, selectedGuide.Y) <= lockTolerance &&
+            state.LockPosition is { } nativeLock &&
+            Distance(nativeLock, settledLock.X, settledLock.Y) <= lockTolerance &&
+            actualLock is { } actual &&
+            Distance(actual, settledLock.X, settledLock.Y) <= lockTolerance &&
+            Distance(actual, ledger.CurrentLockX, ledger.CurrentLockY) <= lockTolerance &&
+            Distance(actual, ledger.RequestedLockX, ledger.RequestedLockY) <= lockTolerance;
+    }
+
+    // Thin cloud commonly drops a selected guide star without changing the
+    // telescope field. PHD2 can reacquire that same star and begin a new guide
+    // epoch by itself. This predicate recognizes only an already recovered,
+    // live same-owner field; it does not authorize selection, calibration,
+    // mount motion or exposure.
+    internal static bool IsSameFieldGuideActiveAfterLoss(
+        Phd2StateSnapshot state,
+        long sessionConnection,
+        Phd2Point selectedGuide,
+        Phd2Point settledLock,
+        double lockTolerance)
+    {
+        if (!double.IsFinite(lockTolerance) || lockTolerance <= 0) return false;
+        return state.IsConnected && !state.AutomationPaused && !state.Phd2Paused &&
+            state.AppState == Phd2AppState.Guiding &&
+            state.ConnectionEpoch == sessionConnection &&
+            state.PendingSettleOperationId is null &&
+            state.GuideOutput is { Failed: false } &&
+            state.SelectedStar is { } selected &&
+            Distance(selected, selectedGuide.X, selectedGuide.Y) <= lockTolerance &&
+            state.LockPosition is { } nativeLock &&
+            Distance(nativeLock, settledLock.X, settledLock.Y) <= lockTolerance;
+    }
+
     internal static GateResult? RebuildBudgetGate(Phd2LockShiftPendingState ledger,
         DateTimeOffset now, GateResult sourceGate, GateResult bindingGate)
     {

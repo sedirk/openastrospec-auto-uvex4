@@ -479,6 +479,64 @@ internal sealed record Phd2LockShiftPendingState(
         };
     }
 
+    /// <summary>
+    /// Rebinds the same completed lock lineage after PHD2 loses and reselects
+    /// a guide star without any coordinator-issued mount motion. The detector
+    /// origin-current vector is translated into the new guide epoch so consumed
+    /// attempts, cumulative pixels, exposure credit and the lineage clock remain
+    /// unchanged. A changed connection, unsettled endpoint or ambiguous
+    /// current/requested lock is rejected.
+    /// </summary>
+    public Phd2LockShiftPendingState RebaseAfterSameFieldGuideEpoch(
+        long connectionEpoch,
+        long guideEpoch,
+        Phd2Point verifiedLock,
+        double endpointTolerancePixels,
+        DateTimeOffset nowUtc,
+        string lastFramePath,
+        string lastFrameSha256,
+        string reason)
+    {
+        ArgumentNullException.ThrowIfNull(verifiedLock);
+        if (Validate().Count != 0 ||
+            Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger)
+            throw new InvalidOperationException("Only a valid settled PHD2 lock lineage can be rebound.");
+        if (connectionEpoch != ConnectionEpoch || guideEpoch < GuideEpoch)
+            throw new InvalidOperationException("Same-field guiding can only advance the current PHD2 connection/guide epoch.");
+        if (!double.IsFinite(endpointTolerancePixels) || endpointTolerancePixels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(endpointTolerancePixels));
+        if (!double.IsFinite(verifiedLock.X) || !double.IsFinite(verifiedLock.Y) ||
+            verifiedLock.X < 0 || verifiedLock.Y < 0)
+            throw new ArgumentOutOfRangeException(nameof(verifiedLock));
+        if (nowUtc < UpdatedUtc)
+            throw new ArgumentOutOfRangeException(nameof(nowUtc));
+        if (string.IsNullOrWhiteSpace(lastFramePath) || !Path.IsPathFullyQualified(lastFramePath) ||
+            !IsSha(lastFrameSha256) || string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("A fully qualified frame, SHA-256 and rebind reason are required.");
+
+        var endpointError = Distance(CurrentLockX, CurrentLockY, RequestedLockX, RequestedLockY);
+        if (!double.IsFinite(endpointError) || endpointError > endpointTolerancePixels)
+            throw new InvalidOperationException(
+                "The completed PHD2 lineage has an ambiguous current/requested endpoint; same-field rebase is not authorized.");
+
+        var originOffsetX = OriginLockX - CurrentLockX;
+        var originOffsetY = OriginLockY - CurrentLockY;
+        return this with
+        {
+            GuideEpoch = guideEpoch,
+            OriginLockX = verifiedLock.X + originOffsetX,
+            OriginLockY = verifiedLock.Y + originOffsetY,
+            CurrentLockX = verifiedLock.X,
+            CurrentLockY = verifiedLock.Y,
+            RequestedLockX = verifiedLock.X,
+            RequestedLockY = verifiedLock.Y,
+            UpdatedUtc = nowUtc,
+            LastAcceptedFrameSha256 = lastFrameSha256.ToUpperInvariant(),
+            LastFramePath = Path.GetFullPath(lastFramePath),
+            LastReason = reason,
+        };
+    }
+
     public Phd2LockShiftLedger ToPlannerLedger() => new(
         LineageId,
         new Phd2Point(OriginLockX, OriginLockY),
@@ -541,6 +599,13 @@ internal sealed record Phd2LockShiftPendingState(
     private static void ValidatePoint(ICollection<string> issues, double x, double y, string label)
     {
         if (!double.IsFinite(x) || !double.IsFinite(y)) issues.Add($"{label} is non-finite.");
+    }
+
+    private static double Distance(double ax, double ay, double bx, double by)
+    {
+        var dx = ax - bx;
+        var dy = ay - by;
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 
     private static bool IsSha(string? value) => value?.Length == 64 && value.All(Uri.IsHexDigit);

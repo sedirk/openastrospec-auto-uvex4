@@ -77,7 +77,8 @@ internal sealed partial class RealObservationStageRunner
     private async Task PersistFocusBoundLocalPairAsync(ObservationContext context, QhyToG3TransferCandidate candidate, CancellationToken token)
     {
         var optical = await ReadLocalDualOpticalStateAsync(context, token).ConfigureAwait(false);
-        if (optical is null)
+        if (optical is null || candidate.PairSource == QhyG3SolvePairSource.ExposureTimedHistoricalFormalPair &&
+            !SameHash(optical.ComputeSha256(), wideFieldOpticalSha ?? string.Empty))
         {
             await WriteAuditBestEffortAsync("qhy-g3-local-candidate-focus-unavailable", new {
                 candidate.CalibrationId, ordinaryCandidateRetained = true, productionLocalModelEligible = false }).ConfigureAwait(false);

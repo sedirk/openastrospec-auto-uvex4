@@ -48,6 +48,22 @@ public sealed class Phd2FreshTargetWindowTests
     }
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void StableAmbiguityNeverBecomesMeasuredIdentityInFullOrRollingWindow(int count)
+    {
+        var window = new Phd2FreshTargetWindow(count);
+        if (count == 3) { window.Observe(true); window.Observe(true); }
+        window.Observe(false);
+        Assert.Equal(0, window.ConsecutiveFrames);
+        Assert.Equal(1, window.RejectedFrames);
+        Assert.False(window.Complete);
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+        Assert.DoesNotContain("CanContinueWithAmbiguousCandidate", source);
+        Assert.DoesNotContain("PHD2_TARGET_TEMPORAL_CONSENSUS_WARNING", source);
+    }
+
+    [Theory]
     [InlineData(true, "G3_POST_WCS_TARGET_NOT_MEASURED", true)]
     [InlineData(false, "PHD2_FRESH_TARGET_STOP_UNCONFIRMED", false)]
     public void TypedOpticalFailureSurvivesOuterPlacementBoundaryOnlyAfterCheckedStop(

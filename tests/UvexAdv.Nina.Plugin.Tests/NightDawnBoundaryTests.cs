@@ -19,6 +19,24 @@ public sealed class NightDawnBoundaryTests
         return current is > -10 and < -8 && current < AstroUtil.GetSunAltitude(now.AddMinutes(-1).UtcDateTime, site);
     });
 
+    [Fact]
+    public void TestEphemerisBoundaryRepinsCurrentNightAfterHistoricalCacheChanges()
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var astro = typeof(AstroUtil);
+        astro.GetField("DeltaUTReference", flags)!.SetValue(null, DateTime.UtcNow.Date.AddDays(-30));
+        var cache = (System.Collections.Concurrent.ConcurrentDictionary<DateTime, double>)
+            astro.GetField("DeltaUTCache", flags)!.GetValue(null)!;
+        cache[DateTime.UtcNow.Date] = double.NaN;
+        try
+        {
+            ReadOnlyNinaAstrometry.Initialize();
+            Assert.Equal(0.1, cache[DateTime.UtcNow.Date]);
+            Assert.InRange(EveningLongitude(DateTimeOffset.UtcNow), -180, 179);
+        }
+        finally { ReadOnlyNinaAstrometry.Initialize(); }
+    }
+
     [Theory]
     [InlineData("skip")]
     [InlineData("cleanup-failure")]

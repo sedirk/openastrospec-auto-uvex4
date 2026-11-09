@@ -24,10 +24,12 @@ internal static class TerminalGuideStartupRetirement
         var phd = await Phd2LockShiftPendingStore.DiscoverAsync(root, token).ConfigureAwait(false);
         if (g3.Any(x => x.State is null || x.Error is not null) || phd.Any(x => x.State is null || x.Error is not null))
             throw Rejected("GUIDE_STARTUP_EVIDENCE_UNREADABLE", "旧导星控制记录不可认证，未连接或归档。");
+        var unissuedFlip = await PreDispatchMeridianRetirement.DiscoverAsync(root, token).ConfigureAwait(false);
         var outstanding = g3.Where(x => x.State!.Phase != G3AcquisitionMotionPhase.SettledBudgetLedger)
             .Select(x => x.State!.ObservationRunId)
             .Concat(phd.Where(x => x.State!.Phase is not (Phd2LockShiftPendingPhase.SettledBudgetLedger or Phd2LockShiftPendingPhase.RetiredCancelledObservation))
-                .Select(x => x.State!.ObservationRunId)).Distinct(StringComparer.Ordinal).ToArray();
+                .Select(x => x.State!.ObservationRunId))
+            .Concat(unissuedFlip is null ? [] : new[] { unissuedFlip.Entry.RunId }).Distinct(StringComparer.Ordinal).ToArray();
         if (outstanding.Length == 0) return null;
         if (outstanding.Length != 1)
             throw Rejected("GUIDE_STARTUP_MULTIPLE_RESPONSIBILITIES", "存在多个未结导星目标；不能猜测应放弃哪一条责任。");
@@ -38,6 +40,7 @@ internal static class TerminalGuideStartupRetirement
             .ReadAsync(token).ConfigureAwait(false);
         if (manifest is null || manifest.ObservationRunId != sourceId)
             throw Rejected("GUIDE_STARTUP_MANIFEST_MISSING", "旧目标原始清单缺失或身份不一致。");
+        unissuedFlip?.ValidateSource(manifest, newRunId, current);
         if (manifest.TerminalState is not (ObservationRunState.Completed or ObservationRunState.Faulted or ObservationRunState.Cancelled) ||
             !GuideStateBoundaryRetirement.IsDifferentLogicalTarget(manifest, newRunId, current))
             return null; // Pause/resume/same logical target retain the exact old recovery route and debits.
@@ -69,7 +72,10 @@ internal static class TerminalGuideStartupRetirement
                     throw Rejected("GUIDE_STARTUP_MECHANICAL_DEBT", "仍有独立机构未结责任；导星句柄归档不能代替机械回程。");
             if (Directory.Exists(root))
                 foreach (var path in Directory.EnumerateFiles(root, "native-meridian-flip.json", SearchOption.AllDirectories))
-                    if (NativeMeridianJournalStore.PendingGate(path) is { } gate) throw new PhysicalActionGateException(gate);
+                    if (NativeMeridianJournalStore.PendingGate(path) is { } gate &&
+                        (unissuedFlip is null || !string.Equals(path, unissuedFlip.Path, StringComparison.OrdinalIgnoreCase)))
+                        throw new PhysicalActionGateException(gate);
+            if (unissuedFlip is not null) await unissuedFlip.RequireUnchangedAsync(root, manifest, ct).ConfigureAwait(false);
             await checkSafety(ct).ConfigureAwait(false);
         }
         await CheckIndependentDebt(token).ConfigureAwait(false);
@@ -78,11 +84,15 @@ internal static class TerminalGuideStartupRetirement
         GuideStateBoundaryRetirement.Validate(manifest, await readWitness(token).ConfigureAwait(false), DateTimeOffset.UtcNow);
         await captureFreshStationaryFrame(token).ConfigureAwait(false);
         await CheckIndependentDebt(token).ConfigureAwait(false);
-        return await GuideStateBoundaryRetirement.RetireAsync(root, sourceId, async ct =>
+        async Task<GuideBoundaryWitness> CheckedWitness(CancellationToken ct)
         {
             await CheckIndependentDebt(ct).ConfigureAwait(false);
             return await readWitness(ct).ConfigureAwait(false);
-        }, token).ConfigureAwait(false);
+        }
+        var archives = (await GuideStateBoundaryRetirement.RetireAsync(root, sourceId, CheckedWitness, token).ConfigureAwait(false)).ToList();
+        if (unissuedFlip is not null)
+            archives.Add(await unissuedFlip.ArchiveAsync(root, newRunId, manifest, CheckedWitness, token).ConfigureAwait(false));
+        return archives;
     }
 
     private static void RequireRunPath(string root, string path, string run, string name)

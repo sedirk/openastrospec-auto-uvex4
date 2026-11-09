@@ -68,4 +68,19 @@ public sealed class G3MeasuredHandoffPolicyTests
             Assert.Null(result.Charged);
         }
     }
+
+    [Fact]
+    public void VerifiedWaypointReservesLocalReturnButRetainsInitialRadiusAndAllHandoffDebits()
+    {
+        var original = State() with { CumulativeMotionArcseconds = 15000 };
+        var waypoint = new G3VerifiedReturnWaypoint(53, 48, 2, Start, Start,
+            "frame.fit", new('D',64), "solve.json", new('E',64), new('F',64));
+        var state = original with { VerifiedReturnWaypoint = waypoint };
+        Assert.Equal(GateDisposition.Passed, G3MeasuredHandoffPolicy.Charge(state, 9, 10000,
+            Start.AddSeconds(300), returnDistanceArcseconds: 50).Gate.Disposition);
+        Assert.NotEqual(GateDisposition.Passed, G3MeasuredHandoffPolicy.Charge(state, 9, 10000,
+            Start.AddSeconds(300)).Gate.Disposition);
+        Assert.NotEqual(GateDisposition.Passed, G3MeasuredHandoffPolicy.Charge(state, 9, 18003,
+            Start.AddSeconds(300), returnDistanceArcseconds: 50).Gate.Disposition);
+    }
 }

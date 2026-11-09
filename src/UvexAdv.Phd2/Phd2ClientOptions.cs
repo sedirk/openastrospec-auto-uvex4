@@ -46,6 +46,10 @@ public sealed class Phd2ClientOptions
     /// local PHD2 instance. Absent/failed evidence never suppresses invalidation.</summary>
     public Func<string?>? ReadConfigurationFingerprint { get; init; }
 
+    /// <summary>Optional read-only witness for expected temporary native-frame
+    /// gain changes. Full original configuration must also be restored at exit.</summary>
+    public Func<Phd2SingleFrameRequest, Func<bool>?>? CreateNativeCaptureConfigurationWitness { get; init; }
+
     internal void Validate()
     {
         if (string.IsNullOrWhiteSpace(Host))

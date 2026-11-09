@@ -86,7 +86,9 @@ app.MapGet("/api/v1/health", (QhyServiceConfigurationProof proof) => Results.Ok(
     LoopbackOnly: true,
     proof,
     DateTimeOffset.UtcNow,
-    Capabilities: [QhyControlProtocol.WideFieldStreamCapability])));
+    Capabilities: [QhyControlProtocol.OwnerIdleCapability, QhyControlProtocol.WideFieldStreamCapability])));
+app.MapGet("/api/v1/owner-idle", (QhyJobCoordinator coordinator) =>
+    Results.Ok(new QhyOwnerIdleProof(1, DateTimeOffset.UtcNow, coordinator.IsIdle)));
 app.MapGet("/api/v1/camera", (QhyJobCoordinator coordinator) => Results.Ok(coordinator.CameraStatus));
 app.MapPost("/api/v1/camera/connect", async (QhyJobCoordinator coordinator, CancellationToken cancellationToken) =>
     Results.Ok(await coordinator.ConnectCameraAsync(cancellationToken).ConfigureAwait(false)));

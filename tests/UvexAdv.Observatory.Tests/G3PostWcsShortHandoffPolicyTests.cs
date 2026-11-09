@@ -5,6 +5,26 @@ namespace UvexAdv.Observatory.Tests;
 
 public sealed class G3PostWcsShortHandoffPolicyTests
 {
+    [Theory]
+    [InlineData("G3_SEP_UNMEASURED", true)]
+    [InlineData("G3_SEP_AMBIGUOUS", true)]
+    [InlineData("G3_SHORT_REPEAT_DISAGREES", true)]
+    [InlineData("G3_SEP_PARENT_BLEND_UNRESOLVED", true)]
+    [InlineData("G3_SHORT_FRAME_REUSED", false)]
+    [InlineData("G3_SHORT_CONFIRMATION_INVALID", false)]
+    [InlineData("G3_SEP_INVALID_COVERAGE", false)]
+    [InlineData("G3_SHORT_POINTING_CHANGED", false)]
+    public void OptionalShortcutFailureMayOnlyRestoreSolverForTypedOpticalCause(string cause, bool allowed)
+    {
+        var measured = Measured(100, 100);
+        var confirmation = new G3ShortPositionConfirmationDecision(GateResult.Unknown(cause, "fixture"), null, false, false, false, 0);
+        var decision = G3PostWcsShortHandoffPolicy.Evaluate(Long, Prediction, 6, Prediction,
+            1920, 1080, 20, null, measured, confirmation, 6, false, 44, 100);
+        Assert.False(decision.Accepted);
+        Assert.Equal(allowed, G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(decision.Gate));
+        Assert.False(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(GateResult.Unknown("G3_POST_WCS_SHORT_UNCONFIRMED", "no typed optical receipt")));
+    }
+
     [Fact]
     public void PairInsideTwentyPixelWindowStillHonorsSmallerInheritedEnvelope()
     {
@@ -18,6 +38,25 @@ public sealed class G3PostWcsShortHandoffPolicyTests
         Assert.True(G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(d.Gate));
         Assert.True(G3PostWcsShortHandoffPolicy.Evaluate(core, Prediction, 5, Prediction,
             1920, 1080, 20, a, b, Confirm(a, b), 2, false, 15, 100).Accepted);
+    }
+
+    [Fact]
+    public void RecordedCompactHighSignalTrackingDriftReachesTheExistingFineHandoff()
+    {
+        var prediction = new PixelPoint(817.63, 431.41);
+        var a = Measured(833.0063440805952, 421.4257186982479);
+        var b = Measured(828.2262622156176, 421.54777232085047);
+        var core = Long with { Target = Long.Target! with { Centroid = a.Identification.Target!.Centroid } };
+        var repeat = Confirm(a, b);
+        Assert.Equal("G3_SHORT_REPEAT_CONFIRMED_WITH_TRACKING_DRIFT", repeat.Gate.Code);
+        var decision = G3PostWcsShortHandoffPolicy.Evaluate(core, prediction, 5, prediction,
+            1920, 1080, 20, a, b, repeat, 2, false, 44, 100);
+        Assert.True(repeat.Accepted);
+        Assert.True(decision.Accepted);
+        Assert.Equal("G3_POST_WCS_SHORT_HANDOFF_CONFIRMED", decision.Gate.Code);
+        Assert.Equal(1, decision.Gate.Metrics!["shortPairConfirmed"]);
+        Assert.Equal(1, decision.Gate.Metrics["currentHandoffGeometryPassed"]);
+        Assert.Equal(1, decision.Gate.Metrics["priorHandoffGeometryPassed"]);
     }
 
     [Theory]
@@ -255,6 +294,7 @@ public sealed class G3PostWcsShortHandoffPolicyTests
         Assert.False(decision.Accepted);
         Assert.False(decision.RecheckPair);
         Assert.Equal(G3PostWcsShortHandoffPolicy.OutsideCode, decision.Gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, decision.Gate.FailureScope);
         Assert.Equal(1, decision.Gate.Metrics!["shortPairConfirmed"]);
     }
 
