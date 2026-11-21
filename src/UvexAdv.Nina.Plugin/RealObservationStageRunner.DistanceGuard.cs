@@ -5,6 +5,15 @@ namespace UvexAdv.Nina.Plugin;
 
 internal sealed partial class RealObservationStageRunner
 {
+    // Use all ordinary prerequisites, including the mount's real UTC readback.
+    // A passive observation cannot dispatch a clock repair from inside its wait.
+    private async Task RequirePassivePlacementGatesAsync(ObservationContext context, CancellationToken token)
+    {
+        await CheckpointAndRejectStaleStageStackAsync(context, token).ConfigureAwait(false);
+        var gate = ValidateImmediatePhysicalActionGates(context);
+        if (gate.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(gate);
+    }
+
     private async Task<Phd2DistanceGuardEvidence?> CheckDistanceGuardAsync(ObservationContext context,
         Phd2SlitPlacementSession session, Phd2SlitPlacementCommissioning preset, Phd2IdentityValidation identity,
         Phd2ExactLockPositionResult exact, Phd2StateSnapshot before, Phd2GuidingFrameLostException loss,
@@ -29,7 +38,7 @@ internal sealed partial class RealObservationStageRunner
         return await Phd2DistanceGuardRecovery.ObserveAsync(session, preset, identity, exact, before, loss, deadline,
             (step, stamp, ct) => Task.Run(() => Phd2DistanceGuardWitness.FromLocalOwner(configuration.Phd2Host,
                 exact, step, stamp, session.LastMeasurement.Measurement.GuideStar, ct), ct), () => phd2.Snapshot,
-            ct => RequireImmediatePhysicalActionGatesAsync(context, ct), Binding,
+            ct => RequirePassivePlacementGatesAsync(context, ct), Binding,
             ct => CapturePhd2GuidingMeasurementsAsync(context, preset, session.Topology, exact.Verified,
                 session.LastMeasurement.Measurement.TargetCentroid, session.LastMeasurement.RuntimeSlitLocal,
                 session.GuideMode, Math.Max(3, session.Quality.RequiredFreshResidualsPerLockShiftStage), ct,

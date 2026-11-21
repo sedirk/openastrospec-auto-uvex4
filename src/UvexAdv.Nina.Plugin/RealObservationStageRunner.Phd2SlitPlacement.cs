@@ -2703,7 +2703,10 @@ internal sealed partial class RealObservationStageRunner
         while (measurements.Count < count && captureAttempt < maximumCaptureAttempts)
         {
             captureAttempt++;
-            await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
+            if (strictPassiveWindow)
+                await RequirePassivePlacementGatesAsync(context, cancellationToken).ConfigureAwait(false);
+            else
+                await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
             var slitFocusBefore = ReadC11MainFocusOwner();
             var slitUvexBefore = await uvex.GetStatusAsync(cancellationToken).ConfigureAwait(false);
             var frameRequest = new Phd2GuidingFrameRequest(
