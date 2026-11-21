@@ -15,7 +15,8 @@ if ($Sid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) {
 $root = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'UVEX-ADV\qhy\data\runs'))
 if ($SimulationRoot) {
     $root = [IO.Path]::GetFullPath($SimulationRoot)
-    if ([IO.Path]::GetDirectoryName($root) -ne [IO.Path]::GetTempPath().TrimEnd('\') -or
+    $canonicalTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    if ([IO.Path]::GetDirectoryName($root) -ne $canonicalTemp -or
         [IO.Path]::GetFileName($root) -notmatch '^uvex-acl-sim-[0-9a-f]{32}$') { throw 'Invalid simulation sandbox.' }
 }
 $bytes = [IO.File]::ReadAllBytes($List)
