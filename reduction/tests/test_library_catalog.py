@@ -399,11 +399,17 @@ def test_changed_header_replaces_derived_facts_but_not_manual_notes(library, tmp
     library.scan()
     file_id = library.list_files()[0]["id"]
     library.set_review(file_id, "pick", 4, "operator fact")
+    previous = frame.stat()
     with fits.open(frame, mode="update") as hdus:  # generated fixture only
         hdus[0].header["OBJECT"] = "after"
         hdus[0].header["UVEXSTG"] = "SCIENCE"
         del hdus[0].header["UVEXCID"]
-    library.scan()
+    # The incremental scan keys immutable originals by size/mtime/parser version.
+    # Both headers fit the same FITS block. Model a later revision explicitly;
+    # two writes in one hosted Windows clock tick are not a filesystem change signal.
+    os.utime(frame, ns=(previous.st_atime_ns, previous.st_mtime_ns + 2_000_000_000))
+    assert frame.stat().st_mtime_ns != previous.st_mtime_ns
+    assert library.scan()["files_parsed"] == 1
     row = library.get_file(file_id)
     assert row["target"] == "after"
     assert row["capture_id"] == ""
