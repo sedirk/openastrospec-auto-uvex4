@@ -111,4 +111,19 @@ jobs:
       - name: Pytest
         shell: pwsh
         # Hosted Windows desktop, not the operator's observing workstation.
-        run: pytest -q --run-ui-tests
+        run: pytest -q --run-ui-tests --junitxml="$env:RUNNER_TEMP/spectral-studio-tests.xml"
+
+      - name: Report failed Spectral Studio test cases
+        if: failure()
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'spectral-studio-tests.xml'
+          if (Test-Path -LiteralPath $report) {
+            [xml]$xml = Get-Content -LiteralPath $report -Raw -Encoding utf8
+            foreach ($case in $xml.SelectNodes('//testcase[failure or error]')) {
+              $detail = $case.SelectSingleNode('failure|error').GetAttribute('message')
+              $message = "$($case.classname)::$($case.name): $detail"
+              $message = $message.Substring(0, [Math]::Min(1300, $message.Length))
+              Write-Output ("::error::" + $message.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A'))
+            }
+          }
