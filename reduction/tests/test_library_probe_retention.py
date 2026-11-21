@@ -8,12 +8,14 @@ from astropy.io import fits
 import numpy as np
 import pytest
 
-from uvex_reduce.library_catalog import LibraryCatalog
+from uvex_reduce.library_catalog import LibraryCatalog, PARSER_VERSION
 from uvex_reduce.library_cleanup_execute import CleanupExecutor, confirmation_phrase, latest_file_receipt
 from uvex_reduce.library_cleanup_plan import CleanupPlanner
 from uvex_reduce.library_probe_retention import (
+    OwnerSpaceReclaimRetentionPlanner,
     ProbeRetentionPlanner,
     TargetSuccessRetentionPlanner,
+    TerminalTargetRetentionPlanner,
 )
 from uvex_reduce.library_probe_retention_watch import ProbeMetadataWatch, unrelated_metadata
 
@@ -125,6 +127,37 @@ def make_target_success_run(root, *, state="Completed", science=True,
     return paths, manifest, record
 
 
+def add_qhy_photometry_job(root, *, run_id="success", job_state="Completed",
+                           leaf_role="PHOTOMETRY-R", write_frame_index=True):
+    job = root / "qhy" / "data" / "runs" / run_id / "qhy-photometry-job"
+    raw_dir, preview_dir = job / "raw", job / "preview"
+    raw_dir.mkdir(parents=True)
+    preview_dir.mkdir(parents=True)
+    frame_id = "photo-frame"
+    raw = raw_dir / f"000001_{leaf_role}_{run_id}.fits"
+    preview = preview_dir / f"000001_{leaf_role}_{run_id}.png"
+    fits.PrimaryHDU(np.ones((8, 8), dtype=np.uint16)).writeto(raw)
+    preview.write_bytes(bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000d49444154789c6360000000020001e221bc330000000049454e44ae"
+        "426082"
+    ))
+    record = {
+        "id": "qhy-photometry-job", "observationRunId": run_id,
+        "state": job_state, "completedUtc": "2026-11-06T12:30:00+00:00",
+        "startedUtc": "2026-11-06T12:01:00+00:00",
+    }
+    (job / "manifest.json").write_text(json.dumps(record), encoding="utf-8")
+    frame = {
+        "frameId": frame_id, "sequenceNumber": 1, "role": leaf_role,
+        "fitsPath": str(raw), "previewPath": str(preview),
+        "sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+    }
+    (job / "frames.jsonl").write_text(
+        (json.dumps(frame) + "\n") if write_frame_index else "", encoding="utf-8")
+    return raw, preview, record
+
+
 def planner(tmp_path, **kwargs):
     catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
     catalog.add_root(tmp_path / "data")
@@ -137,6 +170,20 @@ def target_success_planner(tmp_path):
     catalog.add_root(tmp_path / "data")
     catalog.scan()
     return TargetSuccessRetentionPlanner(catalog, authorized=True)
+
+
+def terminal_target_planner(tmp_path, **kwargs):
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    return TerminalTargetRetentionPlanner(catalog, authorized=True, **kwargs)
+
+
+def owner_reclaim_planner(tmp_path):
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    return OwnerSpaceReclaimRetentionPlanner(catalog, authorized=True)
 
 
 def test_explicit_policy_only_rejects_and_preserves_valid_probes(tmp_path):
@@ -166,6 +213,337 @@ def test_target_success_deletes_parse_and_uncredited_trials_but_keeps_science_ph
     assert paths["science"].exists()
     assert paths["qhy-photometry-r"].exists()
     assert manifest.exists()
+    p.catalog.close()
+
+
+@pytest.mark.parametrize("state", ["Faulted", "Failed", "Cancelled"])
+def test_terminal_target_cleans_disposable_frames_after_failed_or_cancelled_target(tmp_path, state):
+    paths, manifest, _ = make_target_success_run(
+        tmp_path / "data", state=state, science=False)
+    p = terminal_target_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert selected == {
+        "bad-probe.fits", "unselected-probe.fits", "accepted-uncredited-probe.fits",
+        "g3-solve.fit", "g3-residual.fit", "qhy-acquisition.fits",
+    }
+    assert paths["qhy-photometry-r"].exists()
+    assert manifest.exists()
+    p.catalog.close()
+
+
+def test_terminal_target_keeps_science_and_credited_trial_after_failure(tmp_path):
+    paths, manifest, _ = make_target_success_run(
+        tmp_path / "data", state="Faulted", science=True)
+    p = terminal_target_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert "credited-trial.fits" not in selected
+    assert "science.fits" not in selected
+    assert "qhy-photometry-r.fits" not in selected
+    assert "bad-probe.fits" in selected
+    assert paths["credited-trial"].exists()
+    assert paths["science"].exists()
+    assert manifest.exists()
+    p.catalog.close()
+
+
+def test_terminal_target_removes_paired_qhy_acquisition_preview_not_photometry(tmp_path):
+    _, manifest, record = make_target_success_run(
+        tmp_path / "data", state="Faulted", science=False)
+    acquisition, preview, _ = add_qhy_photometry_job(
+        tmp_path / "data", leaf_role="ACQUISITION-WIDE-STREAM")
+    record["evidence"].append({
+        "kind": "qhy-acquisition-fits", "absolutePath": str(acquisition),
+        "sha256": hashlib.sha256(acquisition.read_bytes()).hexdigest(),
+        "metadata": {"observationRunId": "success"},
+    })
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+    p = terminal_target_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert acquisition.name.casefold() in selected
+    assert preview.name.casefold() in selected
+    assert not any("qhy-photometry-r" in name for name in selected)
+    p.catalog.close()
+
+
+@pytest.mark.parametrize("state", ["RunningAuto", "PausedNeedsAttention", "", None])
+def test_terminal_target_never_cleans_active_or_unknown_target(tmp_path, state):
+    make_target_success_run(tmp_path / "data", state=state, science=False)
+    p = terminal_target_planner(tmp_path)
+    assert p.preview_candidates() is None
+    p.catalog.close()
+
+
+def test_terminal_target_uses_forward_only_watermark(tmp_path):
+    make_target_success_run(tmp_path / "data", state="Faulted", science=False,
+                            planned_start="2026-11-06T12:00:00+00:00")
+    assert terminal_target_planner(tmp_path).preview_candidates()
+
+    catalog = LibraryCatalog(tmp_path / "future.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    future = TerminalTargetRetentionPlanner(
+        catalog, authorized=True,
+        not_before_utc="2026-11-06T13:00:00+00:00")
+    assert future.preview_candidates() is None
+    catalog.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle deletion")
+def test_terminal_producer_evidence_path_not_model_and_denied_item_isolated(tmp_path, monkeypatch):
+    from uvex_reduce.library_probe_retention_cli import cycle
+    from uvex_reduce.library_cleanup_execute import WindowsCleanupBackend
+    paths, manifest, record = make_target_success_run(tmp_path / "data", state="Faulted")
+    for e in record["evidence"]:
+        e["evidencePath"] = e["absolutePath"]
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+    (manifest.parent / "fit-model.json").write_text(json.dumps({
+        "observationRunId": "success", "evidencePath": str(paths["g3-residual"]),
+    }), encoding="utf-8")
+    p = terminal_target_planner(tmp_path)
+    monkeypatch.setattr(WindowsCleanupBackend, "delete_access",
+                        staticmethod(lambda path: Path(path).name != "bad-probe.fits"))
+    result = cycle(p.catalog, execute=True, policy="terminal-target")
+    assert result["status"] == "completed" and result["access_denied_count"] == 1, result
+    assert result["deleted_count"] > 0 and not paths["unselected-probe"].exists()
+    for name in ("bad-probe", "g3-residual", "credited-trial", "science", "qhy-photometry-r"):
+        assert paths[name].is_file()
+    p.catalog.close()
+
+
+def test_real_stream_alias_requires_job_index_header_and_digest(tmp_path):
+    from uvex_reduce.library_cleanup_plan import _facts
+    from uvex_reduce.library_catalog import _canonical
+    job = "12345678-1234-1234-1234-123456789abc"
+    frame = "87654321-1234-1234-1234-123456789abc"
+    d = tmp_path / "one" / ("qhy-" + job.replace("-", ""))
+    (d / "raw").mkdir(parents=True)
+    path = d / "raw/test.fits"
+    role = "ACQUISITION-WIDE-STREAM"
+    label = "Star / continuous acquisition witness"
+    hdu = fits.PrimaryHDU(np.ones((8, 8), dtype=np.uint16))
+    for k,v in {"OBJECT":label,"FRAMROLE":role,"OBS-RUN":"one","JOBID":job,"FRAMEID":frame}.items():
+        hdu.header[k] = v
+    hdu.writeto(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (d / "manifest.json").write_text(json.dumps({"id": job,"observationRunId":"one",
+        "state":"Cancelled", "completedUtc":"2026-11-20T00:00:00Z"}))
+    entry = {"frameId":frame,"fitsPath":str(path),"role":role,"sha256":digest}
+    (d / "frames.jsonl").write_text(json.dumps(entry))
+    snap = {"by_path":{},"metadata_facts":{}}
+    for i,p in enumerate((d/"manifest.json", d/"frames.jsonl")):
+        f = _facts(str(p))
+        snap["by_path"][_canonical(p)] = {**f,"id":i,"warning":"","missing":False}
+        snap["metadata_facts"][i] = f
+    warn = f"Identity conflict (target): FITS={label!r}; linked metadata='Star'; FITS identity retained"
+    row = {"target":label,"warning":warn,"path":_canonical(path),"role":role,"capture_id":frame}
+    proof = {"qhy_identity":("Star",role,job,frame),"run_id":"one","sha256":digest,"source_ids":[0,1]}
+    valid = TerminalTargetRetentionPlanner._verified_witness_alias
+    assert valid(row,proof,snap)
+    assert not valid({**row,"warning":warn+"; unrelated warning"},proof,snap)
+    assert not valid({**row,"role":"PHOTOMETRY"},proof,snap)
+    assert not valid(row,{**proof,"run_id":"other"},snap)
+    assert not valid(row,{**proof,"sha256":"0"*64},snap)
+    path.write_bytes(path.read_bytes()+b"x")
+    assert not valid(row,proof,snap)
+
+
+def test_archived_control_requires_matching_retirement_and_guards_archive(tmp_path):
+    root = tmp_path / "data"
+    make_target_success_run(root)
+    control = root / "control"
+    control.mkdir()
+    old = control / "native-meridian-flip.json"
+    entry = dict(RunId="ended", Phase="OwnersIdle", BeforeSide="pierWest", AfterSide="",
+                 UpdatedUtc="2026-11-19T16:07:18Z", Segments=["ended"], Reason="ObservedSideChange")
+    old.write_text(json.dumps(entry),encoding="utf-8")
+    p = terminal_target_planner(tmp_path)
+    archive = old.with_name(old.name + ".pre-dispatch-" + "a"*32 + ".archive")
+    old.rename(archive)
+    receipt = archive.with_name(archive.name + ".audit.json")
+    audit = dict(action="EndedPreDispatchMeridianIntentRetired",motionSent=False,Phase="OwnersIdle",
+                 oldRunId="ended",segments=["ended"],originalPath=str(old), archivePath=str(archive),
+                 originalSha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+    p.catalog.scan()
+    assert p.preview_candidates() is None
+    receipt.write_text(json.dumps(audit),encoding="utf-8")
+    p.catalog.scan()
+    plan = p.preview_candidates()
+    assert plan
+    assert {os.path.normcase(str(f)) for f in (old, archive, receipt)} <= set(plan["shared_guard_paths"])
+    archive.write_bytes(archive.read_bytes()+b" ")
+    assert not p.revalidate(plan)["valid"]
+    p.catalog.close()
+
+
+def test_terminal_guide_archive_protects_original_inputs_not_entire_target(tmp_path):
+    paths, manifest, _ = make_target_success_run(tmp_path / "data")
+    control = manifest.parent / "control"
+    control.mkdir()
+    old = control / "g3-acquisition-motion.json"
+    old.write_text(json.dumps({"state":{"observationRunId":"success",
+                                        "framePath":str(paths["g3-solve"])}}))
+    p = terminal_target_planner(tmp_path)
+    archive = old.with_name(old.name + ".terminal-" + "b"*32 + ".archive")
+    updated = json.loads(old.read_text())
+    updated["state"]["lastReason"] = (
+        "Monotonic G3 lineage aggregate adopted from 1 trustworthy durable copy/copies without counter or clock rollback.")
+    old.write_text(json.dumps(updated))
+    old.rename(archive)
+    receipt = archive.with_name(archive.name + ".audit.json")
+    receipt.write_text(json.dumps(dict(action="TerminalTargetGuideStateRetired",motionSent=False,
+        runId="success",originalPath=str(old),archivePath=str(archive),
+        originalSha256=hashlib.sha256(archive.read_bytes()).hexdigest())))
+    p.catalog.scan()
+    # Production obtains a container-run association for these transient files.
+    p.catalog.connection.execute("UPDATE files SET run_id='success' WHERE path=?",
+                                 (os.path.normcase(str(old)),))
+    p.catalog.connection.commit()
+    plan = p.preview_candidates()
+    assert plan
+    chosen = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert "bad-probe.fits" in chosen and "g3-solve.fit" not in chosen
+    assert os.path.normcase(str(archive)) in plan["shared_guard_paths"]
+    p.catalog.close()
+
+
+def test_owner_reclaim_adds_qhy_photometry_pairs_to_successful_history(tmp_path):
+    paths, manifest, record = make_target_success_run(tmp_path / "data")
+    photometry, preview, _ = add_qhy_photometry_job(tmp_path / "data")
+    record["evidence"].append({
+        "kind": "qhy-photometry-fits", "absolutePath": str(photometry),
+        "evidencePath": str(photometry),
+        "sha256": hashlib.sha256(photometry.read_bytes()).hexdigest(),
+        "metadata": {"observationRunId": "success"},
+    })
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+    (tmp_path / "data" / "success" / "evidence" / "plate-solve.json").write_text(
+        json.dumps({"observationRunId": "success", "framePath": str(photometry)}),
+        encoding="utf-8",
+    )
+    p = owner_reclaim_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert photometry.name.casefold() in selected
+    assert preview.name.casefold() in selected
+    assert {
+        "bad-probe.fits", "unselected-probe.fits", "accepted-uncredited-probe.fits",
+        "g3-solve.fit", "g3-residual.fit", "qhy-acquisition.fits",
+    } <= selected
+    for name in ("credited-trial", "science", "qhy-photometry-r"):
+        assert paths[name].exists()
+    assert manifest.exists()
+    p.catalog.close()
+
+
+def test_owner_reclaim_removes_terminal_photometry_from_failed_run_without_probe_cleanup(tmp_path):
+    paths, manifest, record = make_target_success_run(tmp_path / "data", state="Faulted", science=False)
+    record["snapshot"]["state"] = "Faulted"
+    record["terminalState"] = "Faulted"
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+    photometry, preview, _ = add_qhy_photometry_job(
+        tmp_path / "data", job_state="Faulted")
+    p = owner_reclaim_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert selected == {photometry.name.casefold(), preview.name.casefold()}
+    assert paths["bad-probe"].exists()
+    p.catalog.close()
+
+
+def test_owner_reclaim_covers_unlisted_successful_g3_led_preshots(tmp_path):
+    _, _, _ = make_target_success_run(tmp_path / "data")
+    frame = tmp_path / "data" / "success" / "evidence" / "00099-g3-slit-led-off-before-01.fit"
+    fits.PrimaryHDU(np.ones((8, 8), dtype=np.uint16)).writeto(frame)
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    catalog.connection.execute(
+        "UPDATE files SET channel='slit',role='led-off-before-01',run_id='success' WHERE path=?",
+        (os.path.normcase(str(frame)),))
+    catalog.connection.commit()
+    p = OwnerSpaceReclaimRetentionPlanner(catalog, authorized=True)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name for i in plan["items"] if i["selected"]}
+    assert frame.name in selected
+    p.catalog.close()
+
+
+def test_owner_reclaim_tolerates_target_name_warning_for_exact_qhy_pair(tmp_path):
+    _, _, record = make_target_success_run(tmp_path / "data")
+    photometry, preview, _ = add_qhy_photometry_job(tmp_path / "data")
+    record["evidence"].append({
+        "kind": "qhy-photometry-fits", "absolutePath": str(photometry),
+        "evidencePath": str(photometry),
+        "sha256": hashlib.sha256(photometry.read_bytes()).hexdigest(),
+        "metadata": {"observationRunId": "success"},
+    })
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    catalog.connection.execute(
+        "UPDATE files SET warning='Identity conflict (target)' WHERE path=?",
+        (os.path.normcase(str(photometry)),))
+    catalog.connection.commit()
+    p = OwnerSpaceReclaimRetentionPlanner(catalog, authorized=True)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert photometry.name.casefold() in selected
+    assert preview.name.casefold() in selected
+    p.catalog.close()
+
+
+def test_owner_reclaim_covers_terminal_final_frame_missing_from_frame_index(tmp_path):
+    _, _, _ = make_target_success_run(tmp_path / "data")
+    photometry, preview, _ = add_qhy_photometry_job(
+        tmp_path / "data", leaf_role="ACQUISITION-WIDE-STREAM",
+        write_frame_index=False)
+    catalog = LibraryCatalog(tmp_path / "catalog.sqlite3")
+    catalog.add_root(tmp_path / "data")
+    catalog.scan()
+    catalog.connection.execute(
+        "UPDATE files SET channel='photometry',role='ACQUISITION-WIDE-STREAM',"
+        "run_id='success' WHERE path IN (?,?)",
+        (os.path.normcase(str(photometry)), os.path.normcase(str(preview))),
+    )
+    catalog.connection.commit()
+    p = OwnerSpaceReclaimRetentionPlanner(catalog, authorized=True)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert photometry.name.casefold() in selected
+    assert preview.name.casefold() in selected
+    p.catalog.close()
+
+
+@pytest.mark.parametrize("run_state,job_state", [
+    ("RunningAuto", "Running"),
+    ("Completed", "Running"),
+    ("PausedNeedsAttention", "PausedNeedsAttention"),
+])
+def test_owner_reclaim_never_deletes_active_or_unknown_photometry(
+        tmp_path, run_state, job_state):
+    make_target_success_run(tmp_path / "data", state=run_state)
+    add_qhy_photometry_job(tmp_path / "data", job_state=job_state)
+    p = owner_reclaim_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold()
+                for i in (plan or {}).get("items", ()) if i["selected"]}
+    assert not any("photometry-r" in name for name in selected)
+    p.catalog.close()
+
+
+def test_owner_reclaim_preserves_reduction_dependency(tmp_path):
+    _, _, _ = make_target_success_run(tmp_path / "data")
+    photometry, preview, _ = add_qhy_photometry_job(tmp_path / "data")
+    (tmp_path / "data" / "saved.astroproj").write_text(
+        json.dumps({"inputs": {"photometry": [str(photometry)]}}), encoding="utf-8")
+    p = owner_reclaim_planner(tmp_path)
+    plan = p.preview_candidates()
+    selected = {Path(i["path"]).name.casefold() for i in plan["items"] if i["selected"]}
+    assert photometry.name.casefold() not in selected
+    assert preview.name.casefold() in selected
     p.catalog.close()
 
 
@@ -348,6 +726,16 @@ def test_unrelated_new_acquisition_metadata_allowed_but_partial_and_guards_defer
         watcher.changed(tmp_path, [guard.name])
 
 
+def test_selected_file_removal_is_expected_but_live_change_still_stops(tmp_path):
+    candidate = tmp_path / "selected.fits"
+    candidate.write_bytes(b"selected")
+    watcher = ProbeMetadataWatch([tmp_path], candidates=[candidate])
+    with pytest.raises(OSError):
+        watcher.changed(tmp_path, [candidate.name])
+    candidate.unlink()
+    watcher.changed(tmp_path, [candidate.name])
+
+
 def test_new_unrelated_live_run_does_not_hide_new_old_probe_reference(tmp_path):
     paths, _, _ = make_run(tmp_path / "data")
     p = planner(tmp_path)
@@ -387,6 +775,16 @@ def test_deleted_qhy_records_do_not_make_atr_disposable_or_mask_missing_atr_mani
     p.catalog.close()
 
 
+@pytest.mark.parametrize("run_id", ["UVEX-one", "0123456789abcdef0123456789abcdef"])
+def test_removed_qhy_record_accepts_current_and_legacy_run_ids(tmp_path, run_id):
+    path = tmp_path / "qhy" / "data" / "runs" / run_id / "qhy-job" / "manifest.json"
+    row = {
+        "path": os.path.normcase(str(path)), "missing": 1, "warning": "",
+        "parser_version": PARSER_VERSION,
+    }
+    assert ProbeRetentionPlanner._removed_qhy_record(row)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows change notifications and locked deletion")
 @pytest.mark.parametrize("introduce_dependency", [False, True])
 def test_physical_batch_allows_other_run_writes_but_stops_for_new_dependency(tmp_path, introduce_dependency):
@@ -424,6 +822,11 @@ def test_automatic_cli_cannot_apply_failed_history_authorization():
     ["--watch", "--policy", "target-success", "--include-failed-history",
      "--execute-permanent-target-success"],
     ["--policy", "target-success", "--execute-permanent-target-success"],
+    ["--policy", "terminal-target", "--execute-permanent-target-success"],
+    ["--policy", "terminal-target", "--execute-permanent-terminal-target"],
+    ["--watch", "--policy", "owner-space-reclaim",
+     "--execute-permanent-owner-space-reclaim"],
+    ["--policy", "owner-space-reclaim", "--execute-permanent-target-success"],
 ])
 def test_target_success_watch_requires_its_own_explicit_authorization(arguments):
     from uvex_reduce.library_probe_retention_cli import main

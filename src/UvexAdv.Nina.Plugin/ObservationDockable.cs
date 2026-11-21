@@ -292,6 +292,12 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         settings = new UvexPluginSettings(profileService);
         targetDraft = CreateNativeTargetDraft(profileService, settings);
         this.host = host;
+        DismissPreviousNightNoticeCommand = new SimpleCommand(() =>
+        {
+            PreviousNightCloseoutNotice = string.Empty;
+            RaisePropertyChanged(nameof(PreviousNightCloseoutNotice));
+            RaisePropertyChanged(nameof(HasPreviousNightNotice));
+        });
         this.realRunnerFactory = realRunnerFactory;
         this.cameraMediator = cameraMediator;
         this.imagingMediator = imagingMediator;
@@ -529,6 +535,28 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
         activeProfileService.LocaleChanged += OnLocaleChanged;
         activeProfileService.ProfileChanged += OnProfileChanged;
         ApplyDashboard(host.Dashboard);
+        if (NinaInstancePolicy.IsMaster(settings)) _ = LoadPreviousNightNoticeAsync(lifetime.Token);
+    }
+
+    private async Task LoadPreviousNightNoticeAsync(CancellationToken token)
+    {
+        var directory = host.NightJournalDirectory;
+        var now = DateTimeOffset.UtcNow;
+        var notice = await Task.Run(() => NightCloseoutHistory.ReadNotice(directory, now)).ConfigureAwait(false);
+        if (notice.Length == 0 || token.IsCancellationRequested) return;
+        void Show()
+        {
+            if (token.IsCancellationRequested || !NinaInstancePolicy.IsMaster(settings)) return;
+            PreviousNightCloseoutNotice = ObservationUiPresentation.Text(notice,
+                "The last night has no verified roof closure. Its safety standby did not survive the restart. Check the roof, stopped devices and safety monitor on site. No observation or motion is resumed.", UiCulture);
+            RaisePropertyChanged(nameof(PreviousNightCloseoutNotice));
+            RaisePropertyChanged(nameof(HasPreviousNightNotice));
+        }
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            if (!dispatcher.HasShutdownStarted) _ = dispatcher.BeginInvoke((Action)Show);
+        }
+        else Show();
     }
 
     public ICommand StartSelectedModeCommand => startSelectedModeCommand;
@@ -540,8 +568,11 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
     public ICommand ResumeCommand => resumeCommand;
     public ICommand CancelCommand => cancelCommand;
     public ICommand CloseSafetyStandbyCommand { get; private set; } = null!;
+    public ICommand DismissPreviousNightNoticeCommand { get; }
+    public string PreviousNightCloseoutNotice { get; private set; } = string.Empty;
+    public bool HasPreviousNightNotice => !string.IsNullOrEmpty(PreviousNightCloseoutNotice);
     public bool HasSafetyStandby => host.Dashboard.SafetyStandby is not null;
-    public string SafetyStandbyStatus => host.Dashboard.SafetyStandby?.Message ?? string.Empty;
+    public string SafetyStandbyStatus => host.Dashboard.SafetyStandby?.OperatorStatus ?? string.Empty;
     public bool SafetyStandbyNeedsAttention => host.Dashboard.SafetyStandby?.Phase is "MonitoringOnly" or "CloseoutFailed";
     public ICommand TakeoverCommand => takeoverCommand;
     public ICommand EnableModelAutomationBridgeCommand => enableModelAutomationBridgeCommand;
@@ -4161,7 +4192,8 @@ public sealed partial class ObservationDockable : DockableVM, IDisposable
             Workflow, MainFocus.OptionsSnapshot, dashboard.AcquisitionProgress,
             ObservationAcquisitionPresentation.Build(dashboard.AcquisitionProgress, dashboard.Run.ObservationRunId,
                 dashboard.Run.State, DateTimeOffset.UtcNow, UiCulture), dashboard.SafetyStandby,
-            settings.RealModeCommissioned, CommissioningProfileLoadStatus, commissioningValidationIssues.ToArray());
+            settings.RealModeCommissioned, CommissioningProfileLoadStatus, commissioningValidationIssues.ToArray(),
+            PreviousNightCloseoutNotice);
     }
 
     private ObservationAutomationInvocationResult InvokeAutomationCommand(

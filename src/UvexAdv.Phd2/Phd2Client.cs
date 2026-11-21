@@ -762,7 +762,7 @@ public sealed partial class Phd2Client : IPhd2Client
             {
                 throw new Phd2CaptureException(
                     $"PHD2 continuous full-frame save requires Looping or Selected with a new loop-frame event; current state is {appState}. " +
-                    "No exposure, loop, stop, or save command was sent.");
+                    "No exposure, loop, stop, or save command was sent.") { LoopReadbackConflict = Snapshot };
             }
 
             var exposureReadback = await InvokeAsync(
@@ -799,7 +799,7 @@ public sealed partial class Phd2Client : IPhd2Client
             {
                 throw new Phd2CaptureException(
                     "PHD2 did not remain in the same connected Looping epoch before save_image. " +
-                    "The caller must perform checked stop cleanup; no save was attempted.");
+                    "The caller must perform checked stop cleanup; no save was attempted.") { LoopReadbackConflict = beforeSave };
             }
 
             var saveResult = await InvokeAsync("save_image", parameters: null, cancellationToken)
@@ -818,7 +818,7 @@ public sealed partial class Phd2Client : IPhd2Client
             {
                 throw new Phd2CaptureException(
                     "PHD2 continuous loop changed while copying immutable evidence. " +
-                    "The saved frame must not authorize a subsequent action.");
+                    "The saved frame must not authorize a subsequent action.") { LoopReadbackConflict = afterSave };
             }
 
             var result = new Phd2SingleFrameResult(
@@ -827,7 +827,14 @@ public sealed partial class Phd2Client : IPhd2Client
                 RequestedParametersApplied: false,
                 DateTimeOffset.UtcNow,
                 VerifiedExposureMilliseconds: verifiedExposureMilliseconds,
-                AutomaticRetryAllowed: false);
+                AutomaticRetryAllowed: false)
+            {
+                LoopingFrameEventSequence = frameEvent.Sequence,
+                LoopingFrameObservedUtc = frameEvent.ReceivedUtc,
+                LoopingStarSample = GetOptionalInt64(frameEvent.Payload, "Frame") is > 0 and var frameNumber
+                    ? new(frameNumber, GetOptionalDouble(frameEvent.Payload, "SNR"),
+                        (int?)GetOptionalInt64(frameEvent.Payload, "ErrorCode")) : null,
+            };
             UpdateSnapshot(current => current with { LastSingleFrame = result });
             return result;
         }
@@ -2421,6 +2428,9 @@ public sealed partial class Phd2Client : IPhd2Client
         {
             EventSequence = message.Sequence,
             LastEventUtc = message.ReceivedUtc,
+            LastPreviewStarMissSequence = (message.Name is "StarLost" or "LockPositionLost" ||
+                message.Name == "LoopingExposures" && GetOptionalInt64(message.Payload, "ErrorCode") is >= 2)
+                ? message.Sequence : current.LastPreviewStarMissSequence,
             CalibrationChangeSequence = message.Name is "StartCalibration" or "CalibrationComplete" or
                 "CalibrationFailed" or "CalibrationDataFlipped"
                     ? message.Sequence : current.CalibrationChangeSequence,

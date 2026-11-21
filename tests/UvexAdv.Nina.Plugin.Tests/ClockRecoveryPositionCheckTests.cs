@@ -185,6 +185,36 @@ public sealed class ClockRecoveryPositionCheckTests
     }
 
     [Fact]
+    public void RecordedStoppedTrackingReadbackJitterUsesOnlyOneAdditionalArcsecond()
+    {
+        var before = Snapshot(Issued.AddSeconds(-30)) with
+        {
+            Mount = Snapshot(Issued).Mount with
+            {
+                RightAscensionDegrees = 45.6161525,
+                DeclinationDegrees = 38.16672083333333,
+                ReportedUtc = Issued.AddSeconds(-18.472383),
+            },
+        };
+        var after = Snapshot(Issued) with
+        {
+            Mount = Snapshot(Issued).Mount with
+            {
+                RightAscensionDegrees = 45.615318333333335,
+                DeclinationDegrees = 38.16671833333333,
+            },
+        };
+        Assert.NotNull(ClockRecoveryPositionCheck.TryCreate("original",
+            GateResult.Pass("MOUNT_CLOCK_RECOVERED_BY_NINA_RECONNECT", "verified"),
+            before, after, Issued, Deadline, 2, out _));
+
+        var beyondJitter = after with { Mount = after.Mount with { RightAscensionDegrees = after.Mount.RightAscensionDegrees - 2.0 / 3600 } };
+        Assert.Null(ClockRecoveryPositionCheck.TryCreate("original",
+            GateResult.Pass("MOUNT_CLOCK_RECOVERED_BY_NINA_RECONNECT", "verified"),
+            before, beyondJitter, Issued, Deadline, 2, out _));
+    }
+
+    [Fact]
     public void RightAscensionWrapIsComparedOnTheSphere()
     {
         var before = Snapshot(Issued.AddSeconds(-1)) with { Mount = Snapshot(Issued).Mount with { RightAscensionDegrees = 359.9999, ReportedUtc = Issued.AddSeconds(-1) } };

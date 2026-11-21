@@ -74,7 +74,13 @@ public sealed class NativeTargetBoundaryOwnershipTests
             await Assert.ThrowsAsync<InvalidOperationException>(() => host.RunNativeTargetBoundaryAsync(new object(),
                 plan.ObservationRunId, _ => Task.CompletedTask, timeout.Token));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.RunNativeTargetBoundaryAsync(owner,
-                plan.ObservationRunId, token => { host.Cancel(); token.ThrowIfCancellationRequested(); return Task.CompletedTask; }, timeout.Token));
+                plan.ObservationRunId, token =>
+                {
+                    using var failedCallback = token.Register(() => throw new NullReferenceException("native boundary cancellation callback"));
+                    Assert.Null(Record.Exception(host.Cancel));
+                    token.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                }, timeout.Token));
             Assert.NotEqual(GateDisposition.Passed, host.RealRunOwnershipGate().Disposition);
             await host.RunAsync(Plan("after-cancel"), new Fixture(), timeout.Token, owner);
         }

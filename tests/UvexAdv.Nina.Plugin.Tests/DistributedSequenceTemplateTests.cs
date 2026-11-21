@@ -31,6 +31,12 @@ public sealed class DistributedSequenceTemplateTests
     {
         yield return [TemplatePath(Full)];
         yield return [TemplatePath(Block)];
+        if (Environment.GetEnvironmentVariable("UVEX_NIGHT_START_HOME_STAGE") is { Length: > 0 } stage)
+        {
+            foreach (var candidate in new[] { "plans/front0.json", "plans/front1.json", "plans/mid0.json",
+                         "plans/later0.json", "plans/later1.json", $"templates/{Full}", $"templates/{Block}" })
+                yield return [Path.Combine(stage, candidate)];
+        }
         if (Environment.GetEnvironmentVariable("UVEX_SEQUENCE_AUDIT_DIRECTORY") is { Length: > 0 } directory)
         {
             var files = Directory.GetFiles(directory, "*.json");
@@ -49,6 +55,10 @@ public sealed class DistributedSequenceTemplateTests
             .Where(x => x["$type"]?.Value<string>()?.StartsWith(typeof(UvexTargetObservationContainer).FullName!) == true).ToArray();
         var loaded = fixture.Converter.Deserialize(json.ToString());
         var night = Night(loaded);
+        var savedHome = json.DescendantsAndSelf().OfType<JObject>().Single(x =>
+            x["$type"]?.Value<string>()?.StartsWith(typeof(UvexNightSequenceContainer).FullName!) == true)
+            .Value<bool?>("HomeMountAtNightStart") ?? false;
+        Assert.Equal(savedHome, night.HomeMountAtNightStart);
         // Native HMS/DMS round-tripping introduces sub-femtodegree floating
         // noise at 0/0 placeholders. Compare coordinates to 1e-8 degrees, while
         // keeping all non-coordinate choices exact.
@@ -84,6 +94,7 @@ public sealed class DistributedSequenceTemplateTests
         for (var pass = 0; pass < 3; pass++)
         {
             night = Night(loaded);
+            Assert.Equal(savedHome, night.HomeMountAtNightStart);
             var current = night.Items.OfType<UvexTargetObservationContainer>().Select(AuditChoices).ToArray();
             Assert.Equal(choices.Length, current.Length);
             foreach (var (expected, actual) in choices.Zip(current))
@@ -123,6 +134,18 @@ public sealed class DistributedSequenceTemplateTests
         }
         Assert.Equal(0, fixture.TelescopeCalls);
         Assert.Equal(0, fixture.ProfileWritesAfterSetup);
+    }
+
+    [Fact]
+    public void LegacyNightDoesNotInheritHomeFromAnEnabledPrototype()
+    {
+        using var fixture = new Fixture();
+        var night = Night(fixture.Load(Full));
+        Assert.True(night.HomeMountAtNightStart);
+        Assert.True(((UvexNightSequenceContainer)night.Clone()).HomeMountAtNightStart);
+        Newtonsoft.Json.JsonConvert.PopulateObject("{}", night);
+        Assert.False(night.HomeMountAtNightStart);
+        Assert.Null(night.StartHome);
     }
 
     [Fact]

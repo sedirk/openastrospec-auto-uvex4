@@ -685,7 +685,13 @@ internal sealed partial class RealObservationStageRunner
             !SameHash(proof.SolveEvidenceSha256, solve.EvidenceSha256) ||
             proof.ConfirmationPath != field.TargetIdentification.BoundShortPositionEvidencePath ||
             proof.FirstFramePath == proof.CurrentFramePath || SameHash(proof.FirstFrameSha256, proof.CurrentFrameSha256))
-            return GateResult.Unknown("G3_SPARSE_SOURCE_CHANGED", "Measured continuity lacks its independently confirmed, timely catalogue association.");
+            // This composite describes a temporary absence/staleness of the
+            // independent measured association. It is not proof that an
+            // immutable source file or extractor changed. Treating it as a
+            // run-scope integrity failure ended an otherwise valid native
+            // night after the next target's first optical miss.
+            return GateResult.TargetQuality("G3_SPARSE_MEASURED_CONTINUITY_UNCONFIRMED",
+                "Measured continuity lacks its independently confirmed, timely catalogue association; reject this target without treating the observation evidence as corrupted.");
         var now = DateTimeOffset.UtcNow;
         var temporal = G3SparseFrameTimingPolicy.Evaluate(track.Timing, now,
             G3SparseTimingPurpose.RegisteredCurrentFrame, field.TargetIdentification.CatalogPositionSpreadPixels,

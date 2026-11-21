@@ -15,7 +15,7 @@ internal sealed class NativeMeridianStageBoundary(CancellationToken parent) : ID
     {
         parent.ThrowIfCancellationRequested();
         Interrupted = true;
-        stage.Cancel();
+        NativeCancellation.Request(stage);
         stage.Token.ThrowIfCancellationRequested();
     }
 

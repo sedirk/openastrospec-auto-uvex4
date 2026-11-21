@@ -14,9 +14,14 @@ internal sealed class AdaptiveGuidingRecovery
     internal bool CalibrationConsumed { get; private set; }
     internal DateTimeOffset? StartedUtc { get; private set; }
     private int clearFrames;
+    // A usable field needs another independent exposure, not a 15 s cloud poll.
+    internal TimeSpan NextStarCheckDelay => TimeSpan.FromSeconds(clearFrames == 1 ? 1 : 15);
     private DateTimeOffset? previousFrameUtc;
     private bool actionIssued;
     private bool inPlaceCheckConsumed;
+    private bool recoveredEpochWindowConsumed;
+    internal bool TryConsumeRecoveredEpochWindow() =>
+        !recoveredEpochWindowConsumed && (recoveredEpochWindowConsumed = true);
     private readonly HashSet<(string Lineage, int Stage)> primaryStarSettles = [];
     internal bool TryConsumePrimaryStarSettle(string lineage = "legacy", int chargedStage = 1) =>
         !string.IsNullOrWhiteSpace(lineage) && chargedStage > 0 &&

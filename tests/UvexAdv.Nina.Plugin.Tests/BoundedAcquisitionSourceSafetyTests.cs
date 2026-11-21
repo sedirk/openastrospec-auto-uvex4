@@ -1321,7 +1321,8 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("configuration.G3.GhostAssistanceMode != GhostAssistanceMode.Skip", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("return null;", cachedAnalysis, StringComparison.Ordinal);
         Assert.Contains("motionPrediction", wcs, StringComparison.Ordinal);
-        Assert.Contains("AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach", wcs, StringComparison.Ordinal);
+        Assert.Contains("G3PostWcsIdentityPolicy.RequiresIndependentArrivalAstrometry(", wcs, StringComparison.Ordinal);
+        Assert.Contains("AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach && !requiresIndependentArrivalAstrometry", wcs, StringComparison.Ordinal);
         Assert.Contains("AllowUnsolvedTargetHandoff: false", wrapper, StringComparison.Ordinal);
         Assert.Contains("CaptureAndAnalyzeG3WithSolveLadderAsync", wcs, StringComparison.Ordinal);
     }
@@ -1361,14 +1362,15 @@ public sealed class BoundedAcquisitionSourceSafetyTests
         Assert.Contains("if (!UsesCatalogWcsTargetAuthority(context) &&", ladder);
         var shortSource = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Sources", "RealObservationStageRunner.ShortHandoff.cs"));
         Assert.Contains("preset.TargetSearchRadiusPixels", shortSource);
-        Assert.Contains("if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;", ladder);
-        Assert.Contains("outsideShortHandoff = confirmed;", ladder);
+        Assert.Contains("if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate, outsideShortHandoff?.Gate)) return confirmed;", ladder);
+        Assert.Contains("if (!preserveOriginalOutsideRoute) outsideShortHandoff = confirmed;", ladder);
+        Assert.Contains("var registeredCurrent = !preserveOriginalOutsideRoute", ladder);
         // A typed optical rejection must reach the already captured frame's
         // ordinary formal solver, but never buy another capture ladder. Both
         // completed solver failure and reviewed solver-transient paths exit.
         var fallback = ladder.IndexOf("failedShortShortcutNeedsExistingFrameSolve = confirmed.Gate.Code", StringComparison.Ordinal);
         Assert.True(fallback > shortFrames && fallback < solver);
-        Assert.Contains("captured.Path, probeMountBinding, outsideShortHandoff is not null", ladder);
+        Assert.Contains("outsideShortHandoff is not null || motionPrediction?.RequiresIndependentArrivalAstrometry == true", ladder);
         Assert.Equal(2, ladder.Split("if (failedShortShortcutNeedsExistingFrameSolve) break;", StringSplitOptions.None).Length - 1);
         Assert.Contains("if (solve.Result.Success && resultGate.Code != \"G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED\") return latest;", ladder);
         Assert.Contains("retainedOutsideShortHandoff = outsideShortHandoff ?? retainedOutsideShortHandoff;", ladder);

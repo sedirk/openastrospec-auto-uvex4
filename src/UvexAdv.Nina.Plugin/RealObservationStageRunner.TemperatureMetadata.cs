@@ -54,7 +54,10 @@ internal sealed partial class RealObservationStageRunner
             capture.Image.MetaData.Camera.SetPoint, configuration.Atr.TargetTemperatureC, capture.ExpectedCameraId,
             ct => ReadFreshAtrOwnerAsync(owner, capture.ExpectedCameraId, capture.Image.MetaData.Camera.Id, ct),
             ct => Task.Delay(TimeSpan.FromSeconds(1), ct), token).ConfigureAwait(false);
-        await WriteAuditBestEffortAsync("atr-post-save-temperature-readback", new { capture.CaptureToken, result,
+        var expeditedIdleChecks = atrCoolingRecovery.NotePostSaveZero(result,
+            Volatile.Read(ref atrStableTemperatureEstablished) != 0, capture.ExpectedCameraId,
+            configuration.Atr.TargetTemperatureC, DateTimeOffset.UtcNow);
+        await WriteAuditBestEffortAsync("atr-post-save-temperature-readback", new { capture.CaptureToken, result, expeditedIdleChecks,
             originalFitsUnchanged = true }).ConfigureAwait(false);
         return result.Applied ? AtrCoolingReadinessPolicy.Evaluate(result.Samples[^1], capture.ExpectedCameraId,
             configuration.Atr.TargetTemperatureC) : result.FailureGate is { Disposition: not GateDisposition.Passed } failure ? failure : cached;

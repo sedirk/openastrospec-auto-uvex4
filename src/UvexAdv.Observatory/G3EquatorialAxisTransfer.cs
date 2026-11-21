@@ -8,6 +8,27 @@ namespace UvexAdv.Observatory;
 /// </summary>
 public static class G3EquatorialAxisTransfer
 {
+    // Optical and encoder/readback declinations can differ after unverified
+    // Sync. Cap the projected command, not only the vector in the optical TAN
+    // plane. Each probe here is arithmetic only. The durable reserve is final.
+    public static double FitCommandScale(double proposed, double maximum, Func<double, double> mountDistance)
+    {
+        if (!(proposed > 0 && proposed <= 1 && double.IsFinite(maximum) && maximum > 0)) return double.NaN;
+        var full = mountDistance(proposed);
+        if (!double.IsFinite(full) || full < 0) return double.NaN;
+        if (full < maximum - .01) return proposed;
+        var lo = 0d;
+        var hi = proposed;
+        for (var i = 0; i < 24; i++)
+        {
+            var mid = (lo + hi) * .5;
+            var actual = mountDistance(mid);
+            if (!double.IsFinite(actual) || actual < 0) return double.NaN;
+            if (actual <= maximum - .01) lo = mid; else hi = mid;
+        }
+        return lo > 0 ? lo : double.NaN;
+    }
+
     public static (double RaDegrees, double DecDegrees) Apply(
         double sourceRaDegrees, double sourceDecDegrees,
         double destinationRaDegrees, double destinationDecDegrees,

@@ -808,6 +808,11 @@
               </TextBlock.Style>
             </TextBlock>
           </DockPanel>
+          <DockPanel Margin="0,4,0,0" Visibility="{Binding HasPreviousNightNotice, Converter={StaticResource ObservationBoolToVisibility}, FallbackValue=Collapsed}">
+            <Button DockPanel.Dock="Right" Content="知道了" Command="{Binding DismissPreviousNightNoticeCommand}"
+                    ToolTip="仅收起本次启动的历史提醒；不确认关顶，不操作设备。" Margin="8,0,0,0"/>
+            <TextBlock Text="{Binding PreviousNightCloseoutNotice}" TextWrapping="Wrap" Foreground="#FDA4AF"/>
+          </DockPanel>
           <WrapPanel Margin="0,4,0,0">
             <TextBlock Text="LLM 后台：" FontWeight="Bold" Foreground="#7DD3FC" />
             <TextBlock Text="{Binding ModelAutomationBridgeStatusText}" Foreground="#94A3B8" TextWrapping="Wrap" />
@@ -2322,6 +2327,9 @@
           </WrapPanel>
           <TextBlock Text="开始时间用前置的原生“等待到时间”。截止按中午到次日中午划分观测夜，启动时锁定；凌晨重试不会顺延一晚。留空仅按目标完成/晨光结束。" TextWrapping="Wrap" Margin="0,4"/>
           <TextBlock Text="普通截止在阶段/已保存帧边界停止，不截断长曝；安全事件立即停止。普通取消不发机械收口命令。" TextWrapping="Wrap" Margin="0,4"/>
+          <CheckBox IsChecked="{Binding HomeMountAtNightStart}" IsEnabled="{Binding CanEditPlan}"
+                    Content="开夜先回零（整轮一次）" AutomationProperties.Name="开夜先回零（整轮一次）" Margin="0,4"/>
+          <TextBlock Text="开顶、开盖并确认设备空闲后，首个实际目标转向前核验赤道仪零位。已经到位不再移动；换目标、翻转或续拍不重复。" TextWrapping="Wrap" Margin="0,0,0,4"/>
           <WrapPanel Margin="0,4">
             <TextBlock Text="初始导星：半径(px，0 沿用配置)" VerticalAlignment="Center"/>
             <TextBox Text="{Binding InitialGuideSettlePixels}" Width="45" Margin="4,0,10,0"/>

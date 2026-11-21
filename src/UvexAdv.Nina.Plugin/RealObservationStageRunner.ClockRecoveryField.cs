@@ -255,7 +255,7 @@ internal sealed partial class RealObservationStageRunner
             }
             finally
             {
-                window.Cancel();
+                NativeCancellation.Request(window);
                 if (failure is not null || operation is { IsCompleted: false })
                     stopFailure = await StopAndJoinAsync(operation).ConfigureAwait(false);
                 if (operation is not { IsCompleted: false } && run.startupGuidePendingOperation is not { IsCompleted: false })
@@ -366,11 +366,10 @@ internal sealed partial class RealObservationStageRunner
                 current.Identity.Phd2ProfileName != before.Identity.Phd2ProfileName ||
                 current.Identity.G3StableCameraId != before.Identity.G3StableCameraId)
                 return run.RejectClockCurrentFieldPhdOwner("新帧复核期间 PHD2/导星相机身份改变；未接管新会话。");
-            var separation = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(before.Mount.RightAscensionDegrees,
-                before.Mount.DeclinationDegrees, current.Mount.RightAscensionDegrees, current.Mount.DeclinationDegrees);
             if (current.Identity != before.Identity || !current.Stationary || current.Parked || !current.Tracking ||
                 current.Mount.PierSide != before.Mount.PierSide || current.Mount.CoordinateEpoch != before.Mount.CoordinateEpoch ||
-                !double.IsFinite(separation) || separation > MountCommandArrivalToleranceArcseconds)
+                !ClockRecoveryPositionCheck.SameStoppedPointing(
+                    before, current, MountCommandArrivalToleranceArcseconds))
                 return GateResult.Unknown("CLOCK_CURRENT_FIELD_POSITION_CHANGED", "新帧复核期间设备、镜侧或实报指向改变；不授权沿用当前位置或旧光学证据。");
             return null;
         }

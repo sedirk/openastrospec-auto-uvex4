@@ -31,7 +31,7 @@ internal sealed class StartupGuideCaptureBoundary(TimeSpan? stopTimeout = null)
         }
         finally
         {
-            cancellation.Cancel();
+            NativeCancellation.Request(cancellation);
             using var stoppedWindow = new CancellationTokenSource(timeout);
             Task<Phd2StopCaptureResult> stopped;
             try { stopped = stop(stoppedWindow.Token); }

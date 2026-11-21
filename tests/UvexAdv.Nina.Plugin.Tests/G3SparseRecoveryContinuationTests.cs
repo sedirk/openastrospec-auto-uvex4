@@ -243,7 +243,8 @@ public sealed class G3SparseRecoveryContinuationTests
         var body = source[start..end];
         var overlap = body.IndexOf("var overlapMove = G3SparseRecoveryWorkflow.PlanCorrection(", StringComparison.Ordinal);
         Assert.True(overlap > 0);
-        var scale = body.IndexOf("var scale = overlapMove.AppliedScale;", overlap, StringComparison.Ordinal);
+        var scale = body.IndexOf("G3EquatorialAxisTransfer.FitCommandScale(overlapMove.AppliedScale", overlap, StringComparison.Ordinal);
+        Assert.True(scale > overlap);
         var reserve = body.IndexOf("G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(", scale, StringComparison.Ordinal);
         var intent = body.IndexOf("Phase = G3AcquisitionMotionPhase.OutboundIntent", reserve, StringComparison.Ordinal);
         Assert.True(overlap > 0 && scale > overlap && reserve > scale && intent > reserve);

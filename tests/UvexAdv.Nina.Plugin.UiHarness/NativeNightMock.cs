@@ -7,6 +7,7 @@ public sealed class NativeNightMock
     public bool EnableRealMode { get; set; } = true;
     public bool StartMonitoring { get; set; } = true;
     public bool CanEditPlan => true;
+    public bool HomeMountAtNightStart { get; set; } = true;
     public IReadOnlyList<UvexAdv.Nina.Plugin.SequenceItems.UvexTargetObservationContainer> Items { get; } =
         [NativeTargetEditorFixture.Create("Synthetic A"), NativeTargetEditorFixture.Create("Synthetic B", 120)];
     public bool StopAtDawn { get; set; } = true;

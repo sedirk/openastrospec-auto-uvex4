@@ -2,7 +2,10 @@ using System.Text.Json;
 using System.Reflection;
 using NINA.Core.Model;
 using NINA.Equipment.Equipment.MyTelescope;
+using NINA.Equipment.Equipment.MyDome;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Equipment.Interfaces;
+using NINA.Equipment.Model;
 using UvexAdv.Observatory;
 using Xunit;
 
@@ -10,6 +13,52 @@ namespace UvexAdv.Nina.Plugin.Tests;
 
 public sealed class NightSafetyStandbyTests
 {
+    [Theory]
+    [InlineData(ShutterState.ShutterOpen)]
+    [InlineData(ShutterState.ShutterClosed)]
+    public async Task FirstConnectedRoofSnapshotMustActuallyReachStoppedTerminalState(ShutterState terminal)
+    {
+        var roof = new DomeInfo { Connected = true, DeviceId = "RRCI.Dome", ShutterStatus = (ShutterState)5 };
+        var reads = 0;
+        var gate = await RealObservationStageRunnerFactory.WaitForStandbyReadbackAsync(() =>
+        {
+            if (++reads == 3) roof.ShutterStatus = terminal;
+            return RealObservationStageRunnerFactory.CheckStandbyRoofReadback(roof, "RRCI.Dome");
+        }, default, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(1));
+        Assert.Equal(GateDisposition.Passed, gate.Disposition);
+        Assert.Equal(3, reads);
+    }
+
+    [Theory]
+    [InlineData("invalid-state")]
+    [InlineData("error")]
+    [InlineData("moving")]
+    [InlineData("wrong-owner")]
+    [InlineData("disconnected")]
+    public async Task UnknownOrChangedRoofCannotBecomeOpenJustByWaiting(string mode)
+    {
+        var roof = new DomeInfo { Connected = mode != "disconnected", DeviceId = mode == "wrong-owner" ? "other-roof" : "RRCI.Dome",
+            ShutterStatus = mode == "invalid-state" ? (ShutterState)5 : mode == "error" ? ShutterState.ShutterError : ShutterState.ShutterOpen,
+            Slewing = mode == "moving" };
+        var gate = await RealObservationStageRunnerFactory.WaitForStandbyReadbackAsync(
+            () => RealObservationStageRunnerFactory.CheckStandbyRoofReadback(roof, "RRCI.Dome"), default,
+            TimeSpan.FromMilliseconds(15), TimeSpan.FromMilliseconds(1));
+        Assert.NotEqual(GateDisposition.Passed, gate.Disposition);
+        Assert.Equal(mode == "wrong-owner" ? "NIGHT_STANDBY_ROOF_IDENTITY_CHANGED" :
+            mode == "disconnected" ? "NIGHT_STANDBY_ROOF_DISCONNECTED" : "NIGHT_STANDBY_ROOF_STATE_UNCONFIRMED", gate.Code);
+    }
+
+    [Fact]
+    public async Task SafetyOrIdentityFailureIsNeverRetriedAsInitialConnectionReadback()
+    {
+        var reads = 0;
+        var gate = await RealObservationStageRunnerFactory.WaitForStandbyReadbackAsync(() =>
+        { reads++; return GateResult.Unknown("NIGHT_SAFETY_UNAVAILABLE", "unsafe"); }, default);
+        Assert.Equal(1, reads); Assert.Equal("NIGHT_SAFETY_UNAVAILABLE", gate.Code);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RealObservationStageRunnerFactory.WaitForStandbyReadbackAsync(
+            () => GateResult.Unknown("NIGHT_STANDBY_ROOF_STATE_UNCONFIRMED", "unknown"), new CancellationToken(true)));
+    }
+
     [Theory]
     [InlineData("dawn")]
     [InlineData("deadline")]
@@ -49,6 +98,35 @@ public sealed class NightSafetyStandbyTests
         Assert.Equal(1, f.Closes);
     }
 
+    [Theory]
+    [InlineData(false, false)] [InlineData(false, true)] [InlineData(true, false)]
+    public async Task WindowsPendingDuringStandbyClosesOnceOrRetainsTheAlarm(bool monitoringOnly, bool fails)
+    {
+        using var f = new Fixture();
+        using var reservation = await f.Reserve();
+        var pending = 0; var closes = 0;
+        var probe = WindowsRestartProtectionTests.Probe(() => Volatile.Read(ref pending) == 0 ? UpdateRestartState.NotRequired : UpdateRestartState.Required);
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            MonitoringOnly = monitoringOnly, StopGate = probe.PollGate, RestartCloseout = _ =>
+            { Interlocked.Increment(ref closes); return Task.FromResult<IReadOnlyList<string>>(fails ? ["missing readback"] : []); }
+        });
+        await probe.ReadAsync(default, true); Assert.Null(probe.PollGate());
+        Volatile.Write(ref pending, 1); await probe.ReadAsync(default, true);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (guard.Snapshot.Reason != WindowsRestartProbe.Code && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Assert.Equal(WindowsRestartProbe.Code, guard.Snapshot.Reason);
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(monitoringOnly ? "MonitoringOnly" : fails ? "CloseoutFailed" : "Closed", guard.Snapshot.Phase);
+        Assert.Equal(monitoringOnly ? 0 : 1, closes); Assert.Equal(0, f.Closes);
+        if (guard.Snapshot.IsActive)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+            guard.RequestCloseout(); Assert.Equal(monitoringOnly ? 0 : 1, closes);
+        }
+        f.Host.Dispose(); await guard.LifetimeCompletion.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
     [Fact]
     public async Task FailedConnectionBoundaryCanBeRecheckedOnlyOnExplicitNewNight()
     {
@@ -59,12 +137,21 @@ public sealed class NightSafetyStandbyTests
         var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
         {
             CanHandOver = false,
-            RecheckIdle = _ => { checks++; return Task.FromResult(idle); }
+            MonitoringOnly = true,
+            RecheckIdle = _ => { checks++; return Task.FromResult(idle
+                ? GateResult.Pass("IDLE", "Synthetic stopped owners")
+                : GateResult.Unknown("NIGHT_STANDBY_ATR_DISCONNECTED", "ATR 未连接；请连接原设备后重试，不需要重启。")); }
         });
         Assert.Equal(0, checks); // Guardian itself never starts recovery.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        Assert.Contains("NIGHT_STANDBY_ATR_DISCONNECTED", refusal.Message);
+        Assert.Contains("不需要重启", refusal.Message);
+        Assert.Equal("NIGHT_STANDBY_ATR_DISCONNECTED", guard.Snapshot.LastHandoverGate?.Code);
+        using (var failedCheck = JsonDocument.Parse(await File.ReadAllTextAsync(guard.Snapshot.JournalPath)))
+            Assert.Equal("NIGHT_STANDBY_ATR_DISCONNECTED", failedCheck.RootElement.GetProperty("current")
+                .GetProperty("LastHandoverGate").GetProperty("Code").GetString());
         Assert.Equal(1, checks);
-        Assert.Equal("Waiting", guard.Snapshot.Phase);
+        Assert.Equal("MonitoringOnly", guard.Snapshot.Phase);
         idle = true;
         using var next = await f.Host.ReserveNightAsync(new object(), false, default,
             () => f.Watch(() => { }), "config");
@@ -92,7 +179,7 @@ public sealed class NightSafetyStandbyTests
         {
             CanHandOver = false,
             RecheckIdle = reason == "missing-proof" ? null : _ =>
-            { checks++; if (reason == "read-error") throw new IOException("offline"); return Task.FromResult(true); }
+            { checks++; if (reason == "read-error") throw new IOException("offline"); return Task.FromResult(GateResult.Pass("IDLE", "Synthetic")); }
         });
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Host.ReserveNightAsync(new object(),
             reason == "real", default, () => f.Watch(() => { }), reason == "config" ? "changed" : "config"));
@@ -102,9 +189,11 @@ public sealed class NightSafetyStandbyTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SafetyOrCancellationDuringRecheckCannotCommitTransfer(bool cancel)
+    [InlineData("cancel")]
+    [InlineData("NIGHT_UNSAFE")]
+    [InlineData("NIGHT_DEADLINE_REACHED")]
+    [InlineData("NIGHT_DAWN_REACHED")]
+    public async Task SafetyOrCancellationDuringRecheckCannotCommitTransfer(string reason)
     {
         using var f = new Fixture();
         using var old = await f.Reserve();
@@ -114,9 +203,9 @@ public sealed class NightSafetyStandbyTests
             CanHandOver = false,
             RecheckIdle = _ =>
             {
-                if (cancel) cts.Cancel();
-                else f.Stop = GateResult.Unknown("NIGHT_UNSAFE", "Changed during idle check");
-                return Task.FromResult(true);
+                if (reason == "cancel") cts.Cancel();
+                else f.Stop = GateResult.Unknown(reason, "Changed during idle check");
+                return Task.FromResult(GateResult.Pass("IDLE", "Synthetic"));
             }
         });
         var watches = 0;
@@ -124,6 +213,81 @@ public sealed class NightSafetyStandbyTests
             () => { watches++; return f.Watch(() => { }); }, "config"));
         Assert.Equal(0, watches);
         Assert.NotEqual("Transferred", guard.Snapshot.Phase);
+    }
+
+    [Fact]
+    public async Task ConcurrentRejectedRechecksKeepOneValidJournalAndOriginalProtection()
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false, MonitoringOnly = true,
+            RecheckIdle = async _ =>
+            {
+                await Task.Yield();
+                return GateResult.Unknown("NIGHT_STANDBY_ATR_DISCONNECTED", "Recorded disconnected ATR; no hardware");
+            },
+        });
+        await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => guard.RecheckIdleAsync(false, "config", default)));
+        Assert.Equal("MonitoringOnly", guard.Snapshot.Phase);
+        Assert.Null(guard.Snapshot.Errors);
+        Assert.Equal(1, f.Watches); Assert.Equal(0, f.Closes);
+        using var journal = JsonDocument.Parse(await File.ReadAllTextAsync(guard.Snapshot.JournalPath));
+        Assert.Equal("NIGHT_STANDBY_ATR_DISCONNECTED", journal.RootElement.GetProperty("current")
+            .GetProperty("LastHandoverGate").GetProperty("Code").GetString());
+    }
+
+    [Theory]
+    [InlineData("NIGHT_SAFETY_UNAVAILABLE")]
+    [InlineData("NIGHT_UNSAFE")]
+    [InlineData("NIGHT_DAWN_REACHED")]
+    [InlineData("NIGHT_DEADLINE_REACHED")]
+    public async Task PolledSafetyStopInMonitorOnlyRemainsLatchedAfterReadbackBecomesSafe(string reason)
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false, MonitoringOnly = true,
+            RecheckIdle = _ => Task.FromResult(GateResult.Pass("IDLE", "Synthetic same-owner stopped readback")),
+        });
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        var deadline = guard.Snapshot.DeadlineUtc;
+        f.Stop = GateResult.Unknown(reason, "Synthetic polling-only stop: no unsafe event");
+        Assert.False(guard.RequestCloseout()); // Only wakes diagnostics; it grants no action.
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (guard.Snapshot.LatestSafetyReason != reason) await Task.Delay(5, limit.Token);
+        f.Stop = null;
+        guard.RequestCloseout();
+        while (guard.Snapshot.LatestSafetyReason is not null) await Task.Delay(5, limit.Token);
+        Assert.Equal(reason, guard.Snapshot.Reason);
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reserve());
+        Assert.Contains("NIGHT_STANDBY_CLOSEOUT_LATCHED", refused.Message);
+        Assert.Contains(reason, refused.Message);
+        Assert.Equal(deadline, guard.Snapshot.DeadlineUtc);
+        Assert.Equal("MonitoringOnly", guard.Snapshot.Phase);
+        Assert.Equal(0, f.Closes); Assert.Equal(1, f.Watches);
+    }
+
+    [Fact]
+    public async Task UnavailableOperatorCloseoutDoesNotPoisonExplicitFreshIdleRetry()
+    {
+        using var f = new Fixture();
+        using var old = await f.Reserve();
+        var guard = await f.Host.BeginSafetyStandbyAsync(f.Owner, f.Request with
+        {
+            CanHandOver = false, MonitoringOnly = true,
+            RecheckIdle = _ => Task.FromResult(GateResult.Pass("IDLE", "Synthetic same-owner stopped readback")),
+        });
+        await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(f.Host.RequestSafetyStandbyCloseout());
+        Assert.Null(guard.Snapshot.Reason);
+        using var next = await f.Host.ReserveNightAsync(new object(), false, default,
+            () => f.Watch(() => { }), "config");
+        await guard.LifetimeCompletion.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("Transferred", guard.Snapshot.Phase);
+        Assert.Equal(0, f.Closes); Assert.Equal(1, f.Watches);
     }
 
     [Theory]

@@ -11,9 +11,13 @@ public static class G3PostWcsShortHandoffPolicy
     // Routing only. An optional short-position shortcut must not suppress the
     // normal formal solve of the already captured long frame. Only enumerated
     // optical failures may fall back; identity/stop/hash/geometry failures may not.
-    public static bool NeedsSameFrameCoarseSolve(GateResult gate) =>
+    public static bool NeedsSameFrameCoarseSolve(GateResult gate, GateResult? existingLongFrameRoute = null) =>
         gate.Disposition != GateDisposition.Passed &&
-        (gate.Code == OutsideCode && gate.Metrics?.GetValueOrDefault("confirmedPairCoarseSolveEligible") == 1 ||
+        (gate.Code == OutsideCode && (gate.Metrics?.GetValueOrDefault("confirmedPairCoarseSolveEligible") == 1 ||
+            // The two shorts may agree just outside the recognition fence. That
+            // rules out using their coordinates, NOT solving the original image.
+            existingLongFrameRoute is { Code: G3PostWcsMeasuredHandoffPolicy.OutsideRemainingCode, FailureScope: GateFailureScope.TargetQuality } &&
+            gate.Metrics?.GetValueOrDefault("shortPairConfirmed") == 1) ||
          gate.Code == "G3_POST_WCS_SHORT_UNCONFIRMED" && gate.Metrics?.GetValueOrDefault("shortOpticalFailureAllowsExistingFrameSolve") == 1);
 
     public static G3PostWcsShortHandoffDecision Evaluate(

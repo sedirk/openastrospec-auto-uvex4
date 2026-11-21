@@ -5,6 +5,24 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3EquatorialAxisTransferTests
 {
     [Fact]
+    public void November20ProjectedMountStepShrinksWithoutMovingOrExpandingAnOverlapCap()
+    {
+        double Spherical(double scale)
+        {
+            var dst = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(358, 21, 782.12 * scale, 0);
+            var cmd = G3EquatorialAxisTransfer.Apply(358, 21, dst.RaDegrees, dst.DecDegrees, .7, 18);
+            return G3AcquisitionMotionPlanner.AngularSeparationArcseconds(.7, 18, cmd.RaDegrees, cmd.DecDegrees);
+        }
+        var proposed = 308 / 782.12;
+        Assert.True(Spherical(proposed) > 308);
+        var fitted = G3EquatorialAxisTransfer.FitCommandScale(proposed, 308, Spherical);
+        Assert.InRange(fitted, 0, proposed);
+        Assert.InRange(Spherical(fitted), 307.9, 308);
+        Assert.Equal(.1, G3EquatorialAxisTransfer.FitCommandScale(.1, 308, Spherical));
+        Assert.True(double.IsNaN(G3EquatorialAxisTransfer.FitCommandScale(proposed, 308, _ => double.NaN)));
+    }
+
+    [Fact]
     public void DeclinationReadbackBiasDoesNotRescaleTheRaAxisCorrection()
     {
         var actual = G3EquatorialAxisTransfer.Apply(308.7439, 44.8640, 310.3807, 45.2696, 312.6, 45.9);

@@ -44,6 +44,27 @@ public sealed class NativeMeridianFlipTests
     }
 
     [Fact]
+    public void CompletedClockContinuationConsumesTheOnlyAdditionalSegmentSlot()
+    {
+        var session = new NativeMeridianSession(new(2, 4, 120), _ => true);
+
+        Assert.Null(session.HandoffCapacityGate(currentSegmentRecorded: false));
+        session.RecordSegment("clock-continuation", 0, 0, 0, 0);
+
+        var beforeCurrentSegmentRecorded =
+            session.HandoffCapacityGate(currentSegmentRecorded: false);
+        Assert.Equal("NATIVE_MERIDIAN_SEGMENT_BUDGET_EXHAUSTED", beforeCurrentSegmentRecorded?.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, beforeCurrentSegmentRecorded?.FailureScope);
+        Assert.True(NativeSequencePlan.IsSkippableQualityFailure(beforeCurrentSegmentRecorded));
+
+        // Once the second in-flight segment is recorded, appending the segment
+        // that the requested handoff would create is independently rejected.
+        session.RecordSegment("second-current-segment", 0, 0, 0, 0);
+        Assert.Equal("NATIVE_MERIDIAN_SEGMENT_BUDGET_EXHAUSTED",
+            session.HandoffCapacityGate(currentSegmentRecorded: true)?.Code);
+    }
+
+    [Fact]
     public void OrdinaryFailureCannotManufactureScheduledHandoffButActualChangeStillInvalidatesOldVectors()
     {
         var calls = 0;

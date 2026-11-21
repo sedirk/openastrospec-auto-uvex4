@@ -43,6 +43,12 @@ internal sealed partial class RealObservationStageRunner
     {
         if (commissioning is null)
             return GateResult.Unknown("COMMISSIONING_PRESET_REQUIRED", "Commissioning is unavailable while validating a G3 field mount binding.");
+        if (field.SparseGuideAncestry is { } ancestry)
+        {
+            var integrity = await ancestry.VerifyAsync(field.MountBinding, phd2.Snapshot.ConnectionEpoch,
+                ComputeFileSha256Async, cancellationToken).ConfigureAwait(false);
+            if (integrity.Disposition != GateDisposition.Passed) return integrity;
+        }
         if (field.Solve is { IsFormal: false } inferred)
         {
             if (inferred.Authority == "LocalDualOpticsPrediction")

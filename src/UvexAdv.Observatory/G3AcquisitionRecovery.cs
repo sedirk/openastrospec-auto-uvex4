@@ -615,6 +615,18 @@ public static class G3AcquisitionMotionPlanner
         };
     }
 
+    // The lineage origin bounds the physical radius; ADR-0051's attested
+    // return waypoint (or that origin if none exists) bounds the return route.
+    public static int ReservedSearchReturnMoves(G3AcquisitionMotionState state, double ra, double dec,
+        double endpointAllowance)
+    {
+        var distance = AngularSeparationArcseconds(state.ReturnRaDegrees, state.ReturnDeclinationDegrees, ra, dec);
+        var progress = state.MaximumSingleCorrectionArcseconds - 2 * state.ArrivalToleranceArcseconds;
+        var count = Math.Ceiling((distance + endpointAllowance) / progress);
+        return double.IsFinite(endpointAllowance) && endpointAllowance >= 0 && double.IsFinite(progress) &&
+            progress > 0 && double.IsFinite(count) && count >= 0 && count < int.MaxValue ? (int)count : int.MaxValue;
+    }
+
     public static G3AcquisitionMotionReserve ValidateOutboundAndReturnReserve(
         G3AcquisitionMotionState state,
         double nextRaTangentOffsetArcseconds,
@@ -657,11 +669,11 @@ public static class G3AcquisitionMotionPlanner
         var maximumCommandArcseconds = state.MaximumSingleCorrectionArcseconds - state.ArrivalToleranceArcseconds;
         if (!double.IsFinite(move) || move <= 0 || move > maximumCommandArcseconds + 1e-9)
         {
-            return BlockReserve("G3_MOTION_SINGLE_LIMIT", "The proposed outbound command plus its allowed arrival error exceeds the single-motion limit.", move, radius);
+            return BlockReserve("G3_MOTION_SINGLE_LIMIT", "The proposed outbound command plus its allowed arrival error exceeds the single-motion limit.", move, radius, targetBudget: true);
         }
         if (radius > state.MaximumRadiusArcseconds + 1e-9)
         {
-            return BlockReserve("G3_MOTION_RADIUS_LIMIT", "The proposed outbound endpoint exceeds the declared radius.", move, radius);
+            return BlockReserve("G3_MOTION_RADIUS_LIMIT", "The proposed outbound endpoint exceeds the declared radius.", move, radius, targetBudget: true);
         }
         // A physical endpoint may lie one full arrival tolerance in the
         // radially wrong direction. The guaranteed progress of a maximum
@@ -934,7 +946,8 @@ public static class G3AcquisitionMotionPlanner
                 "G3_MOTION_SPHERICAL_SINGLE_LIMIT",
                 "The fresh reported-to-commanded spherical distance exceeds the reserved-plus-arrival or single-command limit.",
                 commandDistance,
-                endpointRadius);
+                endpointRadius,
+                targetBudget: true);
         }
         if (endpointRadius > state.MaximumRadiusArcseconds + state.ArrivalToleranceArcseconds + 1e-6)
         {
@@ -942,7 +955,8 @@ public static class G3AcquisitionMotionPlanner
                 "G3_MOTION_SPHERICAL_RADIUS_LIMIT",
                 "The commanded coordinate is outside the durable origin radius after allowing one arrival tolerance.",
                 commandDistance,
-                endpointRadius);
+                endpointRadius,
+                targetBudget: true);
         }
         return new G3SphericalCommandValidation(
             GateResult.Pass(
@@ -1039,8 +1053,10 @@ public static class G3AcquisitionMotionPlanner
         string code,
         string message,
         double commandDistance = double.NaN,
-        double endpointRadius = double.NaN) =>
-        new(GateResult.Unknown(code, message), commandDistance, endpointRadius);
+        double endpointRadius = double.NaN,
+        bool targetBudget = false) =>
+        new(targetBudget ? GateResult.TargetQuality(code, message) : GateResult.Unknown(code, message),
+            commandDistance, endpointRadius);
 }
 
 public sealed record G3AcquisitionMotionLoadResult(G3AcquisitionMotionState? State, string? Error);
@@ -1193,22 +1209,20 @@ public static class G3AcquisitionMotionStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(observationsRoot);
         var root = Path.GetFullPath(observationsRoot);
-        if (!Directory.Exists(root)) return Array.Empty<G3AcquisitionMotionFileResult>();
-        string[] runDirectories;
+        IReadOnlyList<string> paths;
         try
         {
-            runDirectories = Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly);
+            paths = await PendingLedgerFileDiscovery.FindRunControlFilesAsync(root,
+                "g3-acquisition-motion.json", cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return [new G3AcquisitionMotionFileResult(root, null, ex.Message)];
         }
         var results = new List<G3AcquisitionMotionFileResult>();
-        foreach (var runDirectory in runDirectories.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        foreach (var path in paths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.Combine(runDirectory, "control", "g3-acquisition-motion.json");
-            if (!File.Exists(path)) continue;
             var loaded = await LoadAsync(path, cancellationToken).ConfigureAwait(false);
             results.Add(new G3AcquisitionMotionFileResult(Path.GetFullPath(path), loaded.State, loaded.Error));
         }

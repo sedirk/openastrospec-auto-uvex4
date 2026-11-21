@@ -7,6 +7,24 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class G3AcquisitionRecoveryTests
 {
     [Fact]
+    public void November20NeighbourReturnUsesLastVerifiedPointButOriginStillBoundsRadius()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var start = State(now) with { OriginRaDegrees = 0, OriginDeclinationDegrees = 0,
+            MaximumSingleCorrectionArcseconds = 310, ArrivalToleranceArcseconds = 2 };
+        var destination = (10400d + 119.42) / 3600;
+        var point = new G3VerifiedReturnWaypoint(10400d / 3600, 0, 4, now, now, "frame", new string('A',64),
+            "solve", new string('B',64), new string('C',64));
+        Assert.Equal(35, G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(start, destination, 0, 5));
+        var moved = start with { VerifiedReturnWaypoint = point };
+        Assert.Equal(1, G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(moved, destination, 0, 5));
+        Assert.Equal(1, G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(moved, destination + 4d/3600, 0, 0));
+        Assert.Equal(int.MaxValue, G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(moved, double.NaN, 0, 5));
+        Assert.Equal(int.MaxValue, G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(moved, destination, 0, -5));
+        Assert.Equal(start.OriginRaDegrees, moved.OriginRaDegrees);
+    }
+
+    [Fact]
     public void StableNearOriginToleranceIsWiderThanStrictBindingButCappedByFreshSolveLimit()
     {
         var state = State(DateTimeOffset.UtcNow) with { ArrivalToleranceArcseconds = 2 };
@@ -159,6 +177,59 @@ public sealed class G3AcquisitionRecoveryTests
 
         Assert.Equal(GateDisposition.Passed, reserve.Gate.Disposition);
         Assert.Equal(3, reserve.ReservedReturnMoves);
+    }
+
+    [Theory]
+    [InlineData(0, 40, 100, "G3_MOTION_SINGLE_LIMIT")]
+    [InlineData(135, 145, 100, "G3_MOTION_RADIUS_LIMIT")]
+    public void OutboundTargetEnvelopeExhaustionIsTargetQualityNotNightFailure(
+        double currentRaArcseconds, double proposedRaArcseconds, double maximumRadiusArcseconds, string code)
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        var state = State(started) with
+        {
+            CurrentRaTangentOffsetArcseconds = currentRaArcseconds,
+            MaximumSingleCorrectionArcseconds = 30,
+            ArrivalToleranceArcseconds = 2,
+            MaximumRadiusArcseconds = maximumRadiusArcseconds,
+            MaximumCumulativeMotionArcseconds = 500,
+            MaximumCorrectionAttempts = 20,
+        };
+
+        var reserve = G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(
+            state, proposedRaArcseconds, 0, started);
+
+        Assert.Equal(code, reserve.Gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, reserve.Gate.FailureScope);
+    }
+
+    [Theory]
+    [InlineData(40, 0, 100, "G3_MOTION_SPHERICAL_SINGLE_LIMIT")]
+    [InlineData(135, 145, 100, "G3_MOTION_SPHERICAL_RADIUS_LIMIT")]
+    public void FreshReadbackOutboundEnvelopeExhaustionIsTargetQuality(
+        double currentRaArcseconds, double commandedRaArcseconds, double maximumRadiusArcseconds, string code)
+    {
+        var started = DateTimeOffset.Parse("2026-08-19T00:00:00Z");
+        var state = State(started) with
+        {
+            CurrentRaTangentOffsetArcseconds = currentRaArcseconds,
+            MaximumSingleCorrectionArcseconds = 30,
+            ArrivalToleranceArcseconds = 2,
+            MaximumRadiusArcseconds = maximumRadiusArcseconds,
+            MaximumCumulativeMotionArcseconds = 500,
+            MaximumCorrectionAttempts = 20,
+        };
+        var reported = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees, state.OriginDeclinationDegrees, currentRaArcseconds, 0);
+        var commanded = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees, state.OriginDeclinationDegrees, commandedRaArcseconds, 0);
+
+        var validation = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
+            state, reported.RaDegrees, reported.DecDegrees,
+            commanded.RaDegrees, commanded.DecDegrees, 10);
+
+        Assert.Equal(code, validation.Gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, validation.Gate.FailureScope);
     }
 
     [Fact]

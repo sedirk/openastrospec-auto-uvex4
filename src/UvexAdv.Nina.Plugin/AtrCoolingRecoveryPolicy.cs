@@ -11,10 +11,36 @@ internal sealed class AtrCoolingRecoveryPolicy
     internal static readonly TimeSpan StalledInterval = TimeSpan.FromMinutes(2);
     private DateTimeOffset? unchangedSince;
     private double anchor = double.NaN;
+    private DateTimeOffset? postSaveZeroUtc;
+    private double confirmedTarget = double.NaN;
     internal int ActionsUsed { get; private set; }
+
+    // A camera already stable BEFORE the shutter and six independent exact-owner
+    // zeros after save is not routine cooldown. Expedite the same two idle-only
+    // recovery actions; this never approves the saved frame or grants a new exposure.
+    internal bool NotePostSaveZero(AtrTemperatureConfirmation result, bool wasStable, string owner,
+        double target, DateTimeOffset now)
+    {
+        if (!wasStable || target >= -AtrCoolingReadinessPolicy.TemperatureToleranceC ||
+            result is not { Applied: false, OriginalTemperatureC: 0, Code: "OWNER_TEMPERATURE_READBACK_UNCONFIRMED" } ||
+            result.Samples.Count != AtrTemperatureMetadataConfirmation.MaximumReads ||
+            !result.Samples.All(s => s.TemperatureC == 0 && s.CoolerPowerPercent is > 0 and <= 100 &&
+                AtrCoolingReadinessPolicy.Evaluate(s, owner, target).Code == "ATR_PRECOOLING_IN_PROGRESS"))
+            return false;
+        confirmedTarget = target;
+        postSaveZeroUtc = now;
+        unchangedSince = now;
+        anchor = 0;
+        return true;
+    }
 
     internal AtrCoolingRecoveryAction Observe(GateResult readiness, DateTimeOffset now)
     {
+        if (readiness.Code != "ATR_PRECOOLING_IN_PROGRESS" || readiness.Metrics is not { } m ||
+            m.GetValueOrDefault("temperatureC", double.NaN) != 0 ||
+            m.GetValueOrDefault("targetTemperatureC", double.NaN) != confirmedTarget ||
+            now < postSaveZeroUtc || now - postSaveZeroUtc > TimeSpan.FromMinutes(1))
+            postSaveZeroUtc = null;
         if (readiness.Disposition == GateDisposition.Passed)
         {
             unchangedSince = null;
@@ -34,7 +60,8 @@ internal sealed class AtrCoolingRecoveryPolicy
             anchor = temperature;
             return AtrCoolingRecoveryAction.Wait;
         }
-        if (now - unchangedSince < StalledInterval) return AtrCoolingRecoveryAction.Wait;
+        if (now - unchangedSince < (postSaveZeroUtc.HasValue && ActionsUsed < 2 ? TimeSpan.FromSeconds(15) : StalledInterval))
+            return AtrCoolingRecoveryAction.Wait;
         unchangedSince = now;
         return ++ActionsUsed switch
         {

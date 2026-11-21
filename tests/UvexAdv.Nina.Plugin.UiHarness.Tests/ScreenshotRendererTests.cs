@@ -114,6 +114,14 @@ public sealed class ScreenshotRendererTests
         Assert.Contains(result.VisibleTexts, x => x.Contains("独立安全待机", StringComparison.Ordinal));
         Assert.Contains(result.VisibleTexts, x => x.Contains("未自动续跑", StringComparison.Ordinal));
     }
+    [Fact]
+    public void RestartHistoryWarnsWithoutOfferingLiveStandbyControls()
+    {
+        var result = RenderPhotometry("previous-night-unconfirmed");
+        Assert.Contains("知道了", result.VisibleTexts);
+        Assert.Contains(result.VisibleTexts, x => x.Contains("不能证明已关顶", StringComparison.Ordinal));
+        Assert.DoesNotContain("安全待机关顶收口", result.VisibleTexts);
+    }
     [Theory]
     [InlineData("native-night")]
     [InlineData("native-night-narrow")]

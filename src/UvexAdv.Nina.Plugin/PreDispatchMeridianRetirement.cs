@@ -30,8 +30,8 @@ internal sealed record PreDispatchMeridianRetirement(string Path, byte[] Bytes, 
             if (entry is not { Phase: "OwnersIdle" or "WaitingForMeridian", BeforeSide: "pierEast" or "pierWest", AfterSide: "" } ||
                 entry.Reason is not ("Scheduled" or "ObservedSideChange") ||
                 entry.Phase == "WaitingForMeridian" && entry.Reason != "Scheduled" ||
-                string.IsNullOrWhiteSpace(entry.RunId) || System.IO.Path.GetFileName(entry.RunId) != entry.RunId || entry.RunId is "." or ".." ||
-                entry.Segments is not { Count: 1 } || entry.Segments[0] != entry.RunId ||
+                !IsSafeRunId(entry.RunId) ||
+                !HasAuthenticatedSegmentShape(entry) ||
                 entry.UpdatedUtc == default || entry.UpdatedUtc > DateTimeOffset.UtcNow)
                 throw new PhysicalActionGateException(gate);
             result = new(path, bytes, entry);
@@ -41,13 +41,17 @@ internal sealed record PreDispatchMeridianRetirement(string Path, byte[] Bytes, 
 
     internal void ValidateSource(ObservationRunManifest manifest, string newRunId, ObservationRunLockedMetadata current)
     {
-        if (manifest.ObservationRunId != Entry.RunId || manifest.TerminalState != ObservationRunState.Completed ||
+        var rootRunId = Entry.Segments[0];
+        var priorSegments = Entry.Segments.Take(Entry.Segments.Count - 1).ToArray();
+        if (!HasAuthenticatedSegmentShape(Entry) ||
+            manifest.ObservationRunId != Entry.RunId || manifest.TerminalState != ObservationRunState.Completed ||
             manifest.Snapshot.State != ObservationRunState.Completed ||
-            manifest.LockedMetadata.Labels?.GetValueOrDefault("nativeTargetRootRunId") != Entry.RunId ||
+            manifest.LockedMetadata.Labels?.GetValueOrDefault("nativeTargetRootRunId") != rootRunId ||
+            !PriorSegmentsMatch(manifest.LockedMetadata.Labels?.GetValueOrDefault("nativeTargetPriorSegments"), priorSegments) ||
             !GuideStateBoundaryRetirement.IsDifferentLogicalTarget(manifest, newRunId, current) ||
             !manifest.Gates.Values.Any(x => x.Code == "NATIVE_MERIDIAN_SEGMENT_BOUNDARY" && x.Disposition == GateDisposition.Passed) ||
             Entry.UpdatedUtc < manifest.Snapshot.UpdatedUtc)
-            throw Rejected("旧记录不是已提交的唯一中天首段，或仍是同一逻辑目标；不自动恢复旧段。");
+            throw Rejected("旧记录不是已提交的认证中天分段，或仍是同一逻辑目标；不自动恢复旧段。");
 
         var original = manifest.LockedMetadata;
         foreach (var name in new[] { "atrCameraId", "g3CameraId", "telescopeId", "qhyCameraId",
@@ -88,7 +92,8 @@ internal sealed record PreDispatchMeridianRetirement(string Path, byte[] Bytes, 
         {
             await JsonSerializer.SerializeAsync(stream, new
             {
-                action = "EndedPreDispatchMeridianIntentRetired", oldRunId = Entry.RunId, newRunId,
+                action = "EndedPreDispatchMeridianIntentRetired", oldRunId = Entry.RunId,
+                targetRootRunId = Entry.Segments[0], segments = Entry.Segments, newRunId,
                 originalPath = Path, archivePath = archive, originalSha256 = Convert.ToHexString(SHA256.HashData(Bytes)),
                 source.Revision, source.PlanSha256, source.LockedMetadataSha256, source.Counters, Entry.Phase, proof,
                 motionSent = false, flipVerified = false, returnVerified = false, targetOnSlitVerified = false,
@@ -103,6 +108,36 @@ internal sealed record PreDispatchMeridianRetirement(string Path, byte[] Bytes, 
         token.ThrowIfCancellationRequested();
         File.Move(Path, archive, overwrite: false);
         return archive;
+    }
+
+    private static bool HasAuthenticatedSegmentShape(NativeMeridianJournal entry)
+    {
+        if (entry.Segments is not { Count: 1 or 2 } segments ||
+            segments.Any(x => !IsSafeRunId(x)) ||
+            segments.Distinct(StringComparer.Ordinal).Count() != segments.Count ||
+            segments[^1] != entry.RunId)
+            return false;
+        return segments.Count == 1 || segments[0] != segments[1];
+    }
+
+    private static bool IsSafeRunId(string? runId) =>
+        !string.IsNullOrWhiteSpace(runId) &&
+        System.IO.Path.GetFileName(runId) == runId &&
+        runId is not "." or "..";
+
+    private static bool PriorSegmentsMatch(string? serialized, IReadOnlyList<string> expected)
+    {
+        if (expected.Count == 0) return string.IsNullOrWhiteSpace(serialized) || serialized == "[]";
+        if (string.IsNullOrWhiteSpace(serialized)) return false;
+        try
+        {
+            return JsonSerializer.Deserialize<string[]>(serialized)
+                ?.SequenceEqual(expected, StringComparer.Ordinal) == true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static PhysicalActionGateException Rejected(string message) =>

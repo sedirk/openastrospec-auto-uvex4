@@ -5,13 +5,16 @@ namespace UvexAdv.Phd2.Tests;
 
 public sealed class Phd2ClientTests
 {
-    [Fact]
-    public async Task EpochDiagnosticsRetainTheInvalidatingEventBeforeGuidingResumesWithoutReauthorizingIt()
+    [Theory]
+    [InlineData("LoopingExposures", Phd2AppState.Looping)]
+    [InlineData("StarLost", Phd2AppState.LostLock)]
+    public async Task EpochDiagnosticsRetainTheInvalidatingEventBeforeGuidingResumesWithoutReauthorizingIt(
+        string interruption, Phd2AppState intermediate)
     {
         await using var server = new FakePhd2Server(async (session, token) =>
         {
             await session.SendEventAsync(new { Event = "AppState", State = "Guiding" }, token);
-            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 58 }, token);
+            await session.SendEventAsync(new { Event = interruption, Frame = 58 }, token);
             await session.SendEventAsync(new { Event = "GuideStep", Frame = 59, dx = -5.37, dy = -3.1,
                 SNR = 228.5, ErrorCode = 1 }, token);
             await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -24,8 +27,11 @@ public sealed class Phd2ClientTests
         Assert.Equal(Phd2AppState.Guiding, snapshot.AppState);
         Assert.False(snapshot.HasCurrentSuccessfulSettle);
         Assert.Equal("event:GuideStep", snapshot.LastGuideEpochChange!.Cause);
-        Assert.Contains(snapshot.RecentGuideEpochChanges, c => c.Cause == "event:LoopingExposures" &&
-            c.PreviousState == Phd2AppState.Guiding && c.State == Phd2AppState.Looping);
+        var loss = snapshot.RecentGuideEpochChanges[^2];
+        Assert.Equal("event:" + interruption, loss.Cause);
+        Assert.Equal(Phd2AppState.Guiding, loss.PreviousState);
+        Assert.Equal(intermediate, loss.State);
+        Assert.Equal(loss.Epoch, snapshot.LastGuideEpochChange.PreviousEpoch);
         var before = snapshot.GuideEpoch;
         for (var i = 0; i < 12; i++) client.PauseAutomation();
         Assert.Equal(8, client.Snapshot.RecentGuideEpochChanges.Count);
@@ -658,7 +664,7 @@ public sealed class Phd2ClientTests
             // the fresh loop event. Delay ensures this is a post-baseline
             // frame rather than an event that was already in flight.
             await Task.Delay(50, cancellationToken);
-            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 12 }, cancellationToken);
+            await session.SendEventAsync(new { Event = "LoopingExposures", Frame = 12, SNR = 68.6, ErrorCode = 1 }, cancellationToken);
 
             var save = await session.ReadRequestAsync(cancellationToken);
             Assert.Equal("save_image", save.GetProperty("method").GetString());
@@ -676,6 +682,12 @@ public sealed class Phd2ClientTests
         Assert.Equal(destination, result.Path);
         Assert.Equal(1500, result.VerifiedExposureMilliseconds);
         Assert.False(result.AutomaticRetryAllowed);
+        Assert.NotNull(result.LoopingFrameEventSequence);
+        Assert.NotNull(result.LoopingFrameObservedUtc);
+        Assert.Equal(new Phd2SelectedStarSnrSample(12, 68.6, 1), result.LoopingStarSample);
+        Assert.Equal(0, client.Snapshot.LastPreviewStarMissSequence);
+        Assert.Null(result.NativeRequestStartedUtc); // A loop event is not a shutter-start attestation.
+        Assert.True(result.LoopingFrameObservedUtc <= result.CompletedUtc);
         Assert.Equal(new byte[] { 0x43, 0x4f, 0x4e, 0x54 }, await File.ReadAllBytesAsync(destination));
         Assert.Equal(
             ["get_app_state", "get_exposure", "save_image"],
@@ -683,6 +695,53 @@ public sealed class Phd2ClientTests
         Assert.DoesNotContain("set_exposure", server.ReceivedMethods);
         Assert.DoesNotContain("loop", server.ReceivedMethods);
         Assert.DoesNotContain("stop_capture", server.ReceivedMethods);
+    }
+
+    [Theory]
+    [InlineData(1, false, false)] // WR 134: PHD2 still measured a centroid, SNR 68.6.
+    [InlineData(2, false, true)]  // Native miss without an epoch change of its own.
+    [InlineData(1, true, true)]   // Loss arrives after the frame, during save_image.
+    public async Task Wr134LoopingSelectedLoopingRoundTripRetainsActualLossWitnessOnly(
+        int nativeError, bool lateLoss, bool lost)
+    {
+        using var dir = new TemporaryDirectory();
+        var source = Path.Combine(dir.Path, "native.fit");
+        await File.WriteAllBytesAsync(source, [1, 2]);
+        var point = new Phd2Point(838.17, 640.37);
+        await using var server = new FakePhd2Server(async (s, ct) =>
+        {
+            await s.ReplyResultAsync(await s.ReadRequestAsync(ct), new[] { point.X, point.Y }, ct);
+            await s.ReplyResultAsync(await s.ReadRequestAsync(ct), "Looping", ct);
+            await s.ReplyResultAsync(await s.ReadRequestAsync(ct), "Selected", ct);
+            await s.ReplyResultAsync(await s.ReadRequestAsync(ct), 2000, ct);
+            await Task.Delay(80, ct);
+            await s.SendEventAsync(new { Event = "LoopingExposures", Frame = 7, SNR = 68.6, ErrorCode = nativeError }, ct);
+            var save = await s.ReadRequestAsync(ct);
+            if (lateLoss)
+            {
+                await s.SendEventAsync(new { Event = "LockPositionLost" }, ct);
+                await s.SendEventAsync(new { Event = "StarLost", Frame = 8, ErrorCode = 2 }, ct);
+            }
+            await s.ReplyResultAsync(save, new { filename = source }, ct);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        });
+        await using var client = CreateClient(server);
+        await client.ConnectAsync(default);
+        Assert.Equal(point, await client.FindGuideStarAsync(default));
+        Assert.Equal(Phd2AppState.Looping, await client.GetAppStateAsync(default));
+        var before = client.Snapshot;
+        var capture = await client.SaveNextLoopingFrameAsync(new(2000, 1, 70, Path.Combine(dir.Path, "copy.fit")), default);
+        var after = client.Snapshot;
+        var changes = after.RecentGuideEpochChanges.Where(c => c.Epoch > before.GuideEpoch).ToArray();
+        Assert.Equal("GetAppStateAsync", changes[0].Cause);
+        Assert.Equal("event:LoopingExposures", changes[1].Cause);
+        Assert.Equal(lateLoss ? 4 : 2, changes.Length);
+        Assert.Equal(lost, after.LastPreviewStarMissSequence > before.EventSequence);
+        Assert.Equal(new Phd2SelectedStarSnrSample(7, 68.6, nativeError), capture.LoopingStarSample);
+        Assert.Equal(point, after.SelectedStar);
+        Assert.Equal(lateLoss ? null : point, after.LockPosition);
+        Assert.Equal(new[] { "find_star", "get_app_state", "get_app_state", "get_exposure", "save_image" },
+            server.ReceivedMethods.ToArray());
     }
 
     [Theory]

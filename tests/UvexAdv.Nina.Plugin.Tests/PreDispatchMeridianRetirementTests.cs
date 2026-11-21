@@ -75,6 +75,28 @@ public sealed partial class NativeSequencePlanTests
         else Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
     }
 
+    [Fact]
+    public async Task EndedSecondSegmentUnissuedFlipUsesAuthenticatedClockContinuationLineageAndRunsNextTarget()
+    {
+        const string rootRun = "clock-continuation-root";
+        await using var fixture = await TerminalStartupFixture.CreateAsync(
+            "success", meridian: true, rootRunId: rootRun);
+        await fixture.AddPreDispatchMeridianAsync("success");
+        var path = Path.Combine(fixture.Root, "control", "native-meridian-flip.json");
+        var bytes = await File.ReadAllBytesAsync(path);
+        var journal = JsonSerializer.Deserialize<NativeMeridianJournal>(bytes)!;
+        Assert.Equal(new[] { rootRun, fixture.RunId }, journal.Segments);
+
+        await AssertTerminalStartupNightAsync(fixture, "success");
+
+        await AssertUnissuedFlipArchiveAsync(fixture.Root, bytes);
+        var archive = Assert.Single(Directory.GetFiles(fixture.Root,
+            "native-meridian-flip.json.pre-dispatch-*.archive", SearchOption.AllDirectories));
+        using var audit = JsonDocument.Parse(await File.ReadAllTextAsync(archive + ".audit.json"));
+        Assert.Equal(rootRun, audit.RootElement.GetProperty("targetRootRunId").GetString());
+        Assert.Equal(2, audit.RootElement.GetProperty("segments").GetArrayLength());
+    }
+
     [Theory]
     [InlineData("changed-after-frame")]
     [InlineData("changed-manifest")]
@@ -84,7 +106,8 @@ public sealed partial class NativeSequencePlanTests
     [InlineData("corrupt-journal")]
     [InlineData("missing-manifest")]
     [InlineData("future")]
-    [InlineData("second-segment")]
+    [InlineData("invalid-segment-order")]
+    [InlineData("forged-prior-segment")]
     [InlineData("after-side")]
     [InlineData("unknown-side")]
     [InlineData("phd-profile-change")]
@@ -103,11 +126,12 @@ public sealed partial class NativeSequencePlanTests
         }
         if (failure == "corrupt-journal") await File.AppendAllTextAsync(path, "corrupt");
         if (failure == "missing-manifest") File.Move(fixture.ManifestPath, fixture.ManifestPath + ".missing");
-        if (failure is "future" or "second-segment" or "after-side" or "unknown-side")
+        if (failure is "future" or "invalid-segment-order" or "forged-prior-segment" or "after-side" or "unknown-side")
             await NativeMeridianJournalStore.SaveAsync(path, entry with
             {
                 UpdatedUtc = failure == "future" ? DateTimeOffset.UtcNow.AddMinutes(1) : entry.UpdatedUtc,
-                Segments = failure == "second-segment" ? [entry.RunId, "second"] : entry.Segments,
+                Segments = failure == "invalid-segment-order" ? [entry.RunId, "second"] :
+                    failure == "forged-prior-segment" ? ["different-root", entry.RunId] : entry.Segments,
                 AfterSide = failure == "after-side" ? "pierEast" : "",
                 BeforeSide = failure == "unknown-side" ? "pierUnknown" : entry.BeforeSide,
             }, default);

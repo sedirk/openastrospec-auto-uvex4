@@ -31,10 +31,85 @@ public sealed class AdaptiveGuidingRecoveryTests
         var s = new AdaptiveGuidingRecovery(); s.BeginCheck(Start);
         for (var t = 0; t < 100; t += 15)
             Assert.Equal(GuideRecoveryAction.WaitForStars, s.Observe(Start.AddSeconds(t), Start.AddSeconds(t), true, 0, 0, 0));
+        Assert.Equal(TimeSpan.FromSeconds(15), s.NextStarCheckDelay);
         Assert.Equal(0, s.Reselections); Assert.False(s.CalibrationConsumed);
         Assert.Equal(GuideRecoveryAction.WaitForStars, Clear(s, 101));
-        Assert.Equal(GuideRecoveryAction.Reselect, Clear(s, 116));
+        Assert.Equal(TimeSpan.FromSeconds(1), s.NextStarCheckDelay);
+        Assert.Equal(GuideRecoveryAction.WaitForStars, Clear(s, 101)); // rereading one frame is not confirmation
+        Assert.Equal(TimeSpan.FromSeconds(15), s.NextStarCheckDelay);
+        Assert.Equal(GuideRecoveryAction.WaitForStars, Clear(s, 104));
+        Assert.Equal(GuideRecoveryAction.Reselect, Clear(s, 107));
         Assert.Equal(1, s.Reselections); Assert.False(s.CalibrationConsumed);
+    }
+
+    [Fact]
+    public void LongExposureRecoveryRegistersAFreshStoppedFieldBeforeGuideReselection()
+    {
+        const int width = 1200;
+        const int height = 900;
+        var reference = Pattern(0, 0);
+        var current = Pattern(2.4, -1.3);
+        var target = new StarCandidate(new(950, 450), 8000, 1_000_000, 80, 5, .1, 0, 450);
+        var field = G3FieldState.Failed(
+                GateResult.Pass("field", "fixture"),
+                "old.fit")
+            with
+            {
+                Frame = new MonochromeFrame(width, height, new ushort[width * height], 65520),
+                Candidates = reference,
+                SlitDetection = new SlitLocusDetection(
+                    GateResult.Pass("slit", "fixture"),
+                    new SlitGeometry("fixture", new(600, 460), 3, 400, 10, 1, "g3", 1, 1),
+                    20, 0, 0),
+                TargetIdentification = new TargetIdentification(
+                    GateResult.Pass("target", "fixture"),
+                    target,
+                    target.Centroid,
+                    0,
+                    2),
+            };
+
+        var seed = RealObservationStageRunner.TryRegisterSameFieldRecoverySeed(
+            field, current, width, height, 30, default);
+
+        Assert.NotNull(seed);
+        Assert.True(seed!.Registration.Accepted);
+        Assert.True(seed.Registration.MatchedStars >= 5);
+        Assert.InRange(seed.Target.X, 952.2, 952.6);
+        Assert.InRange(seed.Target.Y, 448.5, 448.9);
+        Assert.Equal(field.SlitDetection.Geometry, seed.Slit);
+        Assert.NotEqual(seed.Registration.Transform!.Apply(seed.Slit.AcquisitionPoint), seed.Slit.AcquisitionPoint);
+    }
+
+    [Fact]
+    public void UnrelatedRecoveryFieldCannotBecomeASameFieldSeed()
+    {
+        const int width = 1200;
+        const int height = 900;
+        var field = G3FieldState.Failed(
+                GateResult.Pass("field", "fixture"),
+                "old.fit")
+            with
+            {
+                Frame = new MonochromeFrame(width, height, new ushort[width * height], 65520),
+                Candidates = Pattern(0, 0),
+                SlitDetection = new SlitLocusDetection(
+                    GateResult.Pass("slit", "fixture"),
+                    new SlitGeometry("fixture", new(600, 460), 3, 400, 10, 1, "g3", 1, 1),
+                    20, 0, 0),
+                TargetIdentification = new TargetIdentification(
+                    GateResult.Pass("target", "fixture"),
+                    new StarCandidate(new(950, 450), 8000, 1_000_000, 80, 5, .1, 0, 450),
+                    new(950, 450), 0, 2),
+            };
+        var unrelated = Enumerable.Range(0, 10)
+            .Select(i => new StarCandidate(
+                new(1170 - i * 61, 860 - i * 47), 8000, 1_000_000, 80,
+                3, .1, 0, Math.Min(1170 - i * 61, 860 - i * 47)))
+            .ToArray();
+
+        Assert.Null(RealObservationStageRunner.TryRegisterSameFieldRecoverySeed(
+            field, unrelated, width, height, 30, default));
     }
 
     [Theory]
@@ -201,5 +276,22 @@ public sealed class AdaptiveGuidingRecoveryTests
         Assert.Contains("automaticRebuildStopProof = proof", runner);
         Assert.Contains("before.Profile != after.Profile", runner);
         Assert.Contains("!proof.IsCurrent(phd2.Snapshot)", runner);
+    }
+
+    private static StarCandidate[] Pattern(double dx, double dy)
+    {
+        var points = new[]
+        {
+            (100d, 100d), (300d, 120d), (520d, 90d), (140d, 340d), (360d, 360d),
+            (600d, 320d), (180d, 650d), (480d, 680d), (800d, 160d), (820d, 720d),
+        };
+        return points.Select(p =>
+        {
+            var x = p.Item1 + dx;
+            var y = p.Item2 + dy;
+            return new StarCandidate(
+                new(x, y), 5000, 250_000, 40, 3, .1, 0,
+                Math.Min(Math.Min(x, 1200 - x), Math.Min(y, 900 - y)));
+        }).ToArray();
     }
 }

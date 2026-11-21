@@ -7,6 +7,20 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class TargetFailureContinuationTests
 {
     [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("end-policy")]
+    public async Task PreGuideFreshFrameCandidateLossUsesTheSameCheckedNextTargetBoundary(string boundary)
+    {
+        var failure = new TargetQualityEvidenceException("PHD2_PRE_GUIDE_SELECTION_UNAVAILABLE",
+            "Fresh existing-loop frame lost the native pre-guide candidate; no guide/lock/mount request issued.");
+        var gate = failure.AfterStop(true).Gate;
+        Assert.False(NativeSequencePlan.IsSkippableQualityFailure(failure.AfterStop(false).Gate));
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(boundary, gate.Code, gate,
+            ObservationStage.PlaceTargetOnSlit);
+    }
+
+    [Theory]
     [InlineData("PHD2_DIRECT_TARGET_POSITION_UNMEASURED", ObservationStage.PlaceTargetOnSlit)]
     [InlineData("PHD2_SLIT_COMPLETION_WINDOW_EXHAUSTED", ObservationStage.SelectAtrExposure)]
     [InlineData("G3_BOUNDED_SEARCH_EXHAUSTED_RETURNED", ObservationStage.AcquireG3SlitField)]
@@ -18,6 +32,127 @@ public sealed class TargetFailureContinuationTests
         var gate=GateResult.TargetQuality(code,"Recorded front1 failure; no fabricated science or new motion budget.");
         await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("skip",code,gate,stage);
         await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync("cleanup-failure",code,gate,stage);
+    }
+
+    [Theory]
+    [InlineData(0, 40, 100, "G3_MOTION_SINGLE_LIMIT")]
+    [InlineData(135, 145, 100, "G3_MOTION_RADIUS_LIMIT")]
+    public async Task November19OutboundEnvelopeFailuresActuallyExecuteFollowingNativeTarget(
+        double currentRaArcseconds, double proposedRaArcseconds, double maximumRadiusArcseconds, string code)
+    {
+        var started = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var state = new G3AcquisitionMotionState(
+            SchemaVersion: G3AcquisitionMotionState.CurrentSchemaVersion,
+            TangentProjectionId: G3AcquisitionMotionState.CurrentTangentProjectionId,
+            ObservationRunId: "recorded-2026-11-19",
+            BudgetLineageId: Guid.Parse("8a3fa3af-cb05-4ef4-93af-70ec1598c20d").ToString("N"),
+            ActionConfigurationSha256: new string('A', 64),
+            RecoveryContextSha256: new string('B', 64),
+            CommissioningPresetSha256: new string('C', 64),
+            Kind: G3AcquisitionMotionKind.WcsCentering,
+            Phase: G3AcquisitionMotionPhase.SettledBudgetLedger,
+            PierSide: "pierEast",
+            CoordinateEpoch: "JNOW",
+            OriginRaDegrees: 356.85564850923345,
+            OriginDeclinationDegrees: 25.59169767504804,
+            PriorReportedRaDegrees: 356.85564850923345,
+            PriorReportedDeclinationDegrees: 25.59169767504804,
+            CommandedRaDegrees: 356.85564850923345,
+            CommandedDeclinationDegrees: 25.59169767504804,
+            CurrentRaTangentOffsetArcseconds: currentRaArcseconds,
+            CurrentDeclinationOffsetArcseconds: 0,
+            CommandMagnitudeArcseconds: 0,
+            MaximumSingleCorrectionArcseconds: 30,
+            MaximumRadiusArcseconds: maximumRadiusArcseconds,
+            MaximumCumulativeMotionArcseconds: 21600,
+            MaximumCorrectionAttempts: 8,
+            ArrivalToleranceArcseconds: 2,
+            WorstCaseActionSeconds: 90,
+            MaximumElapsedSeconds: 1200,
+            CumulativeMotionArcseconds: 0,
+            CorrectionAttempts: 0,
+            StartedUtc: started,
+            CreatedUtc: started,
+            UpdatedUtc: started,
+            DeclaredEvidencePath: "recorded-g3-wcs-centering.json",
+            LastReason: "recorded 2026-11-19 outbound envelope failure");
+        var gate = G3AcquisitionMotionPlanner.ValidateOutboundAndReturnReserve(
+            state, proposedRaArcseconds, 0, started.AddSeconds(1)).Gate;
+
+        Assert.Equal(code, gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            "skip", gate.Code, gate, ObservationStage.AcquireG3SlitField);
+    }
+
+    [Theory]
+    [InlineData(40, 0, 100, "G3_MOTION_SPHERICAL_SINGLE_LIMIT")]
+    [InlineData(135, 145, 100, "G3_MOTION_SPHERICAL_RADIUS_LIMIT")]
+    public async Task November19FreshReadbackEnvelopeFailuresActuallyExecuteFollowingNativeTarget(
+        double currentRaArcseconds, double commandedRaArcseconds, double maximumRadiusArcseconds, string code)
+    {
+        var started = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var state = new G3AcquisitionMotionState(
+            SchemaVersion: G3AcquisitionMotionState.CurrentSchemaVersion,
+            TangentProjectionId: G3AcquisitionMotionState.CurrentTangentProjectionId,
+            ObservationRunId: "recorded-2026-11-19-fresh-readback",
+            BudgetLineageId: Guid.Parse("4f3f944d-e35e-4b28-a1a8-3f212ac0d959").ToString("N"),
+            ActionConfigurationSha256: new string('A', 64),
+            RecoveryContextSha256: new string('B', 64),
+            CommissioningPresetSha256: new string('C', 64),
+            Kind: G3AcquisitionMotionKind.WcsCentering,
+            Phase: G3AcquisitionMotionPhase.SettledBudgetLedger,
+            PierSide: "pierEast",
+            CoordinateEpoch: "JNOW",
+            OriginRaDegrees: 356.85564850923345,
+            OriginDeclinationDegrees: 25.59169767504804,
+            PriorReportedRaDegrees: 356.85564850923345,
+            PriorReportedDeclinationDegrees: 25.59169767504804,
+            CommandedRaDegrees: 356.85564850923345,
+            CommandedDeclinationDegrees: 25.59169767504804,
+            CurrentRaTangentOffsetArcseconds: currentRaArcseconds,
+            CurrentDeclinationOffsetArcseconds: 0,
+            CommandMagnitudeArcseconds: 0,
+            MaximumSingleCorrectionArcseconds: 30,
+            MaximumRadiusArcseconds: maximumRadiusArcseconds,
+            MaximumCumulativeMotionArcseconds: 21600,
+            MaximumCorrectionAttempts: 8,
+            ArrivalToleranceArcseconds: 2,
+            WorstCaseActionSeconds: 90,
+            MaximumElapsedSeconds: 1200,
+            CumulativeMotionArcseconds: 0,
+            CorrectionAttempts: 0,
+            StartedUtc: started,
+            CreatedUtc: started,
+            UpdatedUtc: started,
+            DeclaredEvidencePath: "recorded-g3-wcs-centering-fresh-readback.json",
+            LastReason: "recorded 2026-11-19 fresh-readback envelope failure");
+        var reported = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees, state.OriginDeclinationDegrees, currentRaArcseconds, 0);
+        var commanded = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+            state.OriginRaDegrees, state.OriginDeclinationDegrees, commandedRaArcseconds, 0);
+        var gate = G3AcquisitionMotionPlanner.ValidateSphericalCommand(
+            state, reported.RaDegrees, reported.DecDegrees,
+            commanded.RaDegrees, commanded.DecDegrees, 10).Gate;
+
+        Assert.Equal(code, gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            "skip", gate.Code, gate, ObservationStage.AcquireG3SlitField);
+    }
+
+    [Fact]
+    public async Task ExhaustedMeridianSegmentCapacitySkipsTheTargetAndActuallyExecutesTheNextOne()
+    {
+        var gate = GateResult.TargetQuality(
+            "NATIVE_MERIDIAN_SEGMENT_BUDGET_EXHAUSTED",
+            "A clock continuation already used the target's only additional segment; no third segment or flip intent may be created.");
+
+        Assert.True(NativeSequencePlan.IsSkippableQualityFailure(gate));
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            "skip", gate.Code, gate, ObservationStage.AcquireG3SlitField);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            "cleanup-failure", gate.Code, gate, ObservationStage.AcquireG3SlitField);
     }
 
     [Theory]

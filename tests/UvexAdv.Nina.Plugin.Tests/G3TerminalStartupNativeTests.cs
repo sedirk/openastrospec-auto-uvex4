@@ -260,7 +260,8 @@ public sealed partial class NativeSequencePlanTests
             Manifest.LockedMetadata.Labels!["telescopeId"], Manifest.LockedMetadata.Labels["g3CameraId"],
             Phd2AppState.Stopped, true, DateTimeOffset.UtcNow);
 
-        internal static async Task<TerminalStartupFixture> CreateAsync(string mode, bool meridian = false)
+        internal static async Task<TerminalStartupFixture> CreateAsync(string mode, bool meridian = false,
+            string? rootRunId = null)
         {
             var value = new TerminalStartupFixture();
             var terminal = mode switch
@@ -270,7 +271,7 @@ public sealed partial class NativeSequencePlanTests
                 "paused-attention" => ObservationRunState.PausedNeedsAttention,
                 _ => meridian ? ObservationRunState.Completed : ObservationRunState.Cancelled,
             };
-            await value.AddRunAsync(value.RunId, terminal, true);
+            await value.AddRunAsync(value.RunId, terminal, true, rootRunId);
             if (mode == "ambiguous-g3") await value.AddRunAsync("second-old-target", ObservationRunState.Faulted, true);
             if (mode == "ambiguous-phd") await value.AddRunAsync("second-old-target", ObservationRunState.Faulted, false);
             value.Manifest = (await new ObservationRunJournalStore(value.ManifestPath).ReadAsync(default))!;
@@ -300,20 +301,30 @@ public sealed partial class NativeSequencePlanTests
             return value;
         }
 
-        private async Task AddRunAsync(string run, ObservationRunState terminal, bool g3)
+        private async Task AddRunAsync(string run, ObservationRunState terminal, bool g3, string? rootRunId = null)
         {
             var now = DateTimeOffset.UtcNow;
             var plan = new ObservationPlan(run, "old-night", new("10 Cas", "* 10 Cas", 1.61057219282, 64.19615796995),
                 new(33, 120, 0), now.AddHours(-2), TimeSpan.FromMinutes(35), new(), new(), "ATR", "G3", "QHY");
             var action = new string('A', 64); var preset = new string('B', 64);
             var store = new ObservationRunJournalStore(Path.Combine(Root, run, "manifest.json"));
+            var labels = new Dictionary<string, string>
+            {
+                ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera", ["qhyCameraId"] = "qhy-camera",
+                ["nativeTargetRootRunId"] = run, ["atrCameraId"] = "ATR",
+                ["phd2RuntimeCameraName"] = "guide", ["phd2RuntimeMountName"] = "mount",
+                ["weakSupervisionEnabled"] = "False", ["requireSafetyMonitor"] = "True",
+                ["requireOpenDomeOrRoof"] = "True",
+            };
+            if (!string.IsNullOrWhiteSpace(rootRunId) && rootRunId != run)
+            {
+                labels["nativeTargetRootRunId"] = rootRunId;
+                labels["nativeTargetPriorSegments"] = JsonSerializer.Serialize(new[] { rootRunId });
+            }
             var manifest = await store.InitializeAsync(plan, new(CommissioningPresetSha256: preset, QhyConfigurationSha256: new string('D', 64),
                 Phd2ProfileEvidenceSha256: new string('C', 64),
                 AdditionalHashes: new Dictionary<string, string> { ["actionConfigurationSha256"] = action },
-                Labels: new Dictionary<string, string>
-                { ["telescopeId"] = "mount", ["g3CameraId"] = "guide-camera", ["qhyCameraId"] = "qhy-camera", ["nativeTargetRootRunId"] = run,
-                    ["atrCameraId"] = "ATR", ["phd2RuntimeCameraName"] = "guide", ["phd2RuntimeMountName"] = "mount",
-                    ["weakSupervisionEnabled"] = "False", ["requireSafetyMonitor"] = "True", ["requireOpenDomeOrRoof"] = "True" }));
+                Labels: labels));
             await store.PublishSnapshotAsync(manifest.Snapshot with { State = terminal, UpdatedUtc = DateTimeOffset.UtcNow }, manifest.Counters, manifest.Revision);
             if (!g3)
             {
@@ -353,8 +364,14 @@ public sealed partial class NativeSequencePlanTests
             await store.PublishSnapshotAsync(fresh.Snapshot with { State = terminal ?? fresh.Snapshot.State, UpdatedUtc = DateTimeOffset.UtcNow }, fresh.Counters, fresh.Revision);
             Manifest = (await store.ReadAsync(default))!;
             OriginalManifest = await File.ReadAllBytesAsync(ManifestPath);
+            var prior = Manifest.LockedMetadata.Labels!.GetValueOrDefault("nativeTargetPriorSegments");
+            var priorSegments = string.IsNullOrWhiteSpace(prior)
+                ? []
+                : JsonSerializer.Deserialize<string[]>(prior) ?? [];
+            var segments = priorSegments.Append(RunId).ToArray();
             await NativeMeridianJournalStore.SaveAsync(Path.Combine(Root, "control", "native-meridian-flip.json"),
-                new(RunId, phase, "pierWest", "", DateTimeOffset.UtcNow, [RunId], phase == "WaitingForMeridian" ? "Scheduled" : "ObservedSideChange"), default);
+                new(RunId, phase, "pierWest", "", DateTimeOffset.UtcNow, segments,
+                    phase == "WaitingForMeridian" ? "Scheduled" : "ObservedSideChange"), default);
         }
 
         public ValueTask DisposeAsync()

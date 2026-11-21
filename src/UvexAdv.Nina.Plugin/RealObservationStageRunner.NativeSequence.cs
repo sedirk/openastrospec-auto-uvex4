@@ -92,8 +92,12 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
     internal async Task<IReadOnlyList<string>> ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion = true)
     {
         canRecheckSequenceIdle = false;
+        if (NightStartHomeDriverBoundary.For(telescopeMediator).Unjoined is { } homeBusy)
+            return [$"{homeBusy.Code}: {homeBusy.Message}"];
         var errors = (await CleanupAfterFailureAsync("Native sequence target boundary", token,
             allowMechanicalActions: false).ConfigureAwait(false)).ToList();
+        if (RoofConnection.PendingGate is { } pendingRoof)
+            errors.Add($"{pendingRoof.Code}: {pendingRoof.Message}");
         canRecheckSequenceIdle = errors.Count == 0 && activeQhyJobs.IsEmpty && pendingQhyRequests.IsEmpty &&
             (atrPreCoolingTask is null || atrPreCoolingTask.IsCompleted) && environmentSafetyShutdownTask.IsCompleted &&
             NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is null &&
@@ -105,8 +109,7 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         if (requireSettledMotion && NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is { } flipGate)
             errors.Add(flipGate.Message);
         var camera = cameraMediator.GetInfo();
-        if (!camera.Connected) errors.Add("ATR 未连接，无法核验实际曝光状态；不代表已确认正在曝光。");
-        else if (camera.IsExposing) errors.Add("ATR 仍报告正在曝光，尚未确认停止。");
+        if (AtrStopIssue(camera.Connected, camera.IsExposing) is { } cameraIssue) errors.Add(cameraIssue);
         if (errors.Count == 0 && phd2.IsConnected)
         {
             var quiet = await Phd2MountIdleWait.WaitAfterTargetStopAsync(phd2, telescopeMediator,
@@ -121,8 +124,7 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
             if (quiet.Disposition != GateDisposition.Passed) errors.Add($"{quiet.Code}: {quiet.Message}");
         }
         var telescope = telescopeMediator.GetInfo();
-        if (!telescope.Connected) errors.Add("赤道仪未连接，无法核验实际运动状态；不代表已确认正在运动。");
-        else if (telescope.Slewing || telescope.IsPulseGuiding) errors.Add("赤道仪仍报告转向或导星脉冲，尚未确认停止。");
+        if (MountStopIssue(telescope.Connected, telescope.Slewing, telescope.IsPulseGuiding) is { } mountIssue) errors.Add(mountIssue);
         if (focuserMediator.GetInfo().IsMoving || focuserMediator.GetInfo().IsSettling)
             errors.Add("主镜调焦尚未确认停止。");
         if ((requireSettledMotion || automaticFocusStopUnconfirmed) && automaticFocusBoundaryIssue is { } focusIssue)
@@ -139,18 +141,31 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
         return errors;
     }
 
+    internal static string? AtrStopIssue(bool connected, bool exposing) => !connected
+        ? "ATR 未连接，无法核验实际曝光状态；不代表已确认正在曝光。"
+        : exposing ? "ATR 仍报告正在曝光，尚未确认停止。" : null;
+    internal static string? MountStopIssue(bool connected, bool slewing, bool pulseGuiding) => !connected
+        ? "赤道仪未连接，无法核验实际运动状态；不代表已确认正在运动。"
+        : slewing || pulseGuiding ? "赤道仪仍报告转向或导星脉冲，尚未确认停止。" : null;
+
     // The night owner calls this only after all target tasks/owners have joined.
     // Reuse the exact selected-adapter, commissioned roof-clearance and checked-terminal
     // implementation used by the single-target production route.
     internal async Task<IReadOnlyList<string>> CloseSequenceNightAsync(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (NightStartHomeDriverBoundary.For(telescopeMediator).Unjoined is { } homeBusy)
+            return [$"{homeBusy.Code}: {homeBusy.Message}"];
+        if (CurrentRoofBoundaryGate() is { } roofBoundary)
+            return [$"{roofBoundary.Code}: {roofBoundary.Message}"];
         if (mountClockReconnectBoundary.BoundaryGate is { } clockOwnerGate)
             return new[] { $"{clockOwnerGate.Code}: {clockOwnerGate.Message}" };
         var errors = new List<string>();
-        if (!cameraMediator.GetInfo().Connected || cameraMediator.GetInfo().IsExposing ||
-            !telescopeMediator.GetInfo().Connected || telescopeMediator.GetInfo().Slewing || telescopeMediator.GetInfo().IsPulseGuiding)
-            return new[] { "设备仍忙；本次未发起整夜机械收口。" };
+        var camera = cameraMediator.GetInfo();
+        var mount = telescopeMediator.GetInfo();
+        if (AtrStopIssue(camera.Connected, camera.IsExposing) is { } cameraIssue) errors.Add(cameraIssue);
+        if (MountStopIssue(mount.Connected, mount.Slewing, mount.IsPulseGuiding) is { } mountIssue) errors.Add(mountIssue);
+        if (errors.Count != 0) return errors;
         // GuiderInfo has no live capture state. Use the existing bounded,
         // read-only PHD2 RPC check, including for a newly created standby closer.
         if (!guiderMediator.GetInfo().Connected ||
@@ -170,6 +185,9 @@ internal sealed partial class RealObservationStageRunner : INativeTargetBoundary
             var issue = await ParkMountAndCloseDomeOrRoofAsync("Native sequence night closeout", token).ConfigureAwait(false);
             if (issue is not null) errors.Add(issue);
         }
+        if (!configuration.Environment.WeakSupervisionEnabled &&
+            (CurrentRoofBoundaryGate() is not null || NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) != BoundRoofPosition.Closed))
+            errors.Add("未收到原绑定屋顶停止且关闭的回读；不能声称物理收口成功，请现场核对。");
         await WriteAuditBestEffortAsync("native-sequence-night-closeout", new
         {
             errors, cover = flatDeviceMediator.GetInfo().CoverState.ToString(),

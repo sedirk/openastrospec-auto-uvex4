@@ -478,7 +478,7 @@ public static class Phd2SlitLockShiftPlanner
         Phd2SensorTopology topology,
         Phd2LockShiftLimits limits,
         DateTimeOffset now,
-        bool allowBudgetLimitedStage = false)
+        bool allowBudgetLimitedStage = false, double? preferredOutboundPixels = null)
     {
         var common = ValidateCommon(qualification, ledger, safety, topology, limits, now);
         if (common is not null) return common;
@@ -517,6 +517,9 @@ public static class Phd2SlitLockShiftPlanner
         }
 
         var stagePixels = Math.Min(limits.MaximumStagePixels * qualification.MaximumLockShiftScale, remaining);
+        if (preferredOutboundPixels is { } preferred && double.IsFinite(preferred) &&
+            preferred > limits.LockVerificationTolerancePixels)
+            stagePixels = Math.Min(stagePixels, preferred); // never changes the return planner or commissioned ceiling
         Phd2LockShiftPlanResult BuildCandidate(double pixels) => BuildStage(
             Phd2LockShiftStageKind.Outbound,
             qualification,

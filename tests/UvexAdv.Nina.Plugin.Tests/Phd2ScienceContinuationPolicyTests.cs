@@ -8,6 +8,77 @@ namespace UvexAdv.Nina.Plugin.Tests;
 public sealed class Phd2ScienceContinuationPolicyTests
 {
     [Theory]
+    [InlineData("same", true)]
+    [InlineData("external-lock", false)]
+    [InlineData("reconnect", false)]
+    [InlineData("calibration", false)]
+    [InlineData("lock", false)]
+    [InlineData("selected", false)]
+    [InlineData("missing-event", false)]
+    [InlineData("gap", false)]
+    [InlineData("prolonged-loss", false)]
+    [InlineData("no-output", false)]
+    [InlineData("replayed-frame", false)]
+    [InlineData("pending-settle", false)]
+    public void Hd223554RecoveredGuideRoutesToLocalRecoveryOnlyWithNativeLossChain(string variant, bool expected)
+    {
+        var selected = new Phd2Point(1402.33, 374.88);
+        var endpoint = new Phd2Point(1410.94, 398.35);
+        var loss = new Phd2GuideEpochChange(17, 18, "event:StarLost", 201, Start,
+            Phd2AppState.Guiding, Phd2AppState.LostLock);
+        var found = new Phd2GuideEpochChange(18, 19, "event:GuideStep", 203, Start.AddSeconds(2.4),
+            Phd2AppState.LostLock, Phd2AppState.Guiding);
+        var step = new Phd2GuideStep(59, 0, 0, 19.1, 1, 37, 72);
+        var state = State() with { GuideEpoch = 19, SelectedStar = selected, LockPosition = endpoint,
+            LastGuideStep = step, GuideOutput = new(59, 0, Start, Start.AddSeconds(3), false, step),
+            RecentGuideEpochChanges = [loss, found] };
+        state = variant switch
+        {
+            "external-lock" => state with { RecentGuideEpochChanges = [loss, found with { Cause = "event:LockPositionSet" }] },
+            "reconnect" => state with { ConnectionEpoch = 2 },
+            "calibration" => state with { CalibrationChangeSequence = 1 },
+            "lock" => state with { LockPosition = selected },
+            "selected" => state with { SelectedStar = endpoint },
+            "missing-event" => state with { RecentGuideEpochChanges = [found] },
+            "gap" => state with { RecentGuideEpochChanges = [loss, found with { PreviousEpoch = 16 }] },
+            "prolonged-loss" => state with { RecentGuideEpochChanges = [loss, found with { ObservedUtc = Start.AddMinutes(3) }] },
+            "no-output" => state with { GuideOutput = null },
+            "replayed-frame" => state with { LastGuideStep = step with { Frame = 58 } },
+            "pending-settle" => state with { PendingSettleOperationId = 1 },
+            _ => state,
+        };
+        Assert.Equal(expected, Phd2ScienceContinuationPolicy.IsNativeLossRecovery(state, 1, 17, 0, selected, endpoint, .05));
+        var ledger = Ledger() with { GuideEpoch = 17, OriginLockX = selected.X, OriginLockY = selected.Y,
+            CurrentLockX = endpoint.X, RequestedLockX = endpoint.X, CurrentLockY = endpoint.Y,
+            RequestedLockY = endpoint.Y, CumulativeCommandedPixels = 25, AttemptsUsed = 1,
+            ExcludedAtrExposureSeconds = 29.4, UpdatedUtc = Start.AddSeconds(131) };
+        var proof = new Phd2PostLockGuidingObservation("native-loss-window-replay", 1, 19, 230, endpoint, .05,
+            Start.AddSeconds(132), YieldedToFreshResiduals: true);
+        var frames = Enumerable.Range(1, 3).Select(i => new Phd2GuidingFrameResult(
+            Path.GetFullPath($"new-{i}.fit"), new string((char)('a' + i), 64), 59+i, 230+i,
+            Start.AddSeconds(132+i), Start.AddSeconds(133+i), false, false, false, false)).ToArray();
+        var now = Start.AddSeconds(137);
+        Assert.Null(Phd2ScienceContinuationPolicy.BindVerifiedLossWindow(ledger, proof, state, selected, endpoint, 0, frames[^1], now));
+        if (expected)
+        {
+            Assert.Throws<Phd2Exception>(() => proof.AcceptResiduals([frames[0], frames[0], frames[2]], state));
+            var fresh = proof.AcceptResiduals(frames, state);
+            var rebound = Phd2ScienceContinuationPolicy.BindVerifiedLossWindow(ledger, fresh, state, selected, endpoint, 0, frames[^1], now);
+            Assert.NotNull(rebound);
+            Assert.Equal(ledger, rebound with { GuideEpoch = ledger.GuideEpoch, LastFramePath = ledger.LastFramePath,
+                LastAcceptedFrameSha256 = ledger.LastAcceptedFrameSha256, LastReason = ledger.LastReason, UpdatedUtc = ledger.UpdatedUtc });
+            Assert.True(Phd2ScienceContinuationPolicy.CanObserveAtSettledLock(rebound, state, 1, 19,
+                fresh.HasAcceptedWindow(state), endpoint, .05));
+            Assert.Null(Phd2ScienceContinuationPolicy.BindVerifiedLossWindow(ledger with { Phase = Phd2LockShiftPendingPhase.ReturnRequired },
+                fresh, state, selected, endpoint, 0, frames[^1], now));
+        }
+        Assert.True(AdaptiveGuidingRecovery.Handles(ObservationStage.SelectAtrExposure, "GUIDING_LOST"));
+        Assert.False(AdaptiveGuidingRecovery.Handles(ObservationStage.SelectAtrExposure, "PHD2_SCIENCE_GUIDE_EPOCH_CHANGED"));
+        var budget = new AdaptiveGuidingRecovery();
+        Assert.True(budget.TryConsumeRecoveredEpochWindow());
+        Assert.False(budget.TryConsumeRecoveredEpochWindow());
+    }
+    [Theory]
     [InlineData("GUIDING_LOST", true)]
     [InlineData("GUIDING_UNSTABLE", true)]
     [InlineData("GUIDING_NOT_STABLE", true)]

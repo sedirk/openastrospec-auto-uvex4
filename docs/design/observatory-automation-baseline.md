@@ -341,6 +341,14 @@ exposure/count settings do not mutate the Profile. Ordinary cancellation still
 authorizes no mechanical closeout; explicit end-night and commissioned unsafe
 shutdown are separate operations. Weak supervision does not gain roof authority.
 
+[ADR-0057](../adr/0057-once-per-night-start-mount-home.md) permits a saved,
+explicit native-night opening Home at the first eligible target, only after
+fully open roof/cover, original safety, stopped owners and motion-ledger checks.
+The single durably precharged native Home is skipped if already home; verified
+stopped arrival is not optical proof. Never replay it on target change, recovery,
+ordinary cancel, reconnect or application startup; ADR-0038 still prohibits Home
+as a catalogue-GOTO recovery.
+
 Under owner-requested [ADR-0026](../adr/0026-protected-standby-after-target-failure.md),
 an optional terminal closeout instruction separates the native night's ordinary
 closure choice from standalone-run preferences. It delegates checked mechanical
@@ -445,16 +453,21 @@ extra flip. Ordinary retries, unknown stop, other mechanical debt and crash
 ambiguity cannot use this exception or reset budgets.
 
 Owner-approved [ADR-0050](../adr/0050-ended-pre-dispatch-meridian-retirement.md)
-narrowly permits abandonment, not adoption, of a terminal first meridian segment's
+narrowly permits abandonment, not adoption, of a terminal meridian segment's
 unique canonical pre-dispatch intent at an explicitly started new logical target.
-Only authenticated `OwnersIdle` or scheduled `WaitingForMeridian` records with no
+ADR-0056 extends that qualifier to an authenticated two-segment lineage when an
+earlier bounded continuation already occupied the target's first segment. Only
+authenticated `OwnersIdle` or scheduled `WaitingForMeridian` records with no
 command/after-side may qualify. Reuse original-owner, full safety, global idle and
 fresh stationary-frame startup verification; preserve old control bytes, audits,
 budgets and science files. Archive the flip handle last, repeating checks after an
-interruption. Command-pending, corrupt/ambiguous records, unknown stop, independent
-mechanical debt, live/same-target recovery and unsafe conditions remain excluded.
-No flip, return, roof/focus move or automatic observation is authorized by archival.
-The next target still requires normal new acquisition, slit and science evidence.
+interruption. Command-pending, corrupt/ambiguous records, a third segment, wrong
+root/order lineage, unknown stop, independent mechanical debt, live/same-target
+recovery and unsafe conditions remain excluded. No flip, return, roof/focus move or
+automatic observation is authorized by archival. Before any new intent is written,
+the existing one-handoff/two-segment target budget is enforced; exhaustion is a
+checked-stop target-quality outcome, never a third segment. The next target still
+requires normal new acquisition, slit and science evidence.
 
 Under [ADR-0021](../adr/0021-station-attested-noninterfering-roof.md), only a
 station with explicit hash-bound owner confirmation of clearance at **all mount
@@ -582,9 +595,9 @@ Every run must retain enough evidence to answer “what object was actually obse
 - all warnings, downgrades, retries, pauses, resumptions, cancellations and operator interventions;
 - checksums of raw inputs and generated manifests.
 
-Raw acquisition files are immutable, except for the explicit successful-target
-parse/trial retention policy in ADR-0053. Repairs or calibration produce new
-files with provenance; they never overwrite the source.
+Raw acquisition files are immutable, except for the explicit target-terminal
+parse/trial retention policies in ADR-0053 and ADR-0055. Repairs or calibration
+produce new files with provenance; they never overwrite the source.
 
 ## 11. Staged implementation and commissioning
 
@@ -771,6 +784,23 @@ time, return or exposure budget, and still requires the complete fresh post-reba
 measurement window and fresh destination confirmation before any move. Unknown
 ownership/stop, companion or multi-lobe ambiguity, weather and cancellation remain
 independent hard gates; predictions are never recorded as measurements.
+
+### 12.20 Terminal-target disposable-frame retention (ADR-0055)
+
+Owner-approved [ADR-0055](../adr/0055-terminal-target-disposable-frame-retention.md)
+extends the narrow irreversible retention exception from completed targets to
+every explicitly terminal target outcome, including failure and cancellation.
+After the durable terminal manifest and a forward-only activation watermark,
+the offline worker may permanently remove only QHY acquisition/continuous-witness
+FITS and paired previews, G3 solve/slit-placement FITS, and ATR `PROBE` FITS not
+credited as science.
+
+ATR science, the final/credited trial, QHY `PHOTOMETRY` science frames,
+calibration, manifests, frame indexes, JSON/JSONL evidence, logs, projects and
+model/reduction dependencies remain protected. Active, paused, taken-over,
+unknown or incomplete runs are never eligible. The worker has no device or
+N.I.N.A. control authority, uses fresh dependency-aware exact-file validation
+and permanent-deletion receipts, and checks every five minutes.
 
 ## 13. Measurements still required
 

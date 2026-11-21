@@ -28,6 +28,27 @@ internal sealed partial class RealObservationStageRunner
                     session.SelectedGuide, session.OriginLock, actual, lockTolerance))
                 return false;
 
+            // Keep validation/safety failures OUTSIDE the optional native-settle
+            // catch: an ownership or safety failure is not an optical retry.
+            var approval = await Phd2ScienceContinuationPolicy.RevalidateSameLockAsync(session.Calibration,
+                async t =>
+                {
+                    await RequireImmediatePhysicalActionGatesAsync(context, t).ConfigureAwait(false);
+                    var owner = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), t).ConfigureAwait(false);
+                    if (!owner.IsValid) throw new Phd2IdentityMismatchException(owner);
+                    var profile = ValidatePhdProfileBindingEvidence();
+                    if (profile.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(profile);
+                },
+                t => phd2.ValidateCalibrationAsync(preset.CalibrationQualityPolicy.ApplyHardRejectionCeilings(
+                    PhdCalibrationRequirement(allowNativeCalibration: false)), t),
+                async t =>
+                {
+                    var readback = await phd2.GetLockPositionAsync(t).ConfigureAwait(false);
+                    return Phd2ScienceContinuationPolicy.CanResettleAfterExposureAtSettledLock(
+                        sourceCode, ledger, phd2.Snapshot, session.ConnectionEpoch, session.GuideEpoch,
+                        session.SelectedGuide, session.OriginLock, readback, lockTolerance);
+                }, cancellationToken).ConfigureAwait(false);
+            if (approval.Disposition != GateDisposition.Passed) throw new PhysicalActionGateException(approval);
             Phd2SettleResult resettle;
             try
             {
@@ -69,6 +90,9 @@ internal sealed partial class RealObservationStageRunner
             }
 
             var resettled = phd2.Snapshot;
+            if (resettle.NativeCalibrationOccurred)
+                throw new PhysicalActionGateException(GateResult.Unknown("PHD2_SAME_LOCK_CALIBRATION_CHANGED",
+                    "An unexpected calibration occurred during same-lock recovery; the previous geometry cannot authorize science."));
             if (!resettle.Succeeded ||
                 resettled.ConnectionEpoch != session.ConnectionEpoch ||
                 resettled.GuideEpoch != session.GuideEpoch + 1 ||

@@ -1,5 +1,11 @@
 # Successful-target frame retention
 
+ADR-0053 remains the historical successful-target design. New installations
+should use the terminal-target policy in
+[terminal-target frame retention](library-terminal-target-retention.md), which
+supersedes ADR-0053's terminal eligibility under ADR-0055. The successful-target
+worker remains available as an offline CLI compatibility mode.
+
 The optional target-success retention worker implements
 [ADR-0053](adr/0053-successful-target-frame-retention.md). It is an offline
 filesystem worker: it does not connect a camera, PHD2, mount, roof or UVEX device,

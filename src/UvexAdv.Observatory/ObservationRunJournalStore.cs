@@ -377,6 +377,39 @@ public sealed class ObservationRunJournalStore
     public Task<ObservationRunManifest?> ReadAsync(CancellationToken cancellationToken = default) =>
         WithExclusivePathAsync(ReadUnlockedAsync, cancellationToken);
 
+    /// <summary>Reuse only an immutable projection of byte-identical, previously validated terminal
+    /// journals. The caller still inventories and verifies every current ledger and its bindings.
+    /// No file metadata, cached path, active journal, or cached control decision supplies authority.</summary>
+    public sealed class TerminalProjection<T>(Func<ObservationRunManifest, T> project) where T : class
+    {
+        private readonly Dictionary<string, T> terminal = new(StringComparer.Ordinal);
+
+        public Task<T?> ReadAsync(ObservationRunJournalStore store, CancellationToken token) =>
+            store.WithExclusivePathAsync<T?>(async ct =>
+            {
+                byte[] bytes;
+                try { bytes = await File.ReadAllBytesAsync(store.ManifestPath, ct).ConfigureAwait(false); }
+                catch (FileNotFoundException) { return null; }
+                var digest = Convert.ToHexString(SHA256.HashData(bytes));
+                ct.ThrowIfCancellationRequested();
+                lock (terminal)
+                    if (terminal.TryGetValue(digest, out var hit)) return hit;
+                // Validate the VERY SAME bytes we hashed, including legacy-plan and metadata checks.
+                using var input = new MemoryStream(bytes, writable: false);
+                using var document = await JsonDocument.ParseAsync(input, cancellationToken: ct).ConfigureAwait(false);
+                var manifest = store.DecodeValidated(document);
+                ct.ThrowIfCancellationRequested();
+                var projection = project(manifest);
+                if (manifest.TerminalState is not null)
+                    lock (terminal)
+                    {
+                        if (terminal.Count >= 1024) terminal.Clear();
+                        terminal[digest] = projection;
+                    }
+                return projection;
+            }, token);
+    }
+
     private Task<ObservationRunManifest> PublishSnapshotCoreAsync(
         ObservationSnapshot snapshot,
         ObservationRunCounters? counters,
@@ -648,18 +681,7 @@ public sealed class ObservationRunJournalStore
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-            var manifest = document.RootElement.Deserialize<ObservationRunManifest>(JsonOptions);
-            if (manifest is null)
-            {
-                throw new ObservationRunManifestCorruptException($"Manifest '{ManifestPath}' is empty.");
-            }
-
-            // Validate the persisted schema before interpreting omitted optional
-            // fields through today's model. Historical records stay read-only;
-            // mutations below still require the current typed plan hash.
-            var persistedPlan = document.RootElement.TryGetProperty("plan", out var plan) ? plan : (JsonElement?)null;
-            ValidateManifest(manifest, persistedPlan);
-            return manifest;
+            return DecodeValidated(document);
         }
         catch (ObservationRunManifestCorruptException)
         {
@@ -671,6 +693,15 @@ public sealed class ObservationRunJournalStore
                 $"Manifest '{ManifestPath}' could not be read or validated: {ex.Message}",
                 ex);
         }
+    }
+
+    private ObservationRunManifest DecodeValidated(JsonDocument document)
+    {
+        var manifest = document.RootElement.Deserialize<ObservationRunManifest>(JsonOptions)
+            ?? throw new ObservationRunManifestCorruptException($"Manifest '{ManifestPath}' is empty.");
+        var persistedPlan = document.RootElement.TryGetProperty("plan", out var plan) ? plan : (JsonElement?)null;
+        ValidateManifest(manifest, persistedPlan);
+        return manifest;
     }
 
     private async Task WriteAtomicUnlockedAsync(

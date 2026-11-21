@@ -414,6 +414,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationContext context,
         CancellationToken cancellationToken)
     {
+        nativeMeridianCapacityGate = null;
         if (configuration.SequencePlan?.TargetDeadlineUtc is { } visibilityEnd)
             context.LimitVisibilityTo(visibilityEnd);
         // A meridian boundary is a normal end of this segment, not permission
@@ -443,6 +444,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationStage stage, ObservationContext context, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        if (NightStartHomeDriverBoundary.For(telescopeMediator).Unjoined is { } homeBusy)
+            return new StageResult(homeBusy);
         if (stage != ObservationStage.FinalizeObservation && SequenceStopGate() is { } sequenceStop)
             return new StageResult(sequenceStop);
         var existingRunId = Interlocked.CompareExchange(
@@ -592,7 +595,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     disposition = ex.Gate.Disposition.ToString(),
                     ex.Gate.Message,
                 }).ConfigureAwait(false);
-                var withheld = new StageResult(ex.Gate);
+                var withheld = ex.ToStageResult();
                 (bool Retry, StageResult Result) automaticRecovery;
                 try
                 {
@@ -623,7 +626,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 catch (PhysicalActionGateException recoveryGate)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    automaticRecovery = (false, new StageResult(recoveryGate.Gate));
+                    automaticRecovery = (false, recoveryGate.ToStageResult());
                 }
                 if (automaticRecovery.Retry)
                 {
@@ -676,7 +679,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     catch (PhysicalActionGateException recoveryGate)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        return await CompleteStageResultAsync(stage, new StageResult(recoveryGate.Gate), cancellationToken).ConfigureAwait(false);
+                        return await CompleteStageResultAsync(stage, recoveryGate.ToStageResult(), cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception recoveryError)
                     {
@@ -2259,6 +2262,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationContext context,
         CancellationToken cancellationToken)
     {
+        if (RoofConnection.PendingGate is { } pending) return pending;
         var selectionGate = ValidateCurrentEnvironmentDeviceSelections();
         if (selectionGate.Disposition != GateDisposition.Passed) return selectionGate;
 
@@ -2309,34 +2313,49 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             warnings.Add("no dome/roll-off-roof adapter is selected");
         }
-        else if (!domeMediator.GetInfo().Connected)
+        else
         {
-            await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
-            selectionGate = ValidateCurrentEnvironmentDeviceSelections();
-            if (selectionGate.Disposition != GateDisposition.Passed) return selectionGate;
-            Report("按锁定的 N.I.N.A. Profile 自动连接圆顶/平移顶适配器（本步骤不发开关顶命令）");
-            if (!await domeMediator.Connect().ConfigureAwait(false))
+            if (CurrentRoofBoundaryGate() is { } roofPending) return roofPending;
+            var acknowledgedConnection = false;
+            if (!domeMediator.GetInfo().Connected)
             {
-                if (configuration.Environment.RequireOpenDomeOrRoof)
+                await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+                Report("连接原绑定屋顶（不发开关顶命令；最多等待 20 秒）");
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var connected = await RoofConnection.ConnectAsync(
+                    () => domeMediator.GetInfo().Connected ? Task.FromResult(true) : domeMediator.Connect(),
+                    ValidateCurrentEnvironmentDeviceSelections,
+                    TimeSpan.FromSeconds(Math.Min(20, configuration.Environment.DomeOrRoofTransitionTimeoutSeconds)),
+                    cancellationToken).ConfigureAwait(false);
+                await WriteAuditBestEffortAsync("roof-adapter-connect", new
                 {
-                    return GateResult.Unknown("ROOF_ADAPTER_CONNECT_FAILED", "N.I.N.A. could not connect the selected dome/roll-off-roof adapter.");
+                    expected = BoundRoofId, connected.Code, connected.Message, elapsedMilliseconds = watch.ElapsedMilliseconds,
+                    nativeStillPending = RoofConnection.PendingGate is not null, roofMotionIssued = false,
+                }).ConfigureAwait(false);
+                acknowledgedConnection = connected.Disposition == GateDisposition.Passed;
+                if (!acknowledgedConnection)
+                {
+                    if (configuration.Environment.RequireOpenDomeOrRoof || connected.Code != "ROOF_ADAPTER_CONNECT_FAILED")
+                        return connected;
+                    warnings.Add("selected dome/roll-off-roof adapter could not connect");
                 }
-                warnings.Add("selected dome/roll-off-roof adapter could not connect");
             }
-        }
 
-        // A full-unattended run also assumes terminal responsibility for a
-        // roof that was already open when its exact locked adapter connected.
-        // Without this adoption, a later camera/focuser/guider connection
-        // failure could leave an already-open observatory outside the shared
-        // failure-close path merely because the dedicated open stage had not
-        // been reached yet.
-        if (!configuration.Environment.WeakSupervisionEnabled && devices.HasDomeOrRoof)
-        {
-            var connectedRoof = domeMediator.GetInfo();
-            if (connectedRoof.Connected &&
-                EnvironmentAdapterIdentityMatches(connectedRoof.DeviceId, devices.DomeOrRoofId) &&
-                connectedRoof.ShutterStatus == ShutterState.ShutterOpen)
+            var seen = domeMediator.GetInfo();
+            if (configuration.Environment.RequireOpenDomeOrRoof || acknowledgedConnection ||
+                (seen.Connected && EnvironmentAdapterIdentityMatches(seen.DeviceId, BoundRoofId)))
+            {
+                var ready = await CheckInitialRoofReadbackAsync(cancellationToken).ConfigureAwait(false);
+                if (ready.Disposition != GateDisposition.Passed)
+                {
+                    if (configuration.Environment.RequireOpenDomeOrRoof || ready.Code != "ROOF_STATE_UNKNOWN") return ready;
+                    warnings.Add("selected dome/roll-off-roof adapter did not publish a connected snapshot");
+                }
+            }
+            // Assume responsibility before another adapter/camera failure can
+            // leave an already-open roof outside the shared failure-close path.
+            if (!configuration.Environment.WeakSupervisionEnabled &&
+                NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) == BoundRoofPosition.Open)
             {
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 1);
                 Interlocked.Exchange(ref domeOrRoofLifecycleCommitted, 1);
@@ -2398,18 +2417,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 "Full unattended mode requires a locked N.I.N.A. dome/roll-off-roof selection and live state authority.");
         }
 
+        if (CurrentRoofBoundaryGate() is { } roofBoundary) return roofBoundary;
         var dome = domeMediator.GetInfo();
-        if (!dome.Connected)
-        {
-            return GateResult.Unknown("ROOF_STATE_UNKNOWN", "The locked N.I.N.A. roof adapter is disconnected.");
-        }
-        if (!EnvironmentAdapterIdentityMatches(dome.DeviceId, configuration.Environment.Devices.DomeOrRoofId))
-        {
-            return GateResult.Fail(
-                "ROOF_ADAPTER_IDENTITY_MISMATCH",
-                $"Connected roof adapter '{dome.DeviceId}' does not match locked selection '{configuration.Environment.Devices.DomeOrRoofId}'.");
-        }
-        if (dome.ShutterStatus == ShutterState.ShutterOpen)
+        var roofState = NinaRoofReadback.CheckObserving(dome, BoundRoofId, allowClosed: true);
+        if (roofState.Disposition != GateDisposition.Passed) return roofState;
+        if (NinaRoofReadback.Position(dome, BoundRoofId) == BoundRoofPosition.Open)
         {
             Interlocked.Exchange(ref domeOrRoofOpenEstablished, 1);
             Interlocked.Exchange(ref domeOrRoofLifecycleCommitted, 1);
@@ -2442,6 +2454,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 $"The roof must be stably closed before an unattended open command; current state is {dome.ShutterStatus}.");
         }
 
+        if (await WindowsRestartProbe.System.BeforeOpeningAsync(cancellationToken).ConfigureAwait(false) is { } updateGate)
+            return updateGate;
         await environmentMechanicalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -2495,12 +2509,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 !await IndependentRoofGuiderIdleAsync(cancellationToken).ConfigureAwait(false))
                 return GateResult.Unknown("ROOF_OPEN_GUIDER_ACTIVE", "PHD2 became active during opening preparation; no roof-open command was issued.");
             await CheckpointAndRejectStaleStageStackAsync(context, cancellationToken).ConfigureAwait(false);
+            if (await WindowsRestartProbe.System.BeforeOpeningAsync(cancellationToken).ConfigureAwait(false) is { } beforeDispatch)
+                return beforeDispatch;
+            cancellationToken.ThrowIfCancellationRequested();
             prerequisite = ValidateRoofOpeningPrerequisites(context, plan);
             if (prerequisite.Disposition != GateDisposition.Passed) return prerequisite;
             dome = domeMediator.GetInfo();
-            if (!dome.Connected ||
-                !EnvironmentAdapterIdentityMatches(dome.DeviceId, configuration.Environment.Devices.DomeOrRoofId) ||
-                dome.ShutterStatus != ShutterState.ShutterClosed)
+            if (CurrentRoofBoundaryGate() is not null || NinaRoofReadback.Position(dome, BoundRoofId) != BoundRoofPosition.Closed ||
+                !dome.CanSetShutter)
             {
                 return GateResult.Unknown(
                     "ROOF_OPEN_STATE_CHANGED",
@@ -2509,6 +2525,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
             if (configuration.Environment.RoofNeverInterferesWithMount && !IndependentRoofMountStopped())
                 return GateResult.Unknown("ROOF_OPEN_MOUNT_MOVING", "Mount stopped state changed immediately before roof opening.");
+            if (!configuration.Environment.RoofNeverInterferesWithMount && !IsBoundMountParked())
+                return GateResult.Unknown("ROOF_OPEN_MOUNT_PARK_UNCONFIRMED", "开顶前无法确认原绑定赤道仪已停放且静止；未开顶。");
             Report(configuration.Environment.RoofNeverInterferesWithMount
                 ? "无干涉屋顶：AIWeather 与停止状态通过，直接开顶；不要求 Park，不移动赤道仪"
                 : "全无人监管：AIWeather、安全天气门和停放状态均通过，委托 N.I.N.A./RRCI 打开平移顶");
@@ -2519,7 +2537,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             Interlocked.Exchange(ref domeOrRoofLifecycleCommitted, 1);
             if (!await domeMediator.OpenShutter(cancellationToken).ConfigureAwait(false))
             {
-                if (domeMediator.GetInfo().ShutterStatus == ShutterState.ShutterClosed)
+                if (CurrentRoofBoundaryGate() is null && NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) == BoundRoofPosition.Closed)
                 {
                     Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
                 }
@@ -2532,7 +2550,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             {
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 1);
             }
-            else if (domeMediator.GetInfo().ShutterStatus == ShutterState.ShutterClosed)
+            else if (CurrentRoofBoundaryGate() is null && NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) == BoundRoofPosition.Closed)
             {
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
             }
@@ -2610,11 +2628,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         {
             cancellationToken.ThrowIfCancellationRequested();
             var telescope = telescopeMediator.GetInfo();
-            if (!telescope.Connected)
+            if (!telescope.Connected || !EnvironmentAdapterIdentityMatches(telescope.DeviceId, configuration.ExpectedTelescopeId))
             {
                 return GateResult.Unknown("MOUNT_DISCONNECTED_WHILE_PARKING", "The mount disconnected while preparing the roof transition.");
             }
-            if (telescope.AtPark && !telescope.Slewing)
+            if (telescope.AtPark && !telescope.Slewing && !telescope.IsPulseGuiding && !telescope.TrackingEnabled)
             {
                 return GateResult.Pass("MOUNT_PARKED_FOR_ROOF", "N.I.N.A. attested that the mount is parked and stopped.");
             }
@@ -2625,39 +2643,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             $"The mount did not reach a checked parked state within {configuration.Environment.DomeOrRoofTransitionTimeoutSeconds} seconds.");
     }
 
-    private async Task<GateResult> WaitForDomeOrRoofStateAsync(
-        ShutterState expected,
-        CancellationToken cancellationToken)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(configuration.Environment.DomeOrRoofTransitionTimeoutSeconds);
-        while (DateTimeOffset.UtcNow <= deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var dome = domeMediator.GetInfo();
-            if (!dome.Connected)
-            {
-                return GateResult.Unknown("ROOF_DISCONNECTED_DURING_TRANSITION", "The RRCI roof adapter disconnected during a commanded transition.");
-            }
-            if (!EnvironmentAdapterIdentityMatches(dome.DeviceId, configuration.Environment.Devices.DomeOrRoofId))
-            {
-                return GateResult.Fail("ROOF_IDENTITY_CHANGED_DURING_TRANSITION", "The connected roof adapter identity changed during a commanded transition.");
-            }
-            if (dome.ShutterStatus == expected)
-            {
-                return GateResult.Pass(
-                    expected == ShutterState.ShutterOpen ? "UNATTENDED_ROOF_OPEN" : "UNATTENDED_ROOF_CLOSED",
-                    $"N.I.N.A./RRCI attested roll-off-roof state {expected}.");
-            }
-            if (dome.ShutterStatus == ShutterState.ShutterError)
-            {
-                return GateResult.Fail("ROOF_TRANSITION_ERROR", "The RRCI roof adapter entered ShutterError during the commanded transition.");
-            }
-            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-        }
-        return GateResult.Unknown(
-            "ROOF_TRANSITION_TIMEOUT",
-            $"The roof did not reach {expected} within {configuration.Environment.DomeOrRoofTransitionTimeoutSeconds} seconds.");
-    }
+    private Task<GateResult> WaitForDomeOrRoofStateAsync(ShutterState expected, CancellationToken cancellationToken) =>
+        NinaRoofReadback.WaitForEndpointAsync(domeMediator.GetInfo, CurrentRoofBoundaryGate, BoundRoofId, expected,
+            RoofTransitionLimit, TimeSpan.FromMilliseconds(250), cancellationToken);
 
     private async Task<GateResult> StartAtrPreCoolingAsync(
         ObservationContext context,
@@ -3665,45 +3653,47 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         await environmentMechanicalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var selection = ValidateCurrentEnvironmentDeviceSelections();
-            if (selection.Disposition != GateDisposition.Passed)
-            {
-                return $"{selection.Code}: {selection.Message}";
-            }
+            if (CurrentRoofBoundaryGate() is { } blocked)
+                return $"{blocked.Code}: {blocked.Message}";
 
             var dome = domeMediator.GetInfo();
-            if (!dome.Connected)
+            var position = NinaRoofReadback.Position(dome, BoundRoofId);
+            if (position == BoundRoofPosition.Opening)
             {
-                return "The locked RRCI roof adapter is disconnected; no roof command was sent.";
+                // Never reverse a shutter that is still opening. Stay within
+                // the original overall closeout token while waiting for it.
+                var open = await WaitForDomeOrRoofStateAsync(ShutterState.ShutterOpen, cancellationToken).ConfigureAwait(false);
+                if (open.Disposition != GateDisposition.Passed) return $"{open.Code}: {open.Message}";
+                dome = domeMediator.GetInfo();
+                position = NinaRoofReadback.Position(dome, BoundRoofId);
             }
-            if (!EnvironmentAdapterIdentityMatches(dome.DeviceId, configuration.Environment.Devices.DomeOrRoofId))
-            {
-                return $"Connected roof adapter '{dome.DeviceId}' does not match locked selection '{configuration.Environment.Devices.DomeOrRoofId}'; no roof command was sent.";
-            }
+            if (position is not (BoundRoofPosition.Open or BoundRoofPosition.Closed or BoundRoofPosition.Closing))
+                return NinaRoofReadback.CheckObserving(dome, BoundRoofId, allowClosed: true).Message +
+                    " 未发停放或关顶指令，未确认关顶。";
             if (configuration.Environment.RoofNeverInterferesWithMount)
                 return await CloseIndependentRoofAsync(reason, cancellationToken).ConfigureAwait(false);
-            if (dome.ShutterStatus == ShutterState.ShutterClosed)
+
+            async Task<string?> ConfirmAlreadyClosingOrClosedAsync()
             {
+                var closed = await CloseBoundRoofOnceAsync(cancellationToken, observeOnly: true).ConfigureAwait(false);
+                if (closed.Disposition != GateDisposition.Passed) return $"{closed.Code}: {closed.Message}";
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
-                var closedRoofMount = telescopeMediator.GetInfo();
-                return closedRoofMount.Connected && closedRoofMount.AtPark && !closedRoofMount.Slewing
+                return IsBoundMountParked()
                     ? null
-                    : "The roll-off roof already reports closed, but the mount is not attested connected, parked and stopped. " +
+                    : "The roll-off roof is confirmed closed, but the original mount is not attested parked and stopped. " +
                       "No mount motion was attempted under a closed roof; terminal cleanup is incomplete.";
             }
+            if (position is BoundRoofPosition.Closing or BoundRoofPosition.Closed)
+                return await ConfirmAlreadyClosingOrClosedAsync().ConfigureAwait(false);
             if (!dome.CanSetShutter)
             {
                 return "The locked RRCI adapter cannot command the roll-off roof closed.";
             }
-            if (dome.ShutterStatus == ShutterState.ShutterError)
-            {
-                return "The locked RRCI adapter reports ShutterError; automatic closure cannot be attested.";
-            }
 
             var telescope = telescopeMediator.GetInfo();
-            if (!telescope.Connected)
+            if (!telescope.Connected || !EnvironmentAdapterIdentityMatches(telescope.DeviceId, configuration.ExpectedTelescopeId))
             {
-                return "The mount is disconnected, so its parked state cannot be attested and the roll-off roof will not be commanded closed.";
+                return "原绑定赤道仪未连接或身份改变，不能停放或关闭屋顶。";
             }
             if (telescope.Slewing)
             {
@@ -3711,12 +3701,20 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 catch (Exception ex) { return $"Mount slew could not be stopped before roof closure: {ex.Message}"; }
             }
             telescope = telescopeMediator.GetInfo();
-            if (!telescope.AtPark)
+            if (!telescope.Connected || telescope.Slewing || telescope.IsPulseGuiding ||
+                !EnvironmentAdapterIdentityMatches(telescope.DeviceId, configuration.ExpectedTelescopeId))
+                return "原绑定赤道仪状态改变或尚未确认停止，不能停放或关闭屋顶。";
+            if (!IsBoundMountParked())
             {
                 if (!telescope.CanPark)
                 {
                     return "The mount is not parked and does not report park capability; the roll-off roof will not be commanded closed.";
                 }
+                if (CurrentRoofBoundaryGate() is { } changedBeforePark) return changedBeforePark.Message;
+                var beforePark = NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId);
+                if (beforePark is BoundRoofPosition.Closing or BoundRoofPosition.Closed)
+                    return await ConfirmAlreadyClosingOrClosedAsync().ConfigureAwait(false);
+                if (beforePark != BoundRoofPosition.Open) return "停放前未再次确认原屋顶已开且停止，未发停放指令。";
                 Report("全无人监管收尾：镜盖已处理，正在通过 N.I.N.A. 停放赤道仪");
                 if (!await telescopeMediator.ParkTelescope(progress, cancellationToken).ConfigureAwait(false))
                 {
@@ -3729,24 +3727,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 }
             }
 
-            dome = domeMediator.GetInfo();
-            if (!dome.Connected ||
-                !EnvironmentAdapterIdentityMatches(dome.DeviceId, configuration.Environment.Devices.DomeOrRoofId))
-            {
-                return "The locked RRCI connection or identity changed after mount park; no roof command was sent.";
-            }
-            if (dome.ShutterStatus == ShutterState.ShutterClosed)
-            {
-                Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
-                return null;
-            }
-
-            Report("全无人监管收尾：赤道仪已停放，委托 N.I.N.A./RRCI 关闭平移顶");
-            if (!await domeMediator.CloseShutter(cancellationToken).ConfigureAwait(false))
-            {
-                return "N.I.N.A./RRCI rejected the roof-close command. On an RRCI replica, verify fresh primary status, replica command authority and required-node parked heartbeats.";
-            }
-            var closeGate = await WaitForDomeOrRoofStateAsync(ShutterState.ShutterClosed, cancellationToken).ConfigureAwait(false);
+            if (!IsBoundMountParked()) return "关顶前无法复核原绑定赤道仪已停放且静止；未发关顶。";
+            Report("全无人监管收尾：原赤道仪已停放，核对 RRCI 已关或执行一次安全关顶");
+            var closeGate = await CloseBoundRoofOnceAsync(cancellationToken).ConfigureAwait(false);
             if (closeGate.Disposition == GateDisposition.Passed)
             {
                 Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
@@ -3860,6 +3843,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         ObservationPlan plan,
         bool allowClosedRoofForUnattendedOpening = false)
     {
+        if (RoofConnection.PendingGate is { } pendingRoof) return pendingRoof;
         var capability = ObservationAutomationPolicy.ValidateFullAutomationCapabilities(
             configuration.Environment.RequireSafetyMonitor,
             configuration.Environment.RequireOpenDomeOrRoof,
@@ -3935,12 +3919,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 }
                 environmentWarnings.Add("selected dome/roll-off-roof identity could not be trusted");
             }
-            else if (dome.ShutterStatus != ShutterState.ShutterOpen &&
-                     !(allowClosedRoofForUnattendedOpening &&
-                       !configuration.Environment.WeakSupervisionEnabled &&
-                       dome.ShutterStatus == ShutterState.ShutterClosed))
+            else
             {
-                return GateResult.Fail("ROOF_NOT_OPEN", $"Dome/roll-off-roof state is {dome.ShutterStatus}, not open.");
+                var roofGate = NinaRoofReadback.CheckObserving(dome, devices.DomeOrRoofId,
+                    allowClosedRoofForUnattendedOpening && !configuration.Environment.WeakSupervisionEnabled);
+                if (roofGate.Disposition != GateDisposition.Passed) return roofGate;
             }
         }
 
@@ -4121,6 +4104,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             }).ConfigureAwait(false);
         }
         await CapturePhd2HomeBoundaryBeforeCatalogSlewAsync(context, cancellationToken).ConfigureAwait(false);
+        // Observe any pre-existing manual home proof BEFORE the optional move:
+        // a home we issue must not retire somebody else's prior motion debt.
+        if (configuration.SequencePlan?.HomeMountAtNightStart == true)
+        {
+            var home = await PrepareNightStartHomeAsync(context, cancellationToken).ConfigureAwait(false);
+            await WriteAuditBestEffortAsync("night-start-mount-home", home).ConfigureAwait(false);
+            if (home.Disposition != GateDisposition.Passed) return new StageResult(home);
+        }
         var trackingGate = await EnsureMountTrackingEnabledAsync(context, cancellationToken).ConfigureAwait(false);
         if (trackingGate.Disposition != GateDisposition.Passed && trackingGate.Code != "TELESCOPE_TRACKING_ENABLE_TIMEOUT")
             return new StageResult(trackingGate);
@@ -5655,8 +5646,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             return G3FieldState.Failed(probe.Gate, probe.FramePath, probe.Image, probe.Solve, probe.MountBinding);
         if (motionPrediction is { AllowUnsolvedTargetHandoff: false } && probe.Solve?.Result.Success != true)
         {
-            // Intermediate-neighbour predictions only center PL3's search.
-            // They must never enter target-field no-WCS recovery or PHD2.
+            // Intermediate-neighbour and non-overlapping arrival predictions
+            // only center the solve search; they do not identify a target.
             return G3FieldState.Failed(probe.Gate, probe.FramePath, probe.Image, probe.Solve, probe.MountBinding);
         }
         if (probe.MountBinding is not null && !string.IsNullOrWhiteSpace(probe.FramePath))
@@ -5812,6 +5803,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 "Catalogue coordinates are a search hint only; this current-field probe cannot use QHY or issue Sync/GOTO.")
             : await SelectG3PlateSolveHintAsync(context, cancellationToken, motionPrediction).ConfigureAwait(false);
         var shortHandoffConfirmationAttempted = false;
+        var farFieldNativeCheckUsed = false;
         int? finalShortRecheckMilliseconds = null;
         var emergencyShortSolveRecheckUsed = false;
         for (var index = 0; index < tierCount; index++)
@@ -6033,8 +6025,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 continue;
             }
 
-            var content = G3SolveProbeContentAnalyzer.Analyze(
-                G3FrameInputPolicy.Create(properties.Width, properties.Height, raw, configuration.G3));
+            var probeFrame = G3FrameInputPolicy.Create(properties.Width, properties.Height, raw, configuration.G3);
+            var content = G3SolveProbeContentAnalyzer.Analyze(probeFrame);
             var contentIsOverexposed = string.Equals(
                 content.Gate.Code,
                 G3SolveProbeContentAnalyzer.OverexposedGateCode,
@@ -6055,6 +6047,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
 
             G3PlateSolveProbeState? outsideShortHandoff = null;
             var failedShortShortcutNeedsExistingFrameSolve = false;
+            var preserveOriginalOutsideRoute = false;
             var predictionTiming = motionPrediction is null ? null : G3MotionPredictionTimingPolicy.Evaluate(
                 motionPrediction.SourceTiming, DateTimeOffset.UtcNow, motionPrediction.MaximumUncertaintyPixels,
                 commissioning?.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ?? 0, motionPrediction.MeasuredDrift);
@@ -6153,13 +6146,22 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     var confirmed = await ConfirmSaturatedG3HandoffWithShortExposureAsync(
                         context, handoffPrediction, measuredTarget, captured.Path, probeMountBinding, shortExposure.Value,
                         handoffPreset, handoffSlit.SlitDetection.Geometry, attempts.AsReadOnly(), cancellationToken,
+                        content.StellarMeasurement.Stars, t => OptionalTargetTrackStarsAsync(probeFrame, raw, sha256, t),
+                        new(captured.NativeRequestStartedUtc.GetValueOrDefault(), captured.CompletedUtc,
+                            exposureMilliseconds / 1000d, captured.CompletedUtc),
                         allowMeasuredCoarse: measuredCoarseAvailable).ConfigureAwait(false);
                     if (confirmed is not null)
                     {
-                        if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate)) return confirmed;
-                        outsideShortHandoff = confirmed;
+                        if (!G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate, outsideShortHandoff?.Gate)) return confirmed;
+                        preserveOriginalOutsideRoute = !G3PostWcsShortHandoffPolicy.NeedsSameFrameCoarseSolve(confirmed.Gate);
                         failedShortShortcutNeedsExistingFrameSolve = confirmed.Gate.Code == "G3_POST_WCS_SHORT_UNCONFIRMED";
-                        Report(failedShortShortcutNeedsExistingFrameSolve
+                        // The failed short pair carries no position authority. Keep the
+                        // long frame's original charged route, including the remaining
+                        // finite ladder/return if this individual frame cannot solve.
+                        if (!preserveOriginalOutsideRoute) outsideShortHandoff = confirmed;
+                        Report(preserveOriginalOutsideRoute
+                            ? "短帧互相一致但没有确认目标身份。回到这张长帧的原定正式解算；若未解出，仅使用原预算中的剩余档位，不按短帧候选移动。"
+                            : failedShortShortcutNeedsExistingFrameSolve
                             ? "短帧未确认目标：不把候选或预测当实测；回到已有长帧完成本来尚未执行的正式解算，不重拍整套阶梯。"
                             : "短帧已确认目标，但超出剩余精调范围：仅解算已有当前场图像一次，成功后按原预算继续粗定位；不扩大精调门限。");
                     }
@@ -6170,7 +6172,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
             PlateSolveEvidence solve;
             try
             {
-                var registeredCurrent = !currentPositionCheck && !contentIsOverexposed
+                var registeredCurrent = !preserveOriginalOutsideRoute && !currentPositionCheck && !contentIsOverexposed
                     ? await TrySparseRegisteredBeforeSolveAsync(context, image, captured.Path, sha256,
                         probeMountBinding, beforeProbeMountReadback, exposureMilliseconds, content,
                         solveHint.Coordinates, motionPrediction, cancellationToken).ConfigureAwait(false)
@@ -6185,15 +6187,41 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         t => TryWideFieldSolveHintAsync(context, hintProbe, t), cancellationToken).ConfigureAwait(false)
                         ?? currentSolveHint;
                 }
-                solve = registeredCurrent ?? await SolveG3HandoffFrameWithResolutionRecoveryAsync(
+                var farFieldNativeCheck = registeredCurrent is { IsFormal: false, Result.Success: true, Result.Coordinates: { } inferredCenter } &&
+                    G3SparseRecoveryWorkflow.NeedsNativeFarFieldCheck(farFieldNativeCheckUsed, registeredCurrent.IsFormal,
+                        AngularSeparationArcseconds(targetCoordinates.Transform(inferredCenter.Epoch), inferredCenter),
+                        registeredCurrent.Result.Pixscale, properties.Width, properties.Height);
+                if (farFieldNativeCheck)
+                {
+                    farFieldNativeCheckUsed = true;
+                    var integrity = await ValidateSparseInferenceSourcesAsync(registeredCurrent!,
+                        ComputeFileSha256Async, cancellationToken).ConfigureAwait(false);
+                    if (integrity.Disposition == GateDisposition.Passed) currentSolveHint = registeredCurrent!.Result.Coordinates;
+                    else if (integrity.FailureScope != GateFailureScope.TargetQuality) throw new PhysicalActionGateException(integrity);
+                }
+                solve = (!farFieldNativeCheck ? registeredCurrent : null) ?? await SolveG3HandoffFrameWithResolutionRecoveryAsync(
                     context, image,
                     currentSolveHint,
                     $"PHD2/G3 solve-only exposure ladder {preset.PresetId} tier {index + 1}",
-                    captured.Path, probeMountBinding, outsideShortHandoff is not null,
+                    captured.Path, probeMountBinding,
+                    outsideShortHandoff is not null || motionPrediction?.RequiresIndependentArrivalAstrometry == true,
                     firstOverride: PlateSolveDownSamplePolicy.G3RecoveryTierOverride(
                         index + 1, attempts.Any(attempt => attempt.GateCode is
                             "G3_PLATE_SOLVE_TIER_FAILED" or "G3_PLATE_SOLVE_PLAUSIBILITY_REJECTED")),
                     cancellationToken).ConfigureAwait(false);
+                if (farFieldNativeCheck)
+                {
+                    var native = solve;
+                    // Only an ordinary optical miss can fall back. Parity, implausible positive
+                    // solutions, timeouts, cancellation, owner/integrity errors follow their normal gates.
+                    if (!native.Result.Success && registeredCurrent!.InferenceValidUntilUtc >= DateTimeOffset.UtcNow)
+                        solve = registeredCurrent;
+                    await PublishRunJsonEvidenceAsync("g3-far-field-original-resolution",
+                        "Remote inferred field checked once on the same raw image before spending overlap moves",
+                        new { inferredEvidence = registeredCurrent!.EvidencePath, nativeEvidence = native.EvidencePath,
+                            native.Result.Success, selectedAuthority = solve.Authority, motionIssued = false,
+                            captureIssued = false, budgetReset = false }, captured.Path, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -6350,6 +6378,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     solveHintReason = solveHint.Reason,
                     solveHintRaDegrees = solveHint.Coordinates.RADegrees,
                     solveHintDecDegrees = solveHint.Coordinates.Dec,
+                    independentArrivalAstrometryRequired = motionPrediction?.RequiresIndependentArrivalAstrometry == true,
                     projectedTarget,
                     mountBinding = probeMountBinding,
                 },
@@ -6908,6 +6937,21 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
         Phd2DependencyRebuildStopProof? stoppedGuideProof = null) =>
         g3Return.ReturnAsync(context, state, G3AcquisitionMotionPath(state.ObservationRunId), token, stoppedGuideProof);
 
+    // A parsed terminal journal is NOT a motion verdict. All three consumers
+    // still check the current ledger/path, run, hashes and physical state.
+    private sealed record LedgerManifestStamp(string ObservationRunId, ObservationRunState? TerminalState,
+        string? TelescopeId, string? RecoveryContext, string? ActionHash, string? CommissioningHash);
+
+    private static readonly ObservationRunJournalStore.TerminalProjection<LedgerManifestStamp> LedgerHistory =
+        new(manifest =>
+        {
+            var telescope = manifest.LockedMetadata.Labels?.GetValueOrDefault("telescopeId");
+            return new(manifest.ObservationRunId, manifest.TerminalState, telescope,
+                string.IsNullOrWhiteSpace(telescope) ? null : ComputeSlitRecoveryContextSha256(manifest.Plan, telescope),
+                manifest.LockedMetadata.AdditionalHashes?.GetValueOrDefault("actionConfigurationSha256"),
+                manifest.LockedMetadata.CommissioningPresetSha256);
+        });
+
     internal static async Task<(bool RunIsTerminal, GateResult? Error)> ValidateG3AcquisitionMotionManifestAsync(
         G3AcquisitionMotionFileResult item,
         CancellationToken cancellationToken)
@@ -6922,11 +6966,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 $"Cannot derive an immutable run manifest from durable G3 motion '{item.Path}'."));
         }
         var manifestPath = Path.Combine(runDirectory, "manifest.json");
-        ObservationRunManifest? manifest;
+        LedgerManifestStamp? manifest;
         try
         {
-            manifest = await new ObservationRunJournalStore(manifestPath)
-                .ReadAsync(cancellationToken)
+            manifest = await LedgerHistory.ReadAsync(new ObservationRunJournalStore(manifestPath), cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
@@ -6947,22 +6990,14 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 "G3_MOTION_MANIFEST_RUN_MISMATCH",
                 $"Run manifest '{manifestPath}' does not belong to durable G3 run '{state.ObservationRunId}'."));
         }
-        if (manifest.LockedMetadata.Labels is null ||
-            !manifest.LockedMetadata.Labels.TryGetValue("telescopeId", out var telescopeId) ||
-            string.IsNullOrWhiteSpace(telescopeId) ||
-            !SameHash(
-                state.RecoveryContextSha256,
-                ComputeSlitRecoveryContextSha256(manifest.Plan, telescopeId)))
+        if (manifest.RecoveryContext is null || !SameHash(state.RecoveryContextSha256, manifest.RecoveryContext))
         {
             return (false, GateResult.Unknown(
                 "G3_MOTION_MANIFEST_CONTEXT_MISMATCH",
                 $"Run manifest '{manifestPath}' does not reproduce the target/site/horizon/Night-Setup/telescope recovery context."));
         }
-        if (manifest.LockedMetadata.AdditionalHashes is null ||
-            !manifest.LockedMetadata.AdditionalHashes.TryGetValue("actionConfigurationSha256", out var actionHash) ||
-            !SameHash(state.ActionConfigurationSha256, actionHash) ||
-            manifest.LockedMetadata.CommissioningPresetSha256 is null ||
-            !SameHash(state.CommissioningPresetSha256, manifest.LockedMetadata.CommissioningPresetSha256))
+        if (manifest.ActionHash is null || !SameHash(state.ActionConfigurationSha256, manifest.ActionHash) ||
+            manifest.CommissioningHash is null || !SameHash(state.CommissioningPresetSha256, manifest.CommissioningHash))
         {
             return (false, GateResult.Unknown(
                 "G3_MOTION_MANIFEST_BINDING_MISMATCH",
@@ -7617,7 +7652,28 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 targetCorrection.RaArcseconds, targetCorrection.DecArcseconds, maximumCommand);
             // Inferred geometry still preserves a measurable bridge. A formal
             // current-image WCS may approach directly within the ORIGINAL limits.
-            var scale = overlapMove.AppliedScale;
+            var solvedInMountEpoch = currentField.Solve.Result.Coordinates.Transform(reported.Epoch);
+            (Coordinates Optical, (double RaDegrees, double DecDegrees) Mount) ProjectCommand(double fraction)
+            {
+                var expected = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
+                    NormalizeDegrees(currentField.Solve.Result.Coordinates.RADegrees), currentField.Solve.Result.Coordinates.Dec,
+                    targetCorrection.RaArcseconds * fraction, targetCorrection.DecArcseconds * fraction);
+                var optical = new Coordinates(expected.RaDegrees, expected.DecDegrees, currentField.Solve.Result.Coordinates.Epoch,
+                    Coordinates.RAType.Degrees).Transform(reported.Epoch);
+                return (optical, G3EquatorialAxisTransfer.Apply(NormalizeDegrees(solvedInMountEpoch.RADegrees), solvedInMountEpoch.Dec,
+                    NormalizeDegrees(optical.RADegrees), optical.Dec, NormalizeDegrees(reported.RADegrees), reported.Dec));
+            }
+            var scale = G3EquatorialAxisTransfer.FitCommandScale(overlapMove.AppliedScale, maximumCommand, fraction =>
+            {
+                var point = ProjectCommand(fraction).Mount;
+                return G3AcquisitionMotionPlanner.AngularSeparationArcseconds(reported.RADegrees, reported.Dec, point.RaDegrees, point.DecDegrees);
+            });
+            if (!double.IsFinite(scale))
+            {
+                stopReason = "No finite mount-domain projection of the optical step fits the commissioned envelope.";
+                destinationPreflightStopGate = GateResult.Unknown("G3_WCS_CENTERING_OPERATION_FAILED", stopReason);
+                break;
+            }
             if (formalDirectApproach)
                 await PublishRunJsonEvidenceAsync("g3-formal-direct-correction-plan",
                     "Current-image formal WCS approach; original movement and return limits retained",
@@ -7625,7 +7681,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         maximumCommand, appliedScale = scale, state.BudgetLineageId,
                         overlapRequired = false, freshDestinationImageRequired = true, budgetReset = false },
                     currentField.FramePath, cancellationToken).ConfigureAwait(false);
-            if (scale < Math.Min(1, maximumCommand / fullMagnitude))
+            if (overlapMove.AppliedScale < Math.Min(1, maximumCommand / fullMagnitude))
             {
                 Report($"为保留拼图重叠，本次粗修收紧为 {fullMagnitude * scale:F1}″；每段仍扣原动作和回程预算，不增加限额。");
                 await PublishRunJsonEvidenceAsync("g3-overlap-correction-plan",
@@ -7635,24 +7691,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         state.MaximumCorrectionAttempts, state.MaximumElapsedSeconds, budgetReset = false },
                     currentField.FramePath, cancellationToken).ConfigureAwait(false);
             }
-            var expectedCommandedG3Center = G3AcquisitionMotionPlanner.ApplyTangentOffsetArcseconds(
-                NormalizeDegrees(currentField.Solve.Result.Coordinates.RADegrees),
-                currentField.Solve.Result.Coordinates.Dec,
-                targetCorrection.RaArcseconds * scale,
-                targetCorrection.DecArcseconds * scale);
             // Transfer the actual equatorial-axis deltas in one epoch. Applying
             // the same tangent vector at a biased mount declination introduces
             // a second cos(dec) conversion and can miss an otherwise correct
             // WCS destination by tens of arcseconds after a large correction.
-            var solvedInMountEpoch = currentField.Solve.Result.Coordinates.Transform(reported.Epoch);
-            var expectedInMountEpoch = new Coordinates(
-                expectedCommandedG3Center.RaDegrees, expectedCommandedG3Center.DecDegrees,
-                currentField.Solve.Result.Coordinates.Epoch, Coordinates.RAType.Degrees)
-                .Transform(reported.Epoch);
-            var commandedCoordinate = G3EquatorialAxisTransfer.Apply(
-                NormalizeDegrees(solvedInMountEpoch.RADegrees), solvedInMountEpoch.Dec,
-                NormalizeDegrees(expectedInMountEpoch.RADegrees), expectedInMountEpoch.Dec,
-                NormalizeDegrees(reported.RADegrees), reported.Dec);
+            var (expectedInMountEpoch, commandedCoordinate) = ProjectCommand(scale);
             if (!double.IsFinite(commandedCoordinate.RaDegrees) || !double.IsFinite(commandedCoordinate.DecDegrees))
             {
                 stopReason = "The spherical G3 WCS-centering command coordinate is invalid.";
@@ -7980,6 +8023,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         predictedTarget.X - (projectionDestination.X - desiredTargetPixel.X),
                         predictedTarget.Y - (projectionDestination.Y - desiredTargetPixel.Y));
                 }
+                var requiresIndependentArrivalAstrometry = G3PostWcsIdentityPolicy.RequiresIndependentArrivalAstrometry(
+                    reserve.MoveFromCurrentArcseconds,
+                    currentField.Image.Properties.Width, currentField.Image.Properties.Height,
+                    currentField.Solve.Result.Pixscale);
                 motionPrediction = new G3WcsMotionPrediction(
                     predictedTarget,
                     MaximumUncertaintyPixels: MountCommandArrivalToleranceArcseconds / currentField.Solve.Result.Pixscale + inverse.InverseResidualPixels + currentField.Solve.PredictionUncertaintyPixels,
@@ -7993,10 +8040,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     commandResidual,
                     inverse.InverseResidualPixels,
                     estimatedArrivalSolve.Coordinates,
-                    AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach,
+                    AllowUnsolvedTargetHandoff: !isSolvedNeighbourApproach && !requiresIndependentArrivalAstrometry,
                     CatalogRegistrationReference: currentField.CatalogRegistrationReference,
                     RequireIndependentTargetPair: true)
                 {
+                    RequiresIndependentArrivalAstrometry = requiresIndependentArrivalAstrometry,
                     SourceTiming = currentField.Solve.ExposureTiming,
                     MeasuredDrift = currentField.Solve.MeasuredDrift,
                     FormalAnchor = currentField.Solve.IsFormal &&
@@ -8004,6 +8052,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         ? currentField.Solve : null,
                     FormalAnchorSourceSha256 = currentField.MountBinding?.FrameSha256,
                 };
+                if (requiresIndependentArrivalAstrometry)
+                    Report("本次粗移超出原窄场画幅重叠范围：先在到达帧独立复核目录位置；短帧重复量到同一星点不等于确认目标。");
             }
             catch (Exception ex)
             {
@@ -8078,6 +8128,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                     neighbourArrivalTolerancePixels,
                     isSolvedNeighbourApproach,
                     advancingFromSolvedNeighbour,
+                    independentArrivalAstrometryRequired = motionPrediction?.RequiresIndependentArrivalAstrometry == true,
                     directAfterFailedNeighbour,
                     state.DirectApproachAfterNeighbourFailureAttempts,
                     destinationPierSidePreflight = destinationSideGate.Code,
@@ -8850,19 +8901,9 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var worstCaseEndpointRadiusArcseconds =
                     sphericalIntentGate.EndpointRadiusArcseconds +
                     G3SearchStableEndpointToleranceArcseconds;
-                var maximumReturnCommandArcseconds =
-                    durableSearch.MaximumSingleCorrectionArcseconds -
-                    durableSearch.ArrivalToleranceArcseconds;
-                var guaranteedReturnProgressArcseconds =
-                    maximumReturnCommandArcseconds - durableSearch.ArrivalToleranceArcseconds;
-                var prechargedReturnMoves =
-                    double.IsFinite(worstCaseEndpointRadiusArcseconds) &&
-                    double.IsFinite(guaranteedReturnProgressArcseconds) &&
-                    guaranteedReturnProgressArcseconds > 0
-                        ? checked((int)Math.Ceiling(
-                            worstCaseEndpointRadiusArcseconds /
-                            guaranteedReturnProgressArcseconds))
-                        : int.MaxValue;
+                var prechargedReturnMoves = G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(
+                    durableSearch, NormalizeDegrees(commanded.RADegrees), commanded.Dec,
+                    G3SearchStableEndpointToleranceArcseconds);
                 var prechargedReturnReserveArcseconds = prechargedReturnMoves == int.MaxValue
                     ? double.PositiveInfinity
                     : prechargedReturnMoves * durableSearch.MaximumSingleCorrectionArcseconds;
@@ -9245,12 +9286,8 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 var additionalActualMotionCharge = Math.Max(
                     0,
                     actualMoveArcseconds - outboundPrechargedMotionArcseconds);
-                var actualReturnMoves =
-                    double.IsFinite(actualOriginRadiusArcseconds) &&
-                    double.IsFinite(guaranteedReturnProgressArcseconds) &&
-                    guaranteedReturnProgressArcseconds > 0
-                        ? checked((int)Math.Ceiling(actualOriginRadiusArcseconds / guaranteedReturnProgressArcseconds))
-                        : int.MaxValue;
+                var actualReturnMoves = G3AcquisitionMotionPlanner.ReservedSearchReturnMoves(
+                    durableSearch, NormalizeDegrees(settledAfterMove.RADegrees), settledAfterMove.Dec, 0);
                 var actualReturnReserveArcseconds = actualReturnMoves == int.MaxValue
                     ? double.PositiveInfinity
                     : actualReturnMoves * durableSearch.MaximumSingleCorrectionArcseconds;
@@ -9273,7 +9310,7 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                         limits.MaximumCumulativeMotionArcseconds + 1e-9 ||
                     projectedGlobalCumulativeArcseconds + actualReturnReserveArcseconds >
                         commissioning.MotionLimits.MaximumCumulativeCorrectionDegrees * 3600d + 1e-9 ||
-                    durableSearch.CorrectionAttempts + actualReturnMoves >
+                    (long)durableSearch.CorrectionAttempts + actualReturnMoves >
                         durableSearch.MaximumCorrectionAttempts ||
                     remainingElapsedSeconds < actualReturnMoves * durableSearch.WorstCaseActionSeconds)
                 {
@@ -12125,11 +12162,10 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 $"Cannot derive the observation manifest path from durable slit state '{item.Path}'."));
         }
         var manifestPath = Path.Combine(runDirectory, "manifest.json");
-        ObservationRunManifest? manifest;
+        LedgerManifestStamp? manifest;
         try
         {
-            manifest = await new ObservationRunJournalStore(manifestPath)
-                .ReadAsync(cancellationToken)
+            manifest = await LedgerHistory.ReadAsync(new ObservationRunJournalStore(manifestPath), cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
@@ -12150,27 +12186,20 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
                 "SLIT_PENDING_MANIFEST_RUN_MISMATCH",
                 $"Run manifest '{manifestPath}' does not belong to durable slit run '{state.ObservationRunId}'."));
         }
-        if (manifest.LockedMetadata.Labels is null ||
-            !manifest.LockedMetadata.Labels.TryGetValue("telescopeId", out var manifestTelescopeId) ||
-            string.IsNullOrWhiteSpace(manifestTelescopeId))
+        if (string.IsNullOrWhiteSpace(manifest.TelescopeId))
         {
             return (false, GateResult.Unknown(
                 "SLIT_PENDING_MANIFEST_TELESCOPE_MISSING",
                 $"Run manifest '{manifestPath}' lacks its immutable telescope identity."));
         }
-        if (!SameHash(
-                state.RecoveryContextSha256,
-                ComputeSlitRecoveryContextSha256(manifest.Plan, manifestTelescopeId)))
+        if (manifest.RecoveryContext is null || !SameHash(state.RecoveryContextSha256, manifest.RecoveryContext))
         {
             return (false, GateResult.Unknown(
                 "SLIT_PENDING_MANIFEST_CONTEXT_MISMATCH",
                 $"Run manifest '{manifestPath}' does not reproduce the durable slit recovery-context hash."));
         }
-        if (manifest.LockedMetadata.AdditionalHashes is null ||
-            !manifest.LockedMetadata.AdditionalHashes.TryGetValue("actionConfigurationSha256", out var manifestActionHash) ||
-            !SameHash(state.ActionConfigurationSha256, manifestActionHash) ||
-            manifest.LockedMetadata.CommissioningPresetSha256 is null ||
-            !SameHash(state.CommissioningPresetSha256, manifest.LockedMetadata.CommissioningPresetSha256))
+        if (manifest.ActionHash is null || !SameHash(state.ActionConfigurationSha256, manifest.ActionHash) ||
+            manifest.CommissioningHash is null || !SameHash(state.CommissioningPresetSha256, manifest.CommissioningHash))
         {
             return (false, GateResult.Unknown(
                 "SLIT_PENDING_MANIFEST_BINDING_MISMATCH",
@@ -16646,9 +16675,11 @@ internal sealed partial class RealObservationStageRunner : ObservationStageRunne
     }
 }
 
-internal class PhysicalActionGateException(GateResult gate) : Exception($"{gate.Code}: {gate.Message}")
+internal class PhysicalActionGateException(GateResult gate, string? evidencePath = null) : Exception($"{gate.Code}: {gate.Message}")
 {
     public GateResult Gate { get; } = gate;
+    internal string? EvidencePath { get; } = evidencePath;
+    internal StageResult ToStageResult() => new(Gate, EvidencePath);
 }
 
 internal sealed class ResumeStageRestartException : Exception
@@ -16788,6 +16819,8 @@ internal sealed record G3FieldState(
     public string? NeighbourCatalogIdentityEvidencePath { get; init; }
     public bool SparseInferenceConfirmed { get; init; }
     public G3SparseMeasuredContinuity? SparseMeasuredContinuity { get; init; }
+    // Catalogue identity only, never a WCS/position on a later guide image.
+    public G3SparseGuideAncestry? SparseGuideAncestry { get; init; }
     public G3SparseExposureTiming? ExposureTiming { get; init; }
     public G3MeasuredTargetSource? TargetTrackSource { get; init; }
 
@@ -16849,6 +16882,7 @@ internal sealed record G3WcsMotionPrediction(
     public G3SparseDriftBound? MeasuredDrift { get; init; }
     public PlateSolveEvidence? FormalAnchor { get; init; }
     public string? FormalAnchorSourceSha256 { get; init; }
+    public bool RequiresIndependentArrivalAstrometry { get; init; }
 }
 
 internal sealed record AtrCapture(

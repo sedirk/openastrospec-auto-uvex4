@@ -30,6 +30,11 @@ internal sealed record ClockRecoveryPositionSnapshot(
 // independently decides whether ordinary acquisition is safe to attempt.
 internal sealed class ClockRecoveryPositionCheck
 {
+    // OnStep can report a few arcseconds of coordinate quantisation/jitter while
+    // both reads are proven stationary, pulse-free and tracking the same field.
+    // This does not permit a slew, pulse or owner change; larger changes still
+    // require the ordinary catalogue/acquisition route.
+    private const double TrackingReadbackJitterAllowanceArcseconds = 1;
     private int attempted;
 
     private ClockRecoveryPositionCheck(string sourceRunId, ClockRecoveryPositionSnapshot before,
@@ -64,7 +69,7 @@ internal sealed class ClockRecoveryPositionCheck
             !Ready(before) || !Ready(after) || before.Identity != after.Identity ||
             issuedUtc == default || issuedUtc >= originalRecoveryDeadlineUtc ||
             before.Mount.ReportedUtc > after.Mount.ReportedUtc || after.Mount.ReportedUtc > issuedUtc ||
-            !SamePointing(before.Mount, after.Mount, maximumSeparationArcseconds)) return null;
+            !SameStoppedPointing(before, after, maximumSeparationArcseconds)) return null;
         reason = "Verified clock repair permits one same-target current-field check within the original deadline; no optical evidence is inherited.";
         return new(sourceRunId, before, after, issuedUtc, originalRecoveryDeadlineUtc, maximumSeparationArcseconds);
     }
@@ -80,7 +85,7 @@ internal sealed class ClockRecoveryPositionCheck
             now < IssuedUtc || now >= OriginalRecoveryDeadlineUtc || !Ready(current) ||
             current.Identity != After.Identity || current.Mount.ReportedUtc < IssuedUtc ||
             current.Mount.ReportedUtc > now ||
-            !SamePointing(After.Mount, current.Mount, MaximumSeparationArcseconds)) return false;
+            !SameStoppedPointing(After, current, MaximumSeparationArcseconds)) return false;
         ConsumedRunId = continuationRunId;
         reason = "One same-target current-field check consumed; only newly captured and independently validated G3/slit evidence may advance acquisition.";
         return true;
@@ -109,10 +114,20 @@ internal sealed class ClockRecoveryPositionCheck
     private static bool ValidCoordinates(double ra, double dec) =>
         double.IsFinite(ra) && ra is >= 0 and < 360 && double.IsFinite(dec) && dec is >= -90 and <= 90;
 
-    private static bool SamePointing(G3FrameMountReadback a, G3FrameMountReadback b, double limit) =>
-        double.IsFinite(limit) && limit > 0 &&
-        string.Equals(a.CoordinateEpoch, b.CoordinateEpoch, StringComparison.Ordinal) &&
-        string.Equals(a.PierSide, b.PierSide, StringComparison.OrdinalIgnoreCase) &&
-        G3AcquisitionMotionPlanner.AngularSeparationArcseconds(a.RightAscensionDegrees, a.DeclinationDegrees,
-            b.RightAscensionDegrees, b.DeclinationDegrees) <= limit + 1e-9;
+    internal static bool SameStoppedPointing(ClockRecoveryPositionSnapshot before,
+        ClockRecoveryPositionSnapshot after, double limit)
+    {
+        if (!double.IsFinite(limit) || limit <= 0 ||
+            !string.Equals(before.Mount.CoordinateEpoch, after.Mount.CoordinateEpoch, StringComparison.Ordinal) ||
+            !string.Equals(before.Mount.PierSide, after.Mount.PierSide, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var separation = G3AcquisitionMotionPlanner.AngularSeparationArcseconds(
+            before.Mount.RightAscensionDegrees, before.Mount.DeclinationDegrees,
+            after.Mount.RightAscensionDegrees, after.Mount.DeclinationDegrees);
+        // A stopped/pulse-free control boundary is already established by Ready().
+        // Tracking readback jitter is not evidence of a new motion command.
+        var allowance = before.Tracking && after.Tracking && before.Stationary && after.Stationary
+            ? TrackingReadbackJitterAllowanceArcseconds : 0;
+        return double.IsFinite(separation) && separation <= limit + allowance + 1e-9;
+    }
 }

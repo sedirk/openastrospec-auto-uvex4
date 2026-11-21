@@ -104,6 +104,7 @@
             {
               "$id": "6",
               "$type": "UvexAdv.Nina.Plugin.SequenceItems.UvexNightSequenceContainer, UvexAdv.Nina.Plugin",
+              "HomeMountAtNightStart": true,
               "StopAtDawn": true,
               "DawnSunAltitudeDegrees": -12,
               "EndAtIso8601": "05:00",

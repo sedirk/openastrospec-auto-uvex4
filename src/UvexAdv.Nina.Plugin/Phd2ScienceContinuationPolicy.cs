@@ -5,6 +5,68 @@ namespace UvexAdv.Nina.Plugin;
 
 internal static class Phd2ScienceContinuationPolicy
 {
+    // HD 223554: the client invalidates settle twice for one native
+    // StarLost -> Guiding transition. The epoch gap or equal lock coordinates
+    // alone cannot distinguish this from an operator stop/reselect.
+    internal static bool IsNativeLossRecovery(Phd2StateSnapshot state,
+        long connection, long guide, long calibrationSequence, Phd2Point selected,
+        Phd2Point endpoint, double tolerance)
+    {
+        if (!IsSameFieldGuideActiveAfterLoss(state, connection, selected, endpoint, tolerance) ||
+            state.CalibrationChangeSequence != calibrationSequence ||
+            state.GuideOutput is not { ConsecutiveMissingOutputs: 0 } output ||
+            state.RecentGuideEpochChanges.Count < 2) return false;
+        var loss = state.RecentGuideEpochChanges[^2];
+        var found = state.RecentGuideEpochChanges[^1];
+        return loss.PreviousEpoch == guide && loss.Epoch == guide + 1 &&
+            loss is { Cause: "event:StarLost", PreviousState: Phd2AppState.Guiding, State: Phd2AppState.LostLock } &&
+            found.PreviousEpoch == loss.Epoch && found.Epoch == loss.Epoch + 1 &&
+            found.Epoch == state.GuideEpoch &&
+            found is { Cause: "event:GuideStep" or "event:AppState", PreviousState: Phd2AppState.LostLock, State: Phd2AppState.Guiding } &&
+            found.EventSequence > loss.EventSequence && found.ObservedUtc >= loss.ObservedUtc &&
+            found.ObservedUtc - loss.ObservedUtc <= TimeSpan.FromSeconds(60) &&
+            output.UpdatedUtc >= loss.ObservedUtc && state.LastGuideStep?.Frame == output.LastFrame;
+    }
+
+    internal static Phd2LockShiftPendingState? BindVerifiedLossWindow(Phd2LockShiftPendingState ledger,
+        Phd2PostLockGuidingObservation proof, Phd2StateSnapshot current, Phd2Point selected, Phd2Point originalLock,
+        long calibrationSequence, Phd2GuidingFrameResult last, DateTimeOffset now)
+    {
+        var tolerance = proof.LockTolerancePixels;
+        if (ledger.Validate().Count != 0 || ledger.Phase != Phd2LockShiftPendingPhase.SettledBudgetLedger ||
+            now < ledger.UpdatedUtc || proof.ResidualsCompletedUtc != last.CompletedUtc || now < last.CompletedUtc ||
+            !proof.HasAcceptedWindow(current) ||
+            !IsNativeLossRecovery(current, ledger.ConnectionEpoch, ledger.GuideEpoch, calibrationSequence,
+                selected, originalLock, tolerance) ||
+            !(Distance(proof.LockPosition, ledger.CurrentLockX, ledger.CurrentLockY) <= tolerance) ||
+            !(Distance(proof.LockPosition, ledger.RequestedLockX, ledger.RequestedLockY) <= tolerance))
+            return null;
+        // No coordinate translation: unlike a reselection the lock never moved.
+        return ledger with { GuideEpoch = proof.GuideEpoch, LastFramePath = last.Path,
+            LastAcceptedFrameSha256 = last.Sha256, UpdatedUtc = now,
+            LastReason = "Same native lock after StarLost; fresh immutable optical window verified." };
+    }
+
+    // Refresh the read-only approval, not the physical calibration. A long probe
+    // can outlive the client TTL without changing any of the actual owners.
+    internal static async Task<GateResult> RevalidateSameLockAsync(Phd2CalibrationValidation original,
+        Func<CancellationToken, Task> physicalGates, Func<CancellationToken, Task<Phd2CalibrationValidation>> refresh,
+        Func<CancellationToken, Task<bool>> sameOwnerAndLock, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        await physicalGates(token).ConfigureAwait(false);
+        var current = await refresh(token).ConfigureAwait(false);
+        if (!current.IsValid || !current.Calibration.Calibrated || current.AllowNativeCalibration ||
+            current.ConnectionEpoch != original.ConnectionEpoch || current.Profile != original.Profile ||
+            current.CalibrationChangeSequence != original.CalibrationChangeSequence)
+            return GateResult.Unknown("PHD2_SAME_LOCK_CALIBRATION_CHANGED",
+                "Same-lock recovery did not read back the original calibrated owner. No settle or calibration was dispatched.");
+        await physicalGates(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        return await sameOwnerAndLock(token).ConfigureAwait(false)
+            ? GateResult.Pass("PHD2_SAME_LOCK_READBACK_CURRENT", "Fresh read-only calibration and the original owner/lock passed.")
+            : GateResult.Unknown("PHD2_SAME_LOCK_OWNER_CHANGED", "Owner/selection/lock changed during readback. No settle was dispatched.");
+    }
     // A StarLost notification can be older than an already recovered live
     // guide. This permits only the original same-epoch fresh optical check;
     // it does NOT characterize reselection/calibration/reacquisition as inert.

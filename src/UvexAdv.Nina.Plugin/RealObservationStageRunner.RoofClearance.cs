@@ -183,26 +183,17 @@ internal sealed partial class RealObservationStageRunner
     {
         if (await ValidateIndependentRoofAuthorityAsync(token).ConfigureAwait(false) is { } authorityIssue)
             return authorityIssue;
+        if (CurrentRoofBoundaryGate() is { } boundary) return boundary.Message;
+        var position = NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId);
+        if (position is not (BoundRoofPosition.Open or BoundRoofPosition.Closed or BoundRoofPosition.Closing))
+            return "无干涉收口前未确认原屋顶读回，未发关顶或停放指令。";
         return await RoofClearancePolicy.CloseThenParkAsync(StopForIndependentRoofAsync, async closeToken =>
         {
-            var selection = ValidateCurrentEnvironmentDeviceSelections();
-            if (selection.Disposition != GateDisposition.Passed) return selection.Message;
-            var roof = domeMediator.GetInfo();
-            if (!IndependentRoofMountStopped() || !roof.Connected ||
-                !EnvironmentAdapterIdentityMatches(roof.DeviceId, configuration.Environment.Devices.DomeOrRoofId))
-                return "Stopped mount or locked roof identity changed; no close command was sent.";
-            if (roof.ShutterStatus != ShutterState.ShutterClosed)
-            {
-                if (!roof.CanSetShutter || roof.ShutterStatus == ShutterState.ShutterError)
-                    return "Roof cannot accept a close command or reports ShutterError.";
-                Report("无干涉屋顶：采集与运动已停止，先关顶；停放单独处理");
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(closeToken);
-                timeout.CancelAfter(TimeSpan.FromSeconds(configuration.Environment.DomeOrRoofTransitionTimeoutSeconds));
-                if (!await domeMediator.CloseShutter(timeout.Token).ConfigureAwait(false))
-                    return "N.I.N.A./RRCI rejected roof closure; controller interlocks were not bypassed.";
-                var closed = await WaitForDomeOrRoofStateAsync(ShutterState.ShutterClosed, timeout.Token).ConfigureAwait(false);
-                if (closed.Disposition != GateDisposition.Passed) return $"{closed.Code}: {closed.Message}";
-            }
+            if (!IndependentRoofMountStopped()) return "未确认原绑定赤道仪停止，未发关顶。";
+            Report("无干涉屋顶：采集与运动已停止，先核对或关闭屋顶；停放单独处理");
+            var closed = await CloseBoundRoofOnceAsync(closeToken,
+                observeOnly: position is BoundRoofPosition.Closing or BoundRoofPosition.Closed).ConfigureAwait(false);
+            if (closed.Disposition != GateDisposition.Passed) return $"{closed.Code}: {closed.Message}";
             Interlocked.Exchange(ref domeOrRoofOpenEstablished, 0);
             await WriteAuditBestEffortAsync("unattended-roof-close", new
             {
@@ -223,21 +214,24 @@ internal sealed partial class RealObservationStageRunner
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(configuration.Environment.DomeOrRoofTransitionTimeoutSeconds +
             (configuration.SequencePlan?.HomeBeforeParkOnFinalize == true ? configuration.SequencePlan.MountHomeTimeoutSeconds : 0)));
+        var mountActionDispatched = false;
+        bool RoofStillClosed() => CurrentRoofBoundaryGate() is null &&
+            NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) == BoundRoofPosition.Closed;
         try
         {
+            if (!RoofStillClosed()) return independentParkIssue = "关顶回读已丢失；未发 Home/Park。";
             if (!IndependentRoofMountStopped()) return independentParkIssue = "Roof closed; mount identity/stopped state changed before independent Park.";
             var mount = telescopeMediator.GetInfo();
             if (mount.AtPark) return independentParkIssue = null;
             if (!mount.CanPark) return independentParkIssue = "Roof closed; mount does not support Park.";
             if (configuration.SequencePlan?.HomeBeforeParkOnFinalize == true)
             {
-                var roof = domeMediator.GetInfo();
-                if (!roof.Connected || roof.ShutterStatus != ShutterState.ShutterClosed ||
-                    !EnvironmentAdapterIdentityMatches(roof.DeviceId, configuration.Environment.Devices.DomeOrRoofId) ||
-                    !await IndependentRoofGuiderIdleAsync(timeout.Token).ConfigureAwait(false) ||
+                if (!await IndependentRoofGuiderIdleAsync(timeout.Token).ConfigureAwait(false) ||
+                    !RoofStillClosed() || !IndependentRoofMountStopped() ||
                     !cameraMediator.GetInfo().Connected || cameraMediator.GetInfo().IsExposing)
                     return independentParkIssue = "Roof closed/readback or idle owners changed; Home and Park not started.";
                 Report("屋顶已关：先有界 Home 回零，核对到位后再 Park；每项最多一次");
+                mountActionDispatched = true;
                 var home = await HomeAndVerifyMountAsync(telescopeMediator, configuration.ExpectedTelescopeId,
                     progress, TimeSpan.FromSeconds(configuration.SequencePlan.MountHomeTimeoutSeconds),
                     TimeSpan.FromMilliseconds(250), timeout.Token).ConfigureAwait(false);
@@ -248,9 +242,10 @@ internal sealed partial class RealObservationStageRunner
             // Home and Park have independent bounded waits; Home never consumes
             // or extends the configured Park allowance.
             timeout.CancelAfter(TimeSpan.FromSeconds(configuration.Environment.DomeOrRoofTransitionTimeoutSeconds));
-            if (!IndependentRoofMountStopped())
-                return independentParkIssue = "Roof closed; mount identity/stopped state changed before Park.";
+            if (!RoofStillClosed() || !IndependentRoofMountStopped())
+                return independentParkIssue = "屋顶关闭回读或原赤道仪停止状态已改变，未发 Park。";
             Report("屋顶已确认关闭；独立尝试停放赤道仪，失败不会重开屋顶");
+            mountActionDispatched = true;
             if (!await telescopeMediator.ParkTelescope(progress, timeout.Token).ConfigureAwait(false))
                 return independentParkIssue = "Roof closed; N.I.N.A. did not complete independent Park.";
             var parked = await WaitForMountParkedAsync(timeout.Token).ConfigureAwait(false);
@@ -262,9 +257,14 @@ internal sealed partial class RealObservationStageRunner
         catch (Exception ex) { return independentParkIssue = $"Roof closed; independent Park failed: {ex.Message}"; }
         finally
         {
-            if (independentParkIssue is not null)
+            if (mountActionDispatched && independentParkIssue is not null)
             {
-                try { telescopeMediator.StopSlew(); }
+                try
+                {
+                    var mount = telescopeMediator.GetInfo();
+                    if (mount.Connected && EnvironmentAdapterIdentityMatches(mount.DeviceId, configuration.ExpectedTelescopeId))
+                        telescopeMediator.StopSlew();
+                }
                 catch (Exception ex) { independentParkIssue += $" Stop request failed: {ex.Message}"; }
             }
             await WriteAuditBestEffortAsync("independent-roof-mount-park", new

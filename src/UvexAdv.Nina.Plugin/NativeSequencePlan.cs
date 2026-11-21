@@ -40,7 +40,9 @@ internal sealed record NativeSequencePlan(
     double InitialGuideSettlePixels = 0, int InitialGuideStableSeconds = 5,
     int InitialGuideTimeoutSeconds = 180, bool ForceGuideCalibration = false,
     bool AutomaticGuideRecovery = true, int GuideStarWaitSeconds = 300,
-    DateTimeOffset? TargetDeadlineUtc = null)
+    DateTimeOffset? TargetDeadlineUtc = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool HomeMountAtNightStart = false)
 {
     internal UvexAdv.Phd2.Phd2SettleCriteria InitialGuideCriteria(UvexAdv.Phd2.Phd2SettleCriteria configured) =>
         InitialGuideSettlePixels > 0

@@ -35,7 +35,7 @@ public sealed partial class SepMainFocusViewModel : INotifyPropertyChanged, IDis
         this.settings = settings; this.host = host; this.factory = factory; this.unavailableReason = unavailableReason;
         this.profileId = profileId; this.changed = changed;
         start = new(StartAsync, () => StartBlockReason is null);
-        cancel = new(() => { cancellation?.Cancel(); SetStatus("正在取消：停止新采样，等待当前操作结束；仅在安全且位置可信时返回原焦位。"); }, () => IsBusy);
+        cancel = new(() => { NativeCancellation.Request(cancellation); SetStatus("正在取消：停止新采样，等待当前操作结束；仅在安全且位置可信时返回原焦位。"); }, () => IsBusy);
         // Saving a draft is not hardware control and need not wait for an unrelated observation.
         save = new(() => options, value =>
         {
@@ -50,7 +50,7 @@ public sealed partial class SepMainFocusViewModel : INotifyPropertyChanged, IDis
 
     internal void ReloadProfile()
     {
-        if (IsBusy) { reloadPending = true; cancellation?.Cancel(); return; }
+        if (IsBusy) { reloadPending = true; NativeCancellation.Request(cancellation); return; }
         try { options = JsonSerializer.Deserialize<SepMainFocusOptions>(settings.SepMainFocusOptionsJson) ?? new(); }
         catch (JsonException) { options = new(); }
         result = null; invalidEditors.Clear(); status = "尚未开始对焦。";
@@ -163,5 +163,5 @@ public sealed partial class SepMainFocusViewModel : INotifyPropertyChanged, IDis
             if (reloadPending) { reloadPending = false; ReloadProfile(); }
         }
     }
-    public void Dispose() => cancellation?.Cancel();
+    public void Dispose() => NativeCancellation.Request(cancellation);
 }

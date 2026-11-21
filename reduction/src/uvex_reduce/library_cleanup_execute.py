@@ -232,6 +232,9 @@ class CleanupExecutor:
         try:
             if plan["action"] == "mark":
                 return self._mark(plan, selected, journal, receipt, cancelled, progress)
+            # A disposable raw may also be the identity guard for a selected
+            # paired preview. Finish previews before their supporting raws.
+            selected.sort(key=lambda row: row.get("category") != "preview")
             for item in selected:
                 if cancelled():
                     receipt["status"] = "cancelled"
@@ -391,6 +394,19 @@ def _windows_libraries() -> tuple[Any, Any, Any]:
 
 class WindowsCleanupBackend:
     """No permanent fallback, no folder recursion, no recycle-bin emptying."""
+
+    @staticmethod
+    def delete_access(path: str) -> bool:
+        """Open and close only; never set disposition or change the ACL."""
+        kernel, _, _ = _windows_libraries()
+        handle = kernel.CreateFileW(path, 0x10080, 0x7, None, 3, 0x00200000, None)
+        if handle == ctypes.c_void_p(-1).value:
+            code = ctypes.get_last_error()
+            if code == 5:  # Access denied on this file only; other errors defer.
+                return False
+            raise ctypes.WinError(code)
+        kernel.CloseHandle(handle)
+        return True
 
     def permanent(self, item: dict, before_mutation: Callable[[], None]) -> dict:
         from ctypes import wintypes

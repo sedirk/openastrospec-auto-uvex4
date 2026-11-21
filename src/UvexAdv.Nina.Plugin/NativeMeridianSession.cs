@@ -19,6 +19,21 @@ internal sealed class NativeMeridianSession(NativeSequencePlan original, Func<do
     private PierSide? segmentSide;
     public Action? VerifyScope { get; init; }
 
+    internal GateResult? HandoffCapacityGate(bool currentSegmentRecorded)
+    {
+        // SegmentRunIds contains only completed segments. Add the current in-flight
+        // segment when it has not yet been recorded, then reserve the one new segment
+        // that a valid handoff would create.
+        var plannedSegments = SegmentRunIds.Count + (currentSegmentRecorded ? 0 : 1) + 1;
+        return !Flipped && plannedSegments > 2
+            ? GateResult.TargetQuality(
+                "NATIVE_MERIDIAN_SEGMENT_BUDGET_EXHAUSTED",
+                "本目标已有一个已完成分段；原设计仅允许一次交接和两段运行。"
+                + "当前交接不能再创建第三段。已保存帧、运动账本和曝光预算保留；"
+                + "请确认停止后按目标质量策略处理。")
+            : null;
+    }
+
     internal bool RequestAtOperationBoundary(PierSide side, double operationSeconds = 0,
         bool destinationWouldChangeSide = false, PierSide? savedSide = null, bool allowScheduled = true)
     {

@@ -41,7 +41,10 @@ internal sealed partial class RealObservationStageRunner
         G3ShortPositionMeasurement? previous = null;
         string? previousHash = null, previousFramePath = null, previousReceipt = null;
         DateTimeOffset previousCompletedUtc = default;
+        DateTimeOffset anchorCompletedUtc = default;
+        string? interveningSplitReceipt = null;
         var frameHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairOwnerEpoch = phd2.Snapshot.ConnectionEpoch;
         var receipts = new List<string>();
         SepDetectionRuntime sepRuntime;
         string sepModulePath,sepWorkerSha256,sepModuleSha256;
@@ -115,6 +118,9 @@ internal sealed partial class RealObservationStageRunner
                 new Phd2SingleFrameRequest(exposure.Value, configuration.G3.Binning, shortGain,
                     ReserveRunEvidencePath("g3-catalog-short-position", ".fit")), cancellationToken).ConfigureAwait(false);
             var after = CaptureG3FrameMountReadback();
+            if (!field.Solve.IsFormal && phd2.Snapshot.ConnectionEpoch != pairOwnerEpoch)
+                return field with { Gate = GateResult.Unknown("G3_SPARSE_GUIDE_CONTEXT_CHANGED",
+                    "PHD2 reconnected while confirming the short pair. No cross-owner association.") };
             bool SamePointing(G3FrameMountReadback readback) =>
                 string.Equals(readback.CoordinateEpoch, field.MountBinding.CoordinateEpoch, StringComparison.Ordinal) &&
                 string.Equals(readback.PierSide, field.MountBinding.PierSide, StringComparison.OrdinalIgnoreCase) &&
@@ -175,12 +181,25 @@ internal sealed partial class RealObservationStageRunner
             var associationValidatedUtc = DateTimeOffset.UtcNow;
             shortBindingGate = await ValidateG3ProbeMountBindingForMotionAsync(context,probe,cancellationToken).ConfigureAwait(false);
             if (shortBindingGate.Disposition != GateDisposition.Passed) return field with { Gate=shortBindingGate };
-            var measurement = companionVector is not null && astrometricPrimaryPrediction is not null
+            if (!field.Solve.IsFormal && phd2.Snapshot.ConnectionEpoch != pairOwnerEpoch)
+                return field with { Gate = GateResult.Unknown("G3_SPARSE_GUIDE_CONTEXT_CHANGED",
+                    "PHD2 reconnected during pixel processing. No cross-owner short pair was accepted.") };
+            G3ShortPositionMeasurement Measure(G3ShortPositionMeasurement? anchor) =>
+                companionVector is not null && astrometricPrimaryPrediction is not null
                 ? G3SepCatalogPrimaryPolicy.Measure(sepMeasurements, astrometricPrimaryPrediction, companionVector,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise)
                 : G3SepShortPositionPolicy.Measure(sepMeasurements, field.TargetIdentification.PredictedPoint,
                     preset.TargetSearchRadiusPixels, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
-                    previousSameSetting: previous);
+                    previousSameSetting: anchor);
+            var measurement = Measure(previous);
+            var intervening = interveningSplitReceipt;
+            interveningSplitReceipt = null; // strictly the very next exposure
+            if (intervening is not null && !G3TransientSplitWitness.MayPairNext(measurement, anchorCompletedUtc, capture.CompletedUtc))
+            {
+                previous = null;
+                previousFramePath = previousHash = previousReceipt = null;
+                measurement = Measure(null);
+            }
             // A boundary recheck is exactly one same-setting fresh pair, not
             // another exposure search or a reset of the six-frame ceiling.
             var nextExposurePolicy = handoffBoundaryRecheckUsed ? exposurePolicy :
@@ -231,6 +250,10 @@ internal sealed partial class RealObservationStageRunner
             var repeatGate = confirmation.RepeatGate;
             var accepted = confirmation.Accepted;
             var positionSpread = confirmation.PositionSpreadPixels;
+            var keepUnsplitAnchor = intervening is null && !handoffBoundaryRecheckUsed && !field.Solve.IsFormal &&
+                G3TransientSplitWitness.MayKeepUnsplitAnchor(previous, measurement, confirmation,
+                    !exposureChanged, companionReference is null && primaryAstrometry is null &&
+                    ResolveTargetStrategy(context).EffectiveClass == TargetObservabilityClass.DirectStellar);
             var receipt = await PublishRunJsonEvidenceAsync("g3-catalog-short-position-confirmation",
                 "Formal long-frame WCS and a separately bound short-exposure position",
                 new
@@ -263,6 +286,8 @@ internal sealed partial class RealObservationStageRunner
                     previousFramePath,
                     previousHash,
                     previousReceipt,
+                    interveningSplitReceipt = intervening,
+                    keepUnsplitAnchorForNextFrameOnly = keepUnsplitAnchor,
                     sourceWcsFrame = field.FramePath,
                     astrometryAuthority = field.Solve.Authority,
                     nativeCurrentFrameSolveSucceeded = field.Solve.IsFormal,
@@ -328,9 +353,12 @@ internal sealed partial class RealObservationStageRunner
                         $"SEP measured saturation: {exposure} -> {exposurePolicy.ExposureMilliseconds} ms at gain 0%; require two fresh matching frames, cap {exposurePolicy.MaximumFrames}. No motion or guiding-setting change."));
                     continue;
                 }
-                if (!confirmation.RetainPreviousMeasurement)
+                if (keepUnsplitAnchor)
+                    interveningSplitReceipt = receipt;
+                else if (!confirmation.RetainPreviousMeasurement)
                 {
                     previous = measurement;
+                    anchorCompletedUtc = capture.CompletedUtc;
                     previousHash = sha;
                     previousFramePath = capture.Path;
                     previousReceipt = receipt;
@@ -398,7 +426,7 @@ internal sealed partial class RealObservationStageRunner
                 TargetIdentification = identification,
                 TargetTrackSource = new(capture.Path, sha, image, frame, binding,
                     new G3SparseExposureTiming(before.ReportedUtc, capture.CompletedUtc,
-                        image.MetaData.Image.ExposureTime, DateTimeOffset.UtcNow), identification.Target.Centroid),
+                        image.MetaData.Image.ExposureTime, DateTimeOffset.UtcNow), identification.Target.Centroid, pairOwnerEpoch),
                 Gate = GateResult.Pass("G3_CATALOG_SHORT_POSITION_CONFIRMED", identification.Gate.Message,
                     new Dictionary<string, double>
                     {

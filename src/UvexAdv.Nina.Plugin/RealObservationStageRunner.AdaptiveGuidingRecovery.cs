@@ -1,4 +1,5 @@
 using NINA.Core.Enum;
+using NINA.Image.Interfaces;
 using UvexAdv.Observatory;
 using UvexAdv.Phd2;
 
@@ -41,6 +42,9 @@ internal sealed partial class RealObservationStageRunner
             Phd2ScienceContinuationPolicy.MayVerifySettledGuideInPlace(original.Gate.Code) &&
             await WaitForSameFieldGuideSelfRecoveryAsync(context, original.Gate.Code, token).ConfigureAwait(false))
         {
+            // Only the just-attested optical window can issue this one-shot
+            // receipt. The shutter path still checks its age, hash and owner.
+            if (preExposureReceipt is not null && IsGuidingStable()) return (true, original);
             try
             {
                 if (await TryVerifyScienceInPlaceAsync(context, original.Gate.Code, token).ConfigureAwait(false))
@@ -118,10 +122,59 @@ internal sealed partial class RealObservationStageRunner
                 GuideRecovery.Observe(DateTimeOffset.UtcNow, captured.CompletedUtc, true,
                     content.StellarMeasurement.StarCount, content.StellarMeasurement.MedianSignalToNoise,
                     content.SaturatedPixelFraction);
+            var searchRadius = commissioning?.Value.Phd2SlitPlacement?.TargetSearchRadiusPixels ??
+                configuration.Slit.TargetPredictionTolerancePixels;
+            var recoverySeedPrediction = TryRegisterSameFieldRecoverySeed(
+                lastG3Field,
+                content.StellarMeasurement.Stars,
+                frame.Width, frame.Height, searchRadius, token);
+            var registrationSource = "focus-detector";
+            if (recoverySeedPrediction is null && action == GuideRecoveryAction.Reselect &&
+                stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
+                lastG3Field is { Frame: { } oldFrame, Image: { } oldImage, MountBinding: { } oldBinding } old &&
+                oldBinding.ObservationRunId == binding.ObservationRunId &&
+                oldBinding.CoordinateEpoch == binding.CoordinateEpoch && oldBinding.PierSide == binding.PierSide &&
+                SameHash(oldBinding.ActionConfigurationSha256, binding.ActionConfigurationSha256) &&
+                SameHash(oldBinding.CommissioningPresetSha256, binding.CommissioningPresetSha256) &&
+                SameHash(oldBinding.ComputeBindingSha256(), oldBinding.BindingSha256) &&
+                G3TargetTrackPolicy.MatchesImmutablePixels(oldFrame, oldImage.Data.FlatArray) &&
+                string.Equals(old.FramePath, oldBinding.FramePath, StringComparison.OrdinalIgnoreCase) &&
+                SameHash(await ComputeFileSha256Async(old.FramePath, token).ConfigureAwait(false), oldBinding.FrameSha256))
+            {
+                // Use matched extraction on both immutable originals. A registration is a search
+                // hint only; it cannot replace the stopped-owner, fresh slit or new guide proof.
+                var a = await OptionalTargetTrackStarsAsync(oldFrame, oldImage.Data.FlatArray,
+                    oldBinding.FrameSha256, token).ConfigureAwait(false);
+                var b = await OptionalTargetTrackStarsAsync(frame, image.Data.FlatArray, sha, token).ConfigureAwait(false);
+                if (DateTimeOffset.UtcNow < deadline &&
+                    SameHash(await ComputeFileSha256Async(path, token).ConfigureAwait(false), sha))
+                    recoverySeedPrediction = TryRegisterSameFieldRecoverySeed(old with { Candidates = a },
+                        b, frame.Width, frame.Height, searchRadius, token);
+                registrationSource = "independent-field-extraction";
+            }
+            var recoverySeedField = recoverySeedPrediction is null
+                ? null
+                : CreateSameFieldRecoverySeed(
+                    lastG3Field!,
+                    path,
+                    image,
+                    frame,
+                    content.StellarMeasurement,
+                    binding,
+                    recoverySeedPrediction);
             evidence = await PublishRunJsonEvidenceAsync("phd2-adaptive-star-check",
                 "Fresh field triage, not proof of weather, target identity or slit arrival",
                 new { sourceCode = original.Gate.Code, action = action.ToString(), sample,
-                    captured.CompletedUtc, content, sha256 = sha, mountBinding = binding,
+                    captured.CompletedUtc, content, sha256 = sha, mountBinding = binding, registrationSource,
+                    recoverySeed = recoverySeedPrediction is null ? null : new
+                    {
+                        recoverySeedPrediction.Target,
+                        recoverySeedPrediction.Slit.AcquisitionPoint,
+                        recoverySeedPrediction.Registration.Code,
+                        recoverySeedPrediction.Registration.MatchedStars,
+                        recoverySeedPrediction.Registration.MaximumHoldoutResidualPixels,
+                        targetMeasured = false,
+                    },
                     deadline, GuideRecovery.Reselections, GuideRecovery.CalibrationConsumed,
                     weatherCauseConfirmed = false, motionIssued = false, budgetReset = false }, path, token).ConfigureAwait(false);
             // Atomic capture preserves the stopped epoch. Never manufacture a
@@ -130,10 +183,21 @@ internal sealed partial class RealObservationStageRunner
                 return (false, new StageResult(GateResult.Unknown("PHD2_ADAPTIVE_OWNER_CHANGED",
                     "星点检测后停止回执已失效；不继续恢复。"), evidence));
             PublishG3Preview(image, $"导星恢复星点检测 {sample + 1}：{content.StellarMeasurement.StarCount} 星；{action}");
-            if (action == GuideRecoveryAction.Exhausted)
+            if (action == GuideRecoveryAction.Exhausted || DateTimeOffset.UtcNow >= deadline)
                 return (false, AdaptiveRecoveryExhausted(AdaptiveGuidingRecovery.ExhaustedCode, evidence));
             if (action is GuideRecoveryAction.Reselect or GuideRecoveryAction.ForceCalibration)
             {
+                if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
+                    action == GuideRecoveryAction.Reselect &&
+                    recoverySeedField is not null)
+                {
+                    // A long science/probe exposure can outlive the old frame's
+                    // moving-mount binding even though the stopped detector
+                    // field never moved. Re-register the fresh stopped frame
+                    // against the last trusted field, then let PHD2 reselect
+                    // and require a new target/slit measurement before resume.
+                    lastG3Field = recoverySeedField;
+                }
                 if (stage is ObservationStage.SelectAtrExposure or ObservationStage.RunScienceBlock &&
                     action == GuideRecoveryAction.Reselect &&
                     await TryReacquireSameFieldGuideWithoutMotionAsync(
@@ -167,7 +231,8 @@ internal sealed partial class RealObservationStageRunner
                 : $"warning：疑似云雾或星场信号不足，等待星点恢复；已检测 {sample + 1} 帧，不改锁点、不发校准脉冲。截止 {deadline:HH:mm:ss} UTC");
             var remaining = deadline - DateTimeOffset.UtcNow;
             if (remaining <= TimeSpan.Zero) break;
-            await Task.Delay(remaining < TimeSpan.FromSeconds(15) ? remaining : TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
+            var delay = GuideRecovery.NextStarCheckDelay;
+            await Task.Delay(remaining < delay ? remaining : delay, token).ConfigureAwait(false);
         }
         return (false, AdaptiveRecoveryExhausted(AdaptiveGuidingRecovery.StarsTimeoutCode, evidence));
     }
@@ -177,6 +242,7 @@ internal sealed partial class RealObservationStageRunner
         string sourceCode,
         CancellationToken token)
     {
+        preExposureReceipt = null;
         if (phd2SlitPlacementSession is not { } session) return false;
         var preset = commissioning?.Value.Phd2SlitPlacement;
         if (preset is null) return false;
@@ -215,13 +281,12 @@ internal sealed partial class RealObservationStageRunner
                 previous.SelectedStar == current.SelectedStar &&
                 previous.LockPosition == current.LockPosition)
             {
-                session = session with
-                {
-                    GuideEpoch = current.GuideEpoch,
-                    FreshGuidingWindowReplacedSettle = true,
-                    ReadOnlyPostLockObservation = null,
-                };
-                phd2SlitPlacementSession = session;
+                // Two cached polls are not new guide frames. They only nominate
+                // this field for optical revalidation; never edit an epoch on
+                // the session alone and leave the durable ledger behind.
+                if (current.GuideEpoch != session.GuideEpoch &&
+                    !await TryAttestRecoveredFieldAsync(context, session, preset, deadline, token).ConfigureAwait(false))
+                    return false;
                 await PublishRunJsonEvidenceAsync(
                     "phd2-same-field-guide-self-recovered",
                     "PHD2 recovered the same selected guide field after loss; no selection, motion, calibration or exposure was issued",
@@ -229,7 +294,8 @@ internal sealed partial class RealObservationStageRunner
                     {
                         sourceCode,
                         session.ConnectionEpoch,
-                        session.GuideEpoch,
+                        previousGuideEpoch = session.GuideEpoch,
+                        current.GuideEpoch,
                         selectedGuide = session.SelectedGuide,
                         settledLock = session.OriginLock,
                         waitSeconds = maximumSeconds,
@@ -255,26 +321,82 @@ internal sealed partial class RealObservationStageRunner
         string? failedEvidence,
         CancellationToken token)
     {
-        if (phd2SlitPlacementSession is not { } previousSession ||
-            lastG3Field is not { TargetIdentification.Target: not null } seedField ||
-            automaticRebuildStopProof?.IsCurrent(phd2.Snapshot) != true ||
-            !HasNoOutstandingGuideRecoveryMotion ||
-            phd2.Snapshot.GuideOutput?.Failed == true ||
-            previousSession.ConnectionEpoch != phd2.Snapshot.ConnectionEpoch)
+        var previousSession = phd2SlitPlacementSession;
+        var seedField = lastG3Field;
+        var unavailable = previousSession is null
+            ? "guide-session-not-retained"
+            : seedField is null || !HasRecoveryTargetPrediction(seedField)
+                ? "target-field-prediction-not-retained"
+                : automaticRebuildStopProof?.IsCurrent(phd2.Snapshot) != true
+                    ? "stopped-owner-receipt-stale"
+                    : !HasNoOutstandingGuideRecoveryMotion
+                        ? "unsettled-motion-responsibility"
+                        : phd2.Snapshot.GuideOutput?.Failed == true
+                            ? "guide-output-fault-latched"
+                            : previousSession.ConnectionEpoch != phd2.Snapshot.ConnectionEpoch
+                                ? "connection-epoch-changed"
+                                : null;
+        if (unavailable is not null)
+        {
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-reacquire-unavailable",
+                "No-motion local guide recovery was withheld at a named prerequisite",
+                new
+                {
+                    sourceCode,
+                    unavailable,
+                    connectionEpoch = phd2.Snapshot.ConnectionEpoch,
+                    guideEpoch = phd2.Snapshot.GuideEpoch,
+                    appState = phd2.Snapshot.AppState.ToString(),
+                    hasSession = phd2SlitPlacementSession is not null,
+                    hasFieldPrediction = lastG3Field is { } field && HasRecoveryTargetPrediction(field),
+                    stopReceiptCurrent = automaticRebuildStopProof?.IsCurrent(phd2.Snapshot) == true,
+                    hasNoOutstandingMotion = HasNoOutstandingGuideRecoveryMotion,
+                    guideOutputFailed = phd2.Snapshot.GuideOutput?.Failed == true,
+                    motionIssued = false,
+                    lockMutationIssued = false,
+                    budgetReset = false,
+                },
+                failedEvidence,
+                token).ConfigureAwait(false);
             return false;
+        }
+        ArgumentNullException.ThrowIfNull(previousSession);
+        ArgumentNullException.ThrowIfNull(seedField);
 
         var preset = commissioning?.Value.Phd2SlitPlacement;
         if (preset is null || preset.Validate().Count != 0) return false;
         var ledgerLoad = await Phd2LockShiftPendingStore.LoadAsync(
             Phd2LockShiftPendingPath(context.Plan.ObservationRunId), token).ConfigureAwait(false);
         if (ledgerLoad.Error is not null ||
-            ledgerLoad.State is not { Phase: Phd2LockShiftPendingPhase.SettledBudgetLedger } previousLedger ||
-            ValidateCurrentPhd2LockLedgerBinding(context, preset, previousLedger).Disposition != GateDisposition.Passed)
+            ledgerLoad.State is not { Phase: Phd2LockShiftPendingPhase.SettledBudgetLedger } previousLedger)
             return false;
 
+        var currentLedgerBinding = ValidateCurrentPhd2LockLedgerBinding(context, preset, previousLedger);
+        if (currentLedgerBinding.Disposition != GateDisposition.Passed)
+        {
+            await PublishRunJsonEvidenceAsync(
+                "phd2-same-field-guide-reacquire-ledger-rejected",
+                "Current PHD2 owner/lock no longer proves the durable motion lineage",
+                new { sourceCode, currentLedgerBinding, previousLedger.LineageId,
+                    previousLedger.ConnectionEpoch, previousLedger.GuideEpoch,
+                    motionIssued = false, lockMutationIssued = false, budgetReset = false },
+                failedEvidence,
+                token).ConfigureAwait(false);
+            return false;
+        }
         var originalBinding = await ValidateG3FieldMountBindingForMotionAsync(
             context, seedField, token).ConfigureAwait(false);
-        if (originalBinding.Disposition != GateDisposition.Passed) return false;
+        if (originalBinding.Disposition != GateDisposition.Passed)
+        {
+            await WriteAuditBestEffortAsync("phd2-same-field-guide-reacquire-binding-rejected", new
+            {
+                context.Plan.ObservationRunId, sourceCode, originalBinding,
+                seedField.FramePath, seedField.MountBinding, adaptiveStarEvidence = failedEvidence,
+                motionIssued = false, lockMutationIssued = false, budgetReset = false,
+            }).ConfigureAwait(false);
+            return false;
+        }
 
         Report("薄云/短时掉星后已取得连续可用星场：尝试在当前离线场原地重新选择导星，不移动赤道仪、不重跑 WCS/邻场搜索。");
         Phd2PlacementGuideChoice choice;
@@ -525,6 +647,124 @@ internal sealed partial class RealObservationStageRunner
         return true;
     }
 
+    private static bool HasRecoveryTargetPrediction(G3FieldState field) =>
+        field.TargetIdentification.Target is not null ||
+        double.IsFinite(field.TargetIdentification.PredictedPoint.X) &&
+        double.IsFinite(field.TargetIdentification.PredictedPoint.Y);
+
+    internal static G3SameFieldRecoverySeed? TryRegisterSameFieldRecoverySeed(
+        G3FieldState? seedField,
+        IReadOnlyList<StarCandidate> currentStars,
+        int width,
+        int height,
+        double targetSearchRadiusPixels,
+        CancellationToken token)
+    {
+        if (seedField is null || seedField.Frame is null || seedField.BrightTargetAuthority is not null ||
+            !HasRecoveryTargetPrediction(seedField) ||
+            seedField.Frame.Width != width || seedField.Frame.Height != height ||
+            seedField.Candidates.Count < 5 || currentStars.Count < 5 ||
+            !double.IsFinite(targetSearchRadiusPixels) || targetSearchRadiusPixels <= 0)
+            return null;
+
+        var target = seedField.TargetIdentification.Target?.Centroid ??
+            seedField.TargetIdentification.PredictedPoint;
+        var registered = G3TargetTrackPolicy.Register(
+            seedField.Candidates,
+            currentStars,
+            target,
+            target,
+            seedField.SlitDetection.Geometry,
+            width,
+            height,
+            targetSearchRadiusPixels,
+            token);
+        if (!registered.Accepted || registered.Transform is not { } transform ||
+            !double.IsFinite(transform.Scale) || transform.Scale is < 0.97 or > 1.03 ||
+            Math.Abs(transform.RotationDegrees) > 5)
+            return null;
+
+        var recoveryTarget = transform.Apply(target);
+        if (!double.IsFinite(recoveryTarget.X) || !double.IsFinite(recoveryTarget.Y) ||
+            recoveryTarget.X < 0 || recoveryTarget.X >= width ||
+            recoveryTarget.Y < 0 || recoveryTarget.Y >= height)
+            return null;
+        if (PixelDistance(recoveryTarget, target) > Math.Max(6, targetSearchRadiusPixels))
+            return null;
+
+        // Stars move across the detector. Its physical entrance slit does not.
+        // Transforming both would hide the very drift the new frame must measure.
+        return new G3SameFieldRecoverySeed(
+            recoveryTarget,
+            seedField.SlitDetection.Geometry,
+            registered);
+    }
+
+    private static G3FieldState CreateSameFieldRecoverySeed(
+        G3FieldState seedField,
+        string framePath,
+        IImageData image,
+        MonochromeFrame frame,
+        G3StellarFocusMeasurement focus,
+        G3FieldMountBinding binding,
+        G3SameFieldRecoverySeed registered) =>
+        seedField with
+        {
+            Gate = GateResult.Pass(
+                "PHD2_SAME_FIELD_RECOVERY_SEED_REGISTERED",
+                "The fresh stopped frame is independently registered to the last trusted field; its target and slit coordinates are predictions until PHD2 supplies a new measured frame.",
+                new Dictionary<string, double>
+                {
+                    ["matchedStars"] = registered.Registration.MatchedStars,
+                    ["maximumHoldoutResidualPixels"] =
+                        registered.Registration.MaximumHoldoutResidualPixels,
+                    ["predictedTargetShiftPixels"] =
+                        PixelDistance(seedField.TargetIdentification.PredictedPoint,
+                            registered.Target),
+                }),
+            FramePath = framePath,
+            Image = image,
+            // Do not attach the old whole-frame WCS or sparse source chain to
+            // the new stopped frame. Only the independently registered local
+            // geometry survives, and all live gates are revalidated by the caller.
+            Solve = null,
+            BrightTargetAnalysis = null,
+            BrightTargetAuthority = null,
+            BrightTargetEvidencePath = null,
+            GhostAssistance = null,
+            Frame = frame,
+            Candidates = focus.Stars,
+            SlitDetection = seedField.SlitDetection with
+            {
+                Gate = GateResult.Warn(
+                    "PHD2_SAME_FIELD_RECOVERY_SLIT_PREDICTED",
+                    "The last physical slit geometry is retained in detector coordinates. A fresh target/slit measurement is still mandatory."),
+                Geometry = registered.Slit,
+            },
+            TargetIdentification = seedField.TargetIdentification with
+            {
+                Gate = GateResult.Warn(
+                    "PHD2_SAME_FIELD_RECOVERY_TARGET_PREDICTED",
+                    "The retained target is a fresh registration prediction, not a new target centroid."),
+                Target = null,
+                CatalogPositionRefinedFromSameFrame = false,
+                BoundShortPositionEvidencePath = null,
+                CatalogPositionSpreadPixels = 0,
+                UniquenessRatio = 0,
+                PredictedPoint = registered.Target,
+                PredictionResidualPixels = PixelDistance(
+                    seedField.TargetIdentification.Target?.Centroid ??
+                        seedField.TargetIdentification.PredictedPoint,
+                    registered.Target),
+            },
+            MainFocusMeasurement = focus,
+            MountBinding = binding,
+            SparseInferenceConfirmed = false,
+            SparseMeasuredContinuity = null,
+            ExposureTiming = null,
+            TargetTrackSource = null,
+        };
+
     private StageResult AdaptiveRecoveryExhausted(string code, string? evidence) =>
         new(GateResult.TargetQuality(code,
             "本目标有界导星恢复或星点等待已用尽，已停止；整夜序列独立复核空闲与原运动账本后，按本目标失败策略跳过。未降低入缝门限，未单独关顶。",
@@ -532,3 +772,8 @@ internal sealed partial class RealObservationStageRunner
                 ["reselectionAttempts"] = GuideRecovery.Reselections,
                 ["calibrationReserved"] = GuideRecovery.CalibrationConsumed ? 1 : 0 }), evidence);
 }
+
+internal sealed record G3SameFieldRecoverySeed(
+    PixelPoint Target,
+    SlitGeometry Slit,
+    G3OverlapRegistrationResult Registration);

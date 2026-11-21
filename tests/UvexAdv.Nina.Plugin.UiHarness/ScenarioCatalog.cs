@@ -28,6 +28,8 @@ public static class ScenarioCatalog
     private static readonly IReadOnlyList<ScreenshotScenario> Scenarios =
     [
         new("idle", 1180, 800, ObservationDockMockViewModel.Idle()),
+        new("previous-night-unconfirmed", 720, 800, new ObservationDockMockViewModel
+        { PreviousNightCloseoutNotice = NightCloseoutHistory.Unverified }),
         new("independent-safety-standby", 1180, 850, new ObservationDockMockViewModel
         { HasSafetyStandby = true, SafetyStandbyStatus = "观测序列已结束；独立安全待机：AIWeather、晨光及 00:30 截止仍有效。未自动续跑。" }),
         new("independent-safety-standby-narrow", 540, 900, new ObservationDockMockViewModel
@@ -321,6 +323,9 @@ public static class ScenarioCatalog
 public sealed class ObservationDockMockViewModel
 {
     public bool HasSafetyStandby { get; init; }
+    public string PreviousNightCloseoutNotice { get; init; } = string.Empty;
+    public bool HasPreviousNightNotice => !string.IsNullOrEmpty(PreviousNightCloseoutNotice);
+    public ICommand DismissPreviousNightNoticeCommand => EnabledCommand;
     public string SafetyStandbyStatus { get; init; } = string.Empty;
     public bool SafetyStandbyNeedsAttention { get; init; }
     public ICommand CloseSafetyStandbyCommand => new NoOpCommand(!SafetyStandbyNeedsAttention);

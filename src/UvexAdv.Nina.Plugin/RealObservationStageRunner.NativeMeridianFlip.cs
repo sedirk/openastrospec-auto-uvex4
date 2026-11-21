@@ -13,14 +13,17 @@ internal sealed partial class RealObservationStageRunner
     private string? nativeMeridianOwnerBoundaryFailure;
     private NativeMeridianStageBoundary? nativeMeridianStageBoundary;
     private ObservationContext? nativeMeridianOperationContext;
+    private GateResult? nativeMeridianCapacityGate;
     private sealed class NativeMeridianBoundaryException : Exception;
     private double MeridianWorkerBoundarySeconds => !configuration.Qhy.SynchronizedPhotometryEnabled ? 0 :
         Math.Max(configuration.Qhy.PhotometryExposureSeconds,
             configuration.Qhy.ParallelFilterSequence.Select(x => x.ExposureSeconds).DefaultIfEmpty(0).Max());
     private string NativeMeridianJournalPath => Path.Combine(SlitPlacementObservationsRoot(), "control", "native-meridian-flip.json");
 
-    private StageResult MeridianSegmentBoundary() => Passed("NATIVE_MERIDIAN_SEGMENT_BOUNDARY",
-        "本段在取场/入缝/保存帧边界结束；不是目标完成。确认原所有者停止后交接侧别，重新定位/入缝/导星。");
+    private StageResult MeridianSegmentBoundary() => nativeMeridianCapacityGate is { } gate
+        ? new StageResult(gate)
+        : Passed("NATIVE_MERIDIAN_SEGMENT_BOUNDARY",
+            "本段在取场/入缝/保存帧边界结束；不是目标完成。确认原所有者停止后交接侧别，重新定位/入缝/导星。");
 
     private void CheckNativeMeridianOperationBoundary(ObservationContext context,
         bool destinationWouldChangeSide = false, PierSide? savedSide = null, bool allowScheduled = true)
@@ -45,6 +48,13 @@ internal sealed partial class RealObservationStageRunner
         if (!NativeMeridian.RequestAtOperationBoundary(mount.SideOfPier, MeridianWorkerBoundarySeconds,
                 destinationWouldChangeSide, savedSide, allowScheduled)) return;
         meridianBoundaryContext = context;
+        if (NativeMeridian.HandoffCapacityGate(currentSegmentRecorded: false) is { } capacity)
+        {
+            nativeMeridianCapacityGate = capacity;
+            Report("本目标已用完一次交接、两段运行预算：停止当前段，不再创建第三次翻转交接。");
+            nativeMeridianStageBoundary.Interrupt();
+            return;
+        }
         Report(NativeMeridian.ObservedSideChange
             ? "赤道仪已报告换侧：停止旧取场/入缝，核验后重新定位同一目标，不重复翻转。"
             : "已到中天交接边界：停止本段，交由原生翻转后重新定位同一目标。");
@@ -55,6 +65,13 @@ internal sealed partial class RealObservationStageRunner
     {
         if (NativeMeridian?.RequestAtFrameBoundary(nextExposure + MeridianWorkerBoundarySeconds) != true) return false;
         meridianBoundaryContext = context;
+        if (NativeMeridian.HandoffCapacityGate(currentSegmentRecorded: false) is { } capacity)
+        {
+            nativeMeridianCapacityGate = capacity;
+            Report("本目标已用完一次交接、两段运行预算：此帧不开始，不再创建第三次翻转交接。");
+            PublishAcquisitionProgress(context, "MeridianSegmentBudgetExhausted");
+            return true;
+        }
         Report("中天翻转：不再开始新曝光；保存的科学帧继续计数，正在结束本段并等待两路采集停止。");
         PublishAcquisitionProgress(context, "MeridianBoundary");
         return true;
@@ -72,6 +89,8 @@ internal sealed partial class RealObservationStageRunner
             throw new InvalidOperationException("光谱翻转仅在持有设备执行权和完整安全链的整夜序列中执行。");
         if (NativeMeridianJournalStore.PendingGate(NativeMeridianJournalPath) is { } pending)
             throw new InvalidOperationException(pending.Message);
+        if (session.HandoffCapacityGate(currentSegmentRecorded: true) is { } capacity)
+            throw new PhysicalActionGateException(capacity);
         _ = session.RemainingPlan(); // No new episode when the original exposure budget is exhausted.
         using var idleTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         idleTimeout.CancelAfter(TimeSpan.FromSeconds(75));

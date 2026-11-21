@@ -21,7 +21,7 @@ from astropy.wcs import WCS
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-ALGORITHM = "sep-bin2-astap-raw-verified-v2"
+ALGORITHM = "sep-multiscale-astap-raw-verified-v4"
 RING_CELLS = [1, 3, 9, 15, 21, 27, 33, 38, 43, 48, 52, 56, 60, 63, 65, 67, 68, 69]
 RING_CELLS += RING_CELLS[::-1]
 RING_EDGES = np.r_[-90., np.arange(-17, 18)*90/17.5, 90.]
@@ -62,10 +62,52 @@ def select_solver_sources(data, measured):
     strong = detect(data, 5.)
     prefer_strong = len(strong) >= 5 and len(measured) >= 5*len(strong)
     selected = strong if prefer_strong else measured
-    return selected, dict(mode="noise-tail-5sigma" if prefer_strong else "original-3.5sigma",
-                          measurementThreshold=3.5, comparisonThreshold=5.,
-                          measuredCount=len(measured), strongerCount=len(strong),
-                          renderedCount=min(60, len(selected)), solverCalls=1)
+    receipt = dict(mode="noise-tail-5sigma" if prefer_strong else "original-3.5sigma",
+                   measurementThreshold=3.5, comparisonThreshold=5.,
+                   measuredCount=len(measured), strongerCount=len(strong), solverCalls=1)
+    # Broad diffuse stars can span many native pixels while only their cores
+    # clear 5 sigma. Choose a proposal scale from the image, BEFORE the solver.
+    # The unchanged bin2 centroids (not this filtered image) verify its WCS.
+    widths = [r.get("rawFwhm", 0.) for r in measured[:3]]
+    if (data is not None and len(widths) == 3 and np.median(widths) >= 10.
+            and 0 < len(strong) <= 8 and len(measured) >= 3*len(strong)
+            # Keep the validated noise-tail constellation if it already has a
+            # spare strong star beyond the five unique matches required. With
+            # exactly five, any one bad/edge source defeats that proposal.
+            and not (prefer_strong and len(strong) > 5)
+            and all(n % 4 == 0 for n in data.shape)):
+        broad = broad_solver_proposals(data)
+        raw_xy = np.array([[r["x"], r["y"]] for r in measured])
+        xy = np.array([[r["x"], r["y"]] for r in broad])
+        support = matches(xy, raw_xy)
+        receipt.update(broadCount=len(broad), crossScaleMatches=len(support))
+        if len(support) >= 5:
+            span = np.ptp(xy[[p["catalogueIndex"] for p in support]], axis=0)
+            if span[0] >= .2*data.shape[1] and span[1] >= .2*data.shape[0]:
+                selected = broad
+                receipt["mode"] = "median3-bin4-broad-proposal"
+    receipt["renderedCount"] = min(60, len(selected))
+    return selected, receipt
+
+
+def broad_solver_proposals(data):
+    h, w = data.shape
+    # Median rejects isolated bad pixels. The 4x4 blocks are for proposing
+    # point patterns only; their centres use the native pixel-centre convention.
+    filtered = ndimage.median_filter(data, size=3, mode="nearest")
+    image = np.ascontiguousarray(filtered.reshape(h//4, 4, w//4, 4).mean((1, 3)), dtype=np.float32)
+    bg = sep.Background(image, bw=32, bh=32)
+    sources = sep.extract(image-bg.back(), 3.5, err=np.maximum(bg.rms(), 1.),
+                          minarea=5, deblend_nthresh=32, deblend_cont=.005)
+    rows = []
+    for source in sources:
+        x, y, a, b, flux = (float(source[k]) for k in ("x", "y", "a", "b", "flux"))
+        width = 2.35482*math.hypot(a, b)/math.sqrt(2.)
+        if (not all(math.isfinite(v) for v in (x, y, a, b, flux)) or flux <= 0
+                or min(x, y, w/4-1-x, h/4-1-y) < 4 or not 1 <= width <= 16 or a/max(.01, b) > 3):
+            continue
+        rows.append(dict(x=(x+.5)*4-.5, y=(y+.5)*4-.5, flux=flux, rawFwhm=4*width, sepFlags=int(source["flag"])))
+    return sorted(rows, key=lambda r: r["flux"], reverse=True)[:300]
 
 
 def point_render(rows, shape):
@@ -90,7 +132,9 @@ def read_tile(path):
     if not header[0]:
         raise ValueError("catalogue_header_missing")
     prior = np.maximum.accumulate(np.where(header, np.arange(len(records)), 0))
-    ra = (records[:, 0]+256*records[:, 1]+65536*records[:, 2])*360/16777215
+    # 24-bit RA * 360 exceeds int32 at ~128 deg. Convert the packed
+    # integer to degrees in floating point BEFORE the multiplication.
+    ra = (records[:, 0]+256*records[:, 1]+65536*records[:, 2])*(360.0/16777215)
     dec = (records[:, 3]+256*records[:, 4]+65536*(records[prior, 3]-128))*90/8388607
     mag = (records[prior, 4]-16)/10
     return np.column_stack((ra[~header], dec[~header], mag[~header])), hashlib.sha256(payload).hexdigest(), payload[:109].decode("ascii")

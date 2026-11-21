@@ -96,6 +96,9 @@ public sealed class Phd2CaptureException : Phd2Exception
     }
 
     public Phd2AppState? RejectedBeforeMutationState { get; }
+    // Set only for a state conflict in the read-only existing-loop save, not
+    // for exposure mismatches, transport, filesystem errors or timeouts.
+    public Phd2StateSnapshot? LoopReadbackConflict { get; init; }
 }
 
 /// <summary>A local preview candidate was lost or never completed selection;

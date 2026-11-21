@@ -67,6 +67,19 @@ public sealed class G3TargetTrackProductionTests(ITestOutputHelper output)
     public void CompiledProductionEntrypointsConsumeAndCommitTheSameTrajectory(string method)
     {
         var calls = Calls(AsyncBody(typeof(RealObservationStageRunner),method)).Select(m=>m.Name).ToArray();
+        if (method == "CaptureAndSelectPhd2GuideAtExposureAsync")
+        {
+            Assert.Contains("AnalyzePhd2PlacementGuideFrameAsync", calls);
+            var refresh = Calls(AsyncBody(typeof(RealObservationStageRunner), "RefreshPhd2TakeoverFieldIfStaleAsync"))
+                .Select(m => m.Name).ToArray();
+            Assert.Contains("AnalyzePhd2PlacementGuideFrameAsync", refresh);
+            Assert.Contains("SaveNextLoopingFrameAsync", refresh);
+            Assert.DoesNotContain("CaptureG3FullFrameForAcquisitionAsync", refresh);
+            Assert.DoesNotContain("StartLoopingAndWaitForFreshFrameAsync", refresh);
+            Assert.DoesNotContain("SetExactLockPositionAsync", refresh);
+            calls = Calls(AsyncBody(typeof(RealObservationStageRunner), "AnalyzePhd2PlacementGuideFrameAsync"))
+                .Select(m => m.Name).ToArray();
+        }
         Assert.Contains("PredictStellarTargetTrackAsync",calls);
         Assert.Contains("RejectStellarTargetTrackCandidate",calls);
         Assert.Contains("RememberStellarTargetTrackAsync",calls);

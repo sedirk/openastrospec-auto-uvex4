@@ -51,7 +51,9 @@ public sealed class CatalogShortPositionSourceSafetyTests
         Assert.Contains("field.Image?.MetaData.Image.ExposureTime * 1000", source);
         Assert.Contains("previous?.Gate.Disposition == GateDisposition.Passed, consecutiveUnmeasuredFrames", source);
         Assert.Contains("consecutiveUnmeasuredFrames + 1 : 0", source);
-        Assert.Contains("previousSameSetting: previous", source);
+        Assert.Contains("previousSameSetting: anchor", source);
+        Assert.Contains("var measurement = Measure(previous)", source);
+        Assert.Contains("measurement = Measure(null)", source);
         Assert.Contains("signalExposureIncreased,", source);
         Assert.Contains("if (exposureChanged)",source);
         Assert.Contains("previousHash = previousFramePath = previousReceipt = null",source);

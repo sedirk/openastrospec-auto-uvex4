@@ -42,6 +42,26 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                 topology,
                 preset.BuildMotionLimits(),
                 clock.GetUtcNow());
+            var distanceGuardApproach = false;
+            if (plan.Stage is { } proposed && session.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar &&
+                session.LastMeasurement.Measurement.GuidePositionMeasuredInFrame &&
+                port.GuideSnapshot is { IsConnected: true, AutomationPaused: false, Phd2Paused: false, AppState: Phd2AppState.Guiding } live &&
+                live.ConnectionEpoch == session.ConnectionEpoch && live.GuideEpoch == session.GuideEpoch)
+            {
+                var limits = preset.BuildMotionLimits();
+                var step = live.LastGuideStep;
+                var budget = Phd2SlitLockShiftPlanner.EvaluateAcquisitionBudget(session.Qualification, session.GuideMode,
+                    session.LastMeasurement.Measurement, ledger, safety, topology, limits, clock.GetUtcNow());
+                var cap = DistanceGuardApproachPixels(step, session.LastMeasurement.Measurement.GuideStar,
+                    ledger.CurrentLockPosition, proposed.StagePixels, budget, limits, session.Qualification.MaximumLockShiftScale);
+                if (cap is { } smaller)
+                {
+                    var shortened = Phd2SlitLockShiftPlanner.PlanOutboundStage(session.Qualification, session.GuideMode,
+                        session.LastMeasurement.Measurement, ledger, safety, topology, limits, clock.GetUtcNow(),
+                        preferredOutboundPixels: smaller);
+                    if (shortened is { IsAllowed: true, Stage: not null }) { plan = shortened; distanceGuardApproach = true; }
+                }
+            }
             var completionTolerance = preset.BuildMotionLimits().TargetOnSlitTolerancePixels *
                 session.Quality.RequiredResidualToleranceScale;
             var requiredCompletionFrames = Math.Max(3, session.Quality.RequiredFreshResidualsPerLockShiftStage);
@@ -415,7 +435,7 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     stage.RequiredFreshResiduals,
                     planningCode = plan.Code,
                     preferProbeCorrection,
-                    budgetLimitedApproach,
+                    budgetLimitedApproach, distanceGuardApproach,
                     predictedProbeEnvelopeOnly = budgetLimitedApproach,
                     stage.CumulativeAfterStageUpperPixels,
                     ledger.CumulativeCommandedPixels,
@@ -794,6 +814,25 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
             FreshGuidingWindowReplacedSettle = true, ReadOnlyPostLockObservation = proof };
         port.RecordSession(session);
         return session;
+    }
+
+    // AvgDist is a sizing hint from a successful native guide frame, not its measured
+    // primary position, a promise about PHD2's threshold, or evidence of slit arrival.
+    internal static double? DistanceGuardApproachPixels(Phd2GuideStep? step, Phd2Point primary, Phd2Point currentLock,
+        double proposed, Phd2LockShiftAcquisitionBudget budget, Phd2LockShiftLimits limits, double scale)
+    {
+        if (!budget.IsAllowed || step is not { Frame: >= 10, Snr: >= 15, HfdPixels: > 0,
+                ErrorCode: 0 or 1, AverageDistancePixels: > 0 and <= 6 } ||
+            !double.IsFinite(proposed) || !(scale > 0 && scale <= 1)) return null;
+        var avg = step.AverageDistancePixels.Value;
+        if (proposed <= Math.Max(12, 3 * avg)) return null;
+        var cap = 2 * avg - PointDistance(primary, currentLock); // triangle bound around actual primary
+        if (!(cap > Math.Max(2, 2 * limits.LockVerificationTolerancePixels)) || cap >= proposed) return null;
+        var attempts = 1 + Math.Ceiling(Math.Max(0, budget.RemainingOutboundPixels - cap) / (limits.MaximumStagePixels * scale));
+        var extra = Math.Max(0, attempts - budget.RequiredOutboundAttempts);
+        return budget.TotalAttempts + extra <= limits.MaximumAttempts &&
+            budget.TotalElapsedSeconds + extra * limits.MaximumStageDuration.TotalSeconds <= limits.MaximumElapsed.TotalSeconds
+            ? cap : null;
     }
 
     private bool IsUsefulBudgetLimitedApproach(IReadOnlyList<Phd2GuidingResidualState> window,

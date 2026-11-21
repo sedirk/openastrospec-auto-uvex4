@@ -258,7 +258,7 @@ public sealed class ScenarioCatalogTests
             "preparation-en", "preparation-night-en", "preparation-narrow", "preparation-narrow-bottom", "preparation-night-narrow", "preparation-night-narrow-bottom"];
         string[] science = ["science-progress", "science-progress-narrow", "science-progress-short", "science-progress-en", "science-progress-saving", "science-progress-paused", "science-progress-probe", "science-progress-complete"];
         var expected = existing.Concat(added).Concat(preparation).Concat(science)
-            .Concat(new[] { "independent-safety-standby", "independent-safety-standby-narrow" })
+            .Concat(new[] { "independent-safety-standby", "independent-safety-standby-narrow", "previous-night-unconfirmed" })
             .Concat(new[] { "atr-cooling-wait", "atr-cooling-wait-narrow" })
             .Concat(new[] { "post-calibration-pulse", "post-calibration-pulse-narrow" })
             .Concat(new[] { "post-calibration-blend", "post-calibration-blend-narrow" })

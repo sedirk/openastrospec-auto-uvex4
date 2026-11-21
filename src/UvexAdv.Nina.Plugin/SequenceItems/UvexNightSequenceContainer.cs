@@ -34,12 +34,20 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     private bool lockedStopAtDawn;
     private double lockedDawnAltitude;
     private bool lockedHomeBeforePark;
+    private bool lockedStartHome;
+    internal NightStartMountHome? StartHome { get; private set; }
     private int lockedHomeTimeoutSeconds;
     private bool lockedHoldOpenAfterTargets;
     private double lockedInitialSettlePixels;
     private int lockedInitialStableSeconds, lockedInitialTimeoutSeconds;
     private NativeSequencePlan? standbyPlan;
     private bool endRequested, unsafeTripped, blocked, operatorCancelled;
+    private volatile bool restartTripped;
+    // Production reads Windows only for real observing. Injection permits the
+    // native sequencer integration to be exercised without touching the OS/devices.
+    internal WindowsRestartProbe? SimulatedRestartProbe { get; init; }
+    private WindowsRestartProbe? nightRestartProbe;
+    private bool RestartIsDue() => restartTripped || nightRestartProbe?.PollGate() is not null;
     private string state = "未开始；将 UVEX4 目标观测拖入此容器，可复制、排序并保存为 N.I.N.A. 模板。";
     private RealRunConfiguration? lockedConfiguration;
     private readonly List<object> outcomes = new();
@@ -71,6 +79,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     [JsonProperty] public bool StopAtDawn { get; set; } = true;
     [JsonProperty] public double DawnSunAltitudeDegrees { get; set; } = -12;
     [JsonProperty] public bool HomeBeforeParkOnFinalize { get; set; }
+    [JsonProperty] public bool HomeMountAtNightStart { get; set; }
     [JsonProperty] public int MountHomeTimeoutSeconds { get; set; } = 180;
     [JsonProperty] public bool HoldOpenAfterTargets { get; set; }
     [JsonProperty] public double InitialGuideSettlePixels { get; set; }
@@ -96,7 +105,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     internal void OnNightUnsafe()
     {
         if (!IsActive) return; // A disposed previous-night callback cannot cancel a new run.
-        unsafeTripped = true; blocked = true; lifetime?.Cancel(); host.Cancel();
+        unsafeTripped = true; blocked = true;
+        try { NativeCancellation.Request(lifetime); }
+        finally { host.Cancel(); }
     }
 
     internal void LockDeadline(DateTimeOffset now, TimeZoneInfo zone)
@@ -145,6 +156,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         DeferObservatoryCloseout = true, DeadlineUtc = lockedDeadline, StopAtDawn = lockedStopAtDawn,
         DawnSunAltitudeDegrees = lockedDawnAltitude,
         HomeBeforeParkOnFinalize = lockedHomeBeforePark, MountHomeTimeoutSeconds = lockedHomeTimeoutSeconds,
+        HomeMountAtNightStart = lockedStartHome,
         InitialGuideSettlePixels = lockedInitialSettlePixels, InitialGuideStableSeconds = lockedInitialStableSeconds,
         InitialGuideTimeoutSeconds = lockedInitialTimeoutSeconds,
     };
@@ -195,6 +207,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             (await runner.ConfirmSequenceIdleAsync(timeout.Token).ConfigureAwait(false)).ToArray();
         RecordUnsettledTargetBoundary(target, result.Run.ObservationRunId, settledErrors,
             runner?.CanRecheckSequenceIdle == true);
+        // Even a local operator skip / optical deadline cannot turn an
+        // uncertain startup Home into authority for the next target. The real
+        // idle proof above, not this receipt, decides mechanical closeout.
+        if (StartHome?.Unconfirmed == true) boundaryFailure ??= "NIGHT_START_HOME_UNCONFIRMED";
         var failedGate = NativeSequencePlan.TerminalFailure(result);
         var completed = result.Run.State == ObservationRunState.Completed && boundaryFailure is null;
         if (result.Run.State == ObservationRunState.Cancelled && !operatorSkipRequested && !endRequested && !unsafeTripped) operatorCancelled = true;
@@ -316,7 +332,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 else if (!FocusBoundarySafe())
                     focusRepair = GateResult.Unknown("NATIVE_FOCUS_SAFETY_CHANGED", "对焦恢复后的安全、截止或取消状态已改变，未批准后续目标。");
                 focusRecoveries.Add(new { target, runId = result.Run.ObservationRunId, focusRepair,
-                    scanReservedHere, session.FocusAttempted, session.Accepted, session.Attempts,
+                    scanReservedHere, focusDiagnosticCheckRequested = session.FocusAttempted,
+                    session.Accepted, session.Attempts,
                     session.ReusedProbes, session.AcceptedSeconds, budget, idleErrors, settledErrors,
                     oldOpticalAuthorityReused = false });
                 if (focusRepair?.Disposition == GateDisposition.Passed && targetsIdle && settledErrors.Length == 0 &&
@@ -406,6 +423,10 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
 
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        // A native retry/parent loop may call Execute again on the very same
+        // card. A different journal path alone must never re-arm this Home.
+        if (HomeMountAtNightStart && StartHome is not null)
+            throw new InvalidOperationException("NIGHT_START_HOME_REENTRY：本轮开夜回零不能通过原生重试重发。请在整轮空闲后重置序列，再明确开始新一轮。");
         NativeEndInstructionsReady = false;
         nativeEndStandby = null;
         nativeEndReceipt = 0;
@@ -415,6 +436,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         LockDeadline(DateTimeOffset.UtcNow, TimeZoneInfo.Local);
         lockedStopAtDawn = StopAtDawn; lockedDawnAltitude = DawnSunAltitudeDegrees;
         lockedHomeBeforePark = HomeBeforeParkOnFinalize; lockedHomeTimeoutSeconds = MountHomeTimeoutSeconds;
+        lockedStartHome = HomeMountAtNightStart;
         lockedHoldOpenAfterTargets = EffectiveHoldOpenAfterTargets;
         lockedInitialSettlePixels = InitialGuideSettlePixels;
         lockedInitialStableSeconds = InitialGuideStableSeconds; lockedInitialTimeoutSeconds = InitialGuideTimeoutSeconds;
@@ -424,7 +446,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         var real = Items.OfType<UvexTargetObservationContainer>().First().UseRealMode;
         NinaInstancePolicy.RequireMaster(settings);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lifetime = cancellation; endRequested = unsafeTripped = blocked = operatorCancelled = false;
+        lifetime = cancellation; endRequested = unsafeTripped = blocked = operatorCancelled = restartTripped = false;
         try
         {
             NightState = "正在开始本轮序列；尚未执行目标。";
@@ -434,12 +456,23 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             clockContinuations.Clear();
             focusScanReservation = 0; focusRecoveries.Clear();
             RefreshPlanEditability();
-            JournalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "UVEX-ADV", "nights", $"night-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}.json");
+            JournalPath = Path.Combine(host.NightJournalDirectory, $"night-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}.json");
+            // Constructing the night receipt has no I/O. The normal simulation
+            // runner never dispatches it to a physical mediator.
+            if (lockedStartHome) StartHome = new(JournalPath);
             lockedConfiguration = real ? factory.CaptureConfiguration(settings) : null;
+            var restartProbe = nightRestartProbe = real ? WindowsRestartProbe.System : SimulatedRestartProbe;
+            // Refresh before a possible transfer so the old guardian latches an
+            // imminent restart even if its regular polling interval just began.
+            if (restartProbe is not null) await restartProbe.ReadAsync(token, fresh: true).ConfigureAwait(false);
             using var reservation = await host.ReserveNightAsync(this, real, token,
                 real ? () => factory.WatchNightSafety(OnNightUnsafe) : null,
                 lockedConfiguration?.ActionConfigurationSha256).ConfigureAwait(false);
+            await using var updateWatch = restartProbe is null ? null : await WindowsRestartWatch.StartAsync(restartProbe, () =>
+            {
+                restartTripped = true; blocked = true;
+                NativeCancellation.Request(cancellation);
+            }, token).ConfigureAwait(false);
             await ExecuteReservedNightAsync(progress, token, cancellation, real).ConfigureAwait(false);
         }
         finally
@@ -460,14 +493,17 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         try
         {
             await SaveJournalAsync("Running").ConfigureAwait(false);
+            if (real) await NightCloseoutHistory.RememberRealNightAsync(JournalPath).ConfigureAwait(false);
             // Native ordering, conditions, child statuses and template persistence.
-            try { await base.Execute(progress, cancellation.Token).ConfigureAwait(false); }
+            try { if (!restartTripped) await base.Execute(progress, cancellation.Token).ConfigureAwait(false); }
             catch (Exception ex) { failure = ex; blocked = true; }
         }
         catch (Exception ex) { failure ??= ex; blocked = true; }
         finally
         {
-            var safetyReason = unsafeTripped ? "NIGHT_UNSAFE" : standbyPlan?.StopGateNow()?.Code;
+            var restartDue = RestartIsDue();
+            if (restartDue) { restartTripped = true; blocked = true; }
+            var safetyReason = restartDue ? WindowsRestartProbe.Code : unsafeTripped ? "NIGHT_UNSAFE" : standbyPlan?.StopGateNow()?.Code;
             var ordinaryCancel = (token.IsCancellationRequested || operatorCancelled) && !endRequested && safetyReason is null;
             var closeErrors = new List<string>();
             var physicalCloseoutConfirmed = false;
@@ -509,9 +545,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                 {
                     if (real)
                     {
-                        await using var closer = factory.Create(host, settings, progress,
-                            lockedConfiguration!.WithSequencePlan(ApplyNight(new NativeSequencePlan(
-                                lockedConfiguration.Atr.ScienceFrameCount, lockedConfiguration.Atr.MaximumScienceAttempts, 0))));
+                        var closeConfig = lockedConfiguration!.WithSequencePlan(ApplyNight(new NativeSequencePlan(
+                            lockedConfiguration.Atr.ScienceFrameCount, lockedConfiguration.Atr.MaximumScienceAttempts, 0)));
                         // A latched weather/dawn/deadline closeout outlives the
                         // observing cancellation. It retains its own finite timeout.
                         safetyOwnsCloseout = safetyReason is not null;
@@ -525,7 +560,13 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                         {
                             // Cancel can arrive between the branch check and token publication.
                             if (operatorCancelled && !safetyOwnsCloseout) timeout.Cancel();
-                            closeErrors.AddRange(await closer.CloseSequenceNightAsync(timeout.Token).ConfigureAwait(false));
+                            if (restartDue)
+                                closeErrors.AddRange(await factory.CloseNightForWindowsRestartAsync(host, settings, closeConfig, progress, timeout.Token).ConfigureAwait(false));
+                            else
+                            {
+                                await using var closer = factory.Create(host, settings, progress, closeConfig);
+                                closeErrors.AddRange(await closer.CloseSequenceNightAsync(timeout.Token).ConfigureAwait(false));
+                            }
                             physicalCloseoutConfirmed = closeErrors.Count == 0;
                         }
                         finally { closeoutLifetime = null; safetyOwnsCloseout = false; }
@@ -556,6 +597,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
                     (targetBoundaryFailures.Count > 0 ? " 观测运动/交接责任未结清，不能继续目标；原始账本保留。" : string.Empty) +
                     (closeErrors.Count > 0 ? " " + string.Join("；", closeErrors) : string.Empty)
                 : DescribeTerminalState(real, ordinaryCancel, physicalCloseoutConfirmed, closeErrors, targetBoundaryFailures);
+            if (restartDue)
+                NightState = WindowsRestartProbe.Message + " " + (physicalCloseoutConfirmed
+                    ? "已回读原绑定屋顶关闭，不代表完成任何剩余目标。" : NightState);
             outcomes.Add(new { terminal = NightState, closeErrors, unsafeTripped, ordinaryCancel,
                 failure = failure?.Message, physicalHardware = real, physicalCloseoutConfirmed,
                 handedToStandby, monitoringOnly, safetyReason, standbyJournalPath,
@@ -566,11 +610,12 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             if (closeErrors.Count > 0) throw new InvalidOperationException(NightState, failure);
             if (!ordinaryCancel && targetBoundaryFailures.Count > 0)
                 reconciliationFailure = new InvalidOperationException(NightState);
-            NativeEndInstructionsReady = !blocked && !endRequested && !unsafeTripped && !ordinaryCancel &&
+            NativeEndInstructionsReady = !blocked && !endRequested && !unsafeTripped && !restartDue && !ordinaryCancel &&
                 !token.IsCancellationRequested && !handedToStandby && targetsIdle &&
                 closeErrors.Count == 0 && targetBoundaryFailures.Count == 0 &&
                 (physicalCloseoutConfirmed || !real);
         }
+        if (restartTripped) throw new InvalidOperationException(WindowsRestartProbe.Code + ": " + NightState, failure);
         if (failure is not null && !endRequested) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         // Preserve the original cancellation/failure when present. This reports
         // unresolved responsibility only; it never retries closeout or clears a ledger.
@@ -618,9 +663,9 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         return new(real, configuration?.ActionConfigurationSha256 ?? string.Empty,
             plan.DeadlineUtc, JournalPath, !monitoringOnly && idle && targetBoundaryFailures.Count == 0,
             callback => real ? factory.WatchNightSafety(callback, abortExposureOnUnsafe: false) : null,
-            () => configuration is not null && !factory.IsNightSafetyCurrent(configuration)
+            () => (real ? WindowsRestartProbe.System : SimulatedRestartProbe)?.PollGate() ?? (configuration is not null && !factory.IsNightSafetyCurrent(configuration)
                 ? GateResult.Unknown("NIGHT_SAFETY_UNAVAILABLE", "安全监视器不安全、断连或绑定改变。")
-                : plan.StopGateNow(),
+                : plan.StopGateNow()),
             async token =>
             {
                 if (!idle) return new[] { "目标停止未确认；未发起机械收口。请人工核对设备。" };
@@ -632,15 +677,24 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
             }, idle ? null : " 停止未确认：目前仅保留监控与报警，机械收口未获准。请确认设备连接和停止后手动重试；未结运动责任不会自动清除。",
             real && configuration is not null && targetResponsibilitiesSettled && initialReason is null
                 ? token => factory.RecheckStandbyIdleAsync(configuration, token) : null,
-            MonitoringOnly: monitoringOnly, InitialReason: initialReason);
+            MonitoringOnly: monitoringOnly, InitialReason: initialReason,
+            RestartCloseout: real ? async token =>
+            {
+                if (!idle) return new[] { "设备停止未确认；未执行机械收口，请现场核对。" };
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                return await factory.CloseNightForWindowsRestartAsync(host, settings, closeConfiguration!,
+                    new Progress<ApplicationStatus>(), timeout.Token).ConfigureAwait(false);
+            } : null);
     }
 
     private async Task SaveJournalAsync(string phase)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
-        var json = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = 1, phase,
+        var json = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = 1, phase, physicalHardware = lockedConfiguration is not null,
             updatedUtc = DateTimeOffset.UtcNow, state = NightState,
             homeBeforeParkOnFinalize = lockedHomeBeforePark, mountHomeTimeoutSeconds = lockedHomeTimeoutSeconds,
+            homeMountAtNightStart = lockedStartHome, startHomePhase = lockedConfiguration is null && lockedStartHome ? "SimulationOnly" : StartHome?.Phase,
             holdOpenAfterTargets = lockedHoldOpenAfterTargets, deadlineUtc = lockedDeadline,
             deadlineSchedule = lockedSchedule,
             initialGuideSettlePixels = lockedInitialSettlePixels, initialGuideStableSeconds = lockedInitialStableSeconds,
@@ -656,17 +710,31 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
     public override Task Interrupt()
     {
         if (lifetime is null) return Task.CompletedTask;
-        operatorCancelled = true; lifetime?.Cancel();
-        if (!safetyOwnsCloseout && !unsafeTripped) closeoutLifetime?.Cancel();
-        host.Cancel();
+        operatorCancelled = true;
+        try
+        {
+            NativeCancellation.Request(lifetime);
+            if (!safetyOwnsCloseout && !unsafeTripped && !restartTripped) NativeCancellation.Request(closeoutLifetime);
+        }
+        finally { host.Cancel(); }
         return Task.CompletedTask;
     }
     public override void ResetProgress()
     {
+        // A root/ancestor that is still RUNNING may be resetting a nested
+        // target or pass. Only an idle sequence reset re-arms an explicit night.
+        if (!IsActive && !HasRunningAncestor()) StartHome = null;
         NativeEndInstructionsReady = false;
         nativeEndStandby = null;
         nativeEndReceipt = 0;
         base.ResetProgress();
+    }
+
+    private bool HasRunningAncestor()
+    {
+        for (var parent = Parent; parent is not null; parent = parent.Parent)
+            if (parent.Status == NINA.Core.Enum.SequenceEntityStatus.RUNNING) return true;
+        return false;
     }
 
     internal async Task EnterNativeEndAsync(CancellationToken token)
@@ -679,7 +747,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         var standby = nativeEndStandby;
         if (standby is null || !ReferenceEquals(host.SafetyStandby, standby) ||
             standby.Snapshot.JournalPath != standbyJournalPath || unsafeTripped || endRequested ||
-            !targetsIdle || targetBoundaryFailures.Count != 0 || standbyPlan?.StopGateNow() is not null) return;
+            !targetsIdle || targetBoundaryFailures.Count != 0 || RestartIsDue() || standbyPlan?.StopGateNow() is not null) return;
         // Keep-open is an explicit saved policy, not an implicit close command.
         if (lockedHoldOpenAfterTargets) return;
         standby.RequestCloseout("NATIVE_END_AREA");
@@ -687,19 +755,20 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         token.ThrowIfCancellationRequested();
         var final = standby.Snapshot;
         if (final.Phase != "Closed" || final.Reason != "NATIVE_END_AREA" ||
-            final.Errors?.Count > 0 || standbyPlan?.StopGateNow() is not null)
+            final.Errors?.Count > 0 || RestartIsDue() || standbyPlan?.StopGateNow() is not null)
             throw new InvalidOperationException("原生结束区收口未通过；不执行附加设备指令。" + final.Message);
         NightState = "已跳到原生结束区；收口已核验，继续执行附加结束指令。各目标原始结果保留。";
         outcomes.Add(new { nativeEndArea = true, standbyJournalPath, physicalCloseoutConfirmed = final.PhysicalHardware });
         await SaveJournalAsync("NativeEnd").ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-        NativeEndInstructionsReady = standbyPlan?.StopGateNow() is null;
+        NativeEndInstructionsReady = !RestartIsDue() && standbyPlan?.StopGateNow() is null;
     }
     public override object Clone()
     {
         var clone = new UvexNightSequenceContainer(profiles, host, factory, settings)
         { StopAtDawn = StopAtDawn, DawnSunAltitudeDegrees = DawnSunAltitudeDegrees, EndAtIso8601 = EndAtIso8601,
             HomeBeforeParkOnFinalize = HomeBeforeParkOnFinalize, MountHomeTimeoutSeconds = MountHomeTimeoutSeconds,
+            HomeMountAtNightStart = HomeMountAtNightStart,
             HoldOpenAfterTargets = EffectiveHoldOpenAfterTargets, InitialGuideSettlePixels = InitialGuideSettlePixels,
             InitialGuideStableSeconds = InitialGuideStableSeconds, InitialGuideTimeoutSeconds = InitialGuideTimeoutSeconds };
         clone.CopyMetaData(this);
@@ -722,7 +791,7 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
 
     [System.Runtime.Serialization.OnDeserializing]
     private void ClearFactoryDefaultsForTemplate(System.Runtime.Serialization.StreamingContext context)
-    { Items.Clear(); Conditions.Clear(); Triggers.Clear(); }
+    { Items.Clear(); Conditions.Clear(); Triggers.Clear(); HomeMountAtNightStart = false; }
 
     [System.Runtime.Serialization.OnDeserialized]
     private void ReattachTemplateChildren(System.Runtime.Serialization.StreamingContext context)
@@ -740,7 +809,8 @@ public sealed class UvexNightSequenceContainer : SequenceContainer
         {
             if (owner.lifetime is null) { owner.host.RequestSafetyStandbyCloseout(); return; }
             owner.endRequested = true; owner.blocked = true;
-            owner.lifetime.Cancel(); owner.host.Cancel();
+            try { NativeCancellation.Request(owner.lifetime); }
+            finally { owner.host.Cancel(); }
         }
     }
 }

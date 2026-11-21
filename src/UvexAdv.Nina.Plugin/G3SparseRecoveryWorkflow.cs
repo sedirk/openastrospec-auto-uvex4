@@ -16,6 +16,11 @@ internal static class G3SparseRecoveryWorkflow
         CanApproachDirectly(solve) && !string.IsNullOrWhiteSpace(framePath) &&
         string.Equals(solve!.SourcePath, framePath, StringComparison.OrdinalIgnoreCase);
 
+    internal static bool NeedsNativeFarFieldCheck(bool alreadyTried, bool formal, double separationArcsec,
+        double pixelScale, int width, int height) =>
+        !alreadyTried && !formal && width > 0 && height > 0 && double.IsFinite(pixelScale) && pixelScale > 0 &&
+        double.IsFinite(separationArcsec) && separationArcsec > pixelScale * Math.Sqrt((double)width * width + (double)height * height);
+
     internal static async Task<GateResult> ValidateFormalEvidenceAsync(PlateSolveEvidence solve,
         Func<string, CancellationToken, Task<string>> hash, CancellationToken token)
     {

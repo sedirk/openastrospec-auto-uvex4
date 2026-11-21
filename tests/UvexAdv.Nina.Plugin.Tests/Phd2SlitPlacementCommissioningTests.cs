@@ -307,6 +307,55 @@ public sealed class Phd2SlitPlacementCommissioningTests
     }
 
     [Fact]
+    public void TypedOpticalGatesCannotBeDowngradedToGenericRunFailureAtPlacement()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.Phd2SlitPlacement.cs"));
+
+        Assert.Contains("throw new PhysicalActionGateException(preSelectBinding)", source, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(preGuideBinding)", source, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(slitDetection.Gate)", source, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(binding)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{preSelectBinding.Code",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{preGuideBinding.Code",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{slitDetection.Gate.Code",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{binding.Code",
+            source,
+            StringComparison.Ordinal);
+        var shortHandoff = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Sources",
+            "RealObservationStageRunner.ShortHandoff.cs"));
+        Assert.Contains("throw new PhysicalActionGateException(longGate)", shortHandoff, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(imageGate)", shortHandoff, StringComparison.Ordinal);
+        Assert.Contains("throw new PhysicalActionGateException(mountGate)", shortHandoff, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{longGate.Code",
+            shortHandoff,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{imageGate.Code",
+            shortHandoff,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "throw new InvalidOperationException($\"{mountGate.Code",
+            shortHandoff,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DurableLockRecoveryReusesThePassedCurrentFieldBeforeFallingBackToFreshPl3()
     {
         var recovery = Section(

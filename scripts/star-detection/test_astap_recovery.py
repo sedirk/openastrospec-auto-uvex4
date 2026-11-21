@@ -29,6 +29,16 @@ def test_noise_and_saturated_frame_do_not_invent_sources():
         worker.detect(np.zeros((128, 127)))
 
 
+@pytest.mark.parametrize("degrees", [0., 127.99, 128.01, 180., 255.99, 256.01, 356.960378, 358.169241, 359.999])
+def test_d80_unsigned_ra_covers_whole_sky(tmp_path, degrees):
+    packed = round(degrees/360*16777215)
+    path = tmp_path/"unsigned.1476"
+    path.write_bytes(b" "*109+b"\x05"+bytes([255, 255, 255, 128, 16])+packed.to_bytes(3, "little")+b"\x00\x00")
+    rows, _, _ = worker.read_tile(path)
+    assert rows.shape == (1, 3)
+    assert rows[0, 0] == pytest.approx(degrees, abs=360/16777215)
+
+
 def test_render_preserves_subpixel_and_does_not_change_measurements():
     rows = [dict(x=40.25, y=60.75, flux=123)]
     image = worker.point_render(rows, (128, 128))-1000
@@ -41,6 +51,34 @@ def test_render_preserves_subpixel_and_does_not_change_measurements():
 def test_unique_matching_never_reuses_detection():
     assert len(worker.matches([[10, 10], [10.1, 10.1]], [[10, 10]])) == 1
     assert worker.matches([[10, 10]], [[30, 30]]) == []
+
+
+@pytest.mark.parametrize("spread,offset,width,expected", [
+    (True, 0., 12., True), (False, 0., 12., False), (True, 10., 12., False), (True, 0., 6., False)])
+def test_broad_proposal_requires_independent_distributed_native_support(monkeypatch, spread, offset, width, expected):
+    data = np.zeros((512, 512), dtype=np.float32)
+    rows = [dict(x=40+180*(i % 3), y=40+(150*(i//3) if spread else i), flux=100-i, rawFwhm=width) for i in range(9)]
+    proposals = [dict(r, x=r["x"]+offset) for r in rows]
+    monkeypatch.setattr(worker, "detect", lambda data, threshold: rows[:2])
+    monkeypatch.setattr(worker, "broad_solver_proposals", lambda data: proposals)
+    selected, receipt = worker.select_solver_sources(data, rows)
+    assert (selected is proposals) is expected
+    assert receipt["solverCalls"] == 1
+    assert rows[0]["x"] == 40
+
+
+def test_broad_proposals_reject_isolated_pixel_defects():
+    data = np.full((256, 256), 4096., dtype=np.float32)
+    data[20:240:20, 20:240:20] = 65520
+    assert not worker.broad_solver_proposals(data)
+
+
+def test_established_noise_tail_with_spare_strong_star_stays_on_original_route(monkeypatch):
+    rows = [dict(x=i, y=i, rawFwhm=15., flux=100-i) for i in range(36)]
+    monkeypatch.setattr(worker, "detect", lambda data, threshold: rows[:6])
+    monkeypatch.setattr(worker, "broad_solver_proposals", lambda _: pytest.fail("do not displace noise-tail route"))
+    _, receipt = worker.select_solver_sources(np.zeros((128, 128)), rows)
+    assert receipt["mode"] == "noise-tail-5sigma"
 
 
 @pytest.mark.parametrize("bad", [False, True])

@@ -65,3 +65,6 @@ Current accepted decisions:
 - [ADR-0052: Exposure-timed delayed dual-optics calibration](0052-exposure-timed-delayed-dual-optics-calibration.md)
 - [ADR-0053: Successful-target parse and trial retention](0053-successful-target-frame-retention.md)
 - [ADR-0054: One bounded rebase from repeatable fresh target measurements](0054-bounded-target-continuity-rebase.md)
+- [ADR-0055: Terminal-target disposable-frame retention](0055-terminal-target-disposable-frame-retention.md)
+- [ADR-0056: Authenticated two-segment pre-dispatch retirement](0056-two-segment-pre-dispatch-retirement.md)
+- [ADR-0057: Once-per-night start mount Home](0057-once-per-night-start-mount-home.md)

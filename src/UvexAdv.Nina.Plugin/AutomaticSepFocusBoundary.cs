@@ -162,7 +162,7 @@ internal sealed class AutomaticSepFocusBoundary(
         }
         catch
         {
-            linked.Cancel();
+            NativeCancellation.Request(linked);
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             IReadOnlyList<string> errors;
             try { errors = await confirmStopped(stop.Token).ConfigureAwait(false); }

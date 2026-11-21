@@ -184,7 +184,7 @@ internal sealed class NinaSepMainFocusHardware(
         else
         {
             if (nativeMove is { IsCompleted: false })
-                try { nativeMoveCancellation?.Cancel(); } catch (ObjectDisposedException) { /* Already cancelled by Move's deadline. */ }
+                NativeCancellation.Request(nativeMoveCancellation);
             if (focusCommandIssued && (owner.IsMoving || f.IsMoving || f.IsSettling)) owner.Halt();
             if (nativeMove is { } pendingMove)
             {
@@ -216,7 +216,7 @@ internal sealed class NinaSepMainFocusHardware(
             else if (captureCommandIssued)
             {
                 if (nativeCapture is { IsCompleted: false })
-                    try { nativeCaptureCancellation?.Cancel(); } catch (ObjectDisposedException) { /* Already cancelled. */ }
+                    NativeCancellation.Request(nativeCaptureCancellation);
                 var stop = await phd.StopCaptureAndConfirmAsync(token).ConfigureAwait(false);
                 if (!stop.ConfirmedIdle || stop.FinalState != Phd2AppState.Stopped) errors.Add("PHD2 对焦曝光停止未确认。");
                 if (nativeCapture is { } pendingCapture)

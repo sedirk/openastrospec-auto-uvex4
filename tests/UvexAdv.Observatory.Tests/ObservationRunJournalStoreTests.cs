@@ -8,6 +8,41 @@ namespace UvexAdv.Observatory.Tests;
 public sealed class ObservationRunJournalStoreTests
 {
     [Fact]
+    public async Task TerminalProjectionRehashesActualBytesAndNeverCachesAnActiveRun()
+    {
+        await using var temporary = new TemporaryDirectory();
+        var path = Path.Combine(temporary.Path, "manifest.json");
+        var store = new ObservationRunJournalStore(path);
+        var plan = CreatePlan();
+        int calls = 0;
+        var reader = new ObservationRunJournalStore.TerminalProjection<string>(m =>
+        {
+            ++calls;
+            return m.TerminalState?.ToString() ?? "Active";
+        });
+        var initial = await store.InitializeAsync(plan);
+        Assert.Equal("Active", await reader.ReadAsync(store, default));
+        Assert.Equal("Active", await reader.ReadAsync(store, default));
+        var snapshot = Snapshot(plan, ObservationRunState.Completed, ObservationStage.FinalizeObservation,
+            "done", null, initial.UpdatedUtc.AddSeconds(1));
+        await store.PublishSnapshotAsync(snapshot);
+        Assert.Equal("Completed", await reader.ReadAsync(store, default));
+        Assert.Equal("Completed", await reader.ReadAsync(store, default));
+        Assert.Equal(3, calls);
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var bytes = await File.ReadAllBytesAsync(path);
+        var index = Array.IndexOf(bytes, (byte)'{');
+        bytes[index] = (byte)'!';
+        await File.WriteAllBytesAsync(path, bytes);
+        File.SetLastWriteTimeUtc(path, stamp);
+        await Assert.ThrowsAnyAsync<JsonException>(() => reader.ReadAsync(store, default));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.ReadAsync(store, new CancellationToken(true)));
+        File.Delete(path);
+        Assert.Null(await reader.ReadAsync(store, default));
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
     public async Task FinalProbeScienceReferenceSurvivesPersistenceExactlyOnceWithoutRewritingSource()
     {
         await using var temporary = new TemporaryDirectory();

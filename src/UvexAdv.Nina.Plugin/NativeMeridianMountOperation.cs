@@ -84,7 +84,7 @@ internal static class NativeMeridianMountOperation
         }
         catch
         {
-            motion.Cancel();
+            NativeCancellation.Request(motion);
             try { stopSlew(); }
             finally
             {

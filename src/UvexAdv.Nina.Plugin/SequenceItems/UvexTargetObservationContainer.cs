@@ -432,6 +432,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
                 return flip.IsDue(seconds);
             }) { VerifyScope = VerifyScope } : null;
             session = meridian ?? (night is not null ? new NativeTargetSession(nativePlan) : null);
+            if (session is not null) session.StartHome = night?.StartHome;
             // The second segment is a new production runner with no old optical
             // state. The night retains the exclusive lease throughout the flip.
             while (await ExecuteTargetAsync(progress, token, night, session, meridian, flip, flipConfiguration).ConfigureAwait(false))
@@ -631,8 +632,7 @@ public sealed partial class UvexTargetObservationContainer : SequenceContainer, 
     {
         if (targetLifetime is null) return;
         Interlocked.Exchange(ref operatorSkipRequested, 1);
-        try { Volatile.Read(ref targetLifetime)?.Cancel(); }
-        catch (ObjectDisposedException) { /* The same target just completed. */ }
+        NativeCancellation.Request(Volatile.Read(ref targetLifetime));
         activeBridge?.Abort(new OperationCanceledException("N.I.N.A. interrupted UVEX Target Observation."));
         host.Cancel();
         RefreshPlanEditability();

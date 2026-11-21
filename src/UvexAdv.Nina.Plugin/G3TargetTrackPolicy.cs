@@ -7,6 +7,19 @@ internal static class G3TargetTrackPolicy
 {
     internal const double MaximumReferenceAgeSeconds = 120;
 
+    internal static PixelPoint? RegisteredShortSearchHint(G3OverlapRegistrationResult fit, PixelPoint original,
+        double associationRadius, double searchRadius, int width, int height,
+        G3SparseExposureTiming reference, G3SparseExposureTiming current, DateTimeOffset now)
+    {
+        if (!fit.Accepted || fit.Transform is null || fit.FitPairs.Count < 3 || fit.HoldoutPairs.Count < 2 ||
+            reference.CaptureRequestedUtc == default || current.CaptureRequestedUtc <= reference.CaptureCompletedUtc) return null;
+        var timing = G3SparseFrameTimingPolicy.Evaluate(current, now, G3SparseTimingPurpose.RegisteredCurrentFrame,
+            fit.MaximumHoldoutResidualPixels, associationRadius, [reference]);
+        var hint = fit.Transform.Apply(original);
+        return timing.Usable && Distance(hint, original) + associationRadius <= searchRadius &&
+            hint.X >= 0 && hint.Y >= 0 && hint.X < width && hint.Y < height ? hint : null;
+    }
+
     internal static bool MatchesImmutablePixels(MonochromeFrame frame, ReadOnlySpan<ushort> pixels)
     {
         if(pixels.Length != frame.Width * frame.Height) return false;

@@ -83,12 +83,13 @@ public sealed class EnvironmentSupervisionPolicyTests
         Assert.Contains("safetyMonitorMediator.Connect()", connection, StringComparison.Ordinal);
         Assert.Contains("weatherDataMediator.Connect()", connection, StringComparison.Ordinal);
         Assert.Contains("domeMediator.Connect()", connection, StringComparison.Ordinal);
+        Assert.Contains("RoofConnection.ConnectAsync", connection, StringComparison.Ordinal);
         Assert.Contains("flatDeviceMediator.Connect()", connection, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenShutter", connection, StringComparison.Ordinal);
         Assert.DoesNotContain("CloseShutter", connection, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenCover", connection, StringComparison.Ordinal);
         Assert.DoesNotContain("CloseCover", connection, StringComparison.Ordinal);
-        Assert.Contains("connectedRoof.ShutterStatus == ShutterState.ShutterOpen", connection, StringComparison.Ordinal);
+        Assert.Contains("NinaRoofReadback.Position(domeMediator.GetInfo(), BoundRoofId) == BoundRoofPosition.Open", connection, StringComparison.Ordinal);
         Assert.Contains("domeOrRoofOpenEstablished, 1", connection, StringComparison.Ordinal);
         Assert.Contains("domeOrRoofLifecycleCommitted, 1", connection, StringComparison.Ordinal);
     }
@@ -130,7 +131,7 @@ public sealed class EnvironmentSupervisionPolicyTests
             "private async Task<string?> ParkMountAndCloseDomeOrRoofAsync(",
             "private async Task<QhyCameraStatus> ConnectQhyAtCheckpointAsync(");
         var park = close.IndexOf("telescopeMediator.ParkTelescope", StringComparison.Ordinal);
-        var closeCommand = close.IndexOf("domeMediator.CloseShutter", StringComparison.Ordinal);
+        var closeCommand = close.IndexOf("var closeGate = await CloseBoundRoofOnceAsync", StringComparison.Ordinal);
         Assert.True(park >= 0 && closeCommand > park);
         Assert.Contains("No mount motion was attempted under a closed roof", close, StringComparison.Ordinal);
 

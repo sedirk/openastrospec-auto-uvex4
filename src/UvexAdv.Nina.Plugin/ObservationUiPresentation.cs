@@ -545,7 +545,7 @@ public static partial class ObservationUiPresentation
             "PHD2_OWNER_STATUS_TIMEOUT" => "PHD2 状态查询超时，暂时无法确认导星相机所有者的实际状态；新的曝光已停止",
             Phd2PlacementGuideWindowPolicy.LegacyPreMotionRejectedCode => "入缝微调前导星光学精度未通过，已确认停止；整夜序列核对账本后跳过本目标，不触发目标间关顶",
             "PHD2_SLIT_PLACEMENT_FAILED_SAFE" => "PHD2 入缝没有取得可验证结果，流程已安全停止",
-            Phd2FreshTargetWindow.FailureCode => "目标位置连续复核仍失败：已在原时限内补取新帧，未用预测位置或分裂星像代替实测；序列确认停止及旧状态归档后可跳过本目标",
+            Phd2FreshTargetWindow.FailureCode => "新帧仍未能唯一实测目标位置：未用附近亮点、分裂星像或旧预测代替目标，未开始下一张曝光；序列确认停止并归档账本后按目标策略处理",
             "PHD2_LOCK_RETURN_SETTLE_FAILED" => "移锁回程的星点稳定未通过；锁点坐标已读回不等于星点已到位。后续入缝或光谱曝光未获放行",
             "PHD2_LOCK_RETURN_SETTLE_TIME_UNAVAILABLE" => "移锁回程已没有足够的稳定复核时间；未重置原预算，保留未结回程",
             Phd2DependencyRebuildStopPolicy.InitialSettleNotReachedCode => "初始导星未稳定，已确认停止且未开始入缝微调；整夜序列复核空闲后跳过本目标，不代表已入缝",
@@ -685,6 +685,11 @@ public static partial class ObservationUiPresentation
             _ when effectiveCode.Contains("G3", StringComparison.Ordinal) || effectiveCode.Contains("WCS", StringComparison.Ordinal) => "G3/WCS 证据不足以证明目标位置或授权下一步动作",
             _ when effectiveCode.Contains("QHY", StringComparison.Ordinal) || effectiveCode.Contains("PLATE", StringComparison.Ordinal) || effectiveCode.Contains("SOLVE", StringComparison.Ordinal) => "QHY/PL3 广域解算证据不足以继续定位",
             _ when effectiveCode.Contains("ATR", StringComparison.Ordinal) || effectiveCode.Contains("SCIENCE", StringComparison.Ordinal) => "ATR 光谱曝光或质量证据未达到本阶段要求",
+            "CATALOG_SLEW_TRACKING_NOT_RESTORED" => "目录转向后，赤道仪未能保持跟踪；尚未开始解析或曝光。请核对驱动中天限位和停止状态，勿连续重试转向",
+            "NIGHT_START_HOME_UNCONFIRMED" or "NIGHT_START_HOME_RECORD_UNCONFIRMED" or "NIGHT_START_HOME_TIMEOUT" =>
+                "开夜回零未获确认；没有继续转向或曝光。请核对赤道仪是否到零位且已停止，再决定是否重新开始整轮",
+            "NIGHT_START_HOME_OWNER_BUSY" or "NIGHT_START_HOME_NOT_IDLE" or "NIGHT_START_HOME_DEVICE_CHANGED" =>
+                "开夜回零所需的原设备身份或空闲状态未确认；请检查导星、相机、调焦及赤道仪，不能靠跳目标绕开",
             _ => "当前质量门未通过；程序没有把不确定状态当作成功",
         };
 

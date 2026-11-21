@@ -568,12 +568,11 @@ public static class SlitPlacementPendingStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(observationsRoot);
         var root = Path.GetFullPath(observationsRoot);
-        if (!Directory.Exists(root)) return Array.Empty<SlitPlacementPendingFileResult>();
-
-        string[] runDirectories;
+        IReadOnlyList<string> paths;
         try
         {
-            runDirectories = Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly);
+            paths = await PendingLedgerFileDiscovery.FindRunControlFilesAsync(root,
+                "slit-placement-pending.json", cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -581,11 +580,9 @@ public static class SlitPlacementPendingStore
         }
 
         var results = new List<SlitPlacementPendingFileResult>();
-        foreach (var runDirectory in runDirectories.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        foreach (var path in paths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.Combine(runDirectory, "control", "slit-placement-pending.json");
-            if (!File.Exists(path)) continue;
             var loaded = await LoadAsync(path, cancellationToken).ConfigureAwait(false);
             results.Add(new SlitPlacementPendingFileResult(Path.GetFullPath(path), loaded.State, loaded.Error));
         }

@@ -1141,6 +1141,18 @@ public sealed partial class NativeSequencePlanTests
         => await AssertNativeFailureBoundaryAsync(mode, failureCode);
 
     [Theory]
+    [InlineData(ObservationStage.SelectAtrExposure, "skip")]
+    [InlineData(ObservationStage.RunScienceBlock, "skip")]
+    [InlineData(ObservationStage.SelectAtrExposure, "cleanup-failure")]
+    [InlineData(ObservationStage.RunScienceBlock, "end-policy")]
+    [InlineData(ObservationStage.SelectAtrExposure, "late-cancel")]
+    [InlineData(ObservationStage.SelectAtrExposure, "late-unsafe")]
+    public async Task AtrWindowRejectionReachesTheActualNextNativeTargetOnlyAfterTheCheckedBoundary(
+        ObservationStage stage, string mode) =>
+        await AssertNativeFailureBoundaryAsync("fresh-window-" + mode, Phd2FreshTargetWindow.FailureCode,
+            failureStage: stage);
+
+    [Theory]
     [InlineData("typed-skip")]
     [InlineData("typed-cleanup-failure")]
     [InlineData("typed-end-policy")]
@@ -1170,6 +1182,7 @@ public sealed partial class NativeSequencePlanTests
         var notifier = new SilentNotifier();
         using var host = new ObservationCoordinatorHost(notifier);
         // Faulted releases the native marker while persistence is still joining.
+        Assert.StartsWith(Path.GetFullPath(Path.GetTempPath()), Path.GetFullPath(host.RunJournalDirectory), StringComparison.OrdinalIgnoreCase);
         // Quality notifications now wait for the saved native boundary, so make
         // the original race repeatable from the snapshot event, not the toast.
         var delayed = 0;
@@ -1433,16 +1446,32 @@ public sealed partial class NativeSequencePlanTests
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
         {
             Stages.Add(stage);
-            if (freshWindow && stage == ObservationStage.PlaceTargetOnSlit)
+            var opticalWindowStage = failureStage == ObservationStage.AcquireG3SlitField
+                ? ObservationStage.PlaceTargetOnSlit : failureStage;
+            if (freshWindow && stage == opticalWindowStage)
             {
                 var window = new Phd2FreshTargetWindow(3);
-                while (!window.Exhausted) window.Observe(measured: false);
-                Assert.Equal(3, window.Captures);
+                foreach (var measured in new[] { true, false, true, true, false, false })
+                    window.Observe(measured);
+                Assert.True(window.Exhausted);
+                Assert.Equal(6, window.Captures);
                 Assert.False(window.Complete);
-                return Task.FromResult(new Phd2FreshTargetNotMeasuredException(
+                var windowFailure = new Phd2FreshTargetNotMeasuredException(
                     GateResult.TargetQuality(Phd2FreshTargetWindow.FailureCode,
-                        "Formal WCS identity retained, but three fresh frames remain ambiguous; no hardware."),
-                    "synthetic-optical-window.json").AfterStop(stopConfirmed: true));
+                        "No complete fresh optical window; no hardware or exposure."),
+                    "synthetic-optical-window.json");
+                if (stage == ObservationStage.PlaceTargetOnSlit)
+                    return Task.FromResult(windowFailure.AfterStop(stopConfirmed: true));
+                // At the ATR boundary, the typed gate survives the same dispatch
+                // used by the real runner. The native sequence still owns
+                // cancellation, cleanup and the independent stop decision.
+                try { throw windowFailure; }
+                catch (PhysicalActionGateException ex)
+                {
+                    var withheld = ex.ToStageResult();
+                    Assert.Equal("synthetic-optical-window.json", withheld.EvidencePath);
+                    return Task.FromResult(withheld);
+                }
             }
             return Task.FromResult(new StageResult(!freshWindow && stage == failureStage && failure is not null
                 ? producedGate ?? (typedQuality ? new TargetQualityEvidenceException(failure, "Synthetic optical failure; no physical hardware.").AfterStop(true).Gate
@@ -1465,10 +1494,13 @@ public sealed partial class NativeSequencePlanTests
         var oldOwner = new object();
         using var old = await host.ReserveNightAsync(oldOwner, false, default);
         var checkedIdle = 0;
+        var ready = false;
         var guard = await host.BeginSafetyStandbyAsync(oldOwner, new(false, "", null,
             Path.Combine(Path.GetTempPath(), "UvexAdv-standby-tests", Guid.NewGuid().ToString("N"), "night.json"),
             false, _ => null, () => null, _ => throw new InvalidOperationException("No roof cycle allowed"),
-            RecheckIdle: _ => { checkedIdle++; return Task.FromResult(true); }));
+            RecheckIdle: _ => { checkedIdle++; return Task.FromResult(ready
+                ? GateResult.Pass("IDLE", "Synthetic original-owner readback")
+                : GateResult.Unknown("NIGHT_STANDBY_ATR_DISCONNECTED", "Recorded 11/15 recovery shape: original ATR disconnected, no exposure or motion permission")); }, MonitoringOnly: true));
         old.Dispose();
         var runner = new TerminalGateRunner(null, false);
         var night = new UvexNightSequenceContainer(profiles, host, null!, settings) { StopAtDawn = false };
@@ -1481,9 +1513,14 @@ public sealed partial class NativeSequencePlanTests
             ExpectedAtrCameraId = "SIM-ATR", ExpectedG3ProfileName = "SIM-G3", ExpectedQhyCameraId = "SIM-QHY",
             ScienceFrames = 1, MaximumScienceAttempts = 2,
         });
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => night.Execute(new Progress<ApplicationStatus>(), default));
+        Assert.Contains("NIGHT_STANDBY_ATR_DISCONNECTED", refused.Message);
+        Assert.Empty(runner.Stages);
+        Assert.Equal("MonitoringOnly", guard.Snapshot.Phase);
+        ready = true;
         await night.Execute(new Progress<ApplicationStatus>(), default).WaitAsync(TimeSpan.FromSeconds(15));
         await guard.Completion.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal(1, checkedIdle);
+        Assert.Equal(2, checkedIdle);
         Assert.Equal("Transferred", guard.Snapshot.Phase);
         Assert.Equal(ObservationRunCoordinator.Stages, runner.Stages);
         Assert.Equal(ObservationRunState.Completed, host.Dashboard.Run.State);

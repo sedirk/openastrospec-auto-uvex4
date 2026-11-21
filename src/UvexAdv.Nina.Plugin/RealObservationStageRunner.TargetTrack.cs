@@ -8,7 +8,8 @@ namespace UvexAdv.Nina.Plugin;
 // A measured short-frame source may accompany an older formal WCS field.
 // Its own pixels/hash/time must not be relabelled as the long frame's time.
 internal sealed record G3MeasuredTargetSource(string Path, string Sha, IImageData Image,
-    MonochromeFrame Frame, G3FieldMountBinding Binding, G3SparseExposureTiming Timing, PixelPoint Target);
+    MonochromeFrame Frame, G3FieldMountBinding Binding, G3SparseExposureTiming Timing, PixelPoint Target,
+    long? ConnectionEpoch = null);
 
 internal sealed partial class RealObservationStageRunner
 {

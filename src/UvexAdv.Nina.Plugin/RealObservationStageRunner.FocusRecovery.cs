@@ -18,13 +18,27 @@ internal sealed partial class RealObservationStageRunner
         ObservationPlan failedPlan, Func<CancellationToken, Task<bool>> reserveScan, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        async Task<GateResult?> NotAttemptedAsync(string reason)
+        {
+            Report("本目标未执行自动失焦诊断或焦移：" + reason);
+            await WriteAuditBestEffortAsync("auto-focus-not-attempted", new
+            {
+                reason, diagnosticFramesCaptured = 0, scanReserved = false,
+                motionIssued = false, originalFailureRetained = true, budgetReset = false,
+            }).ConfigureAwait(false);
+            // Optional recovery being inapplicable must not become an unknown
+            // whole-night failure. The original checked-stop skip still owns it.
+            return null;
+        }
         if (configuration.SequencePlan?.DeferObservatoryCloseout != true || configuration.Environment.WeakSupervisionEnabled
             || failedPlan.ObservationRunId != observationRunId || disposed || NativeTarget is null)
-            return null;
+            return await NotAttemptedAsync("当前不是仍持有本目标的完整安全夜间停止边界。").ConfigureAwait(false);
         SepMainFocusOptions? saved;
         try { saved = JsonSerializer.Deserialize<SepMainFocusOptions>(configuration.MainFocusOptionsJson); }
-        catch (JsonException) { return null; }
-        if (saved is not { AutomaticRecoveryEnabled: true, ConfigurationIssue: null }) return null;
+        catch (JsonException) { return await NotAttemptedAsync("本夜锁定的主镜对焦设置缺失或无法读取。").ConfigureAwait(false); }
+        if (saved is not { AutomaticRecoveryEnabled: true, ConfigurationIssue: null })
+            return await NotAttemptedAsync(saved is { AutomaticRecoveryEnabled: false }
+                ? "本夜保存的自动失焦恢复开关已关闭。" : saved?.ConfigurationIssue ?? "本夜没有保存有效主镜对焦设置。").ConfigureAwait(false);
         var bindings = nightSetup?.Value.FocusDomains?.Where(b => b.Role == FocusDomainRole.C11Main).ToArray();
         if (bindings is not { Length: 1 } || bindings[0].Owner != FocusDomainConventions.C11Owner
             || bindings[0].LogicalDeviceId != FocusDomainConventions.C11LogicalDeviceId

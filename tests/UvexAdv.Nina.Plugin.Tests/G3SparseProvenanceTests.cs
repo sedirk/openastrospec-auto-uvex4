@@ -66,9 +66,73 @@ public sealed class G3SparseProvenanceTests
         Task<GateResult> Validate() => RealObservationStageRunner.ValidateMeasuredSparseContinuityAsync(field,
             (p, _) => Task.FromResult(hashes[p]), stop.Token);
         if (scenario == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(Validate);
-        else Assert.Equal(scenario == "valid", (await Validate()).Disposition == GateDisposition.Passed);
+        else
+        {
+            var result = await Validate();
+            Assert.Equal(scenario == "valid", result.Disposition == GateDisposition.Passed);
+            if (scenario is "mutated-short" or "mutated-parent")
+                Assert.Equal("G3_SPARSE_SOURCE_CHANGED", result.Code);
+            if (scenario is "old-association" or "different-target" or "extended-expiry")
+            {
+                Assert.Equal("G3_SPARSE_MEASURED_CONTINUITY_UNCONFIRMED", result.Code);
+                Assert.Equal(GateFailureScope.TargetQuality, result.FailureScope);
+            }
+            if (scenario is "old-measurement" or "drift-too-large")
+                Assert.Equal("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", result.Code);
+        }
         Assert.Equal(now.AddSeconds(-5), solve.InferenceValidUntilUtc);
         Assert.False(solve.IsFormal);
+    }
+
+    [Fact]
+    public async Task DistinctGuideFrameInheritsOnlyIdentityAndAllParentsRemainVerifiable()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var shortUtc = now.AddSeconds(-9);
+        var guideUtc = now.AddSeconds(-2);
+        var solve = Inferred();
+        G3FieldMountBinding Bind(string name, char digest, DateTimeOffset time, double ra = 20, string pier = "pierWest") =>
+            G3FieldMountBinding.Create("run",new('A',64),new('B',64),name,new(digest,64),time,
+                new(ra,30,"J2000",pier,time));
+        var previous = Bind("first.fit",'1',shortUtc.AddSeconds(-3));
+        var last = Bind("short.fit",'2',shortUtc);
+        var guide = Bind("guide.fit",'4',guideUtc);
+        var shortSource = new G3MeasuredTargetSource(last.FramePath,last.FrameSha256,null!,null!,last,
+            new(shortUtc.AddSeconds(-1),shortUtc,.1,shortUtc),new(50,55),7);
+        var expires = shortUtc.AddSeconds(30);
+        var pair = new G3SparseMeasuredContinuity(shortUtc,expires,solve.EvidenceSha256,
+            "pair.json",new('3',64),previous.FramePath,previous.FrameSha256,last.FramePath,last.FrameSha256,100);
+        var seed = G3FieldState.Failed(GateResult.Pass("pair","short pair"),solve:solve) with
+        { SparseMeasuredContinuity = pair, TargetTrackSource = shortSource, SparseInferenceConfirmed = true };
+        GateResult Check(G3FieldMountBinding current, DateTimeOffset? start, long epoch, DateTimeOffset at) =>
+            G3SparseGuideAncestry.SelectionFrameGate(shortSource,current,start,epoch,expires,at,2);
+        Assert.True(G3SparseGuideAncestry.IsRegisteredPair(seed));
+        Assert.Equal(GateDisposition.Passed,Check(guide,guideUtc.AddSeconds(-1),7,now).Disposition);
+        Assert.Equal(GateFailureScope.TargetQuality,Check(guide,null,7,now).FailureScope);
+        Assert.Equal(GateFailureScope.TargetQuality,Check(guide,shortUtc.AddMilliseconds(-1),7,now).FailureScope);
+        Assert.Equal(GateFailureScope.TargetQuality,Check(guide,shortUtc,7,expires.AddTicks(1)).FailureScope);
+        Assert.Equal(GateFailureScope.TargetQuality,Check(Bind("copy.fit",'2',guideUtc),shortUtc,7,now).FailureScope);
+        Assert.Equal("G3_SPARSE_GUIDE_CONTEXT_CHANGED",Check(guide,shortUtc,8,now).Code);
+        Assert.Equal("G3_FIELD_MOUNT_BINDING_STALE",Check(Bind("guide.fit",'4',guideUtc,21),shortUtc,7,now).Code);
+        Assert.Equal("G3_FIELD_MOUNT_BINDING_PIER_CHANGED",Check(Bind("guide.fit",'4',guideUtc,20,"pierEast"),shortUtc,7,now).Code);
+        var published = G3SparseGuideAncestry.Transfer(seed,seed with {MountBinding=guide,FramePath=guide.FramePath},
+            7,"handoff.json",new('7',64));
+        Assert.Null(published.Solve);
+        Assert.Null(published.SparseMeasuredContinuity);
+        Assert.Null(published.TargetTrackSource);
+        Assert.False(published.SparseInferenceConfirmed);
+        Assert.Equal("handoff.json",published.NeighbourCatalogIdentityEvidencePath);
+        Assert.Equal(guide,published.MountBinding);
+        var ancestry = Assert.IsType<G3SparseGuideAncestry>(published.SparseGuideAncestry);
+        var hashes = new Dictionary<string,string>(solve.InferenceSources)
+        { [previous.FramePath]=previous.FrameSha256,[last.FramePath]=last.FrameSha256,[guide.FramePath]=guide.FrameSha256,
+            ["pair.json"]=pair.ConfirmationSha256,["handoff.json"]=new('7',64) };
+        Task<GateResult> Verify(G3FieldMountBinding b,long epoch,string? altered=null) =>
+            ancestry.VerifyAsync(b,epoch,(path,_)=>Task.FromResult(path==altered?new string('9',64):hashes[path]),default);
+        Assert.Equal(GateDisposition.Passed,(await Verify(guide,7)).Disposition);
+        Assert.Equal("G3_SPARSE_GUIDE_CONTEXT_CHANGED",(await Verify(guide,8)).Code);
+        foreach(var key in hashes.Keys) Assert.Equal("G3_SPARSE_SOURCE_CHANGED",(await Verify(guide,7,key)).Code);
+        Assert.Equal(expires,seed.SparseMeasuredContinuity!.PositionValidUntilUtc);
     }
 
     [Fact]
@@ -120,6 +184,36 @@ public sealed class G3SparseProvenanceTests
             (_, _) => throw new Xunit.Sdk.XunitException("Expired evidence must not be consumed"), default);
         Assert.Equal("G3_CATALOG_SHORT_POSITION_UNCONFIRMED", gate.Code);
         Assert.NotEqual(GateDisposition.Passed, gate.Disposition);
+    }
+
+    [Theory]
+    [InlineData("skip")]
+    [InlineData("cleanup-failure")]
+    [InlineData("end-policy")]
+    public async Task RecordedMissingMeasuredAssociationActuallyExecutesNextNativeTarget(string boundary)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var solve = Inferred() with { InferenceValidUntilUtc = now.AddSeconds(-5) };
+        var target = new StarCandidate(new(173, 810), 4352, 6495, 25.8, 0, .389, 0, 173);
+        var identification = new TargetIdentification(GateResult.Pass("measured", "independent pair"),
+            target, new(144, 825), 32.8, 2, TargetIdentificationAuthority.CatalogWcsProjection,
+            BoundShortPositionEvidencePath: "confirmed.json", CatalogPositionSpreadPixels: 1.89);
+        var proof = new G3SparseMeasuredContinuity(now.AddSeconds(-6), now.AddSeconds(20), solve.EvidenceSha256,
+            "confirmed.json", new('3', 64), "first.fit", new('1', 64), "second.fit", new('2', 64), 100);
+        var field = G3FieldState.Failed(GateResult.Pass("confirmed", "pair"), solve: solve) with
+        {
+            TargetIdentification = identification,
+            TargetTrackSource = null,
+            SparseInferenceConfirmed = true,
+            SparseMeasuredContinuity = proof,
+        };
+        var gate = await RealObservationStageRunner.ValidateMeasuredSparseContinuityAsync(
+            field, (_, _) => throw new Xunit.Sdk.XunitException(
+                "Missing association is a quality miss, not permission to consume source files."), default);
+        Assert.Equal("G3_SPARSE_MEASURED_CONTINUITY_UNCONFIRMED", gate.Code);
+        Assert.Equal(GateFailureScope.TargetQuality, gate.FailureScope);
+        await new NativeSequencePlanTests().AssertNativeFailureBoundaryAsync(
+            boundary, gate.Code, gate, ObservationStage.PlaceTargetOnSlit);
     }
 
     [Fact]

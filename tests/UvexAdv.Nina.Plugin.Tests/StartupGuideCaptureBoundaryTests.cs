@@ -9,6 +9,33 @@ public sealed class StartupGuideCaptureBoundaryTests
     private static Phd2SingleFrameResult Frame() => new("synthetic.fit", false, true, DateTimeOffset.UtcNow, 1000);
     private static Phd2StopCaptureResult Stopped() => new(Phd2AppState.Stopped, Phd2AppState.Stopped, true, true, DateTimeOffset.UtcNow);
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ThrowingCancellationCallbackCannotSkipActualOwnerStop(bool stopped)
+    {
+        var guard = new StartupGuideCaptureBoundary(TimeSpan.FromMilliseconds(100));
+        var stops = 0;
+        CancellationTokenRegistration registration = default;
+        try
+        {
+            var error = await Record.ExceptionAsync(() => guard.RunAsync(token =>
+            {
+                registration = token.Register(() => throw new NullReferenceException("disconnected native owner"));
+                return Task.FromResult(Frame());
+            }, _ =>
+            {
+                stops++;
+                return Task.FromResult(Stopped() with { ConfirmedIdle = stopped });
+            }, _ => Task.CompletedTask, default));
+            Assert.Equal(1, stops);
+            if (stopped) Assert.Null(error);
+            else Assert.Equal("GUIDE_STARTUP_STOP_UNCONFIRMED", Assert.IsType<PhysicalActionGateException>(error).Gate.Code);
+            Assert.Null(guard.UnjoinedOperation);
+        }
+        finally { registration.Dispose(); }
+    }
+
     [Fact]
     public async Task CompletedNativeFrameIsReturnedOnlyAfterOriginalOwnerStopCompletes()
     {

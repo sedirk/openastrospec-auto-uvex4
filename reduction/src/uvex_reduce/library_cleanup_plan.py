@@ -441,7 +441,7 @@ class CleanupPlanner:
             # A preview output in its own stopped producer is provenance, not an
             # input. Everything else (including runtime-model evidence) protects.
             own_output = bool(proof and link["source_file_id"] in proof["source_ids"]
-                              and relation in self._output_relations(proof))
+                              and self._is_output_link(link, relation, proof, snapshot))
             if not own_output:
                 reasons.append("referenced_dependency_or_runtime_model")
         facts = _facts(path, ancestors) if exact or not reasons else None
@@ -470,6 +470,9 @@ class CleanupPlanner:
 
     def _output_relations(self, proof: dict) -> frozenset[str]:
         return _PROVENANCE_RELATIONS
+
+    def _is_output_link(self, link, relation, proof, snapshot):
+        return relation in self._output_relations(proof)
 
     def inventory(self) -> list[dict[str, Any]]:
         snapshot = self._load(force=True)
@@ -532,6 +535,7 @@ class CleanupPlanner:
         # Dependencies and proof documents are digest-bound and checked afresh
         # before execution. No filesystem mutation is made while creating a plan.
         guarded_ids = set(snapshot["documents"])
+        guarded_ids.update(snapshot.get("extra_guard_ids", ()))
         guarded_ids.update(row["id"] for row in snapshot["files"].values()
                            if row["kind"] == "project" or Path(row["path"]).suffix.casefold() == ".toml")
         shared_guard_paths = {snapshot["files"][identifier]["path"] for identifier in guarded_ids}
@@ -546,7 +550,7 @@ class CleanupPlanner:
         guards = [_signature(_facts(snapshot["files"][identifier]["path"], ancestors))
                   for identifier in sorted(guarded_ids)]
         for guard in guards:
-            if (Path(guard["path"]).suffix.casefold() in _METADATA_SUFFIXES and guard["exists"]
+            if (Path(guard["path"]).suffix.casefold() in _METADATA_SUFFIXES | {".archive"} and guard["exists"]
                     and guard["size_bytes"] <= MAX_METADATA_BYTES):
                 guard["sha256"] = hashlib.sha256(Path(guard["path"]).read_bytes()).hexdigest()
         plan: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "plan_id": uuid.uuid4().hex,

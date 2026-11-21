@@ -23,6 +23,7 @@ internal interface INativeTargetBoundary
 internal class NativeTargetSession(NativeSequencePlan original)
 {
     public NativeSequencePlan Original { get; } = original;
+    internal NightStartMountHome? StartHome { get; set; }
     internal AdaptiveGuidingRecovery GuidingRecovery { get; } = new();
     public int Accepted { get; private set; }
     public int Attempts { get; private set; }

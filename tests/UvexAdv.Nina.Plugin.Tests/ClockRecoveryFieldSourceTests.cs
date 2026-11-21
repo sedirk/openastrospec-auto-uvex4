@@ -122,7 +122,7 @@ public sealed class ClockRecoveryFieldSourceTests
             "window.CancelAfter(remaining)", "run.clockCurrentFieldProbeActive = true",
             "operation = run.CaptureAndAnalyzeG3WithSolveLadderAsync(context, window.Token, currentPositionCheck: true)",
             "while (!operation.IsCompleted)", "CheckPhysicalBoundary(context, requireIdleIllumination: false)",
-            "field = await operation.ConfigureAwait(false)", "finally", "window.Cancel()",
+            "field = await operation.ConfigureAwait(false)", "finally", "NativeCancellation.Request(window)",
             "stopFailure = await StopAndJoinAsync(operation)", "run.clockCurrentFieldProbeActive = false");
         Ordered(capture, "token.ThrowIfCancellationRequested();\n            if (stopFailure",
             "if (failure is OperationCanceledException && originalDeadlineCancelled)",

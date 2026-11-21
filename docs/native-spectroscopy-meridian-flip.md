@@ -70,7 +70,10 @@ manifest 标签记录 `nativeTargetRootRunId`、原始目标计划、此前分�
 当前翻转控制记录：`%LOCALAPPDATA%\UVEX-ADV\observations\control\native-meridian-flip.json`。
 若进程在等待/命令期间中断，或记录损坏，下一轮会报告 `NATIVE_FLIP_UNCONFIRMED` /
 `NATIVE_FLIP_JOURNAL_UNREADABLE`，不会重新发翻转。须通过现场只读状态与原始日志确认，
-人工处理遗留状态；本版没有自动“清掉记录继续”的按钮。计划翻转成功记录 `MountVerified`，
+人工处理遗留状态；本版没有“无条件清掉记录继续”的按钮。ADR-0050/0056 允许下一次
+显式新逻辑目标在重新证明原所有者、设备停止、完整安全链和新鲜停画帧后，按原字节
+归档已结束且尚未发令的单段或认证双段记录。命令待发、三段、乱序、伪造根或任何
+未知责任仍阻断。计划翻转成功记录 `MountVerified`，
 已换侧核验记录 `SideChangeVerified` 并明确 `flipCommandSent=false`；两者都不是光学入缝或
 科学质量通过。各段 FITS、manifest 和审计证据不变。
 

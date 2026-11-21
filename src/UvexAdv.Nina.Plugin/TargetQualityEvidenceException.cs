@@ -8,6 +8,7 @@ namespace UvexAdv.Nina.Plugin;
 internal sealed class TargetQualityEvidenceException(string code, string message)
     : PhysicalActionGateException(GateResult.TargetQuality(code, message))
 {
+    internal UvexAdv.Phd2.Phd2StateSnapshot? PreviewLossWitness { get; init; }
     internal StageResult AfterStop(bool stopConfirmed) => new(stopConfirmed
         ? Gate
         : GateResult.Unknown("PHD2_QUALITY_STOP_UNCONFIRMED",

@@ -97,16 +97,13 @@ internal sealed class ObservationRunPersistenceSession : IAsyncDisposable
         ObservationPlan plan,
         ObservationRunLockedMetadata lockedMetadata,
         Action<Exception> onFailure,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string runJournalDirectory)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(lockedMetadata);
         ArgumentNullException.ThrowIfNull(onFailure);
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "UVEX-ADV",
-            "observations",
-            SanitizePathSegment(plan.ObservationRunId));
+        ArgumentException.ThrowIfNullOrWhiteSpace(runJournalDirectory);
+        var root = Path.Combine(runJournalDirectory, SanitizePathSegment(plan.ObservationRunId));
         var store = new ObservationRunJournalStore(Path.Combine(root, "manifest.json"));
         await store.InitializeAsync(plan, lockedMetadata, cancellationToken).ConfigureAwait(false);
         return new ObservationRunPersistenceSession(store, onFailure);

@@ -33,6 +33,8 @@ internal static class Phd2GuideSnrExposurePolicy
         bool hasPreviousTier, bool motionFree, bool guidingEverStarted) =>
         hasPreviousTier && CanRecoverCandidateLoss(baseline, lost, current, selected, motionFree, guidingEverStarted);
 
+    // Eligibility AFTER the scoped SNR sampler actually reported loss. Never
+    // use the eligibility predicate as a detector on two ordinary snapshots.
     internal static bool CanRecoverCandidateLoss(Phd2StateSnapshot baseline,
         Phd2StateSnapshot lost, Phd2StateSnapshot current, Phd2Point selected,
         bool motionFree, bool guidingEverStarted, bool ownedRecoveryPreparation = false) =>

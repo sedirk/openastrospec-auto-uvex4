@@ -92,6 +92,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
     private object? nightOwner;
     private string? nativeTargetRunId;
     private readonly string nightOwnershipPath;
+    internal string NightJournalDirectory { get; }
+    internal string RunJournalDirectory { get; }
     private NightSafetyStandby? safetyStandby;
     private NightSafetyStandbySnapshot? standbySnapshot;
     internal NightSafetyStandby? SafetyStandby { get { lock (sync) return safetyStandby; } }
@@ -118,7 +120,12 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 }, freshIdle && ReferenceEquals(candidate, safetyStandby)) == true) return transferred!;
         }
         if (standbyWasActive)
-            throw new InvalidOperationException("安全待机本次未批准交接：请确认原绑定设备已连接且停止、天气安全，并检查未结责任。未发起新观测或机械动作。");
+        {
+            var diagnosis = candidate?.Snapshot.LastHandoverGate;
+            throw new InvalidOperationException("安全待机本次未批准交接：" + (diagnosis is null
+                ? "请确认原绑定设备已连接且停止、天气安全，并检查未结责任。"
+                : $"{diagnosis.Code}：{diagnosis.Message}") + "未发起新观测或机械动作。");
+        }
         if (!await runGate.WaitAsync(0, token).ConfigureAwait(false))
             throw new InvalidOperationException("观测、对焦或安全收口仍占用设备；待机须安全、同配置且无未结责任才能交接新序列。");
         try
@@ -198,7 +205,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
         lock (sync)
         {
             if (safetyStandby is null) return false;
-            safetyStandby.RequestCloseout(); return true;
+            return safetyStandby.RequestCloseout();
         }
     }
 
@@ -213,22 +220,28 @@ public sealed class ObservationCoordinatorHost : IDisposable
         try { DashboardChanged?.Invoke(this, dashboard); }
         catch (Exception ex) { NINA.Core.Utility.Logger.Error(ex); }
         if (next.Phase is "CloseoutFailed" or "MonitoringOnly") attentionNotifier.Notify(new(
-            ObservationAttentionSeverity.Error, "OpenAstroSpec 独立安全收口需要处理", next.Message,
-            next.Id + ":" + next.Phase));
+            ObservationAttentionSeverity.Error, "OpenAstroSpec 独立安全收口需要处理", next.OperatorStatus,
+            next.Id + ":" + next.Phase + (next.Reason == WindowsRestartProbe.Code ? ":windows-restart" : "")));
     }
 
     public ObservationCoordinatorHost()
-        : this(new NinaAndWindowsObservationAttentionNotifier())
+        : this(new NinaAndWindowsObservationAttentionNotifier(), nightJournalDirectory: NightCloseoutHistory.DefaultDirectory,
+            runJournalDirectory: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UVEX-ADV", "observations"))
     {
     }
 
-    internal ObservationCoordinatorHost(IObservationAttentionNotifier attentionNotifier, string? nightOwnershipPath = null)
+    internal ObservationCoordinatorHost(IObservationAttentionNotifier attentionNotifier, string? nightOwnershipPath = null,
+        string? nightJournalDirectory = null, string? runJournalDirectory = null)
     {
         this.attentionNotifier = attentionNotifier ?? throw new ArgumentNullException(nameof(attentionNotifier));
+        // Test/injected hosts must not leave simulated nights in the operator's real history.
+        NightJournalDirectory = nightJournalDirectory ?? Path.Combine(Path.GetTempPath(), "uvex-test-nights", Guid.NewGuid().ToString("N"));
+        RunJournalDirectory = runJournalDirectory ?? Path.Combine(NightJournalDirectory, "fixture-observations");
         this.nightOwnershipPath = nightOwnershipPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "UVEX-ADV", "observations", "control", "real-observation-owner.lock");
         coordinator.SnapshotChanged += OnCoordinatorSnapshotChanged;
+        coordinator.CancellationCallbackFailed += (_, failure) => NativeCancellation.Report(failure);
         previews[ObservationPreviewChannel.QhyWideField] = EmptyPreview(
             ObservationPreviewChannel.QhyWideField,
             "等待 QHY/GS350 广域取景数据");
@@ -354,7 +367,7 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 plan,
                 lockedMetadata,
                 ex => OnPersistenceFailure(reservation, ex),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, RunJournalDirectory).ConfigureAwait(false);
             lock (sync)
             {
                 if (!ReferenceEquals(activeRunReservation, reservation))
@@ -366,10 +379,13 @@ public sealed class ObservationCoordinatorHost : IDisposable
                 manifestRunId = plan.ObservationRunId;
             }
             ResetDashboardForRun(plan, lockedMetadata);
-            await coordinator.StartAsync(
-                plan,
-                new DashboardStageRunner(this, runner),
-                cancellationToken).ConfigureAwait(false);
+            Task Observe(CancellationToken token) => coordinator.StartAsync(plan, new DashboardStageRunner(this, runner), token);
+            if (!belongsToNight && runner is IWindowsRestartRun { RestartPort: { } restart })
+                await restart.ExecuteAsync(Observe, (message, alarm) => attentionNotifier.Notify(new(
+                    alarm ? ObservationAttentionSeverity.Error : ObservationAttentionSeverity.Warning,
+                    "OpenAstroSpec · Windows 更新待重启", message, plan.ObservationRunId + ":windows-restart")),
+                    cancellationToken).ConfigureAwait(false);
+            else await Observe(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -427,8 +443,8 @@ public sealed class ObservationCoordinatorHost : IDisposable
         // night is joining/handing off owners. Cancel that scope as well.
         CancellationTokenSource? boundary;
         lock (sync) boundary = activeNativeBoundary?.Cancellation;
-        try { boundary?.Cancel(); } catch (ObjectDisposedException) { /* The joined scope already released. */ }
-        coordinator.Cancel();
+        try { NativeCancellation.Request(boundary); }
+        finally { coordinator.Cancel(); }
     }
 
     public void RequestTakeover(string reason = "操作员请求人工接管。") => coordinator.RequestTakeover(reason);
@@ -884,8 +900,9 @@ internal sealed class DashboardStageRunner(
 /// across Pause/Resume and are retried only after coordinator revalidation.
 /// </summary>
 internal sealed class SequencerStageBridge : IObservationStageRunner, IObservationRunProvenanceSource,
-    IRealObservationRunOwnershipSource, IObservationTerminalGatePolicy, IObservationTerminalGuideCleanup, IDisposable
+    IRealObservationRunOwnershipSource, IObservationTerminalGatePolicy, IObservationTerminalGuideCleanup, IWindowsRestartRun, IDisposable
 {
+    public WindowsRestartRunPort? RestartPort => (inner as IWindowsRestartRun)?.RestartPort;
     public Task CleanupTerminalGuideStateAsync(string runId, CancellationToken token) =>
         inner is IObservationTerminalGuideCleanup cleanup ? cleanup.CleanupTerminalGuideStateAsync(runId, token) : Task.CompletedTask;
     private readonly IObservationStageRunner inner;

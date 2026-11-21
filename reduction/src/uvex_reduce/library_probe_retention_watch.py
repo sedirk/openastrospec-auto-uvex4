@@ -154,14 +154,16 @@ class ProbeMetadataWatch(WindowsMetadataWatch):
             path = stack.pop()
             checked += 1
             key = _canonical(path)
-            if checked > 4096 or key in self.candidates or key in self.guard_paths:
+            if checked > 4096 or key in self.guard_paths:
                 raise OSError("清理依据或选定试拍已变化；延后清理，不干扰观测。")
             try:
                 info = path.lstat()
             except FileNotFoundError:
-                # Removing an unrelated file cannot introduce a dependency;
-                # rename destinations arrive as separate watched notifications.
+                # The executor's own selected-file deletion is expected here.
+                # A still-present selected file is rejected below.
                 continue
+            if key in self.candidates:
+                raise OSError("选定文件在删除前发生变化；延后清理，不干扰观测。")
             if _reparse(info):
                 raise OSError("新重解析路径需要重新核查；延后清理。")
             if stat.S_ISDIR(info.st_mode):

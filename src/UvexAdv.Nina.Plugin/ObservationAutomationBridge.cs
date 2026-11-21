@@ -95,7 +95,8 @@ internal sealed record ObservationAutomationSnapshot(
     NightSafetyStandbySnapshot? SafetyStandby = null,
     bool RealModeCommissioned = false,
     string CommissioningProfileLoadStatus = "",
-    IReadOnlyList<string>? CommissioningValidationIssues = null);
+    IReadOnlyList<string>? CommissioningValidationIssues = null,
+    string PreviousNightCloseoutNotice = "");
 
 internal sealed record ObservationAutomationInvocationResult(
     bool Accepted,

@@ -10,6 +10,8 @@ internal sealed partial class RealObservationStageRunner
         ObservationContext context, G3WcsMotionPrediction prediction, TargetIdentification longTarget,
         string longFramePath, G3FieldMountBinding longMountBinding, int exposureMilliseconds, Phd2SlitPlacementCommissioning preset,
         SlitGeometry slit, IReadOnlyList<G3PlateSolveAttemptEvidence> attempts, CancellationToken cancellationToken,
+        IReadOnlyList<StarCandidate> longFieldStars, Func<CancellationToken, Task<IReadOnlyList<StarCandidate>>> extractLongStars,
+        G3SparseExposureTiming longTiming,
         bool allowMeasuredCoarse = false)
     {
         var longProbe = new G3PlateSolveProbeState(GateResult.Unknown("G3_SHORT_CHECK_PENDING", "Not a motion authority"),
@@ -27,6 +29,7 @@ internal sealed partial class RealObservationStageRunner
         var policy = G3PostWcsShortExposurePolicy.Start(commissionedShortExposureMilliseconds,
             commissionedTargetGuidingCeilingMilliseconds);
         G3ShortPositionMeasurement? previous = null;
+        IReadOnlyList<StarCandidate>? independentLongStars = null;
         string? previousHash = null, previousPath = null;
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var lastCompleted = DateTimeOffset.MinValue;
@@ -44,7 +47,7 @@ internal sealed partial class RealObservationStageRunner
             await RequireImmediatePhysicalActionGatesAsync(context, cancellationToken).ConfigureAwait(false);
             var longGate = await ValidateG3ProbeMountBindingForMotionAsync(context, longProbe, cancellationToken).ConfigureAwait(false);
             if (longGate.Disposition != GateDisposition.Passed)
-                throw new InvalidOperationException($"{longGate.Code}: {longGate.Message}");
+                throw new PhysicalActionGateException(longGate);
             var identity = await phd2.ValidateIdentityAsync(PhdIdentityRequirement(), cancellationToken).ConfigureAwait(false);
             if (!identity.IsValid) throw new Phd2IdentityMismatchException(identity);
             var off = await EnsureSlitIlluminationOffAsync("short target-centre confirmation", true, cancellationToken).ConfigureAwait(false);
@@ -79,7 +82,7 @@ internal sealed partial class RealObservationStageRunner
             var imageGate = ValidateG3SolveProbeImage(captured, image, exposureMilliseconds,
                 nativeCaptureGainPercent: shortConfirmationGainPercent);
             if (imageGate.Disposition != GateDisposition.Passed)
-                throw new InvalidOperationException($"{imageGate.Code}: {imageGate.Message}");
+                throw new PhysicalActionGateException(imageGate);
             var frame = G3FrameInputPolicy.Create(image.Properties.Width, image.Properties.Height, image.Data.FlatArray, configuration.G3);
             var content = G3SolveProbeContentAnalyzer.Analyze(frame); // diagnostics only, NOT target extraction
             var sep = await client.DetectAsync(runtime, frame.Width, frame.Height, image.Data.FlatArray,
@@ -96,6 +99,35 @@ internal sealed partial class RealObservationStageRunner
             var measurement = G3SepShortPositionPolicy.Measure(sep, longTargetAnchor,
                 shortAssociationRadius, preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio,
                 previousSameSetting: previous);
+            G3OverlapRegistrationResult? fieldRegistration = null;
+            PixelPoint? registeredHint = null;
+            if (measurement.Gate.Code == "G3_SEP_UNMEASURED" && longTiming.CaptureRequestedUtc != default &&
+                captured.NativeRequestStartedUtc is { } started && started > longTiming.CaptureCompletedUtc)
+            {
+                // Do not enlarge a missed ROI around a bright blob. Only an independent
+                // field transform (target/halo excluded, separate holdouts) may translate
+                // the SAME search window on this original. It never supplies the centroid.
+                fieldRegistration = await RunWithG3PendingReturnTimeAsync("short-field-registration", async t =>
+                {
+                    var freshStars = CatalogFieldRegistration.ReferenceStars(sep);
+                    G3OverlapRegistrationResult Register(IReadOnlyList<StarCandidate> stars) =>
+                        G3TargetTrackPolicy.Register(stars, freshStars, longTargetAnchor, longTargetAnchor,
+                            slit, frame.Width, frame.Height, preset.TargetSearchRadiusPixels, t);
+                    var first = Register(longFieldStars);
+                    if (first.Accepted || freshStars.Count < 5) return first;
+                    independentLongStars ??= await extractLongStars(t).ConfigureAwait(false);
+                    return Register(independentLongStars);
+                }, cancellationToken).ConfigureAwait(false);
+                var now = DateTimeOffset.UtcNow;
+                registeredHint = G3TargetTrackPolicy.RegisteredShortSearchHint(fieldRegistration, longTargetAnchor,
+                    shortAssociationRadius, preset.TargetSearchRadiusPixels, frame.Width, frame.Height, longTiming,
+                    new(started, captured.CompletedUtc, exposureMilliseconds / 1000d, now), now);
+                if (registeredHint is { } hint)
+                {
+                    measurement = G3SepShortPositionPolicy.Measure(sep, hint, shortAssociationRadius,
+                        preset.MinimumTargetSignalToNoise, preset.MinimumTargetUniquenessRatio, previousSameSetting: previous);
+                }
+            }
             var shortTarget = measurement.Identification;
             var probe = new G3PlateSolveProbeState(
                 GateResult.Unknown("G3_POST_WCS_MEASURED_TARGET_READY", "Independent SEP positions agree; fresh PHD2 proof is still required."),
@@ -108,10 +140,10 @@ internal sealed partial class RealObservationStageRunner
             };
             var mountGate = await ValidateG3ProbeMountBindingForMotionAsync(context, probe, cancellationToken).ConfigureAwait(false);
             if (mountGate.Disposition != GateDisposition.Passed)
-                throw new InvalidOperationException($"{mountGate.Code}: {mountGate.Message}");
+                throw new PhysicalActionGateException(mountGate);
             longGate = await ValidateG3ProbeMountBindingForMotionAsync(context, longProbe, cancellationToken).ConfigureAwait(false);
             if (longGate.Disposition != GateDisposition.Passed)
-                throw new InvalidOperationException($"{longGate.Code}: {longGate.Message}");
+                throw new PhysicalActionGateException(longGate);
             var confirmation = G3ShortPositionMeasurementPolicy.EvaluateConfirmation(previous, measurement,
                 previousHash, sha, attempt, preset.TargetSearchRadiusPixels, maximumFrames);
             var handoffGeometry = G3PostWcsMeasuredHandoffPolicy.CanHandOff(longTarget, prediction.PredictedTargetPoint,
@@ -134,7 +166,7 @@ internal sealed partial class RealObservationStageRunner
                 "SEP continuity check after a small WCS correction (no repeat solve)",
                 new { accepted, coarsePair, attempt, maximumFrames,
                     longFramePath, longTarget, shortFramePath = captured.Path, shortFrameSha256 = sha,
-                    longTargetAnchor, shortAssociationRadius,
+                    longTargetAnchor, shortAssociationRadius, fieldRegistration, registeredHint,
                     exposureMilliseconds, requestedGainPercent = shortConfirmationGainPercent,
                     guidingProfileGainPercent = configuration.G3.GainPercent,
                     commissionedShortStartMilliseconds = commissionedShortExposureMilliseconds,

@@ -48,13 +48,10 @@ internal sealed class Phd2FreshTargetWindow(int requiredFrames)
 }
 
 internal sealed class Phd2FreshTargetNotMeasuredException(GateResult gate, string evidencePath)
-    : InvalidOperationException($"{Phd2FreshTargetWindow.FailureCode}: {gate.Message}")
+    : PhysicalActionGateException(gate, evidencePath)
 {
-    internal GateResult Gate { get; } = gate;
-    internal string EvidencePath { get; } = evidencePath;
-
     internal StageResult AfterStop(bool stopConfirmed) => stopConfirmed
-        ? new(Gate, EvidencePath)
+        ? ToStageResult()
         : new(GateResult.Unknown("PHD2_FRESH_TARGET_STOP_UNCONFIRMED",
             $"Target measurement failed and the checked guide stop is unconfirmed. {Gate.Message}"), EvidencePath);
 }

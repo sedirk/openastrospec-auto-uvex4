@@ -200,6 +200,11 @@ public sealed record Phd2SingleFrameResult(
     /// <summary>PC time immediately before native atomic capture dispatch; absent on loop/save routes.</summary>
     public DateTimeOffset? NativeRequestStartedUtc { get; init; }
 
+    /// <summary>Fresh native loop event which supplied a read-only save; not an attested shutter interval.</summary>
+    public long? LoopingFrameEventSequence { get; init; }
+    public DateTimeOffset? LoopingFrameObservedUtc { get; init; }
+    public Phd2SelectedStarSnrSample? LoopingStarSample { get; init; }
+
     /// <summary>The supported capture path applies ExposureMs through set_exposure before loop.</summary>
     public bool ExposureApplied => true;
 
@@ -292,6 +297,9 @@ public sealed record Phd2StateSnapshot(
     Phd2ConfigurationChangeEvidence? LastConfigurationChange = null)
 {
     public long CalibrationChangeSequence { get; init; }
+    // Native preview miss only. A get_app_state reply or a new camera frame
+    // with a centroid does not imply loss, even when it changes GuideEpoch.
+    public long LastPreviewStarMissSequence { get; init; }
     public bool PendingOwnerCalibrationAllowed { get; init; }
     // PHD2 can enter settle before the first good centroid starts guiding.
     public bool PendingInitialLockConfirmationAllowed { get; init; }

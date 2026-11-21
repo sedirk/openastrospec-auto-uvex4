@@ -155,6 +155,11 @@ internal sealed partial class RealObservationStageRunner
             }
             if (localReselection) continue;
         }
-        return new(choice, loop, selection.Selection, selection.Requested, selection.Selected);
+        return new(choice, loop, selection.Selection, selection.Requested, selection.Selected)
+        {
+            RemainingTakeoverSelections = Phd2HandoffRecoveryPolicy.RemainingPreviewSelections(selectionAttemptsAtTier,
+                candidateReselectionConsumed, lostCandidates.Count != 0, guidingEverStarted, recoveryPreparation),
+            PreparationConnection = loop.ConnectionEpoch
+        };
     }
 }

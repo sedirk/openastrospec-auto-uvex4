@@ -13,6 +13,7 @@ public sealed partial class NativeSequencePlanTests
     [InlineData("delayed", true)] [InlineData("delayed", false)]
     [InlineData("stuck", true)] [InlineData("stuck", false)]
     [InlineData("disconnected", true)] [InlineData("identity", false)]
+    [InlineData("callback-delayed", true)] [InlineData("callback-stuck", false)]
     public async Task WeatherDuringNativeSlewDrainsOrRetainsDiagnosticGuardian(string mode, bool holdOpen)
     {
         InitializeAstrometry();
@@ -24,7 +25,12 @@ public sealed partial class NativeSequencePlanTests
         using var nativeToken = new CancellationTokenSource();
         var night = new UvexNightSequenceContainer(profiles, host, null!, settings)
         { StopAtDawn = false, HoldOpenAfterTargets = holdOpen, EndAtIso8601 = DateTimeOffset.Now.AddHours(1).ToString("o") };
-        var first = new WeatherCancellationBoundaryRunner(mode, () => { night.OnNightUnsafe(); nativeToken.Cancel(); });
+        Exception? signalFailure = null;
+        var first = new WeatherCancellationBoundaryRunner(mode, () =>
+        {
+            signalFailure = Record.Exception(night.OnNightUnsafe);
+            nativeToken.Cancel();
+        });
         var second = new TerminalGateRunner(null, false);
         for (var i = 0; i < 2; i++)
         {
@@ -42,6 +48,7 @@ public sealed partial class NativeSequencePlanTests
         }
         Assert.NotNull(await Record.ExceptionAsync(() => night.Execute(new Progress<ApplicationStatus>(), nativeToken.Token)
             .WaitAsync(TimeSpan.FromSeconds(12))));
+        Assert.Null(signalFailure);
         Assert.True(first.Cancelled); Assert.True(first.IdleChecks > 0); Assert.Empty(second.Stages);
         Assert.False(night.IsActive); Assert.False(night.NativeEndInstructionsReady);
         using var journal = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(night.JournalPath));
@@ -49,7 +56,7 @@ public sealed partial class NativeSequencePlanTests
         Assert.True(terminal.GetProperty("unsafeTripped").GetBoolean());
         Assert.False(terminal.GetProperty("ordinaryCancel").GetBoolean());
         Assert.False(terminal.GetProperty("physicalHardware").GetBoolean());
-        if (mode == "delayed")
+        if (mode.EndsWith("delayed", StringComparison.Ordinal))
         {
             Assert.Null(host.SafetyStandby); // The checked simulated closeout, not a latent guardian.
             Assert.Empty(terminal.GetProperty("closeErrors").EnumerateArray());
@@ -81,14 +88,19 @@ public sealed partial class NativeSequencePlanTests
         public async Task<IReadOnlyList<string>> ConfirmSequenceIdleAsync(CancellationToken token, bool requireSettledMotion = true)
         {
             Assert.True(Cancelled); IdleChecks++;
-            var result = await Phd2MountIdleWaitTests.ReplayCancelledSlew(mode, token);
+            var result = await Phd2MountIdleWaitTests.ReplayCancelledSlew(mode.Replace("callback-", string.Empty, StringComparison.Ordinal), token);
             return result.Disposition == GateDisposition.Passed ? [] : new[] { result.Code + ": " + result.Message };
         }
         public override Task OnCancelledAsync(ObservationContext context, CancellationToken token)
         { Cancelled = true; return Task.CompletedTask; }
         public override Task<StageResult> ExecuteStageAsync(ObservationStage stage, ObservationContext context, CancellationToken token)
         {
-            if (stage == ObservationStage.AcquireG3SlitField) { cancel(); token.ThrowIfCancellationRequested(); }
+            if (stage == ObservationStage.AcquireG3SlitField)
+            {
+                using var nativeCallback = mode.StartsWith("callback-", StringComparison.Ordinal)
+                    ? token.Register(() => throw new NullReferenceException("recorded ToupTek teardown callback")) : default;
+                cancel(); token.ThrowIfCancellationRequested();
+            }
             return Task.FromResult(new StageResult(GateResult.Pass("SIM_STAGE", "Recorded cancellation timing; no hardware")));
         }
     }

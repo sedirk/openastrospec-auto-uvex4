@@ -62,6 +62,7 @@ public sealed class ObservationRunCoordinator : IDisposable
     private bool disposed;
 
     public event EventHandler<ObservationSnapshot>? SnapshotChanged;
+    public event EventHandler<AggregateException>? CancellationCallbackFailed;
 
     public ObservationSnapshot Snapshot
     {
@@ -188,20 +189,39 @@ public sealed class ObservationRunCoordinator : IDisposable
             published = snapshot;
             cancellation = runCancellation;
         }
-        handler?.Invoke(this, published);
-        cancellation?.Cancel();
+        try { handler?.Invoke(this, published); }
+        finally { RequestCancellation(cancellation); }
     }
 
     public void Dispose()
     {
+        CancellationTokenSource? cancellation;
         lock (sync)
         {
             if (disposed) return;
             disposed = true;
-            runCancellation?.Cancel();
+            cancellation = runCancellation;
             resumeSignal?.TrySetCanceled();
-            runCancellation?.Dispose();
         }
+        RequestCancellation(cancellation);
+        cancellation?.Dispose();
+    }
+
+    private void RequestCancellation(CancellationTokenSource? cancellation)
+    {
+        if (CancellationSignal.Request(cancellation) is not { } failure) return;
+        // Diagnostics are separate from outcome events: cancellation cleanup
+        // can finish concurrently, and appending a late diagnostic must not
+        // mask RUN_CANCELLED or CANCEL_CLEANUP_FAILED as the terminal code.
+        // The host logs the full native exception; no stop/closeout is inferred.
+        if (CancellationCallbackFailed is not { } handlers)
+        {
+            System.Diagnostics.Trace.TraceError("CANCEL_CALLBACK_FAILED: {0}", failure);
+            return;
+        }
+        foreach (EventHandler<AggregateException> handler in handlers.GetInvocationList())
+            try { handler(this, failure); }
+            catch (Exception diagnosticFailure) { System.Diagnostics.Trace.TraceError("Cancellation diagnostics failed: {0}", diagnosticFailure); }
     }
 
     private async Task RunAsync(ObservationPlan plan, IObservationStageRunner runner, CancellationToken cancellationToken)
