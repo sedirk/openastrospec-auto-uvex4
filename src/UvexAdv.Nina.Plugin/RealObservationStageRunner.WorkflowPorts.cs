@@ -11,6 +11,11 @@ internal sealed partial class RealObservationStageRunner
     {
         public void ThrowIfGuideOutputFailed() => run.phd2.ThrowIfGuideOutputFailed();
         public Phd2StateSnapshot GuideSnapshot => run.phd2.Snapshot;
+        public Task<Phd2DistanceGuardEvidence?> CheckDistanceGuardAsync(ObservationContext c,
+            Phd2SlitPlacementSession s, Phd2SlitPlacementCommissioning preset, Phd2IdentityValidation identity,
+            Phd2ExactLockPositionResult exact, Phd2StateSnapshot before, Phd2GuidingFrameLostException loss,
+            DateTimeOffset deadline, CancellationToken t) =>
+            run.CheckDistanceGuardAsync(c, s, preset, identity, exact, before, loss, deadline, t);
         public Phd2LockShiftPendingState? PendingMotion => run.pendingPhd2LockShift;
         public bool GuidePrecisionWarningActive => run.placementGuidePrecisionWarningActive;
         public bool TryConsumePrimaryStarSettle(string lineage, int chargedStage) =>

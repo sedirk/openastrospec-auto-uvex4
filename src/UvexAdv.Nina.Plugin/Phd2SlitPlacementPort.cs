@@ -19,6 +19,10 @@ internal interface IPhd2SlitPlacementPort
 {
     void ThrowIfGuideOutputFailed();
     Phd2StateSnapshot GuideSnapshot { get; }
+    Task<Phd2DistanceGuardEvidence?> CheckDistanceGuardAsync(ObservationContext context,
+        Phd2SlitPlacementSession session, Phd2SlitPlacementCommissioning preset, Phd2IdentityValidation identity,
+        Phd2ExactLockPositionResult exact, Phd2StateSnapshot before, Phd2GuidingFrameLostException loss,
+        DateTimeOffset reservedDeadline, CancellationToken token);
     Phd2LockShiftPendingState? PendingMotion { get; }
     bool GuidePrecisionWarningActive { get; }
     bool TryConsumePrimaryStarSettle(string lineage, int chargedStage);

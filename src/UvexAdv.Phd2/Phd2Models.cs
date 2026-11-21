@@ -257,6 +257,9 @@ public sealed record Phd2EventMessage(
     DateTimeOffset ReceivedUtc,
     JsonElement Payload);
 
+public sealed record Phd2NativeLossReceipt(long Sequence, long PreviousMissSequence,
+    DateTimeOffset ReceivedUtc, Phd2GuideStep Frame);
+
 public sealed record Phd2StateSnapshot(
     bool IsConnected,
     bool AutomationPaused,
@@ -300,6 +303,7 @@ public sealed record Phd2StateSnapshot(
     // Native preview miss only. A get_app_state reply or a new camera frame
     // with a centroid does not imply loss, even when it changes GuideEpoch.
     public long LastPreviewStarMissSequence { get; init; }
+    public Phd2NativeLossReceipt? LastNativeStarLoss { get; init; }
     public bool PendingOwnerCalibrationAllowed { get; init; }
     // PHD2 can enter settle before the first good centroid starts guiding.
     public bool PendingInitialLockConfirmationAllowed { get; init; }

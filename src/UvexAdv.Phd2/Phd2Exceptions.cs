@@ -121,6 +121,16 @@ public sealed class Phd2GuidingFrameLostException : Phd2Exception
 
     public Phd2StateSnapshot Snapshot { get; }
     public Phd2GuideStep? LostFrame { get; }
+    // Preserve the triggering event itself even if the live snapshot has advanced.
+    public long? LostEventSequence { get; init; }
+    public DateTimeOffset? LostEventUtc { get; init; }
+    internal static Phd2GuidingFrameLostException FromStateReadback(Phd2StateSnapshot s) =>
+        s.AppState == Phd2AppState.LostLock && s.LastNativeStarLoss is { } receipt &&
+        s.LastPreviewStarMissSequence == receipt.Sequence && s.LastGuideStep == receipt.Frame &&
+        s.LastGuideEpochChange is { Cause: "event:StarLost" } change &&
+        change.EventSequence == receipt.Sequence && change.Epoch == s.GuideEpoch
+            ? new(s, receipt.Frame) { LostEventSequence = receipt.Sequence, LostEventUtc = receipt.ReceivedUtc }
+            : new(s); // A bare LostLock status is never a native distance witness.
     // Present only for the locally scoped, read-only pre-guide SNR sampler.
     // Lets its caller distinguish an optional candidate trial from guide loss.
     public Phd2StateSnapshot? SelectedStarSnrBaseline { get; init; }

@@ -23,6 +23,7 @@ spectrograph implementation, plus its offline Spectral Studio companion.
 
 **Start here:** [Observatory product](products/observatory/README.md) ·
 [Spectral Studio](products/spectral-studio/README.md) ·
+[0.4.0.364 source release notes](docs/releases/v0.4.0.364.md) ·
 [build and simulator](#build-and-run-the-simulator) ·
 [commissioning](docs/commissioning.md) ·
 [latest software/validation closeout](docs/closeout-2026-10-24.md) ·

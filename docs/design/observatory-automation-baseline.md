@@ -802,6 +802,16 @@ unknown or incomplete runs are never eligible. The worker has no device or
 N.I.N.A. control authority, uses fresh dependency-aware exact-file validation
 and permanent-deletion receipts, and checks every five minutes.
 
+### 12.21 Passive native distance-guard recovery (ADR-0058)
+
+After one charged and verified outbound exact lock only, ADR-0058 permits
+eight seconds of passive observation of the identified native distance refusal.
+Require the same WCS/optical target, measured primary, physical slit, bound
+endpoint, owner and live output in a new optical window before resuming
+ordinary planning. This issues no command to recover and neither clears
+return debt nor grants time beyond the existing stage, return and night limits.
+Other losses, unknown stops and independent equipment/weather gates are unchanged.
+
 ## 13. Measurements still required
 
 The design intentionally does not invent these values:

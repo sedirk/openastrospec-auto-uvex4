@@ -68,3 +68,4 @@ Current accepted decisions:
 - [ADR-0055: Terminal-target disposable-frame retention](0055-terminal-target-disposable-frame-retention.md)
 - [ADR-0056: Authenticated two-segment pre-dispatch retirement](0056-two-segment-pre-dispatch-retirement.md)
 - [ADR-0057: Once-per-night start mount Home](0057-once-per-night-start-mount-home.md)
+- [ADR-0058: Passive verification of a native post-lock distance rejection](0058-passive-post-lock-distance-guard.md)

@@ -127,3 +127,28 @@ jobs:
               Write-Output ("::error::" + $message.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A'))
             }
           }
+
+  publish-source-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.4.0.')
+    needs: [observatory-control-tests, sep-image-tests, spectral-studio-tests]
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Publish verified source tag (no vendor binaries)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v0\.4\.0\.(0|[1-9][0-9]*)$') { throw 'Invalid release tag' }
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Source release must already be on main' }
+          $version = $tag.Substring(1)
+          $assembly = Get-Content src/UvexAdv.Nina.Plugin/Properties/AssemblyInfo.cs -Raw
+          if (!$assembly.Contains("AssemblyFileVersion(`"$version`")")) { throw 'Assembly/tag mismatch' }
+          gh release create $tag --verify-tag --title "OpenAstroSpec $version" --notes-file "docs/releases/$tag.md"

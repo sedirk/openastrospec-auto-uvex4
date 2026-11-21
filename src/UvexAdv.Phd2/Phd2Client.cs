@@ -1229,7 +1229,7 @@ public sealed partial class Phd2Client : IPhd2Client
             var destinationPath = Path.GetFullPath(request.DestinationPath);
             var appState = await GetAppStateAsync(cancellationToken).ConfigureAwait(false);
             if (appState == Phd2AppState.LostLock)
-                throw new Phd2GuidingFrameLostException(Snapshot);
+                throw Phd2GuidingFrameLostException.FromStateReadback(Snapshot);
             if (appState != Phd2AppState.Guiding)
             {
                 throw new Phd2CaptureException(
@@ -1245,7 +1245,8 @@ public sealed partial class Phd2Client : IPhd2Client
                 // StarLost is a completed camera frame without a usable guide
                 // centroid. Waiting only for GuideStep masks this as a timeout.
                 if (message.Name == "StarLost")
-                    throw new Phd2GuidingFrameLostException(Snapshot, ParseGuideStep(message.Payload));
+                    throw new Phd2GuidingFrameLostException(Snapshot, ParseGuideStep(message.Payload))
+                    { LostEventSequence = message.Sequence, LostEventUtc = message.ReceivedUtc };
                 EnsureSameGuidingEpoch(baseline, "while waiting for a fresh guide frame");
                 if (message.Name != "GuideStep")
                 {
@@ -2147,7 +2148,7 @@ public sealed partial class Phd2Client : IPhd2Client
     {
         var current = Snapshot;
         if (current.AppState == Phd2AppState.LostLock)
-            throw new Phd2GuidingFrameLostException(current);
+            throw Phd2GuidingFrameLostException.FromStateReadback(current);
         if (!current.IsConnected || current.AppState != Phd2AppState.Guiding ||
             current.AutomationPaused || current.Phd2Paused ||
             current.ConnectionEpoch != baseline.ConnectionEpoch || current.GuideEpoch != baseline.GuideEpoch)
@@ -2428,6 +2429,9 @@ public sealed partial class Phd2Client : IPhd2Client
         {
             EventSequence = message.Sequence,
             LastEventUtc = message.ReceivedUtc,
+            LastNativeStarLoss = message.Name == "StarLost"
+                ? new(message.Sequence, current.LastPreviewStarMissSequence, message.ReceivedUtc, ParseGuideStep(message.Payload))
+                : current.LastNativeStarLoss,
             LastPreviewStarMissSequence = (message.Name is "StarLost" or "LockPositionLost" ||
                 message.Name == "LoopingExposures" && GetOptionalInt64(message.Payload, "ErrorCode") is >= 2)
                 ? message.Sequence : current.LastPreviewStarMissSequence,

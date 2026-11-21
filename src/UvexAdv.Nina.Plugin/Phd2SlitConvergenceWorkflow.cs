@@ -624,6 +624,34 @@ internal sealed class Phd2SlitConvergenceWorkflow(ScienceQualityPolicy qualityPo
                     exact.CompletedUtc.AddSeconds(preset.MaximumStageSeconds),
                     cancellationToken, referenceGuide: session.LastMeasurement.Measurement.GuideStar).ConfigureAwait(false);
             }
+            catch (Exception ex) when (Phd2StageFailurePolicy.FindLostFrame(ex) is { LostEventSequence: not null } loss &&
+                loss.LostFrame is { ErrorCode: 8 } && stageReadOnlyObservation is not null &&
+                session.GuideMode == Phd2SlitGuideMode.OffSlitGuideStar &&
+                pending.Phase == Phd2LockShiftPendingPhase.AwaitingFreshResidual)
+            {
+                // This catch is reachable only once for this charged intent; restart recovery
+                // never resumes an outstanding outbound stage. A denial preserves the original loss.
+                var limits = preset.BuildMotionLimits();
+                var distance = PointDistance(ledger.OriginLockPosition, exact.Verified);
+                var reserve = Math.Max(stage.ReservedRecoveryAttempts, distance == 0 ? 0 : (int)Math.Ceiling(
+                    (distance + limits.LockVerificationTolerancePixels) / (limits.MaximumStagePixels - limits.LockVerificationTolerancePixels)));
+                var deadline = Phd2DistanceGuardRecovery.Deadline(exact.CompletedUtc.AddSeconds(preset.MaximumStageSeconds),
+                    ledger.StartedUtc, limits, reserve, null, null);
+                var recovery = await port.CheckDistanceGuardAsync(context, session, preset, identity, exact, stageProof,
+                    loss, deadline, cancellationToken).ConfigureAwait(false);
+                if (recovery is null || !recovery.Proof.HasAcceptedWindow(port.GuideSnapshot)) throw;
+                measurements = recovery.Frames;
+                stageReadOnlyObservation = recovery.Proof;
+                pending = pending.RebindAfterLocallyAttestedGuideEpoch(recovery.Proof.ConnectionEpoch, recovery.Proof.GuideEpoch,
+                    exact.Verified, clock.GetUtcNow(), "Native distance guard recovered; original primary, lock and fresh optical window verified.");
+                await port.PersistPendingAsync(request.PendingPath, pending, CancellationToken.None).ConfigureAwait(false);
+                port.RecordPendingMotion(pending);
+                session = session with { GuideEpoch = recovery.Proof.GuideEpoch };
+                await port.PublishRunJsonEvidenceAsync("phd2-distance-guard-recovered", "原生距离保护自行恢复；未重发移锁",
+                    new { recovery.Native, recovery.AdditionalVetoes, recovery.Proof, pending.LineageId, pending.AttemptsUsed, deadline,
+                        hashes = measurements.Select(m => m.Frame.Sha256), commandResent = false, motionDebtCleared = false },
+                    measurements[^1].Frame.Path, cancellationToken).ConfigureAwait(false);
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 pending = pending with

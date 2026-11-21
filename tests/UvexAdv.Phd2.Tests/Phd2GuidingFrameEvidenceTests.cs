@@ -50,6 +50,8 @@ public sealed class Phd2GuidingFrameEvidenceTests
                     .WaitAsync(TimeSpan.FromSeconds(3)));
             Assert.Equal(47L, error.LostFrame!.Frame);
             Assert.Equal(2.9, error.LostFrame.Snr);
+            Assert.Equal(client.Snapshot.LastNativeStarLoss?.Sequence, error.LostEventSequence);
+            Assert.NotNull(error.LostEventUtc);
             Assert.False(File.Exists(path));
             Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
         }
@@ -67,10 +69,43 @@ public sealed class Phd2GuidingFrameEvidenceTests
         });
         await using var client = CreateClient(server);
         await client.ConnectAsync(CancellationToken.None);
-        await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() =>
+        var bare = await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(() =>
             client.SaveCurrentGuidingFrameAsync(new(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.fit"),
                 TimeSpan.FromSeconds(1)), CancellationToken.None));
+        Assert.Null(bare.LostEventSequence);
+        Assert.Null(bare.LostEventUtc);
         Assert.Equal(new[] { "get_app_state" }, server.ReceivedMethods.ToArray());
+    }
+
+    [Fact]
+    public async Task DistanceRejectedJustBeforeFrameReadPreservesExactNativeReceiptAndPreviousMiss()
+    {
+        var lost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new FakePhd2Server(async (session, token) =>
+        {
+            var request = await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(request, "Guiding", token);
+            await session.SendEventAsync(new { Event = "AppState", State="Guiding" },token);
+            await session.SendEventAsync(new { Event = "StarLost", Frame=16,SNR=40.64,HFD=5.76,ErrorCode=8 },token);
+            await session.SendEventAsync(new { Event = "StarLost", Frame=17,SNR=40.2,HFD=5.8,ErrorCode=8 },token);
+            request=await session.ReadRequestAsync(token);
+            await session.ReplyResultAsync(request,"LostLock",token);
+            await Task.Delay(Timeout.InfiniteTimeSpan,token);
+        });
+        await using var client=CreateClient(server);
+        long first=0;
+        client.EventReceived+=(_,m)=>{ if(m.Name=="StarLost"){if(first==0)first=m.Sequence;else lost.TrySetResult();} };
+        await client.ConnectAsync(default);
+        await client.GetAppStateAsync(default);
+        await lost.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var error=await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(()=>client.SaveCurrentGuidingFrameAsync(
+            new(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.fit"),TimeSpan.FromSeconds(1)),default));
+        var r=Assert.IsType<Phd2NativeLossReceipt>(client.Snapshot.LastNativeStarLoss);
+        Assert.Equal(first,r.PreviousMissSequence);
+        Assert.Equal(17L,error.LostFrame!.Frame);
+        Assert.Equal(r.Sequence,error.LostEventSequence);
+        Assert.Equal(r.ReceivedUtc,error.LostEventUtc);
+        Assert.Equal(new[] {"get_app_state","get_app_state"},server.ReceivedMethods.ToArray());
     }
 
     [Fact]

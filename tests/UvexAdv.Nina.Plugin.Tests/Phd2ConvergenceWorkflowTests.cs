@@ -13,8 +13,10 @@ public sealed class Phd2ConvergenceWorkflowTests
     [InlineData(Phd2SlitGuideMode.DegradedDirectTargetGuiding, false)]
     [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, true, 324304)]
     [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, false, 41185424)]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, true, 100, "verified")]
+    [InlineData(Phd2SlitGuideMode.OffSlitGuideStar, true, 100, "denied")]
     public async Task Later0InitialGuideWarningReachesRealConvergenceWithoutWaitingForAnUnsentShift(
-        Phd2SlitGuideMode mode, bool nativeSucceeded, double flux = 100)
+        Phd2SlitGuideMode mode, bool nativeSucceeded, double flux = 100, string distanceGuard = "none")
     {
         var f = new Phd2ConvergenceFixture(warning: true);
         var request = f.Request([24, 24, 24]);
@@ -66,20 +68,47 @@ public sealed class Phd2ConvergenceWorkflowTests
         f.Trace.Handlers["ValidateCalibrationAsync"] = _ => Task.FromResult(request.Session.Calibration);
         f.Trace.Handlers["BeginFreshResidualObservation"] = _ => new Phd2PostLockGuidingObservation(
             "local-shift", 1, 2, 9, dispatched!, 1, f.Now.AddSeconds(-3), MeasuredContinuation: true);
-        f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = _ =>
+        IReadOnlyList<Phd2GuidingResidualState> FinalWindow()
         {
             Assert.NotNull(dispatched);
-            return Task.FromResult<IReadOnlyList<Phd2GuidingResidualState>>(f.Window([.3, .3, .3], 'D')
+            return f.Window([.3, .3, .3], 'D')
                 .Select((item, i) => item with { Measurement = item.Measurement with {
                     GuideStar = direct ? new(500.3, 400) : dispatched!, CapturedUtc = f.Now.AddSeconds(i - 2), FluxMetric = flux },
                     Frame = item.Frame with { EventSequence = i + 10, TriggerGuideFrame = i + 10,
-                        GuideStepUtc = f.Now.AddSeconds(i - 2), CompletedUtc = f.Now.AddSeconds(i - 2) } }).ToArray());
+                        GuideStepUtc = f.Now.AddSeconds(i - 2), CompletedUtc = f.Now.AddSeconds(i - 2) } }).ToArray();
+        }
+        f.Trace.Handlers["CapturePhd2PlacementGuideWindowAsync"] = _ => distanceGuard == "none"
+            ? Task.FromResult(FinalWindow()) : Task.FromException<IReadOnlyList<Phd2GuidingResidualState>>(
+                new Phd2GuidingFrameLostException(snapshot, new(16,null,null,40.64,5.76,3.26,8))
+                {LostEventSequence=10, LostEventUtc=f.Now.AddSeconds(-2)});
+        f.Trace.Handlers["CheckDistanceGuardAsync"] = _ =>
+        {
+            Assert.Equal(Phd2LockShiftPendingPhase.AwaitingFreshResidual, f.Persisted[^1].Phase);
+            if (distanceGuard != "verified") return Task.FromResult<Phd2DistanceGuardEvidence?>(null);
+            snapshot = snapshot with { GuideEpoch=4 };
+            var frames = FinalWindow();
+            var proof = new Phd2PostLockGuidingObservation("verified",1,4,9,dispatched!,1,
+                f.Now.AddSeconds(-3),MeasuredContinuation:true).AcceptResiduals(frames.Select(m=>m.Frame).ToArray(),snapshot);
+            return Task.FromResult<Phd2DistanceGuardEvidence?>(new(new(16,guide,25.87,7.4),proof,frames));
         };
         f.Trace.Handlers["SelectPhd2CalibrationQuality"] = a => new Phd2CalibrationCandidateSelection(
             Phd2CalibrationSelectionPurpose.LockShift, assessment, [assessment]);
         f.Trace.Handlers["BuildPhd2LockShiftQualification"] = _ => request.Session.Qualification;
-        var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
-        Assert.True(result.CanAdvance, result.Gate.Message);
+        if (distanceGuard == "denied")
+            await Assert.ThrowsAsync<Phd2GuidingFrameLostException>(()=>f.Workflow.ConvergeAsync(f.Context, request, default));
+        else
+        {
+            var result = await f.Workflow.ConvergeAsync(f.Context, request, default);
+            Assert.True(result.CanAdvance, result.Gate.Message);
+        }
+        Assert.Equal(distanceGuard == "none" ? 0 : 1, f.Trace.Calls.Count(c=>c=="CheckDistanceGuardAsync"));
+        if (distanceGuard != "none")
+        {
+            Assert.All(f.Persisted,p=>Assert.Equal(1,p.AttemptsUsed));
+            Assert.All(f.Persisted,p=>Assert.Equal(f.Persisted[0].CumulativeCommandedPixels,p.CumulativeCommandedPixels));
+            Assert.DoesNotContain("ReturnPhd2LockToOriginAsync", f.Trace.Calls);
+            if (distanceGuard == "denied") Assert.Equal(Phd2LockShiftPendingPhase.AwaitingFreshResidual,f.Persisted[^1].Phase);
+        }
         Assert.Single(f.Trace.Calls, c => c == "SetExactLockPositionAsync");
         Assert.Single(f.Trace.Calls, c => c == "CapturePhd2PlacementGuideWindowAsync");
         Assert.DoesNotContain("ResettleAtCurrentLockAsync", f.Trace.Calls);

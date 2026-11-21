@@ -2690,7 +2690,8 @@ internal sealed partial class RealObservationStageRunner
         Phd2ReadOnlyFrameGraceBudget? readoutGrace = null,
         bool rollingSample = false,
         Phd2Point? referenceGuide = null,
-        bool referenceTargetMeasured = true)
+        bool referenceTargetMeasured = true,
+        bool strictPassiveWindow = false)
     {
         if (count <= 0) throw new InvalidOperationException("The commissioned fresh-residual count must be positive.");
         using var uvex = new UvexServiceClient(configuration.UvexServiceUrl);
@@ -2698,7 +2699,7 @@ internal sealed partial class RealObservationStageRunner
         var captureAttempt = 0;
         var targetWindow = new Phd2FreshTargetWindow(count);
         var windowOwner = phd2.Snapshot;
-        var maximumCaptureAttempts = targetWindow.MaximumCaptures;
+        var maximumCaptureAttempts = strictPassiveWindow ? count : targetWindow.MaximumCaptures;
         while (measurements.Count < count && captureAttempt < maximumCaptureAttempts)
         {
             captureAttempt++;
@@ -2783,6 +2784,9 @@ internal sealed partial class RealObservationStageRunner
             var frame = G3FrameInputPolicy.Create(properties.Width, properties.Height, raw, configuration.G3);
             var candidates = StarFieldDetector.Detect(frame);
             var matchedPrimary = result.ResolvePrimaryStarPosition(properties.Width, properties.Height, raw);
+            if (strictPassiveWindow && matchedPrimary is null)
+                throw new TargetQualityEvidenceException("PHD2_NATIVE_DISTANCE_PRIMARY_UNCONFIRMED",
+                    "Recovered guide crop did not uniquely match the same immutable frame.");
             var continuityPrediction = guideMode == Phd2SlitGuideMode.OffSlitGuideStar &&
                 referenceGuide is not null && matchedPrimary is not null &&
                 result.NativeLockPosition is { } continuityLock &&
@@ -2932,7 +2936,7 @@ internal sealed partial class RealObservationStageRunner
                 }
             }
 
-            if (targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection && trackedTarget is null &&
+            if (!strictPassiveWindow && targetPositionAuthority == Phd2TargetPositionAuthority.CatalogWcsProjection && trackedTarget is null &&
                 targetFrameTiming.CaptureRequestedUtc != default)
             {
                 var trackProbe = new G3PlateSolveProbeState(GateResult.Warn("G3_TRACK_SEARCH_ONLY", "Current pixels, not motion authority"),
@@ -2982,6 +2986,10 @@ internal sealed partial class RealObservationStageRunner
                  (trackedTarget is not null && Phd2TargetContinuityPolicy.RejectMeasuredDiscontinuity(
                      referenceTargetMeasured, targetLocal, ToFrameLocal(continuityPrediction,preset), continuityAllowance)));
             var continuityRebaseCandidateObserved = false;
+            if (strictPassiveWindow && (targetTrackRejected || continuityRejected ||
+                targetPositionAuthority is Phd2TargetPositionAuthority.CatalogWcsProjection or Phd2TargetPositionAuthority.CatalogWcsRegisteredField))
+                throw new TargetQualityEvidenceException("PHD2_NATIVE_DISTANCE_TARGET_UNCONFIRMED",
+                    "Recovered guide requires the original measured target; no prediction, rebase or replacement window.");
             if (continuityRejected)
             {
                 var targetKey = $"{context.Plan.ObservationRunId}:{context.Plan.Target.CatalogId}";
@@ -3213,8 +3221,10 @@ internal sealed partial class RealObservationStageRunner
                 }, fluxWarning ? GateSeverity.Warning : GateSeverity.Info);
             if (fluxWarning)
                 Report("目标通量警告：本帧积分亮度超出参考范围，保留真实数值；已确认的同帧目标/主星位置继续用于有界精调，不把积分亮度当成运动安全限位。");
-            var state = new Phd2GuidingResidualState(gate, result, image, frame, candidates, slitDetection.Geometry, measurement, residualMountBinding);
-            if (targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField)
+            var state = new Phd2GuidingResidualState(gate, result, image, frame, candidates, slitDetection.Geometry, measurement, residualMountBinding,
+                NativePrimaryMatched: matchedPrimary is not null &&
+                    PointDistance(guide, ToPhd2Domain(new(matchedPrimary.X, matchedPrimary.Y), preset)) <= 1);
+            if (!strictPassiveWindow && targetPositionAuthority != Phd2TargetPositionAuthority.CatalogWcsRegisteredField)
                 await RememberStellarTargetTrackAsync(context, frame, raw, targetLocal, result.Path, actualSha,
                     targetFrameTiming, image.MetaData.Image.ExposureTime, trackedTarget, cancellationToken).ConfigureAwait(false);
             var acceptedOrdinal = measurements.Count + 1;
@@ -4891,7 +4901,8 @@ internal sealed record Phd2GuidingResidualState(
     IReadOnlyList<StarCandidate> Candidates,
     SlitGeometry RuntimeSlitLocal,
     Phd2SlitFieldMeasurement Measurement,
-    G3FieldMountBinding MountBinding);
+    G3FieldMountBinding MountBinding,
+    bool NativePrimaryMatched = false);
 
 
 internal sealed record Phd2PlacementGuideChoice(
